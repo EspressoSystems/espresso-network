@@ -61,7 +61,8 @@ type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTa
 /// Hook that may install stake tables for `catchup(target)` when the held pair `(start-1, start)` is
 /// more than one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk
 /// start `start'`, at or above `start`, or an error that ends the catchup attempt without a walk.
-/// The pair `(start'-1, start')` is held on return. The hook bounds its own duration (no timeout,
+/// The pair `(start'-1, start')` is held on return, and so is the table of epoch `start'-2` (the next
+/// install's block reward reads it). The hook bounds its own duration (no timeout,
 /// `seed_lock` held) and must not await a catchup on this coordinator.
 pub type CatchupSeedFn<TYPES> = Arc<
     dyn Fn(
@@ -85,6 +86,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     load_drb_progress_fn: LoadDrbProgressFn,
     store_drb_result_fn: StoreDrbResultFn,
     catchup_seed: Arc<OnceLock<CatchupSeedFn<TYPES>>>,
+    /// Serves waiters first come, so a seed for an old epoch can run ahead of the node's own catchup.
     seed_lock: Arc<AsyncMutex<()>>,
     drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
