@@ -25,7 +25,7 @@ pub struct LcContractFinalizedState {
     pub block_comm_root: CircuitField,
 }
 
-/// What a seed installs for `catchup(target)` when `start` is the top of the held pair.
+/// What a seed installs for a catchup to a target epoch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeedWindow {
     /// Epochs whose stake tables are installed, ascending.
@@ -53,11 +53,12 @@ impl LcContractFinalizedState {
         &self,
         epoch_height: u64,
         first_epoch: EpochNumber,
+        // The highest epoch whose stake table and the one below it are held; the walk starts here.
         start: EpochNumber,
         target: EpochNumber,
     ) -> Option<SeedWindow> {
         let contract_epoch = self.seed_epoch(epoch_height);
-        // The walk reaches the target, or the contract epoch, on its own from the held pair.
+        // The walk reaches the target, or the contract epoch, on its own from `start`.
         if target <= start + 1 || contract_epoch <= start + 1 {
             return None;
         }
