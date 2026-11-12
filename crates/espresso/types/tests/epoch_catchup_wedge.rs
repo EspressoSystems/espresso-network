@@ -663,3 +663,27 @@ async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
         "the seed did not install its pair"
     );
 }
+
+/// A catchup whose pair is adjacent starts its walk while another catchup's seed holds `seed_lock`.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn adjacent_catchup_does_not_wait_for_a_running_seed_ok() {
+    let (store, coordinator) = setup();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seed: CatchupSeedFn<SeqTypes> = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_, _, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        })
+    };
+    coordinator.set_catchup_seed(seed);
+
+    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)));
+    assert!(wait_until(RECOVERY_BUDGET, || calls.load(Ordering::SeqCst) == 1).await);
+    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(WALK_EPOCH)));
+
+    assert!(
+        wait_until(RECOVERY_BUDGET, || store.loads_of(WALK_EPOCH) >= 1).await,
+        "the adjacent catchup waited for the running seed"
+    );
+}
