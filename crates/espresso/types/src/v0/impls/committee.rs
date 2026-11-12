@@ -593,9 +593,10 @@ impl EpochCommittees {
             block_reward = Some(reward);
         }
 
-        self.load_stake_table(epoch).await;
-
-        let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
+        let epoch_committee = self
+            .load_stake_table(epoch)
+            .await
+            .map(|snapshot| Arc::clone(&snapshot.inner.committee));
 
         // TODO: If the stake table is missing should it be fetched by an unbounded
         // number of tasks?
@@ -1007,28 +1008,28 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// epoch root header, and the randomized committee (rebuilt from the DRB
     /// result).
     async fn load_stake_table(&self, epoch: EpochNumber) -> Option<Self::Snapshot> {
-        if self.inner.read().snapshots.contains_key(&epoch) {
-            return self.snapshot(epoch);
+        if let Some(snapshot) = self.snapshot(epoch) {
+            return Some(snapshot);
         }
         let locks = tokio::time::timeout(self.storage_read_timeout, async {
             // Ensure there is only one `load_stake_table` at a time:
             let guard = self.load_from_storage_lock.lock().await;
             // Check if someone else won the race while we queued.
-            if self.inner.read().snapshots.contains_key(&epoch) {
-                return None;
+            if let Some(snapshot) = self.snapshot(epoch) {
+                return Err(snapshot);
             }
             let persistence = self.fetcher.persistence.lock().await;
-            Some((guard, persistence))
+            Ok((guard, persistence))
         })
         .await;
         let (_guard, persistence) = match locks {
-            Ok(Some(locks)) => locks,
+            Ok(Ok(locks)) => locks,
             // Someone else loaded the epoch while we queued for the first lock.
-            Ok(None) => return self.snapshot(epoch),
+            Ok(Err(snapshot)) => return Some(snapshot),
             Err(_) => {
                 // A timeout can also mean a won race.
-                if self.inner.read().snapshots.contains_key(&epoch) {
-                    return self.snapshot(epoch);
+                if let Some(snapshot) = self.snapshot(epoch) {
+                    return Some(snapshot);
                 }
                 warn!(
                     %epoch,
@@ -1039,8 +1040,8 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
         // Check if someone else won the race:
-        if self.inner.read().snapshots.contains_key(&epoch) {
-            return self.snapshot(epoch);
+        if let Some(snapshot) = self.snapshot(epoch) {
+            return Some(snapshot);
         }
         // Bound the reads so a stalled query cannot pin the locks held above.
         let read = tokio::time::timeout(self.storage_read_timeout, async {
@@ -1073,8 +1074,8 @@ impl Membership<SeqTypes> for EpochCommittees {
             Ok(Some(loaded)) => loaded,
             Ok(None) => return None,
             Err(_) => {
-                if self.inner.read().snapshots.contains_key(&epoch) {
-                    return self.snapshot(epoch);
+                if let Some(snapshot) = self.snapshot(epoch) {
+                    return Some(snapshot);
                 }
                 warn!(
                     %epoch,
@@ -3480,13 +3481,23 @@ mod tests {
         });
         let err = task.await.expect_err("the hash mismatch panics");
         assert!(err.is_panic(), "task failed without a panic: {err:?}");
+        let payload = err.into_panic();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .expect("panic payload is a string");
+        assert!(
+            message.contains("next_stake_table_hash"),
+            "unexpected panic message: {message}"
+        );
 
         let inner = committees.inner.read();
-        let epoch = inner
+        let committee = inner
             .epoch_committee(EpochNumber::new(3))
             .expect("prefilled committee stays");
         assert!(
-            epoch.header.is_none(),
+            committee.header.is_none(),
             "the mismatching root replaced the committee"
         );
         let held: Vec<_> = inner.all_validators.keys().copied().collect();
@@ -3553,10 +3564,16 @@ mod tests {
 
     /// The epoch root at `height`, stamped two seconds per block.
     async fn timed_root(height: u64) -> Header {
+        timed_root_spaced(height, 2_000).await
+    }
+
+    /// The epoch root at `height`, stamped `block_millis` per block.
+    async fn timed_root_spaced(height: u64, block_millis: u64) -> Header {
         match header_deciding(height, StakeTableState::default().commit()).await {
             Header::V4(mut fields) => {
                 fields.next_stake_table_hash = None;
-                fields.timestamp_millis = crate::v0::TimestampMillis::from_millis(height * 2_000);
+                fields.timestamp_millis =
+                    crate::v0::TimestampMillis::from_millis(height * block_millis);
                 Header::V4(fields)
             },
             other => panic!("expected a V4 header, got {other:?}"),
@@ -3566,10 +3583,19 @@ mod tests {
     /// The roots of a seed window `first ..= last`: the root below the window and the root that
     /// defines each table.
     async fn seed_window_roots(first: u64, last: u64) -> (Header, Vec<Header>) {
-        let preceding = timed_root(100 * (first - 3) - 5).await;
+        seed_window_roots_spaced(first, last, 2_000).await
+    }
+
+    /// [`seed_window_roots`] stamped `block_millis` per block.
+    async fn seed_window_roots_spaced(
+        first: u64,
+        last: u64,
+        block_millis: u64,
+    ) -> (Header, Vec<Header>) {
+        let preceding = timed_root_spaced(100 * (first - 3) - 5, block_millis).await;
         let mut roots = Vec::new();
         for epoch in first..=last {
-            roots.push(timed_root(100 * (epoch - 2) - 5).await);
+            roots.push(timed_root_spaced(100 * (epoch - 2) - 5, block_millis).await);
         }
         (preceding, roots)
     }
@@ -3596,6 +3622,13 @@ mod tests {
         // The walked window, the seeded window and the first two epochs.
         let bound = RECENT_STAKE_TABLES_LIMIT as usize + 1 + 5 + 2;
         assert!(held <= bound, "{held} snapshots held, bound {bound}");
+        let inner = committees.inner.read();
+        for epoch in (60..=64).chain([40]) {
+            assert!(
+                inner.snapshots.contains_key(&EpochNumber::new(epoch)),
+                "epoch {epoch} was evicted"
+            );
+        }
     }
 
     /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
@@ -3976,7 +4009,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn seeded_block_reward_equals_walked_block_reward() {
         let epoch = 30;
-        let (preceding, mut roots) = seed_window_roots(epoch, epoch).await;
+        // Differs from the 2 s the reward assumes, so the preceding root's timestamp matters.
+        let (preceding, mut roots) = seed_window_roots_spaced(epoch, epoch, 3_000).await;
         let root = roots.remove(0);
 
         let (walked, walked_coordinator) = seed_window_setup(epoch, epoch).await;
