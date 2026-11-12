@@ -43,8 +43,8 @@ StakeTable contract for peer discovery.
 ## Validator startup
 
 `SequencerContext::init` applies the stored anchor's epoch to cliquenet and dials the active validators at the L1
-finalized block (`Fetcher::validator_set_at`). Their keys stay extra request-response responders. `state_peers` is
-optional for validators.
+finalized block (`Fetcher::validator_set_at`), bounded to 60 s. Their keys are extra request-response responders
+while the network holds them. `state_peers` is optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
 without one the catchup walks only. The follower installs the same seed with its upstreams as the only source,
@@ -54,20 +54,24 @@ A node behind the stored window is caught up by `EpochMembershipCoordinator::cat
 one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
 seed at a time:
 
-1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
-   at or below the second installed table is not seeded: its DRB needs `ST(target-1)` and `ST(target-2)`, so the
-   walk serves it.
+1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. The seed
+   runs when `target > start + 1` and `E* > start + 1`, with `start` the top of the held pair. The window ends at
+   `top = min(E*+1, target)`: only roots below `F` are provable, so never above `E*+1`. The DRB of a target at or
+   below `E*+1` needs `ST(target-1)` and `ST(target-2)`, which are installed or held.
 2. Fetches the header at `F` (sources: step 5) and accepts it iff its height is `F` and its `block_comm_root`
    matches.
-3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it; `root(E*-6)` only supplies
-   a block time. The L1 read, the peer requests (30 s) and each install are bounded.
-4. Installs the tables above the held pair within `ST(E*-3) ..= ST(E*+1)`, each with a block reward computed from the
-   proven roots, each root bounded by the catchup timeout. A stake table hash mismatch panics as in the walk; a timeout
-   or another error keeps the installed tables and the catchup retries above them. The walk then runs from `E*+1` up to
-   the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
-5. Requests go over request-response. With `--state-peers`, they also go over HTTP after `--http-catchup-delay`, at once
-   when the protocol is not available; the state peers are asked in order and an answer that fails its check moves on to
-   the next. A follower has no request-response: its upstreams answer at once.
+3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
+   the preceding root where the reward of the lowest table reads its block time. The L1 read, the peer requests (30 s)
+   and each install are bounded.
+4. Installs `ST(max(top-4, start+1, 3)) ..= ST(top)`, each with a block reward computed from the proven roots, each
+   root bounded by the catchup timeout. A stake table hash mismatch ends the process; a timeout or another error keeps
+   the installed tables and the catchup retries above them. The walk then runs from `top` up to the target (nothing
+   for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
+5. Requests go over request-response. With `--state-peers`, they also go over HTTP, eligible `--http-catchup-delay`
+   after the fetch starts (one delay for the whole fetch), at once when the protocol is not available. The state peers
+   are asked in order; a peer that fails or answers wrongly moves to the back for the rest of the process. When both
+   sides fail, the error carries both reasons.
+   A follower has no request-response: its upstreams answer at once.
 
 ## Consensus upgrades
 

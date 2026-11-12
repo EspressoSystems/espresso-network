@@ -1687,7 +1687,7 @@ pub mod testing {
                 anchor_view,
                 storage,
                 catchup_providers,
-                LcContractSeed::new(&chain_config, vec![], Duration::ZERO, &NoMetrics),
+                LcContractSeed::new(&chain_config, vec![], Duration::ZERO, metrics),
                 persistence,
                 coordinator_network,
                 self.state_relay_url.clone(),

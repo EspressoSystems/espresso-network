@@ -97,9 +97,16 @@ struct StalledStakeStore {
     /// Epochs `load_stake` has been entered for, in call order.
     load_stake_epochs: Mutex<Vec<u64>>,
     load_stake_calls: AtomicUsize,
+    /// Epochs `load_stake` answers with an empty table instead of stalling.
+    served_epochs: Mutex<HashSet<u64>>,
 }
 
 impl StalledStakeStore {
+    /// Makes `load_stake` answer for `epoch`.
+    fn serve(&self, epoch: u64) {
+        self.served_epochs.lock().insert(epoch);
+    }
+
     fn calls(&self) -> usize {
         self.load_stake_calls.load(Ordering::SeqCst)
     }
@@ -130,6 +137,9 @@ impl MembershipPersistence for StalledStakeStore {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         self.load_stake_calls.fetch_add(1, Ordering::SeqCst);
         self.load_stake_epochs.lock().push(*epoch);
+        if self.served_epochs.lock().contains(&*epoch) {
+            return Ok(Some(Default::default()));
+        }
         tracing::info!(%epoch, "load_stake entered; stalling (models a hung DB query)");
         std::future::pending::<anyhow::Result<Option<StakeTuple>>>().await
     }
@@ -610,4 +620,41 @@ async fn seeded_start_resumes_the_walk_ok() {
         Some(TARGET_EPOCH),
         "the walk began at the held pair"
     );
+}
+
+/// A catchup queued on `seed_lock` while a seed installs its pair does not call the seed again.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
+    let (store, coordinator) = setup();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let seed: CatchupSeedFn<SeqTypes> = {
+        let (store, calls) = (Arc::clone(&store), Arc::clone(&calls));
+        Arc::new(move |target, start, coordinator| {
+            let (store, calls) = (Arc::clone(&store), Arc::clone(&calls));
+            Box::pin(async move {
+                calls.lock().push((*target, *start));
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                for epoch in [TARGET_EPOCH - 2, TARGET_EPOCH - 1] {
+                    store.serve(epoch);
+                    assert!(
+                        coordinator
+                            .membership()
+                            .load_stake_table(EpochNumber::new(epoch))
+                            .await
+                            .is_some()
+                    );
+                }
+                Ok(EpochNumber::new(TARGET_EPOCH - 1))
+            })
+        })
+    };
+    coordinator.set_catchup_seed(seed);
+
+    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)));
+    assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
+    // Pair (TARGET_EPOCH - 3, TARGET_EPOCH - 2) is held once the first seed has installed.
+    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH - 1)));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
 }
