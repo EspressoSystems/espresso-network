@@ -11,7 +11,10 @@ use espresso_types::{
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::{Delta, PermittedRewardMerkleTreeV2},
 };
-use futures::{StreamExt, future::Future};
+use futures::{
+    StreamExt,
+    future::{Future, join_all},
+};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource},
     data_source::{Transaction, VersionedDataSource, storage::pruning::PrunedHeightDataSource},
@@ -667,27 +670,31 @@ async fn store_reward_trees_below<T>(
             return;
         },
     };
-    for height in reward_boundaries_below(start, finalized, epoch_height) {
-        let fetch = store_reward_tree(storage, instance, provider, height);
-        match timeout(REWARD_TREE_FETCH_TIMEOUT, fetch).await {
-            Ok(Ok(())) => tracing::info!(
-                height,
-                finalized,
-                "stored the reward tree at a boundary below the state start"
-            ),
-            Ok(Err(err)) => tracing::warn!(
-                height,
-                finalized,
-                err = %format_args!("{err:#}"),
-                "failed to store the reward tree at a boundary below the state start"
-            ),
-            Err(_) => tracing::warn!(
-                height,
-                finalized,
-                "timed out fetching the reward tree at a boundary below the state start"
-            ),
-        }
-    }
+    // All at once, so that peers that hang delay the start by one timeout, not one per boundary.
+    let stores = reward_boundaries_below(start, finalized, epoch_height)
+        .into_iter()
+        .map(|height| async move {
+            let store = store_reward_tree(storage, instance, provider, height);
+            match timeout(REWARD_TREE_FETCH_TIMEOUT, store).await {
+                Ok(Ok(())) => tracing::info!(
+                    height,
+                    finalized,
+                    "stored the reward tree at a boundary below the state start"
+                ),
+                Ok(Err(err)) => tracing::warn!(
+                    height,
+                    finalized,
+                    err = %format_args!("{err:#}"),
+                    "failed to store the reward tree at a boundary below the state start"
+                ),
+                Err(_) => tracing::warn!(
+                    height,
+                    finalized,
+                    "timed out fetching the reward tree at a boundary below the state start"
+                ),
+            }
+        });
+    join_all(stores).await;
 }
 
 /// Fetch the reward tree at the epoch boundary `height` from peers, check it against the root in
