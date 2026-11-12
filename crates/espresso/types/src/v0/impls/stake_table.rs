@@ -1240,6 +1240,7 @@ impl Fetcher {
             chain_config: Arc::new(AsyncMutex::new(chain_config)),
             update_task: StakeTableUpdateTask(AsyncMutex::new(None)).into(),
             initial_supply: Arc::new(AsyncRwLock::new(None)),
+            lc_contract_address: Arc::default(),
         }
     }
 
@@ -1937,11 +1938,16 @@ impl Fetcher {
         let block = self.l1_client.finalized_number_within_wait().await?;
         let state = tokio::time::timeout(L1_FINALIZED_WAIT, async {
             let provider = self.l1_client.provider.clone();
-            let lc_contract = StakeTableV3::new(stake_table_contract, provider.clone())
-                .lightClient()
-                .call()
-                .await
-                .context("failed to read the LC contract address")?;
+            let lc_contract = *self
+                .lc_contract_address
+                .get_or_try_init(|| async {
+                    StakeTableV3::new(stake_table_contract, provider.clone())
+                        .lightClient()
+                        .call()
+                        .await
+                        .context("failed to read the LC contract address")
+                })
+                .await?;
             LightClientV3::new(lc_contract, provider)
                 .finalizedState()
                 .block(BlockId::number(block))
