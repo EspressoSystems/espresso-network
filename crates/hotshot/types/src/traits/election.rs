@@ -155,12 +155,11 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
 
 /// The stake tables of views before the first epoch, when epochs were not
 /// enabled yet: the genesis stake table and the genesis DA committee.
-#[derive(Debug)]
+///
+/// Clones share the tables, so cloning is cheap.
+#[derive(Debug, Clone)]
 pub struct GenesisStakeTables<T: NodeType> {
-    stake_table: Vec<PeerConfig<T>>,
-    da_stake_table: Vec<PeerConfig<T>>,
-    /// The position of each key in `stake_table`.
-    stake_index: HashMap<T::SignatureKey, usize>,
+    tables: Arc<Tables<T>>,
 }
 
 impl<T: NodeType> GenesisStakeTables<T> {
@@ -176,33 +175,44 @@ impl<T: NodeType> GenesisStakeTables<T> {
         let stake_index = index_keys(&stake_table, "stake table")?;
         index_keys(&da_stake_table, "DA committee")?;
         Ok(Self {
-            stake_table,
-            da_stake_table,
-            stake_index,
+            tables: Arc::new(Tables {
+                stake_table,
+                da_stake_table,
+                stake_index,
+            }),
         })
     }
 
     pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
-        self.stake_table.iter()
+        self.tables.stake_table.iter()
     }
 
     pub fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
-        self.da_stake_table.iter()
+        self.tables.da_stake_table.iter()
     }
 
     pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        let &position = self.stake_index.get(key)?;
-        Some(self.stake_table[position].clone())
+        let &position = self.tables.stake_index.get(key)?;
+        Some(self.tables.stake_table[position].clone())
     }
 
     pub fn success_threshold(&self) -> U256 {
         supermajority_threshold(
-            self.stake_table
+            self.tables
+                .stake_table
                 .iter()
                 .map(|p| p.stake_table_entry.stake())
                 .sum(),
         )
     }
+}
+
+#[derive(Debug)]
+struct Tables<T: NodeType> {
+    stake_table: Vec<PeerConfig<T>>,
+    da_stake_table: Vec<PeerConfig<T>>,
+    /// The position of each key in `stake_table`.
+    stake_index: HashMap<T::SignatureKey, usize>,
 }
 
 /// The position of each key in `table`, the genesis `name`.
@@ -243,7 +253,7 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot>;
 
     /// The stake tables of views before the first epoch.
-    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>>;
+    fn genesis_stake_tables(&self) -> GenesisStakeTables<T>;
 
     /// The first epoch, which runs on the genesis stake table.
     fn first_epoch(&self) -> EpochNumber;

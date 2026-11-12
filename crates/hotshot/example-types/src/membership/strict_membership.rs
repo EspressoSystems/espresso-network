@@ -41,7 +41,7 @@ where
 {
     inner: Arc<RwLock<Inner<T, S>>>,
     /// The members given to `new`, which run the views before the first epoch.
-    genesis: Arc<GenesisStakeTables<T>>,
+    genesis: GenesisStakeTables<T>,
     epoch_height: BlockNumber,
 }
 
@@ -80,10 +80,8 @@ where
         epoch_height: u64,
         first_epoch: EpochNumber,
     ) -> Self {
-        let genesis = Arc::new(
-            GenesisStakeTables::new(quorum_members.clone(), da_members.clone())
-                .expect("genesis members without duplicate keys"),
-        );
+        let genesis = GenesisStakeTables::new(quorum_members.clone(), da_members.clone())
+            .expect("genesis members without duplicate keys");
         let membership = Self {
             inner: Arc::new(RwLock::new(Inner {
                 table: TestStakeTable::new(
@@ -188,7 +186,7 @@ where
         ))
     }
 
-    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>> {
+    fn genesis_stake_tables(&self) -> GenesisStakeTables<T> {
         self.genesis.clone()
     }
 

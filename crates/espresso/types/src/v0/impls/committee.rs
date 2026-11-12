@@ -80,7 +80,7 @@ struct Inner {
     /// The stake tables of views before the first epoch.
     ///
     /// Built once at constructor time. `add_da_committee` does not change it.
-    genesis: Arc<GenesisStakeTables<SeqTypes>>,
+    genesis: GenesisStakeTables<SeqTypes>,
 
     /// The DA committee of the epochs that no entry of `da_committees` covers.
     genesis_da_committee: Arc<DaCommittee>,
@@ -440,10 +440,7 @@ impl EpochCommittees {
             })
             .collect();
 
-        let genesis = Arc::new(GenesisStakeTables::new(
-            stake_table.clone(),
-            da_members.clone(),
-        )?);
+        let genesis = GenesisStakeTables::new(stake_table.clone(), da_members.clone())?;
         let da_committee = Arc::new(DaCommittee {
             committee: da_members,
             indexed_committee: indexed_da_members,
@@ -829,7 +826,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         true
     }
 
-    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
+    fn genesis_stake_tables(&self) -> GenesisStakeTables<SeqTypes> {
         self.inner.read().genesis.clone()
     }
 

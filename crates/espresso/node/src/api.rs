@@ -163,7 +163,7 @@ impl ApiState {
     }
 
     /// The stake tables of the views before the first epoch.
-    async fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<SeqTypes>> {
+    async fn genesis_stake_tables(&self) -> GenesisStakeTables<SeqTypes> {
         self.consensus()
             .await
             .membership_coordinator()
