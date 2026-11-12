@@ -311,6 +311,7 @@ where
         &genesis.chain_config,
         catchup_params.state_peers.clone(),
         catchup_params.http_delay,
+        &*metrics,
     );
 
     let loaded_network_config = load_or_fetch_network_config(
@@ -1687,7 +1688,7 @@ pub mod testing {
                 anchor_view,
                 storage,
                 catchup_providers,
-                LcContractSeed::new(&chain_config, vec![], Duration::ZERO),
+                LcContractSeed::new(&chain_config, vec![], Duration::ZERO, metrics),
                 persistence,
                 coordinator_network,
                 self.state_relay_url.clone(),

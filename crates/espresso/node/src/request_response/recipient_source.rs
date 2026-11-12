@@ -1,8 +1,12 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
+use hotshot_new_protocol::network::Sender;
 use hotshot_types::{
     data::EpochNumber,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
@@ -22,8 +26,11 @@ pub struct RecipientSource<P: SequencerPersistence> {
     /// The public key of the node
     pub public_key: PubKey,
     /// Keys of the validators active at the L1 finalized block at startup that the network did not
-    /// hold; added to the keys of the consensus-epoch table, deduplicated, without self.
+    /// hold; added to the keys of the consensus-epoch table, deduplicated, without self, while the
+    /// network still holds them.
     pub l1_finalized_peers: Vec<PubKey>,
+    /// The network, for the keys it holds at request time.
+    pub network: Sender<SeqTypes>,
 }
 
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
@@ -44,19 +51,26 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
         Ok(responders(
             table_keys,
             &self.l1_finalized_peers,
+            &self.network.peer_keys(),
             &self.public_key,
         ))
     }
 }
 
-/// `table_keys` and `l1_finalized_peers` together, deduplicated, without `own_key`.
+/// `table_keys` and those `l1_finalized_peers` that are in `held`, deduplicated, without `own_key`.
 fn responders(
     table_keys: impl Iterator<Item = PubKey>,
     l1_finalized_peers: &[PubKey],
+    held: &HashSet<PubKey>,
     own_key: &PubKey,
 ) -> Vec<PubKey> {
     let keys: BTreeSet<PubKey> = table_keys
-        .chain(l1_finalized_peers.iter().copied())
+        .chain(
+            l1_finalized_peers
+                .iter()
+                .filter(|key| held.contains(key))
+                .copied(),
+        )
         .filter(|key| key != own_key)
         .collect();
     keys.into_iter().collect()
@@ -115,12 +129,13 @@ mod tests {
     }
 
     #[test]
-    fn responders_union_without_self() {
+    fn responders_union_of_held_without_self() {
         let own = key(0);
         let table = [own, key(1), key(2)];
-        let l1_finalized = [key(2), key(3), own];
+        let l1_finalized = [key(2), key(3), key(4), own];
+        let held = HashSet::from([key(3), own]);
 
-        let out = responders(table.into_iter(), &l1_finalized, &own);
+        let out = responders(table.into_iter(), &l1_finalized, &held, &own);
 
         let mut expected = vec![key(1), key(2), key(3)];
         expected.sort();

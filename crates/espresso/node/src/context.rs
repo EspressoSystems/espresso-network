@@ -190,6 +190,7 @@ where
             version,
         )
         .await;
+        let network_sender = coordinator_network.sender().clone();
 
         // Restore the persisted lock so the new protocol resumes with the lock
         // it actually held, not the older decided-anchor QC.
@@ -301,6 +302,7 @@ where
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
                 l1_finalized_peers,
+                network: network_sender,
             },
             DataSource {
                 node_state: instance_state.clone(),
@@ -609,11 +611,14 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
         .unwrap_or(upgrade_lock.upgrade().base)
 }
 
+/// Bound on the dial of the L1 finalized validators at startup.
+const STARTUP_DIAL_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Applies the stored anchor's epoch to `network` and dials the active validators at the L1
 /// finalized block that it does not hold. Returns the dialed keys.
 ///
 /// Held keys keep the connect info of the held tables, which may be older than L1's. The dial runs
-/// once; a failure leaves no extra peers until restart. The first `apply_epoch` for a higher epoch
+/// once, bounded by `STARTUP_DIAL_TIMEOUT`; a failure leaves no extra peers until restart. The first `apply_epoch` for a higher epoch
 /// with a table drops the dialed peers.
 async fn connect_startup_peers(
     network: &mut Cliquenet<SeqTypes>,
@@ -630,7 +635,8 @@ async fn connect_startup_peers(
         tracing::warn!(%anchor_epoch, %err, "coordinator apply_epoch failed at startup");
     }
 
-    let held = network.peer_keys();
+    let started = Instant::now();
+    let held = network.sender().peer_keys();
     let dial = async {
         let l1_block = initializer
             .instance_state()
@@ -655,14 +661,18 @@ async fn connect_startup_peers(
         network.add_peers(Role::Active, targets)?;
         anyhow::Ok(dialed)
     };
-    let l1_finalized_peers = dial.await.unwrap_or_else(|err| {
-        tracing::warn!(%err, "failed to dial the L1 finalized validators");
-        Vec::new()
-    });
+    let l1_finalized_peers = tokio::time::timeout(STARTUP_DIAL_TIMEOUT, dial)
+        .await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("exceeded {STARTUP_DIAL_TIMEOUT:?}")))
+        .unwrap_or_else(|err| {
+            tracing::warn!(%err, "failed to dial the L1 finalized validators");
+            Vec::new()
+        });
     info!(
         target: "announce::catchup",
         %anchor_epoch,
         l1_finalized_peers = l1_finalized_peers.len(),
+        duration_ms = started.elapsed().as_millis() as u64,
         "startup peers"
     );
     l1_finalized_peers

@@ -3579,6 +3579,7 @@ mod test {
             storage::{StorageConnectionType, UpdateAvailabilityStorage},
         },
         explorer::TransactionSummariesResponse,
+        metrics::PrometheusMetrics,
         node::{SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
@@ -4121,6 +4122,80 @@ mod test {
             info.delta.is_some()
         })
         .await;
+    }
+
+    /// The SQL node answers `Request::HeaderProof` over request-response with a proof that
+    /// verifies against the block Merkle root of the requested snapshot.
+    #[apply(sql_data_sources)]
+    async fn test_header_proof_over_request_response<D>(_d: PhantomData<D>)
+    where
+        D: TestableSqlDataSource,
+    {
+        const NUM_NODES: usize = 5;
+        const ROOT: u64 = 5;
+        const HEIGHT: u64 = 3;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let dbs = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
+        let persistence: [_; NUM_NODES] = dbs
+            .iter()
+            .map(<D as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(D::options(&dbs[0], Options::with_port(port)))
+            .persistences(persistence)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let mut decided = network.server.event_stream().filter_map(|event| {
+            future::ready(match event {
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
+                _ => None,
+            })
+        });
+        tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = decided.next().await.unwrap();
+                if leaf.height() >= ROOT + 2 {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("network did not decide enough blocks");
+        drop(decided);
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        let root_header: Header = client
+            .get(&format!("availability/header/{ROOT}"))
+            .send()
+            .await
+            .unwrap();
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(60),
+            network.peers[0]
+                .request_response_protocol
+                .request_indefinitely(
+                    Request::HeaderProof {
+                        root: ROOT,
+                        height: HEIGHT,
+                    },
+                    |_request, response| async move { Ok(response) },
+                ),
+        )
+        .await
+        .expect("no peer answered")
+        .unwrap();
+        let Response::HeaderProof(proof) = response else {
+            panic!("expected a header proof, got {response:?}");
+        };
+        let header = proof
+            .verify_at_height(root_header.block_merkle_tree_root(), HEIGHT)
+            .unwrap();
+        assert_eq!(header.height(), HEIGHT);
     }
 
     /// A query node with a gap must fill it from a peer over the path production runs: the
@@ -7034,6 +7109,7 @@ mod test {
             .await
             .unwrap();
 
+        let metrics = PrometheusMetrics::default();
         // Dropping it stops the temporary database, so it lives to the end of the test.
         let fresh_db = if fresh_storage {
             Some(D::create_storage().await)
@@ -7052,7 +7128,7 @@ mod test {
                 options,
                 None::<NullStateCatchup>,
                 None,
-                &NoMetrics,
+                &metrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
                 TEST_UPGRADE,
@@ -7084,6 +7160,12 @@ mod test {
         .await
         .expect("the joined node did not decide with the network");
 
+        let export = metrics.export().unwrap();
+        assert!(
+            metric_value(&export, "catchup_lc_contract_seeds") >= Some(1.0),
+            "no seed ran:\n{export}"
+        );
+
         let coordinator = node.node_state().coordinator;
         // A fresh node's whole window has rewards; a stale one holds older epochs it already had.
         let first_rewarded = if fresh_storage {
@@ -7102,10 +7184,10 @@ mod test {
             );
         }
 
-        // A fresh node holds the seeded window only: the epochs between its genesis pair and the
-        // window are not walked until something asks for one, and then the walk leaves the
-        // window held.
-        let skipped = EpochNumber::new(seed_epoch.saturating_sub(4));
+        // A fresh node holds the seeded window only, which starts at most 4 epochs below its top:
+        // the epochs between its genesis pair and the window are not walked until something asks
+        // for one, and then the walk leaves the window held.
+        let skipped = EpochNumber::new(seed_epoch.saturating_sub(5));
         if fresh_storage && *skipped > 2 {
             assert!(
                 coordinator.membership().snapshot(skipped).is_none(),
