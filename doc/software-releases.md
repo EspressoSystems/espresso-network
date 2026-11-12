@@ -37,7 +37,8 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
   validation. CI builds docker images for them. Release automation ignores them.
 - Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
   backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
-  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Manual backports use
+  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Both need a squash-merged PR: the
+  workflow refuses a merge commit or a rebase merge, which then needs a manual backport. Manual backports use
   `git cherry-pick -x`.
 
 ## Tracker issue
