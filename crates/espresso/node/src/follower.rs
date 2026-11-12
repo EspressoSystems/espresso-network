@@ -332,7 +332,7 @@ where
         next,
     };
     let mut tasks = TaskList::default();
-    // The seed has run when init returns, so the seed count cannot race.
+    // Init returns once the coordinator holds the stake table the first poll needs.
     let tip = follower
         .source
         .block_height()
@@ -628,19 +628,14 @@ impl<P: SequencerPersistence> Follower<P> {
     async fn run(mut self) {
         tracing::info!(from = self.next, "following the chain");
         loop {
-            self.poll_logged().await;
+            if let Err(err) = self.poll().await {
+                tracing::warn!(
+                    next = self.next,
+                    err = %format!("{err:#}"),
+                    "following the chain failed"
+                );
+            }
             sleep(self.options.poll_interval).await;
-        }
-    }
-
-    /// One poll; a failure is logged and the next poll retries it.
-    async fn poll_logged(&mut self) {
-        if let Err(err) = self.poll().await {
-            tracing::warn!(
-                next = self.next,
-                err = %format!("{err:#}"),
-                "following the chain failed"
-            );
         }
     }
 
@@ -909,8 +904,12 @@ mod tests {
 
     const EPOCH_HEIGHT: u64 = 100;
 
-    // Epoch 2 spans blocks 101..=200 and its root block is 195.
     #[rstest]
+    // Epoch 1 spans blocks 1..=100 and its root block is 95.
+    #[case::genesis(0, 2)]
+    #[case::first_epoch_root(95, 2)]
+    #[case::first_epoch_after_root(96, 3)]
+    // Epoch 2 spans blocks 101..=200 and its root block is 195.
     #[case::before_root(194, 3)]
     #[case::root(195, 3)]
     #[case::after_root(196, 4)]
