@@ -7963,9 +7963,7 @@ mod test {
         check_same_reward_tree(expected, actual, start)
             .await
             .with_context(|| format!("setup: the snapshot's reward tree, {}", context()))?;
-        // The node may store the trees below the start just after it records the start.
         let needed = (lowest..start).step_by(epoch as usize).collect::<Vec<_>>();
-        wait_for_reward_trees(actual, &needed, Instant::now() + Duration::from_secs(30)).await;
         for &height in &needed {
             check_same_reward_tree(expected, actual, height)
                 .await
@@ -8037,27 +8035,6 @@ mod test {
     /// The route that serves a node's reward tree at `height` from its own storage.
     fn reward_tree_path(height: u64) -> String {
         espresso_api::routes::v1::reward_merkle_tree_v2(height)
-    }
-
-    /// Wait until `client` serves the reward tree at each of `heights`, or until `deadline`.
-    async fn wait_for_reward_trees(
-        client: &Client<ClientErr, StaticVersion<0, 1>>,
-        heights: &[u64],
-        deadline: Instant,
-    ) {
-        while Instant::now() < deadline {
-            let answers = join_all(heights.iter().map(|&height| async move {
-                client
-                    .get::<Vec<u8>>(&reward_tree_path(height))
-                    .send()
-                    .await
-            }))
-            .await;
-            if answers.iter().all(Result::is_ok) {
-                return;
-            }
-            sleep(Duration::from_millis(500)).await;
-        }
     }
 
     /// Check that `actual` serves the same reward tree at `height` as `expected`, node 0.
