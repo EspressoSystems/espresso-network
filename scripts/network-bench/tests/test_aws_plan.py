@@ -1303,6 +1303,50 @@ def test_journal_max_bytes_is_set_only_for_journal_storage():
     assert env["fs"]["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
 
 
+def test_node_stake_sets_each_node_s_registered_stake_in_node_order():
+    hosts = fleet(3)
+    stakes = (4, 1, 2)
+    for j in range(3):
+        spec = host(f"node{j}", hosts[f"node{j}"]["role"])
+        env = parse_env(
+            awsb.render_node_env(spec, hosts, awsb.pg_endpoint(), node_stake=stakes)
+        )
+        assert env["ESPRESSO_NODE_STAKE_VALUE"] == str(stakes[j])
+    assert "ESPRESSO_NODE_STAKE_VALUE" not in node_env("node1")
+
+
+def test_node_stake_needs_one_value_per_node():
+    cfg = replace(small_cfg(nodes=3, submit=2), node_stake=(4, 1))
+    with pytest.raises(awsb.Refused, match="one value per node"):
+        awsb.plan_hosts(cfg)
+    assert awsb.plan_hosts(replace(cfg, node_stake=(4, 1, 1)))
+
+
+def test_node_stake_is_refused_where_the_l1_stake_table_takes_over():
+    cfg = small_cfg(nodes=3, submit=2, node_stake=(4, 1, 1), epoch_height=300)
+    with pytest.raises(awsb.Refused, match="L1 stake table"):
+        awsb.plan_hosts(cfg)
+
+
+def test_node_stake_is_in_the_config_hash_summary_and_manifest():
+    cfg = small_cfg(nodes=3, submit=2, node_stake=(4, 1, 1))
+    hosts = awsb.plan_hosts(cfg)
+
+    def digest(**kw) -> str:
+        return awsb.run_config_hash(replace(cfg, **kw), hosts, {}, b"genesis")
+
+    assert digest() != digest(node_stake=())
+    assert digest() != digest(node_stake=(1, 4, 1))
+    assert "node-stake: 4,1,1" in awsb.format_node_summary(cfg)
+    assert not any(
+        line.startswith("node-stake") for line in awsb.format_node_summary(small_cfg(3))
+    )
+    saved = awsb.config_to_json(cfg)
+    assert awsb.config_from_manifest(saved).node_stake == (4, 1, 1)
+    del saved["node_stake"]
+    assert awsb.config_from_manifest(saved).node_stake == ()
+
+
 def test_sqlite_node0_env_selects_the_embedded_db_and_has_no_postgres():
     spec = next(h for h in awsb.plan_hosts(small_cfg()) if h["name"] == "node0")
     env = parse_env(awsb.render_node_env(spec, fleet(2), None, query_engine="sqlite"))

@@ -277,6 +277,7 @@ where
             http_delay: opt.http_catchup_delay,
         },
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
+        stake_value: alloy::primitives::U256::from(opt.stake_value.get()),
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
