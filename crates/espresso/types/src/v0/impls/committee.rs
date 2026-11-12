@@ -761,14 +761,8 @@ impl EpochCommittees {
         Ok(())
     }
 
-    /// Installs the epoch roots `roots`, ascending, as `add_epoch_root` does, for a seed: the
-    /// block reward of each table takes the timestamp of the root below it from the previous root
-    /// of the batch, or from `preceding_root` for the first (`None` near genesis, where the assumed
-    /// block time applies). A table without a reward is an error. Each root is bounded by the
-    /// coordinator's catchup timeout and prunes as `add_epoch_root` does.
-    ///
-    /// An error or a timeout leaves the tables installed before it, as a walk does. A stake table
-    /// hash mismatch panics as in `add_epoch_root`.
+    /// the first (`None` near genesis). A failed batch keeps the tables installed before it.
+    /// the first (`None` near genesis). A failed batch keeps the tables installed before the failure.
     #[cfg(feature = "node")]
     pub async fn install_epoch_roots(
         &self,
@@ -3361,15 +3355,36 @@ mod tests {
     /// Puts a committee for `epoch` carrying a reward and `hash`, so `add_epoch_root` skips the
     /// L1 fetch.
     fn put_prefilled(committees: &EpochCommittees, epoch: u64, hash: StakeTableHash) {
+        put_committee(committees, epoch, hash, Some(RewardAmount::default()));
+    }
+
+    /// Puts a committee for `epoch` carrying `block_reward` and `hash`.
+    fn put_committee(
+        committees: &EpochCommittees,
+        epoch: u64,
+        hash: StakeTableHash,
+        block_reward: Option<RewardAmount>,
+    ) {
+        put_committee_with_header(committees, epoch, hash, block_reward, None);
+    }
+
+    /// Puts a committee for `epoch` carrying `block_reward`, `hash` and the epoch root `header`.
+    fn put_committee_with_header(
+        committees: &EpochCommittees,
+        epoch: u64,
+        hash: StakeTableHash,
+        block_reward: Option<RewardAmount>,
+        header: Option<Header>,
+    ) {
         let mut inner = committees.inner.write();
         let template = inner
             .epoch_committee(EpochNumber::genesis())
             .expect("genesis committee exists")
             .clone();
         let prefilled = EpochCommittee {
-            block_reward: Some(RewardAmount::default()),
+            block_reward,
             stake_table_hash: Some(hash),
-            header: None,
+            header,
             eligible_leaders: template.eligible_leaders.clone(),
             stake_table: template.stake_table.clone(),
             validators: template.validators.clone(),
@@ -3410,6 +3425,22 @@ mod tests {
 
     fn other_hash() -> StakeTableHash {
         Commitment::from_raw([7; 32])
+    }
+
+    /// A matching hash installs the root.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn add_epoch_root_matching_hash_ok() {
+        let (committees, coordinator) = mismatch_setup();
+        let header = header_deciding(95, StakeTableState::default().commit()).await;
+
+        committees
+            .add_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        let inner = committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(3)).unwrap();
+        assert!(committee.header.is_some());
     }
 
     /// A mismatch with the held table of the epoch below panics.
@@ -3527,11 +3558,12 @@ mod tests {
         assert!(held <= bound, "{held} snapshots held, bound {bound}");
     }
 
-    /// Persistence of a seed test: `events` are the complete stake table events, and `store_stake`
-    /// never returns.
+    /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
+    /// counts its calls and finds nothing, and `store_stake` never returns.
     #[derive(Debug)]
     struct StalledStakeStore {
         events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        load_stake_calls: Arc<AtomicUsize>,
     }
 
     #[async_trait::async_trait]
@@ -3540,6 +3572,7 @@ mod tests {
             &self,
             _epoch: EpochNumber,
         ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            self.load_stake_calls.fetch_add(1, Ordering::SeqCst);
             Ok(None)
         }
 
@@ -3636,16 +3669,23 @@ mod tests {
         assert!(snapshot.epoch_block_reward().is_none());
     }
 
-    /// A seed of epoch 21 whose `store_stake` stalls after the insert: committees holding epoch 20,
-    /// a coordinator with `catchup_timeout`, and the root of epoch 21 with the root below it.
-    async fn stalled_install_setup(
-        catchup_timeout: Duration,
-    ) -> (
-        EpochCommittees,
-        EpochMembershipCoordinator<SeqTypes>,
-        Header,
-        Header,
-    ) {
+    /// A seed of epoch 21 whose `store_stake` stalls after the insert.
+    struct StalledInstall {
+        /// Committees holding epoch 20.
+        committees: EpochCommittees,
+        /// Coordinator over `committees`, with the setup's catchup timeout.
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
+        /// The root that defines epoch 21.
+        root: Header,
+        /// The root below `root`.
+        preceding: Header,
+        /// Calls of `load_stake` so far.
+        load_stake_calls: Arc<AtomicUsize>,
+    }
+
+    /// The [`StalledInstall`] setup, with `catchup_timeout` on the coordinator.
+    async fn stalled_install_setup(catchup_timeout: Duration) -> StalledInstall {
+        let load_stake_calls = Arc::new(AtomicUsize::new(0));
         let validator = super::super::stake_table::testing::TestValidator::random();
         let events = vec![
             (
@@ -3665,7 +3705,10 @@ mod tests {
         ];
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
-            Arc::new(AsyncMutex::new(StalledStakeStore { events })),
+            Arc::new(AsyncMutex::new(StalledStakeStore {
+                events,
+                load_stake_calls: Arc::clone(&load_stake_calls),
+            })),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
             crate::ChainConfig {
@@ -3693,23 +3736,104 @@ mod tests {
         }
         .into();
         let preceding = timed_root(100 * 18 - 5).await;
-        (committees, coordinator, root, preceding)
+        StalledInstall {
+            committees,
+            coordinator,
+            root,
+            preceding,
+            load_stake_calls,
+        }
     }
 
-    /// A root that exceeds the catchup timeout is an error.
+    /// Runs `install_epoch_roots` on the setup's root; it fails with the catchup timeout.
+    async fn install_stalled_root(setup: &StalledInstall) -> EpochCommitteesError {
+        setup
+            .committees
+            .install_epoch_roots(
+                Some(setup.preceding.clone()),
+                vec![setup.root.clone()],
+                &setup.coordinator,
+            )
+            .await
+            .unwrap_err()
+    }
+
+    /// A root that exceeds the catchup timeout is an error, and the epoch it inserted before the
+    /// stall stays held with its stake table and block reward.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_timeout_fails() {
-        let (committees, coordinator, root, preceding) =
-            stalled_install_setup(Duration::from_millis(500)).await;
+        let setup = stalled_install_setup(Duration::from_millis(500)).await;
 
-        let err = committees
-            .install_epoch_roots(Some(preceding), vec![root], &coordinator)
-            .await
-            .unwrap_err();
+        let err = install_stalled_root(&setup).await;
 
         assert!(
             matches!(&err, EpochCommitteesError::Message(message) if message.contains("exceeded")),
             "{err:#}"
+        );
+        let inner = setup.committees.inner.read();
+        let committee = inner.epoch_committee(EpochNumber::new(21)).unwrap();
+        assert!(!committee.stake_table.is_empty());
+        assert!(committee.block_reward.is_some());
+    }
+
+    /// Requests epoch 25 with a seed hook that records `(target, start)` and fails. Returns the
+    /// recorded calls and the storage loads made by the catchup up to the hook.
+    async fn catchup_seed_calls(setup: &StalledInstall) -> (Vec<(u64, u64)>, usize) {
+        let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let hook_calls = Arc::clone(&calls);
+        setup
+            .coordinator
+            .set_catchup_seed(Arc::new(move |target, start, _coordinator| {
+                hook_calls.lock().push((*target, *start));
+                Box::pin(async { Err(anyhow::anyhow!("no seed in this test")) })
+            }));
+        let loads_before = setup.load_stake_calls.load(Ordering::SeqCst);
+
+        let _ = setup
+            .coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(25)));
+        while calls.lock().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let loads = setup.load_stake_calls.load(Ordering::SeqCst) - loads_before;
+        (calls.lock().clone(), loads)
+    }
+
+    /// After a batch that failed with its first table installed, the next catchup finds the held
+    /// pair and calls the seed with its top, without reading storage.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn catchup_after_failed_batch_starts_at_held_pair_ok() {
+        let setup = stalled_install_setup(Duration::from_millis(500)).await;
+        install_stalled_root(&setup).await;
+
+        let (calls, loads) = catchup_seed_calls(&setup).await;
+
+        assert_eq!(calls, vec![(25, 21)]);
+        assert_eq!(loads, 0, "a pair held in memory needs no storage load");
+    }
+
+    /// With one table held above the genesis pair, the scan for the held pair reads storage once
+    /// per catchup, not once per skipped epoch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn held_pair_scan_skips_the_gap_below_a_single_table_ok() {
+        let setup = stalled_install_setup(Duration::from_millis(500)).await;
+        install_stalled_root(&setup).await;
+        setup
+            .committees
+            .inner
+            .write()
+            .snapshots
+            .remove(&EpochNumber::new(20));
+        let seeded = *setup.committees.first_epoch() + 1;
+
+        let (calls, loads) = catchup_seed_calls(&setup).await;
+
+        assert_eq!(calls, vec![(25, seeded)]);
+        // One load of epoch 20 before the hook takes the seed lock, one after.
+        assert!(
+            loads <= 2,
+            "{loads} storage loads for a single skipped epoch"
         );
     }
 
