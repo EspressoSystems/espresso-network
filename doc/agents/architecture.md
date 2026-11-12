@@ -40,6 +40,31 @@ V0_6, `crates/hotshot/new-protocol/`, `doc/stake-table-fast-finality.md`. Replac
 `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key` and `p2p_addr` on the
 StakeTable contract for peer discovery.
 
+## Validator startup
+
+`SequencerContext::init` applies the stored anchor's epoch to cliquenet and dials the active validators at the L1
+finalized block (`Fetcher::validator_set_at`). Their keys stay extra request-response responders. `state_peers` is
+optional for validators.
+
+The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
+without one the catchup walks only. The follower has no seed and walks at startup (`bootstrap_epoch_window`).
+
+A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
+one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
+seed at a time:
+
+1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
+   below the second installed table is not seeded: its DRB needs `ST(target-1)` and `ST(target-2)`, so the walk serves
+   it.
+2. Fetches the header at `F` over request-response and accepts it iff its height is `F` and its `block_comm_root`
+   matches.
+3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it; `root(E*-6)` only supplies
+   a block time. The L1 read, the peer requests (30 s) and each install are bounded.
+4. Installs the tables above the held pair within `ST(E*-3) ..= ST(E*+1)`, each with a block reward computed from the
+   proven roots, each root bounded by the catchup timeout. A stake table hash mismatch panics as in the walk; a timeout
+   or another error keeps the installed tables and the catchup retries above them. The walk then runs from `E*+1` up to
+   the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
+
 ## Consensus upgrades
 
 Mechanism and configuration: `doc/upgrades.md`.

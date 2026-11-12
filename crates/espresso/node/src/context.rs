@@ -11,7 +11,7 @@ use anyhow::{Context, ensure};
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
@@ -21,14 +21,14 @@ use futures::{
 use hotshot_new_protocol::{
     coordinator::Coordinator,
     leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
-    network::{Cliquenet, NetworkError},
+    network::{Cliquenet, NetworkError, Role},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     HotShotConfig, PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::drb_difficulty_selector,
     epoch_membership::EpochMembershipCoordinator,
     initializer::{HotShotInitializer, load_start_epoch_info},
@@ -61,6 +61,7 @@ use crate::{
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
+    lc_contract_seed::LcContractSeed,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         RequestResponseProtocol,
@@ -68,7 +69,6 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::bootstrap_epoch_window,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 
@@ -90,10 +90,9 @@ pub struct SequencerContext<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
 
-    /// The request-response protocol
+    /// The request-response protocol; owns it for the catchup seed, which holds it weakly.
     #[derivative(Debug = "ignore")]
-    #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<P>,
+    pub request_response_protocol: Arc<RequestResponseProtocol<P>>,
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
@@ -138,7 +137,6 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
         leader_trace_dir: Option<PathBuf>,
@@ -175,25 +173,17 @@ where
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
-        let epoch_height = initializer.epoch_height();
-
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
-        let current_epoch = bootstrap_epoch_window(
+        let l1_finalized_peers = connect_startup_peers(
+            &mut coordinator_network,
             &membership_coordinator,
-            epoch_height,
-            bootstrap_epoch_catchup_timeout,
+            &initializer,
+            version,
         )
-        .await
-        .context("startup stake-table catchup failed")?;
-        tracing::info!(%current_epoch, "Startup catchup complete");
-
-        // For cliquenet this dials the N-1/N/N+1 epoch window before consensus starts.
-        if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
-            tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
-        }
+        .await;
 
         // Restore the persisted lock so the new protocol resumes with the lock
         // it actually held, not the older decided-anchor QC.
@@ -296,14 +286,15 @@ where
         };
 
         // Create the request-response protocol
-        let request_response_protocol = RequestResponseProtocol::new(
+        let request_response_protocol = Arc::new(RequestResponseProtocol::new(
             request_response_config,
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
             RecipientSource {
-                memberships: membership_coordinator,
+                memberships: membership_coordinator.clone(),
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
+                l1_finalized_peers,
             },
             DataSource {
                 node_state: instance_state.clone(),
@@ -313,12 +304,17 @@ where
             },
             validator_config.public_key,
             validator_config.private_key.clone(),
-        );
+        ));
 
         // Add the request-response protocol to the list of providers for state catchup. Since the interior is mutable,
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
-        state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
+        state_catchup.add_provider(Arc::new(RequestResponseProtocol::clone(
+            &request_response_protocol,
+        )));
+        if instance_state.chain_config.stake_table_contract.is_some() {
+            LcContractSeed::install(&membership_coordinator, &request_response_protocol);
+        }
 
         // Create the external event handler
         let mut tasks = TaskList::default();
@@ -360,7 +356,7 @@ where
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<P>,
+        request_response_protocol: Arc<RequestResponseProtocol<P>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -605,6 +601,65 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
         .decided_upgrade_cert()
         .map(|cert| cert.data.new_version)
         .unwrap_or(upgrade_lock.upgrade().base)
+}
+
+/// Applies the stored anchor's epoch to `network` and dials the active validators at the L1
+/// finalized block that it does not hold. Returns the dialed keys.
+///
+/// Held keys keep the connect info of the held tables, which may be older than L1's. The dial runs
+/// once; a failure leaves no extra peers until restart. The first `apply_epoch` for a higher epoch
+/// with a table drops the dialed peers.
+async fn connect_startup_peers(
+    network: &mut Cliquenet<SeqTypes>,
+    membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    initializer: &HotShotInitializer<SeqTypes>,
+    version: Version,
+) -> Vec<PubKey> {
+    // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
+    let anchor_epoch = initializer
+        .anchor_leaf()
+        .epoch(initializer.epoch_height())
+        .unwrap_or_else(EpochNumber::genesis);
+    if let Err(err) = network.apply_epoch(anchor_epoch, membership_coordinator) {
+        tracing::warn!(%anchor_epoch, %err, "coordinator apply_epoch failed at startup");
+    }
+
+    let held = network.peer_keys();
+    let dial = async {
+        let l1_block = initializer
+            .instance_state()
+            .l1_client
+            .finalized_number_within_wait()
+            .await?;
+        let validators = membership_coordinator
+            .membership()
+            .fetcher()
+            .validator_set_at(l1_block, version)
+            .await?;
+        let targets = validators
+            .active_validators()
+            .values()
+            .filter(|validator| !held.contains(validator.stake_table_key()))
+            .filter_map(|validator| {
+                let info = (validator.x25519_key?.into(), validator.p2p_addr.clone()?);
+                Some((*validator.stake_table_key(), info))
+            })
+            .collect::<Vec<_>>();
+        let dialed = targets.iter().map(|(key, _)| *key).collect();
+        network.add_peers(Role::Active, targets)?;
+        anyhow::Ok(dialed)
+    };
+    let l1_finalized_peers = dial.await.unwrap_or_else(|err| {
+        tracing::warn!(%err, "failed to dial the L1 finalized validators");
+        Vec::new()
+    });
+    info!(
+        target: "announce::catchup",
+        %anchor_epoch,
+        l1_finalized_peers = l1_finalized_peers.len(),
+        "startup peers"
+    );
+    l1_finalized_peers
 }
 
 async fn seed_membership(
