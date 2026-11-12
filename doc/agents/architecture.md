@@ -57,8 +57,8 @@ seed at a time:
 1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
    below the second installed table is not seeded: its DRB needs `ST(target-1)` and `ST(target-2)`, so the walk serves
    it.
-2. Fetches the header at `F` over request-response and accepts it iff its height is `F` and its `block_comm_root`
-   matches.
+2. Fetches the header at `F` over request-response (a follower: from its upstreams) and accepts it iff its height
+   is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it; `root(E*-6)` only supplies
    a block time. The L1 read, the peer requests (30 s) and each install are bounded.
 4. Installs the tables above the held pair within `ST(E*-3) ..= ST(E*+1)`, each with a block reward computed from the
@@ -67,7 +67,7 @@ seed at a time:
    the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
 5. Requests go over request-response. With `--state-peers`, they also go over HTTP after `--http-catchup-delay`, at once
    when the protocol is not available; the state peers are asked in order and an answer that fails its check moves on to
-   the next.
+   the next. A follower has no request-response: its upstreams answer at once.
 
 ## Consensus upgrades
 

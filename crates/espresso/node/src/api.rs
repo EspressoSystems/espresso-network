@@ -5938,6 +5938,7 @@ mod test {
                 >= Some(epoch_from_block_number(tip, EPOCH_HEIGHT) as f64),
             "{export}"
         );
+        // The first poll precedes the query API, so no state replay walks the seed window first.
         assert!(
             metric_value(&export, "consensus_catchup_lc_contract_seeds") >= Some(1.0),
             "{export}"

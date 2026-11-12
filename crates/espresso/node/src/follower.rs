@@ -316,7 +316,7 @@ where
         .block_height()
         .await
         .context("reading the height the query database has reached")?;
-    let follower = Follower {
+    let mut follower = Follower {
         source,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
@@ -331,6 +331,9 @@ where
         next,
     };
     let mut tasks = TaskList::default();
+    // The first poll requests the first stake table before the caller starts the query API, whose
+    // state replay would otherwise walk up to the seed window first.
+    follower.poll_logged().await;
     tasks.spawn("light client follower", follower.run());
 
     Ok(FollowerHandle {
@@ -610,14 +613,19 @@ impl<P: SequencerPersistence> Follower<P> {
     async fn run(mut self) {
         tracing::info!(from = self.next, "following the chain");
         loop {
-            if let Err(err) = self.poll().await {
-                tracing::warn!(
-                    next = self.next,
-                    err = %format!("{err:#}"),
-                    "following the chain failed"
-                );
-            }
+            self.poll_logged().await;
             sleep(self.options.poll_interval).await;
+        }
+    }
+
+    /// One poll; a failure is logged and the next poll retries it.
+    async fn poll_logged(&mut self) {
+        if let Err(err) = self.poll().await {
+            tracing::warn!(
+                next = self.next,
+                err = %format!("{err:#}"),
+                "following the chain failed"
+            );
         }
     }
 
@@ -736,9 +744,8 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// Holds the stake tables that following from `height` needs: the next epoch's, and the one
-    /// after it once the epoch's root block lies below `height` and derives nothing. Far behind,
-    /// the coordinator seeds them from the LC contract.
+    /// Holds the stake tables that following from `height` needs: the next epoch's and, once the
+    /// epoch's root block lies below `height`, the one after. Far behind, the coordinator seeds.
     async fn require_stake_tables(&self, height: u64) -> anyhow::Result<()> {
         let epoch = epoch_from_block_number(height, self.epoch_height);
         let root_skipped = root_block_in_epoch(epoch, self.epoch_height) < height;
