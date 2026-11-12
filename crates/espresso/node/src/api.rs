@@ -7027,14 +7027,14 @@ mod test {
 
     /// Where the mock LC contract is finalized when the validator starts.
     enum LcContractAt {
-        /// A fixed block height.
-        Height(u64),
+        /// A fixed block height, with the network run to `network_epoch`.
+        Height { height: u64, network_epoch: u64 },
         /// The newest block the network decided.
         NetworkTip,
     }
 
     /// A validator that starts with the LC contract finalized at `lc_contract_height` while the
-    /// network is at epoch `NETWORK_EPOCH` (`TIP_NETWORK_EPOCH` for `NetworkTip`), is seeded by its
+    /// network is at the network epoch (`TIP_NETWORK_EPOCH` for `NetworkTip`), is seeded by its
     /// post-start catchup and votes.
     ///
     /// Six validators run to `STOPPED_AT_EPOCH`, node 1 is stopped, the network runs on to
@@ -7048,7 +7048,6 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
         const STOPPED_AT_EPOCH: u64 = 2;
-        const NETWORK_EPOCH: u64 = 7;
         // One more epoch below the tip, so that epochs lie between the genesis pair and the window.
         const TIP_NETWORK_EPOCH: u64 = 8;
         const JOIN_TIMEOUT: Duration = Duration::from_secs(240);
@@ -7081,7 +7080,7 @@ mod test {
 
         let mut events = network.server.event_stream();
         let network_epoch = match lc_contract {
-            LcContractAt::Height(_) => NETWORK_EPOCH,
+            LcContractAt::Height { network_epoch, .. } => network_epoch,
             LcContractAt::NetworkTip => TIP_NETWORK_EPOCH,
         };
         wait_for_epochs(&mut events, EPOCH_HEIGHT, network_epoch).await;
@@ -7089,7 +7088,7 @@ mod test {
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         let header: Header = match lc_contract {
-            LcContractAt::Height(height) => client
+            LcContractAt::Height { height, .. } => client
                 .get(&format!("availability/header/{height}"))
                 .send()
                 .await
@@ -7213,13 +7212,21 @@ mod test {
         }
     }
 
-    /// Covers `TEST:fresh-validator-joins-over-cliquenet-ok`: fresh storage, LC contract at the
-    /// network epoch.
+    /// Covers `TEST:fresh-validator-joins-over-cliquenet-ok`: fresh storage, LC contract at height
+    /// 82 in epoch 9 while the network is past it, in epoch 10. The window is epochs 6 to 10, so
+    /// the block reward of epoch 6 reads the preceding root, the root of epoch 3.
     #[apply(sql_data_sources)]
     async fn test_new_protocol_fresh_validator_joins_over_cliquenet<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(LcContractAt::Height(62), true).await;
+        validator_joins_over_cliquenet::<D>(
+            LcContractAt::Height {
+                height: 82,
+                network_epoch: 10,
+            },
+            true,
+        )
+        .await;
     }
 
     /// The LC contract is in the network's current epoch: the node crosses the end of that epoch
@@ -7237,7 +7244,14 @@ mod test {
     async fn test_new_protocol_fresh_validator_joins_with_prover_lag<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(LcContractAt::Height(35), true).await;
+        validator_joins_over_cliquenet::<D>(
+            LcContractAt::Height {
+                height: 35,
+                network_epoch: 7,
+            },
+            true,
+        )
+        .await;
     }
 
     /// `TEST:restart-more-than-lookahead-behind-reaches-current-ok`: stored anchor in epoch 2, the
@@ -7248,7 +7262,14 @@ mod test {
     >(
         _d: PhantomData<D>,
     ) {
-        validator_joins_over_cliquenet::<D>(LcContractAt::Height(62), false).await;
+        validator_joins_over_cliquenet::<D>(
+            LcContractAt::Height {
+                height: 62,
+                network_epoch: 7,
+            },
+            false,
+        )
+        .await;
     }
 
     #[apply(sql_data_sources)]

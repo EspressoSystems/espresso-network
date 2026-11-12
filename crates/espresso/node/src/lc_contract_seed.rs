@@ -36,7 +36,7 @@ use crate::request_response::{
 /// Most requests of one seed in flight; peers answer 4 requests per key at a time.
 const MAX_CONCURRENT_REQUESTS: usize = 3;
 
-/// Bound on the peer requests of one seed: with no answering peer the attempt fails within it.
+/// Bound on each peer request of a seed: with no answering peer the attempt fails within it.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The LC-contract seed behind `CatchupSeedFn`; steps in `doc/agents/architecture.md`.
