@@ -67,16 +67,12 @@ jobs:
           else
             mapfile -t targets < <(jq -r '.[] | capture("^backport (?<branch>[^ ]+)$").branch' <<<"$LABELS")
           fi
-          # Run a fixed copy: after the first target the working tree is on a release branch,
-          # which has its own, older copy of the script.
-          git show "$GITHUB_SHA:scripts/backport-dispatch" > "$RUNNER_TEMP/backport-dispatch"
-          chmod +x "$RUNNER_TEMP/backport-dispatch"
           created=""
           failed=""
           for target in ${targets[@]+"${targets[@]}"}; do
             out="$RUNNER_TEMP/backport-dispatch-output"
             : > "$out"
-            if GITHUB_OUTPUT="$out" "$RUNNER_TEMP/backport-dispatch" "$PR_NUMBER" "$target"; then
+            if GITHUB_OUTPUT="$out" scripts/backport-dispatch "$PR_NUMBER" "$target"; then
               new=$(sed -n 's/^created_pull_numbers=//p' "$out")
               created="$created $new"
               gh pr comment "$PR_NUMBER" --body "Created backport PR for \`$target\`: #$new" || true
@@ -84,7 +80,9 @@ jobs:
               failed="$failed $target"
               gh pr comment "$PR_NUMBER" --body "Backport to \`$target\` failed. See the [workflow run]($run_url)." || true
             fi
-            # Start the next target from a clean tree, whatever state this one stopped in.
+            # Start the next target from a clean tree on $GITHUB_SHA, whatever state this one
+            # stopped in. This also brings back this commit's scripts/backport-dispatch: a
+            # backport branch has its release branch's older copy.
             git cherry-pick --abort >/dev/null 2>&1 || true
             git checkout -q --force --detach "$GITHUB_SHA"
           done
