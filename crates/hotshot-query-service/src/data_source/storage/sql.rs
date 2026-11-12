@@ -1273,6 +1273,7 @@ mod test {
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
+    use hotshot_types::simple_certificate::Certificate2;
     use jf_merkle_tree_compat::{
         MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::UniversalMerkleTree,
     };
@@ -1285,7 +1286,10 @@ mod test {
             MerklizedStateStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
         },
         merklized_state::{MerklizedState, Snapshot, UpdateStateData},
-        testing::mocks::{MockMerkleTree, MockTypes},
+        testing::{
+            chain::{EPOCH_HEIGHT, MockChain, NUM_NODES},
+            mocks::{MockMerkleTree, MockTypes},
+        },
     };
 
     impl SqlStorage {
@@ -1890,6 +1894,95 @@ mod test {
             .await
             .unwrap();
         count
+    }
+
+    /// A pruner run deletes the cert2s at the heights it prunes, and keeps the ones above.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning() {
+        let db = TmpDb::init().await;
+        let (storage, chain) = storage_with_sparse_cert2s(&db).await;
+
+        let cfg = PrunerCfg::default();
+        let mut pruner = Some(data_pruner(&cfg, 3));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(2));
+        assert_eq!(count_rows(&storage, "leaf2").await, 2);
+
+        let mut tx = storage.read().await.unwrap();
+        let cert2_1: Option<Certificate2<MockTypes>> = tx.load_cert2(1).await.unwrap();
+        assert_eq!(cert2_1, None);
+        let cert2_2: Option<Certificate2<MockTypes>> = tx.load_cert2(2).await.unwrap();
+        assert_eq!(cert2_2, None);
+        let cert2_4: Option<Certificate2<MockTypes>> = tx.load_cert2(4).await.unwrap();
+        assert_eq!(cert2_4, Some(cert2_at(&chain, 4)));
+        let earliest: Option<Certificate2<MockTypes>> = tx.load_earliest_cert2(0).await.unwrap();
+        assert_eq!(earliest, Some(cert2_at(&chain, 4)));
+    }
+
+    /// A later pruner run, which starts above genesis, deletes the cert2s at its heights too.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_later_run() {
+        let db = TmpDb::init().await;
+        let (storage, _) = storage_with_sparse_cert2s(&db).await;
+
+        let cfg = PrunerCfg::default();
+        let mut pruner = Some(data_pruner(&cfg, 3));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(2));
+        pruner.as_mut().unwrap().data.target_height = 5;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(4));
+
+        assert_eq!(count_rows(&storage, "leaf2").await, 0);
+        assert_eq!(count_rows(&storage, "cert2").await, 0);
+    }
+
+    /// Storage with leaves at heights 0 to 4 and cert2s at heights 1, 2 and 4 only: a leaf
+    /// finalized indirectly, by the decide of a later leaf, has no cert2 of its own.
+    async fn storage_with_sparse_cert2s(db: &TmpDb) -> (SqlStorage, MockChain) {
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(Default::default());
+
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push_empty(4).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf_range(chain.blocks().iter().map(|block| &block.leaf))
+            .await
+            .unwrap();
+        for height in [1, 2, 4] {
+            tx.insert_cert2(height, cert2_at(&chain, height))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        assert_eq!(count_rows(&storage, "leaf2").await, 5);
+        assert_eq!(count_rows(&storage, "cert2").await, 3);
+        (storage, chain)
+    }
+
+    /// The cert2 finalizing the block at `height`.
+    fn cert2_at(chain: &MockChain, height: u64) -> Certificate2<MockTypes> {
+        let cert2 = chain.cert2(&chain.blocks()[height as usize]).unwrap();
+        assert_eq!(cert2.data.block_number, height);
+        cert2
+    }
+
+    /// A pruner whose next data batches delete every height below `target_height`.
+    fn data_pruner(cfg: &PrunerCfg, target_height: u64) -> Pruner<'_> {
+        Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height,
+                minimum_retention_height: target_height,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg,
+            extra_pruning: false,
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

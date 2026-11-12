@@ -533,6 +533,14 @@ impl Transaction<Prune> {
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
 
+        // Every reader of a cert2 needs the leaf at its height too, so it goes with the leaf.
+        let res = query("DELETE FROM cert2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting cert2")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned cert2");
+
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
