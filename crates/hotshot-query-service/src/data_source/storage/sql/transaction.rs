@@ -533,14 +533,6 @@ impl Transaction<Prune> {
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
 
-        // Every reader of a cert2 needs the leaf at its height too, so it goes with the leaf.
-        let res = query("DELETE FROM cert2 WHERE height <= $1")
-            .bind(height as i64)
-            .execute(self.as_mut())
-            .await
-            .context("deleting cert2")?;
-        tracing::debug!(rows_affected = res.rows_affected(), "pruned cert2");
-
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
@@ -587,6 +579,31 @@ impl Transaction<Prune> {
         );
 
         Ok(())
+    }
+
+    /// Delete the lowest `limit` cert2s at or below `height`, returning how many were deleted.
+    ///
+    /// Every reader of a cert2 needs the leaf at its height too, so cert2s are pruned with the
+    /// leaves.
+    #[instrument(skip(self))]
+    pub(super) async fn delete_cert2_chunk(
+        &mut self,
+        height: u64,
+        limit: u64,
+    ) -> anyhow::Result<u64> {
+        // Neither backend has a portable `DELETE ... LIMIT`.
+        let res = query(
+            "DELETE FROM cert2 WHERE height IN (
+                SELECT height FROM cert2 WHERE height <= $1 ORDER BY height LIMIT $2
+             )",
+        )
+        .bind(height as i64)
+        .bind(limit as i64)
+        .execute(self.as_mut())
+        .await
+        .context("deleting cert2")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned cert2");
+        Ok(res.rows_affected())
     }
 
     /// Record the height of the latest pruned merklized state.

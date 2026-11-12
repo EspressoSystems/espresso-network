@@ -822,14 +822,14 @@ impl SqlStorage {
     ) -> anyhow::Result<()> {
         tracing::info!("pruning batch");
         match category {
-            PruneCategory::Data => self.prune_data_batch(to).await?,
+            PruneCategory::Data => self.prune_data_batch(pruner.cfg, to).await?,
             PruneCategory::State => self.prune_state_batch(pruner.cfg, from, to).await?,
         }
         pruner.set_pruned_height(category, to);
         Ok(())
     }
 
-    async fn prune_data_batch(&self, to: u64) -> anyhow::Result<()> {
+    async fn prune_data_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
         self.set_pruned_height(to).await?;
@@ -839,7 +839,28 @@ impl SqlStorage {
             .await
             .context("opening pruning transaction")?;
         tx.delete_batch(to).await?;
-        tx.commit().await.context("committing deleted batch")
+        tx.commit().await.context("committing deleted batch")?;
+
+        self.delete_cert2s(to, cfg.batch_size().max(1)).await
+    }
+
+    /// Delete the cert2s at or below `to`, at most `chunk` per transaction.
+    ///
+    /// A node upgraded from a version that never pruned cert2s still has every one below its
+    /// pruned height. In one transaction, its first batch would hold the write lock, which
+    /// consensus shares on SQLite, until all of them are gone.
+    async fn delete_cert2s(&self, to: u64, chunk: u64) -> anyhow::Result<()> {
+        loop {
+            let mut tx = self
+                .prune_write()
+                .await
+                .context("opening cert2 pruning transaction")?;
+            let deleted = tx.delete_cert2_chunk(to, chunk).await?;
+            tx.commit().await.context("committing deleted cert2s")?;
+            if deleted < chunk {
+                return Ok(());
+            }
+        }
     }
 
     /// Record `height` as the data pruned height, without deleting anything: data at or below it
@@ -1267,7 +1288,7 @@ pub mod testing {
 // These tests start `postgres` from PATH, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use std::time::Duration;
+    use std::{ops::RangeInclusive, time::Duration};
 
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
@@ -1934,6 +1955,66 @@ mod test {
         assert_eq!(count_rows(&storage, "cert2").await, 0);
     }
 
+    /// The first batch after an upgrade deletes the backlog of cert2s that older versions left
+    /// below the pruned height, when the backlog holds more rows than `batch_size` and is not a
+    /// multiple of it. The cert2s above the batch stay.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_larger_than_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 9).await;
+        insert_cert2s(&storage, &chain, [8, 9]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 6));
+        for to in [1, 3, 5] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=5).await;
+
+        pruner.as_mut().unwrap().data.target_height = 8;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(7));
+        assert_cert2s_pruned_to(&storage, &chain, 7, &[8, 9]).await;
+    }
+
+    /// As above, with a backlog of exactly twice `batch_size` rows and no cert2 in the batch.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_exact_multiple_of_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 8).await;
+        insert_cert2s(&storage, &chain, [7, 8]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 5));
+        for to in [1, 3, 4] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=4).await;
+
+        pruner.as_mut().unwrap().data.target_height = 7;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(6));
+        assert_cert2s_pruned_to(&storage, &chain, 6, &[7, 8]).await;
+    }
+
+    /// The first batch after an upgrade deletes the backlog together with the cert2s at its own
+    /// heights.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_with_batch_window() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 8).await;
+        insert_cert2s(&storage, &chain, [4, 5, 6, 8]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 4));
+        for to in [1, 3] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=3).await;
+
+        pruner.as_mut().unwrap().data.target_height = 6;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
+        assert_cert2s_pruned_to(&storage, &chain, 5, &[6, 8]).await;
+    }
+
     /// Storage with leaves at heights 0 to 4 and cert2s at heights 1, 2 and 4 only: a leaf
     /// finalized indirectly, by the decide of a later leaf, has no cert2 of its own.
     async fn storage_with_sparse_cert2s(db: &TmpDb) -> (SqlStorage, MockChain) {
@@ -1983,6 +2064,100 @@ mod test {
             cfg,
             extra_pruning: false,
         }
+    }
+
+    /// Storage with leaves at heights 0 to `tip` and no cert2s, configured to prune with `cfg`.
+    async fn storage_with_leaves(
+        db: &TmpDb,
+        cfg: &PrunerCfg,
+        tip: usize,
+    ) -> (SqlStorage, MockChain) {
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(cfg.clone());
+
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push_empty(tip).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf_range(chain.blocks().iter().map(|block| &block.leaf))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        (storage, chain)
+    }
+
+    async fn insert_cert2s(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        heights: impl IntoIterator<Item = u64>,
+    ) {
+        let mut tx = storage.write().await.unwrap();
+        for height in heights {
+            tx.insert_cert2(height, cert2_at(chain, height))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+    }
+
+    /// Insert cert2s at `heights`, all at or below the pruned height, as a node upgraded from a
+    /// version whose pruner never deleted cert2s still has them.
+    async fn insert_cert2_backlog(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        heights: RangeInclusive<u64>,
+    ) {
+        let pruned = storage
+            .read()
+            .await
+            .unwrap()
+            .load_pruned_height()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            *heights.end() <= pruned,
+            "backlog above pruned height {pruned}"
+        );
+
+        insert_cert2s(storage, chain, heights.clone()).await;
+        let mut tx = storage.read().await.unwrap();
+        for height in heights {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(cert2, Some(cert2_at(chain, height)));
+        }
+    }
+
+    /// Assert that no cert2 at or below `pruned` is left, and that exactly the cert2s at `kept`,
+    /// in ascending order, are left, unchanged.
+    async fn assert_cert2s_pruned_to(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        pruned: u64,
+        kept: &[u64],
+    ) {
+        let mut tx = storage.read().await.unwrap();
+        for height in 0..=pruned {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(cert2, None, "cert2 left at height {height}");
+        }
+        for &height in kept {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(
+                cert2,
+                Some(cert2_at(chain, height)),
+                "cert2 at height {height}"
+            );
+        }
+        let earliest: Option<Certificate2<MockTypes>> = tx.load_earliest_cert2(0).await.unwrap();
+        assert_eq!(
+            earliest,
+            kept.first().map(|&height| cert2_at(chain, height))
+        );
+        drop(tx);
+
+        assert_eq!(count_rows(storage, "cert2").await, kept.len() as i64);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
