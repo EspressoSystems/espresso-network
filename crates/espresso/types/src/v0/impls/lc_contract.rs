@@ -67,8 +67,8 @@ impl LcContractFinalizedState {
         // installed again; epoch 3 is the first table an epoch root defines.
         let first = EpochNumber::new(last.saturating_sub(4).max(*start + 1).max(3));
         // The lowest block reward takes its block time from this root, except near genesis.
-        let preceding_root = (first <= last && first > first_epoch + 4)
-            .then(|| root_block_in_epoch(*first - 3, epoch_height));
+        let preceding_root =
+            (first > first_epoch + 4).then(|| root_block_in_epoch(*first - 3, epoch_height));
         Some(SeedWindow {
             epochs: first..=last,
             preceding_root,
