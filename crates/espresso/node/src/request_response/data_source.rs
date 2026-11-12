@@ -338,6 +338,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                     None => bail!("no cert2 available at height {height}"),
                 }
             },
+            // Only nodes with SQL storage answer.
             Request::HeaderProof { root, height } => Ok(Response::HeaderProof(Box::new(
                 self.sql_storage("header proof")?
                     .get_header_proof(*root, *height)
