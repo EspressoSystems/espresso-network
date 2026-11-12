@@ -27,7 +27,7 @@ use espresso_types::{
     v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
-        RewardMerkleTreeV2,
+        RewardMerkleTreeV2, RewardMerkleTreeV2Data as InternalRewardTreeData,
     },
     v0_6::RewardClaimError,
 };
@@ -66,7 +66,7 @@ use serde_json;
 use tagged_base64::TaggedBase64;
 
 use super::{
-    RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
+    RewardMerkleTreeDataSource,
     data_source::{
         CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeKeysDataSource,
         NodeStateDataSource, PruningDataSource, RequestResponseDataSource, StakeTableDataSource,

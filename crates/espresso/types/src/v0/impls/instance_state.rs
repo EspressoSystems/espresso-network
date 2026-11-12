@@ -612,13 +612,14 @@ pub mod mock {
     use hotshot_types::{
         data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
     };
-    use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+    use jf_merkle_tree_compat::MerkleTreeScheme;
 
     use super::*;
     use crate::{
         BackoffParams, BlockMerkleTree, FeeAccountProof, Leaf2,
         catchup::{
-            FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, StateCertFor, Verified,
+            CatchupRequest, FeeAccountsAt, FrontierAt, LeafAt, RewardAccountsV1At, RewardTreeV2At,
+            StateCertFor, Verified,
         },
         retain_accounts,
         v0_3::RewardAccountProofV1,
@@ -687,34 +688,28 @@ pub mod mock {
             );
             let tree = retain_accounts(src, req.accounts.iter().copied())
                 .with_context(|| "failed to retain accounts")?;
-            Ok(req.verify(&tree)?)
+            Ok(req.verify(tree).await?)
         }
 
-        async fn try_remember_blocks_merkle_tree(
+        async fn try_fetch_blocks_frontier(
             &self,
             _retry: usize,
             _instance: &NodeState,
-            _height: u64,
-            view: ViewNumber,
-            mt: &mut BlockMerkleTree,
-        ) -> anyhow::Result<()> {
+            req: &FrontierAt,
+        ) -> anyhow::Result<Verified<BlockMerkleTree>> {
             tokio::time::sleep(self.delay).await;
 
-            tracing::info!("catchup: fetching frontier for view {view}");
-            let src = &self.state[&view].block_merkle_tree;
+            tracing::info!("catchup: fetching frontier for view {}", req.view);
+            let src = &self.state[&req.view].block_merkle_tree;
 
-            assert_eq!(src.commitment(), mt.commitment());
+            assert_eq!(src.commitment(), req.tree.commitment());
             assert!(
                 src.num_leaves() > 0,
                 "catchup should not be triggered when blocks tree is empty"
             );
 
-            let index = src.num_leaves() - 1;
-            let (elem, proof) = src.lookup(index).expect_ok().unwrap();
-            mt.remember(index, elem, proof.clone())
-                .expect("Proof verifies");
-
-            Ok(())
+            let (_, proof) = src.lookup(src.num_leaves() - 1).expect_ok().unwrap();
+            Ok(req.verify(proof).await?)
         }
 
         async fn try_fetch_chain_config(

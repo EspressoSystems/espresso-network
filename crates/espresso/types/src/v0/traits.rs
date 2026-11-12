@@ -42,7 +42,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
-    catchup::{FeeAccountsAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, StateCertFor, Verified},
+    catchup::{
+        FeeAccountsAt, FrontierAt, LeafAt, RewardAccountsV1At, RewardTreeV2At, StateCertFor,
+        Verified,
+    },
     impls::NodeState,
     utils::BackoffParams,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
@@ -105,27 +108,24 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
-    /// Fetch and remember the blocks frontier without retrying on transient errors.
-    async fn try_remember_blocks_merkle_tree(
+    /// Fetch the blocks frontier without retrying on transient errors.
+    async fn try_fetch_blocks_frontier(
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()>;
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>>;
 
-    /// Fetch and remember the blocks frontier, retrying on transient errors.
-    async fn remember_blocks_merkle_tree(
+    /// Fetch the blocks frontier, retrying on transient errors.
+    async fn fetch_blocks_frontier(
         &self,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
         self.backoff()
-            .retry(mt, |mt, retry| {
-                self.try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
+            .retry(self, |provider, retry| {
+                provider
+                    .try_fetch_blocks_frontier(retry, instance, req)
                     .map_err(|err| err.context(format!("fetching frontier using {}", self.name())))
                     .boxed()
             })
@@ -282,29 +282,23 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_accounts(instance, req).await
     }
 
-    async fn try_remember_blocks_merkle_tree(
+    async fn try_fetch_blocks_frontier(
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
         (**self)
-            .try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
+            .try_fetch_blocks_frontier(retry, instance, req)
             .await
     }
 
-    async fn remember_blocks_merkle_tree(
+    async fn fetch_blocks_frontier(
         &self,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        (**self)
-            .remember_blocks_merkle_tree(instance, height, view, mt)
-            .await
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
+        (**self).fetch_blocks_frontier(instance, req).await
     }
 
     async fn try_fetch_chain_config(

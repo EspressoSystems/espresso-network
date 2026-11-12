@@ -39,7 +39,7 @@ use crate::{
     BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount,
     FeeInfo, FeeMerkleTree, Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes,
     UpgradeType,
-    catchup::FeeAccountsAt,
+    catchup::{FeeAccountsAt, FrontierAt},
     traits::StateCatchup,
     v0::{
         impls::{StakeTableHash, distribute_block_reward},
@@ -1074,14 +1074,17 @@ impl ValidatedState {
                 ?parent_view,
                 "fetching block frontier from peers"
             );
-            peers
-                .remember_blocks_merkle_tree(
+            validated_state.block_merkle_tree = peers
+                .fetch_blocks_frontier(
                     instance,
-                    parent_height,
-                    parent_view,
-                    &mut validated_state.block_merkle_tree,
+                    &FrontierAt {
+                        height: parent_height,
+                        view: parent_view,
+                        tree: validated_state.block_merkle_tree.clone(),
+                    },
                 )
-                .await?;
+                .await?
+                .into_inner();
         }
 
         // Fetch missing fee state entries

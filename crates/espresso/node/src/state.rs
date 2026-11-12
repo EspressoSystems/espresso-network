@@ -7,7 +7,7 @@ use committable::Committable;
 use either::Either;
 use espresso_types::{
     BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
-    catchup::RewardTreeV2At,
+    catchup::{FrontierAt, RewardTreeV2At},
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::{Delta, PermittedRewardMerkleTreeV2},
@@ -657,15 +657,18 @@ async fn fetch_boundary_state(
 ) -> anyhow::Result<ValidatedState> {
     let header = leaf.block_header();
     let mut state = ValidatedState::from_header(header);
-    catchup
-        .remember_blocks_merkle_tree(
+    state.block_merkle_tree = catchup
+        .fetch_blocks_frontier(
             instance,
-            leaf.height(),
-            leaf.view_number(),
-            &mut state.block_merkle_tree,
+            &FrontierAt {
+                height: leaf.height(),
+                view: leaf.view_number(),
+                tree: state.block_merkle_tree.clone(),
+            },
         )
         .await
-        .context("fetching the block frontier")?;
+        .context("fetching the block frontier")?
+        .into_inner();
     let reward_root = header
         .reward_merkle_tree_root()
         .right()

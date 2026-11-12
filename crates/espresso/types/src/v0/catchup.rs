@@ -1,14 +1,12 @@
 //! Catchup requests, and the values a peer sends back once they are verified against the request.
 //!
-//! The leaf, fee account, reward account, reward tree, chain config and state certificate methods
-//! of [`StateCatchup`](super::traits::StateCatchup) return [`Verified`] values. A provider gets
-//! one only from the `verify` function of the request it was asked to answer, or from
-//! [`Verified::new_unchecked`] for a trusted source. The types do not stop a provider from
-//! verifying against a request it built itself, so providers must use the one they were given.
-//!
-//! Not covered yet: the blocks frontier is checked by `remember` inside each provider.
+//! Every fetch method of [`StateCatchup`](super::traits::StateCatchup) takes a [`CatchupRequest`]
+//! and returns a [`Verified`] value. A provider gets one only from [`CatchupRequest::verify`] on
+//! the request it was asked to answer, or from [`Verified::new_unchecked`] for a trusted source.
+//! The types do not stop a provider from verifying against a request it built itself, so
+//! providers must use the one they were given.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, sync::Arc};
 
 use anyhow::{Context, anyhow, ensure};
 use committable::{Commitment, Committable};
@@ -21,25 +19,39 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
 };
-use jf_merkle_tree_compat::MerkleTreeScheme;
+use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 #[cfg(feature = "node")]
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
-#[cfg(feature = "node")]
-use crate::{Certificate2, Leaf2};
 use crate::{
-    FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree,
-    SeqTypes,
+    BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, SeqTypes,
     v0_3::{
         ChainConfig, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountV1,
-        RewardAmount, RewardMerkleCommitmentV1, RewardMerkleTreeV1,
+        RewardMerkleCommitmentV1, RewardMerkleTreeV1,
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
-        forgotten_accounts_include,
+        RewardMerkleTreeV2Data, forgotten_accounts_include,
     },
     validate_state_cert,
 };
+#[cfg(feature = "node")]
+use crate::{Certificate2, Leaf2};
+
+/// A request for data from outside this node, carrying what the answer must match.
+pub trait CatchupRequest: Send + Sync {
+    /// What a responder sends back, as decoded from the wire.
+    type Response: Send;
+    /// What the caller receives once the response is checked.
+    type Output: Send;
+
+    /// Checks `response` against this request.
+    fn verify(
+        &self,
+        response: Self::Response,
+    ) -> impl Future<Output = Result<Verified<Self::Output>, VerifyError>> + Send;
+}
 
 /// Why a response failed verification.
 #[derive(Debug, thiserror::Error)]
@@ -88,11 +100,14 @@ pub struct FeeAccountsAt {
     pub accounts: Vec<FeeAccount>,
 }
 
-impl FeeAccountsAt {
+impl CatchupRequest for FeeAccountsAt {
+    type Response = FeeMerkleTree;
+    type Output = Vec<FeeAccountProof>;
+
     /// One proof per requested account, each checked against [`Self::root`].
-    pub fn verify(
+    async fn verify(
         &self,
-        tree: &FeeMerkleTree,
+        tree: FeeMerkleTree,
     ) -> Result<Verified<Vec<FeeAccountProof>>, VerifyError> {
         // `prove` sizes its lookup by the tree's own height, which comes from the peer.
         if tree.height() != FEE_MERKLE_TREE_HEIGHT {
@@ -104,7 +119,7 @@ impl FeeAccountsAt {
         self.accounts
             .iter()
             .map(|account| {
-                let (proof, _) = FeeAccountProof::prove(tree, (*account).into())
+                let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
                     .with_context(|| format!("response missing fee account {account}"))?;
                 proof.verify(&self.root).with_context(|| {
                     format!(
@@ -129,11 +144,14 @@ pub struct RewardAccountsV1At {
     pub accounts: Vec<RewardAccountV1>,
 }
 
-impl RewardAccountsV1At {
+impl CatchupRequest for RewardAccountsV1At {
+    type Response = RewardMerkleTreeV1;
+    type Output = Vec<RewardAccountProofV1>;
+
     /// One proof per requested account, each checked against [`Self::root`].
-    pub fn verify(
+    async fn verify(
         &self,
-        tree: &RewardMerkleTreeV1,
+        tree: RewardMerkleTreeV1,
     ) -> Result<Verified<Vec<RewardAccountProofV1>>, VerifyError> {
         // `prove` sizes its lookup by the tree's own height, which comes from the peer.
         if tree.height() != REWARD_MERKLE_TREE_V1_HEIGHT {
@@ -145,7 +163,7 @@ impl RewardAccountsV1At {
         self.accounts
             .iter()
             .map(|account| {
-                let (proof, _) = RewardAccountProofV1::prove(tree, (*account).into())
+                let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
                     .with_context(|| format!("response missing v1 reward account {account}"))?;
                 proof.verify(&self.root).with_context(|| {
                     format!(
@@ -156,6 +174,50 @@ impl RewardAccountsV1At {
                 Ok(proof)
             })
             .collect::<anyhow::Result<_>>()
+            .map(Verified::new)
+            .map_err(VerifyError::Invalid)
+    }
+}
+
+/// The frontier of the block tree at a block: the proof of its last leaf.
+#[derive(Clone, Debug)]
+pub struct FrontierAt {
+    pub height: u64,
+    pub view: ViewNumber,
+    /// The tree the frontier must prove against, which holds at least its root.
+    pub tree: BlockMerkleTree,
+}
+
+impl FrontierAt {
+    fn remember(
+        &self,
+        frontier: &<BlockMerkleTree as MerkleTreeScheme>::MembershipProof,
+    ) -> anyhow::Result<BlockMerkleTree> {
+        let last = self
+            .tree
+            .num_leaves()
+            .checked_sub(1)
+            .context("an empty block tree has no frontier")?;
+        let elem = frontier
+            .elem()
+            .context("frontier is missing its leaf element")?;
+        let mut tree = self.tree.clone();
+        tree.remember(last, *elem, frontier)
+            .context("frontier does not prove against the block tree root")?;
+        Ok(tree)
+    }
+}
+
+impl CatchupRequest for FrontierAt {
+    type Response = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
+    type Output = BlockMerkleTree;
+
+    /// A copy of [`Self::tree`] that remembers the frontier.
+    async fn verify(
+        &self,
+        frontier: Self::Response,
+    ) -> Result<Verified<BlockMerkleTree>, VerifyError> {
+        self.remember(&frontier)
             .map(Verified::new)
             .map_err(VerifyError::Invalid)
     }
@@ -172,21 +234,8 @@ pub struct RewardTreeV2At {
 }
 
 impl RewardTreeV2At {
-    /// Rebuilds the tree from its balances, then verifies it as [`Self::verify_tree`] does.
-    ///
-    /// Building the tree waits for the process-wide reward tree permit.
-    pub async fn verify_balances(
-        &self,
-        balances: Vec<(RewardAccountV2, RewardAmount)>,
-    ) -> Result<Verified<PermittedRewardMerkleTreeV2>, VerifyError> {
-        let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(balances)
-            .await
-            .map_err(VerifyError::Invalid)?;
-        self.verify_tree(tree)
-    }
-
     /// Accepts `tree` if its root is [`Self::root`] and none of [`Self::accounts`] is forgotten
-    /// in it.
+    /// in it. For a tree that is already built, such as one loaded from local storage.
     pub fn verify_tree(
         &self,
         tree: PermittedRewardMerkleTreeV2,
@@ -209,6 +258,28 @@ impl RewardTreeV2At {
     }
 }
 
+impl CatchupRequest for RewardTreeV2At {
+    /// A bincode-encoded [`RewardMerkleTreeV2Data`].
+    type Response = Vec<u8>;
+    type Output = PermittedRewardMerkleTreeV2;
+
+    /// Rebuilds the tree from its balances, then verifies it as [`Self::verify_tree`] does.
+    ///
+    /// Building the tree waits for the process-wide reward tree permit.
+    async fn verify(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<Verified<PermittedRewardMerkleTreeV2>, VerifyError> {
+        let data = bincode::deserialize::<RewardMerkleTreeV2Data>(&bytes)
+            .context("decoding reward merkle tree v2")
+            .map_err(VerifyError::Invalid)?;
+        let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(data.balances)
+            .await
+            .map_err(VerifyError::Invalid)?;
+        self.verify_tree(tree)
+    }
+}
+
 /// The leaf at a height, verified through the stake tables `coordinator` resolves.
 #[derive(Clone)]
 pub struct LeafAt {
@@ -224,42 +295,25 @@ impl fmt::Debug for LeafAt {
     }
 }
 
-/// A leaf chain from a peer, sorted by which verifier it needs. Only [`LeafAt::classify`] builds
-/// one, so a chain cannot reach a verifier other than the one its requested leaf's version picks.
+/// A responder's answer to a [`LeafAt`] request.
 #[cfg(feature = "node")]
 #[derive(Clone, Debug)]
-pub enum LeafChain {
-    /// A legacy 3-chain, which decides the requested leaf on its own.
-    Legacy(LegacyChain),
-    /// A new-protocol leaf range, which needs the cert2 at
-    /// [`NewProtocolChain::cert2_height`].
-    NewProtocol(NewProtocolChain),
-}
-
-#[cfg(feature = "node")]
-#[derive(Clone, Debug)]
-pub struct LegacyChain(Vec<Leaf2>);
-
-#[cfg(feature = "node")]
-#[derive(Clone, Debug)]
-pub struct NewProtocolChain {
-    leaves: Vec<Leaf2>,
-    cert2_height: u64,
-}
-
-#[cfg(feature = "node")]
-impl NewProtocolChain {
-    /// The height of the cert2 that finalizes the chain: its highest leaf.
-    pub fn cert2_height(&self) -> u64 {
-        self.cert2_height
-    }
+pub struct LeafResponse {
+    /// A legacy 3-chain that decides the requested leaf, or a new-protocol leaf range from the
+    /// requested leaf up to the one its cert2 finalizes.
+    pub leaves: Vec<Leaf2>,
+    /// The cert2 at [`LeafAt::cert2_height`], which only a new-protocol chain has.
+    pub cert2: Option<Certificate2<SeqTypes>>,
 }
 
 #[cfg(feature = "node")]
 impl LeafAt {
-    /// Picks the verifier from the version of the leaf at [`Self::height`], which its commitment
-    /// covers, never from the order or other leaves of the response.
-    pub fn classify(&self, leaves: Vec<Leaf2>) -> Result<LeafChain, VerifyError> {
+    /// The height of the cert2 that finalizes `leaves`, or `None` for a legacy chain, which
+    /// decides the requested leaf on its own.
+    ///
+    /// The protocol comes from the version of the leaf at [`Self::height`], which its commitment
+    /// covers, never from the order or the other leaves of the response.
+    pub fn cert2_height(&self, leaves: &[Leaf2]) -> Result<Option<u64>, VerifyError> {
         let mut requested = leaves
             .iter()
             .filter(|leaf| leaf.height() == self.height)
@@ -271,62 +325,55 @@ impl LeafAt {
             )));
         }
         if !requested.any(|leaf| leaf.block_header().version() >= NEW_PROTOCOL_VERSION) {
-            return Ok(LeafChain::Legacy(LegacyChain(leaves)));
+            return Ok(None);
         }
-        let cert2_height = leaves
-            .iter()
-            .map(Leaf2::height)
-            .max()
-            .expect("the chain has a leaf at the requested height");
-        Ok(LeafChain::NewProtocol(NewProtocolChain {
-            leaves,
-            cert2_height,
-        }))
+        Ok(leaves.iter().map(Leaf2::height).max())
     }
 
-    /// Verifies a legacy chain and returns the leaf at [`Self::height`].
-    pub async fn verify_legacy(&self, chain: LegacyChain) -> Result<Verified<Leaf2>, VerifyError> {
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION));
-        let result = verify_leaf_chain(chain.0, &self.coordinator, self.height, &upgrade_lock)
-            .await
-            .with_context(|| format!("failed to verify leaf chain at height {}", self.height));
-        classify_verify_error(result)
-    }
-
-    /// Verifies a new-protocol chain with the cert2 that finalizes it, and returns the leaf at
-    /// [`Self::height`].
-    pub async fn verify_new_protocol(
-        &self,
-        chain: NewProtocolChain,
-        cert2: Certificate2<SeqTypes>,
-    ) -> Result<Verified<Leaf2>, VerifyError> {
+    async fn verify_chain(&self, response: LeafResponse) -> anyhow::Result<Leaf2> {
+        let Some(cert2_height) = self.cert2_height(&response.leaves)? else {
+            let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+            return verify_leaf_chain(
+                response.leaves,
+                &self.coordinator,
+                self.height,
+                &upgrade_lock,
+            )
+            .await;
+        };
+        let cert2 = response
+            .cert2
+            .with_context(|| format!("leaf chain is missing its cert2 at height {cert2_height}"))?;
         let upgrade_lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
-        let result = hotshot_new_protocol::utils::verify_new_protocol_leaf_chain(
-            chain.leaves,
+        hotshot_new_protocol::utils::verify_new_protocol_leaf_chain(
+            response.leaves,
             &self.coordinator,
             self.height,
             &upgrade_lock,
             cert2,
         )
         .await
-        .with_context(|| {
-            format!(
-                "failed to verify leaf chain with cert2 at height {}",
-                self.height
-            )
-        });
-        classify_verify_error(result)
     }
 }
 
 #[cfg(feature = "node")]
-fn classify_verify_error(result: anyhow::Result<Leaf2>) -> Result<Verified<Leaf2>, VerifyError> {
-    match result {
-        Ok(leaf) => Ok(Verified::new(leaf)),
-        Err(err) => match err.downcast_ref::<StakeTableUnavailable>() {
+impl CatchupRequest for LeafAt {
+    type Response = LeafResponse;
+    type Output = Leaf2;
+
+    /// The leaf at [`Self::height`], finalized by the chain in `response`.
+    async fn verify(&self, response: LeafResponse) -> Result<Verified<Leaf2>, VerifyError> {
+        let err = match self.verify_chain(response).await {
+            Ok(leaf) => return Ok(Verified::new(leaf)),
+            Err(err) => err.context(format!(
+                "failed to verify leaf chain at height {}",
+                self.height
+            )),
+        };
+        match err.downcast_ref::<StakeTableUnavailable>() {
             Some(StakeTableUnavailable(epoch)) => Err(VerifyError::Unavailable(*epoch)),
             None => Err(VerifyError::Invalid(err)),
-        },
+        }
     }
 }
 
@@ -339,10 +386,13 @@ pub struct StateCertFor {
     pub upgrade_lock: UpgradeLock<SeqTypes>,
 }
 
-impl StateCertFor {
+impl CatchupRequest for StateCertFor {
+    type Response = LightClientStateUpdateCertificateV2<SeqTypes>;
+    type Output = LightClientStateUpdateCertificateV2<SeqTypes>;
+
     /// Accepts `cert` if it certifies the root block of [`Self::epoch`] with enough of
     /// [`Self::stake_table`], as [`validate_state_cert`] checks.
-    pub fn verify(
+    async fn verify(
         &self,
         cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>, VerifyError> {
@@ -359,27 +409,36 @@ impl StateCertFor {
     }
 }
 
-/// The chain config, if it has the requested commitment.
-pub fn verify_chain_config(
-    commitment: Commitment<ChainConfig>,
-    chain_config: ChainConfig,
-) -> Result<Verified<ChainConfig>, VerifyError> {
-    if chain_config.commit() != commitment {
-        return Err(VerifyError::Invalid(anyhow!(
-            "received chain config with mismatched commitment: expected {commitment}, got {}",
-            chain_config.commit()
-        )));
+/// A commitment requests the chain config it commits to.
+impl CatchupRequest for Commitment<ChainConfig> {
+    type Response = ChainConfig;
+    type Output = ChainConfig;
+
+    async fn verify(
+        &self,
+        chain_config: ChainConfig,
+    ) -> Result<Verified<ChainConfig>, VerifyError> {
+        if chain_config.commit() != *self {
+            return Err(VerifyError::Invalid(anyhow!(
+                "received chain config with mismatched commitment: expected {self}, got {}",
+                chain_config.commit()
+            )));
+        }
+        Ok(Verified::new(chain_config))
     }
-    Ok(Verified::new(chain_config))
 }
 
 #[cfg(test)]
 mod tests {
     use alloy::primitives::{Address, U256};
-    use jf_merkle_tree_compat::UniversalMerkleTreeScheme;
+    use committable::RawCommitmentBuilder;
+    use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, UniversalMerkleTreeScheme};
 
     use super::*;
-    use crate::{BlockSize, FEE_MERKLE_TREE_HEIGHT, FeeAmount, retain_accounts};
+    use crate::{
+        BLOCK_MERKLE_TREE_HEIGHT, BlockSize, FEE_MERKLE_TREE_HEIGHT, FeeAmount, Header,
+        retain_accounts, v0_3::RewardAmount,
+    };
 
     fn account(byte: u8) -> FeeAccount {
         FeeAccount::from(Address::repeat_byte(byte))
@@ -402,12 +461,54 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fee_accounts_prove_presence_and_absence_against_the_requested_root() {
+    fn block_tree(tag: &str, blocks: u64) -> BlockMerkleTree {
+        let mut tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
+        for block in 0..blocks {
+            tree.push(
+                RawCommitmentBuilder::<Header>::new(tag)
+                    .u64(block)
+                    .finalize(),
+            )
+            .unwrap();
+        }
+        tree
+    }
+
+    fn frontier_at(tree: &BlockMerkleTree) -> FrontierAt {
+        FrontierAt {
+            height: tree.num_leaves(),
+            view: ViewNumber::new(1),
+            tree: BlockMerkleTree::from_commitment(tree.commitment()),
+        }
+    }
+
+    fn reward_balances() -> Vec<(RewardAccountV2, RewardAmount)> {
+        vec![(
+            RewardAccountV2(Address::repeat_byte(1)),
+            RewardAmount(U256::from(100)),
+        )]
+    }
+
+    async fn reward_tree_at(balances: Vec<(RewardAccountV2, RewardAmount)>) -> RewardTreeV2At {
+        let root = PermittedRewardMerkleTreeV2::try_from_kv_set(balances)
+            .await
+            .unwrap()
+            .tree
+            .commitment();
+        RewardTreeV2At {
+            height: 1,
+            view: ViewNumber::new(1),
+            root,
+            accounts: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn fee_accounts_prove_presence_and_absence_against_the_requested_root() {
         let tree = fee_tree(&[account(1)]);
         let req = fee_accounts_at(tree.commitment(), vec![account(1), account(2)]);
 
-        let proofs = req.verify(&tree).unwrap();
+        let proofs = req.verify(tree).await.unwrap();
 
         let balances = proofs
             .inner()
@@ -417,21 +518,21 @@ mod tests {
         assert_eq!(balances, [U256::from(100), U256::ZERO]);
     }
 
-    #[test]
-    fn fee_accounts_reject_a_tree_with_another_root() {
+    #[tokio::test]
+    async fn fee_accounts_reject_a_tree_with_another_root() {
         let tree = fee_tree(&[account(1)]);
         let req = fee_accounts_at(fee_tree(&[]).commitment(), vec![account(1)]);
 
-        req.verify(&tree).unwrap_err();
+        req.verify(tree).await.unwrap_err();
     }
 
-    #[test]
-    fn fee_accounts_reject_a_response_missing_a_requested_account() {
+    #[tokio::test]
+    async fn fee_accounts_reject_a_response_missing_a_requested_account() {
         let tree = fee_tree(&[account(1), account(2)]);
         let response = retain_accounts(&tree, [account(2)]).unwrap();
         let req = fee_accounts_at(tree.commitment(), vec![account(1)]);
 
-        let err = req.verify(&response).unwrap_err();
+        let err = req.verify(response).await.unwrap_err();
 
         assert!(
             format!("{err:#}").contains("response missing fee account"),
@@ -439,18 +540,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fee_accounts_reject_a_tree_of_another_height() {
+    #[tokio::test]
+    async fn fee_accounts_reject_a_tree_of_another_height() {
         let tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT + 1);
         let req = fee_accounts_at(tree.commitment(), vec![account(1)]);
 
-        let err = req.verify(&tree).unwrap_err();
+        let err = req.verify(tree).await.unwrap_err();
 
         assert!(format!("{err:#}").contains("has height"), "{err:#}");
     }
 
-    #[test]
-    fn v1_reward_accounts_reject_a_tree_of_another_height() {
+    #[tokio::test]
+    async fn v1_reward_accounts_reject_a_tree_of_another_height() {
         let tree = RewardMerkleTreeV1::new(REWARD_MERKLE_TREE_V1_HEIGHT + 1);
         let req = RewardAccountsV1At {
             height: 1,
@@ -459,22 +560,79 @@ mod tests {
             accounts: vec![RewardAccountV1(Address::repeat_byte(1))],
         };
 
-        let err = req.verify(&tree).unwrap_err();
+        let err = req.verify(tree).await.unwrap_err();
 
         assert!(format!("{err:#}").contains("has height"), "{err:#}");
     }
 
-    #[test]
-    fn chain_config_must_have_the_requested_commitment() {
+    #[tokio::test]
+    async fn frontier_is_remembered_in_a_tree_that_holds_only_the_root() {
+        let tree = block_tree("chain", 3);
+        let (_, frontier) = tree.lookup(2).expect_ok().unwrap();
+
+        let remembered = frontier_at(&tree).verify(frontier).await.unwrap();
+
+        assert!(remembered.inner().lookup(2).expect_ok().is_ok());
+        assert_eq!(remembered.inner().commitment(), tree.commitment());
+    }
+
+    #[tokio::test]
+    async fn frontier_of_another_chain_is_rejected() {
+        let tree = block_tree("chain", 3);
+        let (_, frontier) = block_tree("fork", 3).lookup(2).expect_ok().unwrap();
+
+        let err = frontier_at(&tree).verify(frontier).await.unwrap_err();
+
+        assert!(matches!(err, VerifyError::Invalid(_)), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn reward_tree_v2_is_rebuilt_from_its_wire_encoding() {
+        let balances = reward_balances();
+        let req = reward_tree_at(balances.clone()).await;
+        let bytes = bincode::serialize(&RewardMerkleTreeV2Data { balances }).unwrap();
+
+        let tree = req.verify(bytes).await.unwrap();
+
+        assert_eq!(tree.inner().tree.commitment(), req.root);
+    }
+
+    #[tokio::test]
+    async fn reward_tree_v2_with_other_balances_is_rejected() {
+        let req = reward_tree_at(reward_balances()).await;
+        let bytes = bincode::serialize(&RewardMerkleTreeV2Data { balances: vec![] }).unwrap();
+
+        let err = req.verify(bytes).await.err().unwrap();
+
+        assert!(
+            format!("{err:#}").contains("does not match root"),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reward_tree_v2_that_does_not_decode_is_rejected() {
+        let req = reward_tree_at(reward_balances()).await;
+
+        let err = req.verify(vec![0xff; 3]).await.err().unwrap();
+
+        assert!(matches!(err, VerifyError::Invalid(_)), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn chain_config_must_have_the_requested_commitment() {
         let requested = ChainConfig::default();
         let other = ChainConfig {
             max_block_size: BlockSize(1),
             ..requested
         };
 
-        verify_chain_config(requested.commit(), other).unwrap_err();
+        requested.commit().verify(other).await.unwrap_err();
         assert_eq!(
-            verify_chain_config(requested.commit(), requested)
+            requested
+                .commit()
+                .verify(requested)
+                .await
                 .unwrap()
                 .into_inner(),
             requested

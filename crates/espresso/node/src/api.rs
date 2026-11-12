@@ -43,6 +43,7 @@ use espresso_types::{
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2,
+        RewardMerkleTreeV2Data,
     },
 };
 use futures::future::{BoxFuture, Future, FutureExt};
@@ -69,7 +70,6 @@ use hotshot_types::{
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use tokio::{sync::OnceCell, time::timeout};
 use url::Url;
 use vbs::version::Version;
@@ -1131,35 +1131,6 @@ impl StateSignatureDataSource for ApiState {
             .read()
             .await
             .get_signature(height)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-/// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
-pub struct RewardMerkleTreeV2Data {
-    pub balances: Vec<(RewardAccountV2, RewardAmount)>,
-}
-
-impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
-    type Error = anyhow::Error;
-    // Required method
-    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2Data> {
-        let num_leaves = self.num_leaves();
-
-        let balances: Vec<_> = self
-            .iter()
-            .map(|(account, balance)| (*account, *balance))
-            .collect();
-
-        if balances.len() as u64 == num_leaves {
-            Ok(RewardMerkleTreeV2Data { balances })
-        } else {
-            bail!(
-                "RewardMerkleTreeV2 is incomplete, some accounts are missing. Balances length: \
-                 {}, num_leaves: {num_leaves}.",
-                balances.len(),
-            );
-        }
     }
 }
 
