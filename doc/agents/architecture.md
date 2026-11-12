@@ -56,7 +56,7 @@ seed at a time:
 1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. A target
    at or below the second installed table is not seeded: its DRB needs `ST(target-1)` and `ST(target-2)`, so the
    walk serves it.
-2. Fetches the header at `F` over request-response and accepts it iff its height is `F` and its `block_comm_root`
+2. Fetches the header at `F` (sources: step 5) and accepts it iff its height is `F` and its `block_comm_root`
    matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(E*-6) ..= root(E*-1)` against it; `root(E*-6)` only supplies
    a block time. The L1 read, the peer requests (30 s) and each install are bounded.
