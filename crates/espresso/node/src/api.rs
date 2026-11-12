@@ -4123,6 +4123,80 @@ mod test {
         .await;
     }
 
+    /// The SQL node answers `Request::HeaderProof` over request-response with a proof that
+    /// verifies against the block Merkle root of the requested snapshot.
+    #[apply(sql_data_sources)]
+    async fn test_header_proof_over_request_response<D>(_d: PhantomData<D>)
+    where
+        D: TestableSqlDataSource,
+    {
+        const NUM_NODES: usize = 5;
+        const ROOT: u64 = 5;
+        const HEIGHT: u64 = 3;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let dbs = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
+        let persistence: [_; NUM_NODES] = dbs
+            .iter()
+            .map(<D as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(D::options(&dbs[0], Options::with_port(port)))
+            .persistences(persistence)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let mut decided = network.server.event_stream().filter_map(|event| {
+            future::ready(match event {
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
+                _ => None,
+            })
+        });
+        tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = decided.next().await.unwrap();
+                if leaf.height() >= ROOT + 2 {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("network did not decide enough blocks");
+        drop(decided);
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        let root_header: Header = client
+            .get(&format!("availability/header/{ROOT}"))
+            .send()
+            .await
+            .unwrap();
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(60),
+            network.peers[0]
+                .request_response_protocol
+                .request_indefinitely(
+                    Request::HeaderProof {
+                        root: ROOT,
+                        height: HEIGHT,
+                    },
+                    |_request, response| async move { Ok(response) },
+                ),
+        )
+        .await
+        .expect("no peer answered")
+        .unwrap();
+        let Response::HeaderProof(proof) = response else {
+            panic!("expected a header proof, got {response:?}");
+        };
+        let header = proof
+            .verify_at_height(root_header.block_merkle_tree_root(), HEIGHT)
+            .unwrap();
+        assert_eq!(header.height(), HEIGHT);
+    }
+
     /// A query node with a gap must fill it from a peer over the path production runs: the
     /// proactive scanner, `LightClientProvider`, the light-client HTTP client and the peer's
     /// endpoints. One node takes part in consensus while the chain is built, then is shut down and

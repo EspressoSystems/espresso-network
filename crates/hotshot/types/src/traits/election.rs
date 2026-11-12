@@ -335,8 +335,12 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
 
     /// Load the committee for `epoch` from local storage.
     ///
-    /// Returns `true` if a snapshot for `epoch` is available afterwards.
-    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
+    /// Returns the snapshot for `epoch` if one is available afterwards. Use it rather than a
+    /// second [`Self::snapshot`], which a concurrent eviction can empty.
+    fn load_stake_table(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Future<Output = Option<Self::Snapshot>> + Send;
 
     /// Register a DA committee that takes effect starting at `first_epoch`.
     fn add_da_committee(&self, first_epoch: EpochNumber, da_committee: Vec<PeerConfig<T>>);
