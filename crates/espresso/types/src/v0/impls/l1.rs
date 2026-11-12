@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, num::NonZeroU64, str::FromStr, sync::Arc};
 #[cfg(feature = "node")]
-use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
+use std::{num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -61,6 +61,7 @@ use super::{
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
+    v0_3::Fetcher,
 };
 use crate::L1ClientOptions;
 #[cfg(feature = "node")]
@@ -1350,19 +1351,8 @@ impl L1Client {
 
         // Divide the range `prev_finalized..=new_finalized` into chunks of size
         // `events_max_block_range`.
-        let mut start = prev;
-        let end = new_finalized;
-        let chunk_size = opt.l1_events_max_block_range;
-        let chunks = std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
-        });
+        let chunks =
+            Fetcher::block_range_chunks(prev, new_finalized, opt.l1_events_max_block_range);
 
         // Fetch events for each chunk.
         let events = stream::iter(chunks).then(|(from, to)| {
@@ -1887,7 +1877,7 @@ mod test {
         f: impl FnOnce(&mut L1ClientOptions),
     ) -> L1Client {
         let mut opt = L1ClientOptions {
-            l1_events_max_block_range: 1,
+            l1_events_max_block_range: NonZeroU64::MIN,
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
             ..Default::default()

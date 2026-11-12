@@ -1,6 +1,7 @@
 use std::{
     cmp::{max, min},
     collections::{HashMap, HashSet},
+    num::NonZeroU64,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -1448,22 +1449,21 @@ impl Fetcher {
     }
 
     /// Break a block range into fixed-size chunks.
+    ///
+    /// Both bounds of every chunk are inclusive. The chunks cover `from_block..=to_block` for
+    /// every chunk size, also where `from_block + chunk_size` or `to_block + 1` is not a `u64`.
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
-    fn block_range_chunks(
+    pub(crate) fn block_range_chunks(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let mut start = from_block;
-        let end = to_block;
+        let mut next = (from_block <= to_block).then_some(from_block);
         std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
+            let start = next?;
+            let chunk_end = min(start.saturating_add(chunk_size.get() - 1), to_block);
+            next = chunk_end.checked_add(1).filter(|start| *start <= to_block);
+            Some((start, chunk_end))
         })
     }
 
@@ -1475,9 +1475,8 @@ impl Fetcher {
     fn block_range_chunks_rev(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let chunk_size = chunk_size.max(1);
         let mut end = to_block;
         let mut exhausted = to_block < from_block;
         std::iter::from_fn(move || {
@@ -1485,7 +1484,7 @@ impl Fetcher {
                 return None;
             }
             let chunk_end = end;
-            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size.get() - 1));
             exhausted = chunk_start == from_block;
             end = chunk_start.saturating_sub(1);
             Some((chunk_start, chunk_end))
@@ -2361,7 +2360,7 @@ mod tests {
     /// scan for the token `Initialized` event could never succeed at the default range.
     #[test_log::test]
     fn test_block_range_chunks_never_exceed_chunk_size() {
-        const MAX_RANGE: u64 = 10_000;
+        const MAX_RANGE: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
         const INIT_BLOCK: u64 = 1_000_000;
         const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
 
@@ -2370,10 +2369,13 @@ mod tests {
         let descending: Vec<_> =
             Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
 
-        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(
+            descending[0],
+            (INIT_BLOCK - MAX_RANGE.get() + 1, INIT_BLOCK)
+        );
         assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
         for chunk in &descending {
-            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+            assert_eq!(width(chunk), MAX_RANGE.get(), "chunk {chunk:?} is missized");
         }
         for pair in descending.windows(2) {
             assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
@@ -2383,9 +2385,15 @@ mod tests {
             Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
         for chunk in &ascending {
             assert!(
-                width(chunk) <= MAX_RANGE,
+                width(chunk) <= MAX_RANGE.get(),
                 "chunk {chunk:?} exceeds {MAX_RANGE}"
             );
+        }
+
+        assert_eq!(ascending[0].0, LOWEST_BLOCK);
+        assert_eq!(ascending.last().unwrap().1, INIT_BLOCK);
+        for pair in ascending.windows(2) {
+            assert_eq!(pair[1].0, pair[0].1 + 1, "gap or overlap at {pair:?}");
         }
 
         // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
@@ -2394,9 +2402,35 @@ mod tests {
             vec![(0, 5)]
         );
         assert_eq!(
-            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
-            vec![(1, MAX_RANGE), (0, 0)]
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE.get(), MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE.get()), (0, 0)]
         );
+    }
+
+    /// The chunks cover the range where `from_block + chunk_size` or `to_block + 1` is not a
+    /// `u64`. The sum used to wrap in release builds, which ended the iterator before the range
+    /// was covered, and to panic in debug builds.
+    #[test_log::test]
+    fn test_block_range_chunks_at_the_u64_bounds() {
+        let chunks = |from, to, size| {
+            let size = NonZeroU64::new(size).unwrap();
+            Fetcher::block_range_chunks(from, to, size).collect::<Vec<_>>()
+        };
+        const MAX: u64 = u64::MAX;
+
+        assert_eq!(chunks(2, 100, MAX), vec![(2, 100)]);
+        assert_eq!(chunks(0, MAX, MAX), vec![(0, MAX - 1), (MAX, MAX)]);
+        assert_eq!(
+            chunks(MAX - 4, MAX, 2),
+            vec![(MAX - 4, MAX - 3), (MAX - 2, MAX - 1), (MAX, MAX)]
+        );
+        assert_eq!(
+            chunks(MAX - 5, MAX - 1, 4),
+            vec![(MAX - 5, MAX - 2), (MAX - 1, MAX - 1)]
+        );
+        assert_eq!(chunks(MAX, MAX, 1), vec![(MAX, MAX)]);
+        assert_eq!(chunks(5, 4, MAX), vec![]);
+        assert_eq!(chunks(MAX, 0, 1), vec![]);
     }
 
     #[test_log::test]
@@ -3328,7 +3362,7 @@ mod tests {
     ) {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3416,7 +3450,7 @@ mod tests {
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3487,7 +3521,7 @@ mod tests {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
             // max block range for public node rpc is 50000 so this should result in a panic
-            l1_events_max_block_range: 10_u64.pow(9),
+            l1_events_max_block_range: NonZeroU64::new(10_u64.pow(9)).unwrap(),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
