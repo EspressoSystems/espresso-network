@@ -163,6 +163,8 @@ pub(in crate::api) async fn init_query_module(
     Box<dyn ApiSink>,
     Option<RequestResponseStorage>,
 )> {
+    warn_of_pruning_default(&mod_opt);
+
     let mut provider = Provider::default();
 
     // Use the database itself as a fetching provider: sometimes we can fetch data that is
@@ -253,6 +255,19 @@ pub(in crate::api) async fn init_query_module(
         Box::new(ApiEventConsumer::from(ds)),
         Some(RequestResponseStorage::Sql(inner_storage)),
     ))
+}
+
+/// Error level, so that operators see it before a release that prunes by default changes their
+/// node.
+fn warn_of_pruning_default(opt: &Options) {
+    if !opt.prune && !opt.archive {
+        tracing::error!(
+            "Neither --prune nor --archive is set, so this node keeps all block data. A future \
+             release will prune by default. To keep all block data after that release, set \
+             --archive (ESPRESSO_NODE_ARCHIVE=true). To prune now, set --prune \
+             (ESPRESSO_NODE_DATABASE_PRUNE=true)."
+        );
+    }
 }
 
 /// Prune archive state older than the light client contract's retained history. Block merkle paths
