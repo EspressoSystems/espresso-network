@@ -2,13 +2,14 @@
 
 use std::{
     pin::pin,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
     time::Duration,
 };
 
 use anyhow::{Context, anyhow, bail};
 use espresso_types::{
-    BlockMerkleCommitment, Header, LcContractFinalizedState, SeqTypes, traits::SequencerPersistence,
+    BlockMerkleCommitment, ChainConfig, Header, LcContractFinalizedState, SeqTypes,
+    traits::SequencerPersistence,
 };
 use futures::{
     FutureExt, StreamExt, TryStreamExt,
@@ -35,28 +36,32 @@ const MAX_CONCURRENT_REQUESTS: usize = 3;
 /// Bound on the peer requests of one seed: with no answering peer the attempt fails within it.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The LC-contract seed of the catchup, behind `CatchupSeedFn`; steps in
-/// `doc/agents/architecture.md`.
-///
-/// `F` and `blockCommRoot` come from the SNARK-verified LC contract. Every installed table comes
-/// from a header proven against the block Merkle root of a header at `F` that `verify_header`
-/// accepted, whichever source answered. Proven heights are below `F`, installed epochs above
-/// `start`, and every table has a block reward.
+/// The LC-contract seed behind `CatchupSeedFn`; steps in `doc/agents/architecture.md`.
+/// Every installed table is proven against the header at `F` that `verify_header` accepted.
+#[derive(Clone)]
 pub struct LcContractSeed<P: SequencerPersistence> {
-    /// Weak, so the seed owns no path to the coordinator that the protocol holds.
-    requests: Weak<RequestResponseProtocol<P>>,
+    /// Set by `bind_requests` once consensus exists; weak, so the seed owns no path to the
+    /// coordinator that the protocol holds.
+    requests: Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>,
     /// Asked in order after `http_delay`; none, no HTTP.
     state_peers: Vec<QueryServiceClient>,
     http_delay: Duration,
     /// Seed attempts that installed a window.
-    seeded: Box<dyn Counter>,
+    seeded: Arc<dyn Counter>,
 }
 
 impl<P: SequencerPersistence> LcContractSeed<P> {
-    /// A seed without request-response, so `state_peers` answer at once.
-    pub fn new(state_peers: Vec<Url>, http_delay: Duration, metrics: &dyn Metrics) -> Self {
-        Self {
-            requests: Weak::new(),
+    /// A seed without a request-response protocol, `None` when `chain_config` names no stake
+    /// table contract to read the LC contract from. Until `bind_requests`, `state_peers` answer
+    /// at once, else after `http_delay`.
+    pub fn new(
+        chain_config: &ChainConfig,
+        state_peers: Vec<Url>,
+        http_delay: Duration,
+        metrics: &dyn Metrics,
+    ) -> Option<Self> {
+        chain_config.stake_table_contract.map(|_| Self {
+            requests: Arc::default(),
             state_peers: state_peers
                 .into_iter()
                 .map(QueryServiceClient::new)
@@ -64,14 +69,16 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             http_delay,
             seeded: metrics
                 .subgroup("catchup".into())
-                .create_counter("lc_contract_seeds".into(), None),
-        }
+                .create_counter("lc_contract_seeds".into(), None)
+                .into(),
+        })
     }
 
-    /// The seed asking `requests` first, and the state peers after `http_delay`.
-    pub fn with_requests(mut self, requests: &Arc<RequestResponseProtocol<P>>) -> Self {
-        self.requests = Arc::downgrade(requests);
-        self
+    /// Binds the request-response protocol, which exists only after consensus is constructed.
+    pub fn bind_requests(&self, requests: &Arc<RequestResponseProtocol<P>>) {
+        self.requests
+            .set(Arc::downgrade(requests))
+            .expect("the request-response protocol is bound once");
     }
 
     /// Sets the catchup hook of `coordinator` to this seed.
@@ -117,9 +124,17 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
             return Ok(start);
         }
 
+        let requests = self.requests.get().and_then(Weak::upgrade);
         let (preceding, roots) = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            self.fetch_headers(&lc, epoch_height, start),
+            fetch_headers(
+                requests.as_ref(),
+                &self.state_peers,
+                self.http_delay,
+                &lc,
+                epoch_height,
+                start,
+            ),
         )
         .await
         .map_err(|_| {
@@ -136,109 +151,107 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         log("seeded");
         Ok(seed_epoch + 1)
     }
+}
 
-    /// The header at `F`, accepted by `lc.verify_header`, then the headers it proves: the
-    /// preceding root (`lc.preceding_root_height`, the block time source of the lowest installed
-    /// reward) and `lc.proven_root_heights`, ascending.
-    async fn fetch_headers(
-        &self,
-        lc: &LcContractFinalizedState,
-        epoch_height: u64,
-        start: EpochNumber,
-    ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
-        let lc_header = race(
-            self.request_header(lc),
-            state_peers_header(&self.state_peers, lc),
-            self.http_delay,
-        )
+/// The header at `F`, accepted by `lc.verify_header`, then the headers it proves: the preceding
+/// root (`lc.preceding_root_height`, the block time source of the lowest installed reward) and
+/// `lc.proven_root_heights`, ascending. `requests` is `None` while the protocol is unavailable.
+async fn fetch_headers<P: SequencerPersistence, C: Client>(
+    requests: Option<&Arc<RequestResponseProtocol<P>>>,
+    state_peers: &[C],
+    http_delay: Duration,
+    lc: &LcContractFinalizedState,
+    epoch_height: u64,
+    start: EpochNumber,
+) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
+    let lc_header = race(
+        request_header(requests, lc),
+        state_peers_header(state_peers, lc),
+        http_delay,
+    )
+    .await?;
+
+    let root = lc_header.block_merkle_tree_root();
+    let preceding = lc.preceding_root_height(epoch_height, start);
+    let heights = preceding
+        .into_iter()
+        .chain(lc.proven_root_heights(epoch_height, start));
+    let mut headers: Vec<Header> = stream::iter(heights)
+        .map(|height| {
+            race(
+                request_proven_header(requests, lc.height, height, root),
+                state_peers_proven_header(state_peers, lc.height, height, root),
+                http_delay,
+            )
+        })
+        .buffered(MAX_CONCURRENT_REQUESTS)
+        .try_collect()
         .await?;
+    let preceding = preceding.map(|_| headers.remove(0));
+    Ok((preceding, headers))
+}
 
-        let root = lc_header.block_merkle_tree_root();
-        let preceding = lc.preceding_root_height(epoch_height, start);
-        let heights = preceding
-            .into_iter()
-            .chain(lc.proven_root_heights(epoch_height, start));
-        let mut headers: Vec<Header> = stream::iter(heights)
-            .map(|height| {
-                race(
-                    self.request_proven_header(lc.height, height, root),
-                    state_peers_proven_header(&self.state_peers, lc.height, height, root),
-                    self.http_delay,
-                )
-            })
-            .buffered(MAX_CONCURRENT_REQUESTS)
-            .try_collect()
-            .await?;
-        let preceding = preceding.map(|_| headers.remove(0));
-        Ok((preceding, headers))
-    }
+/// The header at `F` over request-response. A rejected answer is skipped and the request keeps
+/// waiting (`request_indefinitely`).
+async fn request_header<P: SequencerPersistence>(
+    requests: Option<&Arc<RequestResponseProtocol<P>>>,
+    lc: &LcContractFinalizedState,
+) -> anyhow::Result<Header> {
+    let requests = requests.context("the request-response protocol is not available")?;
+    let checked_lc = lc.clone();
+    Ok(requests
+        .request_indefinitely(
+            Request::Leaf(lc.height),
+            move |_: &Request, response: Response| {
+                let lc = checked_lc.clone();
+                async move {
+                    let Response::Leaf(leaves) = response else {
+                        bail!("expected leaf response");
+                    };
+                    let header = leaves
+                        .first()
+                        .context("empty leaf chain")?
+                        .block_header()
+                        .clone();
+                    lc.verify_header(&header)?;
+                    Ok(header)
+                }
+                .map(|result| {
+                    result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
+                })
+            },
+        )
+        .await?)
+}
 
-    /// The header at `F` over request-response. A rejected answer is skipped and the request keeps
-    /// waiting (`request_indefinitely`).
-    async fn request_header(&self, lc: &LcContractFinalizedState) -> anyhow::Result<Header> {
-        let requests = self.upgrade_requests()?;
-        let checked_lc = lc.clone();
-        Ok(requests
-            .request_indefinitely(
-                Request::Leaf(lc.height),
-                move |_: &Request, response: Response| {
-                    let lc = checked_lc.clone();
-                    async move {
-                        let Response::Leaf(leaves) = response else {
-                            bail!("expected leaf response");
-                        };
-                        let header = leaves
-                            .first()
-                            .context("empty leaf chain")?
-                            .block_header()
-                            .clone();
-                        lc.verify_header(&header)?;
-                        Ok(header)
-                    }
-                    .map(|result| {
-                        result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
-                    })
-                },
-            )
-            .await?)
-    }
-
-    /// The header at `height`, proven against the block Merkle root `root` of the header at
-    /// `root_height`, over request-response.
-    async fn request_proven_header(
-        &self,
-        root_height: u64,
-        height: u64,
-        root: BlockMerkleCommitment,
-    ) -> anyhow::Result<Header> {
-        let requests = self.upgrade_requests()?;
-        Ok(requests
-            .request_indefinitely(
-                Request::HeaderProof {
-                    root: root_height,
-                    height,
-                },
-                move |_: &Request, response: Response| {
-                    async move {
-                        let Response::HeaderProof(proof) = response else {
-                            bail!("expected header proof response");
-                        };
-                        proof.verify_at_height(root, height)
-                    }
-                    .map(|result| {
-                        result.inspect_err(|err| tracing::debug!("header proof rejected: {err:#}"))
-                    })
-                },
-            )
-            .await?)
-    }
-
-    /// The request-response protocol, or an error when its owner is gone or it was never set.
-    fn upgrade_requests(&self) -> anyhow::Result<Arc<RequestResponseProtocol<P>>> {
-        self.requests
-            .upgrade()
-            .context("the request-response protocol is not available")
-    }
+/// The header at `height`, proven against the block Merkle root `root` of the header at
+/// `root_height`, over request-response.
+async fn request_proven_header<P: SequencerPersistence>(
+    requests: Option<&Arc<RequestResponseProtocol<P>>>,
+    root_height: u64,
+    height: u64,
+    root: BlockMerkleCommitment,
+) -> anyhow::Result<Header> {
+    let requests = requests.context("the request-response protocol is not available")?;
+    Ok(requests
+        .request_indefinitely(
+            Request::HeaderProof {
+                root: root_height,
+                height,
+            },
+            move |_: &Request, response: Response| {
+                async move {
+                    let Response::HeaderProof(proof) = response else {
+                        bail!("expected header proof response");
+                    };
+                    proof.verify_at_height(root, height)
+                }
+                .map(|result| {
+                    result.inspect_err(|err| tracing::debug!("header proof rejected: {err:#}"))
+                })
+            },
+        )
+        .await?)
 }
 
 /// The header at `F` from the state peers, in order.
@@ -299,9 +312,8 @@ where
     Err(last_err)
 }
 
-/// The first `Ok` of `primary` and `fallback`: `fallback` is polled once `primary` errs or
-/// `http_delay` passes, whichever is first. An error from one side waits for the other; the last
-/// error wins. Spawns nothing, and dropping the future drops both sides.
+/// The first `Ok` of `primary` and `fallback`; `fallback` starts when `primary` errs or after
+/// `http_delay`. An error of one side waits for the other; each discarded error is logged.
 async fn race<T>(
     primary: impl Future<Output = anyhow::Result<T>>,
     fallback: impl Future<Output = anyhow::Result<T>>,
@@ -311,14 +323,23 @@ async fn race<T>(
     tokio::select! {
         result = primary.as_mut() => match result {
             Ok(value) => return Ok(value),
-            Err(_) => return fallback.await,
+            Err(err) => {
+                tracing::debug!("seed request-response side failed: {err:#}");
+                return fallback.await;
+            },
         },
         () = tokio::time::sleep(http_delay) => {},
     }
     match select(primary, pin!(fallback)).await {
         Either::Left((Ok(value), _)) | Either::Right((Ok(value), _)) => Ok(value),
-        Either::Left((Err(_), rest)) => rest.await,
-        Either::Right((Err(_), rest)) => rest.await,
+        Either::Left((Err(err), rest)) => {
+            tracing::debug!("seed request-response side failed: {err:#}");
+            rest.await
+        },
+        Either::Right((Err(err), rest)) => {
+            tracing::debug!("seed state peers side failed: {err:#}");
+            rest.await
+        },
     }
 }
 
@@ -328,6 +349,7 @@ mod tests {
     use light_client::testing::TestClient;
 
     use super::*;
+    use crate::persistence::no_storage::NoStorage;
 
     const EPOCH_HEIGHT: u64 = 10;
     const HTTP_DELAY: Duration = Duration::from_secs(5);
@@ -491,19 +513,80 @@ mod tests {
         assert!(format!("{err:#}").contains("expected 62"), "{err:#}");
     }
 
-    /// A proof for another height is rejected and the next state peer is asked.
+    /// A proof that fails verification is rejected and the next state peer is asked.
     #[tokio::test]
-    async fn state_peers_proven_header_skip_wrong_height_ok() {
+    async fn state_peers_proven_header_skip_invalid_proof_ok() {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
         let root = header(&client, 62).await.block_merkle_tree_root();
-        let wrong = TestClient::with_epoch_height(EPOCH_HEIGHT);
-        wrong.leaf(62).await;
-        wrong.return_wrong_leaf(15, 14).await;
+        let other_chain = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        other_chain.leaf(62).await;
+        other_chain.return_wrong_leaf(15, 14).await;
 
-        let served = state_peers_proven_header(&[wrong, client], 62, 15, root)
+        let served = state_peers_proven_header(&[other_chain, client], 62, 15, root)
             .await
             .unwrap();
 
         assert_eq!(served.height(), 15);
+    }
+
+    /// A valid proof from the root's chain for another height is rejected on the height.
+    #[tokio::test]
+    async fn state_peers_proven_header_wrong_height_fails() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let root = header(&client, 62).await.block_merkle_tree_root();
+        client.return_wrong_leaf(15, 14).await;
+
+        let err = state_peers_proven_header(&[client], 62, 15, root)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("expected 15"), "{err:#}");
+    }
+
+    /// Without request-response, the preceding root is split off and the roots come back
+    /// ascending.
+    #[tokio::test]
+    async fn fetch_headers_ok() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let lc = finalized_state(&header(&client, 62).await);
+
+        let (preceding, roots) = fetch_headers::<NoStorage, _>(
+            None,
+            &[client],
+            HTTP_DELAY,
+            &lc,
+            EPOCH_HEIGHT,
+            EpochNumber::new(2),
+        )
+        .await
+        .unwrap();
+
+        let heights: Vec<_> = roots.iter().map(Header::height).collect();
+        assert_eq!(heights, [15, 25, 35, 45, 55]);
+        assert_eq!(preceding.map(|root| root.height()), Some(5));
+    }
+
+    /// A header at `F` whose block Merkle root is not the LC contract's is rejected.
+    #[tokio::test]
+    async fn fetch_headers_forged_header_fails() {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let mut lc = finalized_state(&header(&client, 62).await);
+        lc.block_comm_root = finalized_state(&header(&client, 61).await).block_comm_root;
+
+        let err = fetch_headers::<NoStorage, _>(
+            None,
+            &[client],
+            HTTP_DELAY,
+            &lc,
+            EPOCH_HEIGHT,
+            EpochNumber::new(2),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("block commitment root"),
+            "{err:#}"
+        );
     }
 }

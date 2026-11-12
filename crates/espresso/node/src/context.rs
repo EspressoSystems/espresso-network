@@ -130,7 +130,7 @@ where
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
-        lc_contract_seed: LcContractSeed<P>,
+        lc_contract_seed: Option<LcContractSeed<P>>,
         persistence: Arc<P>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
@@ -175,6 +175,11 @@ where
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
+
+        // Before the anchor `apply_epoch` in `connect_startup_peers`, which can start a catchup.
+        if let Some(seed) = lc_contract_seed.clone() {
+            seed.install(&membership_coordinator);
+        }
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
@@ -313,10 +318,8 @@ where
         state_catchup.add_provider(Arc::new(RequestResponseProtocol::clone(
             &request_response_protocol,
         )));
-        if instance_state.chain_config.stake_table_contract.is_some() {
-            lc_contract_seed
-                .with_requests(&request_response_protocol)
-                .install(&membership_coordinator);
+        if let Some(seed) = &lc_contract_seed {
+            seed.bind_requests(&request_response_protocol);
         }
 
         // Create the external event handler

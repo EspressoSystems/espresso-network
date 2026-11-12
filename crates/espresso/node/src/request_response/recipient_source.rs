@@ -21,8 +21,8 @@ pub struct RecipientSource<P: SequencerPersistence> {
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
     pub public_key: PubKey,
-    /// `ST(now)` keys from boot; added to the consensus-epoch table's keys, deduplicated, without
-    /// self.
+    /// Keys of the validators active at the L1 finalized block at startup that the network did not
+    /// hold; added to the keys of the consensus-epoch table, deduplicated, without self.
     pub l1_finalized_peers: Vec<PubKey>,
 }
 
@@ -65,10 +65,10 @@ fn responders(
 /// The stake table to draw responders from: the current epoch's, else the previous epoch's, else
 /// the newest one this node holds.
 ///
-/// The newest covers a node whose consensus has not reached the network's epoch yet. One started
-/// on an empty database sits at the genesis epoch, below the first epoch, while startup catchup has
-/// already loaded recent stake tables. Without it every request fails before it is sent, including
-/// the ones catchup makes to bring the node to the network's epoch.
+/// The newest covers a node whose consensus is below the epochs it holds tables for, such as one
+/// started on an empty database at the genesis epoch. It always resolves, since the genesis pair is
+/// never pruned. Without it every request fails before it is sent, including the ones catchup
+/// makes to bring the node to the network's epoch.
 fn responder_membership(
     memberships: &EpochMembershipCoordinator<SeqTypes>,
     current_epoch: EpochNumber,

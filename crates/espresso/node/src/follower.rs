@@ -268,9 +268,13 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    if node_state.chain_config.stake_table_contract.is_some() {
-        LcContractSeed::<P>::new(params.upstreams.clone(), Duration::ZERO, &*metrics)
-            .install(&coordinator);
+    if let Some(seed) = LcContractSeed::<P>::new(
+        &node_state.chain_config,
+        params.upstreams.clone(),
+        Duration::ZERO,
+        &*metrics,
+    ) {
+        seed.install(&coordinator);
     }
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {

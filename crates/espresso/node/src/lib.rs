@@ -307,6 +307,7 @@ where
 
     let catchup_params = network_params.catchup;
     let lc_contract_seed = LcContractSeed::new(
+        &genesis.chain_config,
         catchup_params.state_peers.clone(),
         catchup_params.http_delay,
         &*metrics,
@@ -1688,7 +1689,7 @@ pub mod testing {
                 anchor_view,
                 storage,
                 catchup_providers,
-                LcContractSeed::new(vec![], Duration::ZERO, &NoMetrics),
+                LcContractSeed::new(&chain_config, vec![], Duration::ZERO, &NoMetrics),
                 persistence,
                 coordinator_network,
                 self.state_relay_url.clone(),
