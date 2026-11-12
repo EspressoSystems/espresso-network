@@ -191,7 +191,12 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
 /// Error level, so that operators see these before the release that changes their node.
 fn warn_of_storage_changes(modules: &Modules) {
-    let Some(sql) = &modules.storage_sql else {
+    // The same order as `main`, which runs on the file system when both are set.
+    let Some(sql) = modules
+        .storage_sql
+        .as_ref()
+        .filter(|_| modules.storage_fs.is_none())
+    else {
         tracing::error!(
             "This node uses file-system storage. A future release will replace it with SQLite, \
              and query nodes will then prune block data by default. Do not switch to SQLite by \
