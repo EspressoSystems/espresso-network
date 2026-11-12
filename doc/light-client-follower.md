@@ -23,7 +23,8 @@ which must be set. The follower needs:
 - the `storage-sql`, `http` and `query` modules: merklized state, rewards and the explorer need SQL storage;
 - an L1 RPC, for fee deposits and the stake table, like any node;
 - upstream query nodes with SQL storage that serve the `catchup`, `config` and (for `submit`) `submit` modules. Every
-  such node serves the light client API, though upstreams on older releases also need the `light-client` module.
+  such node serves the light client API, though upstreams on older releases also need the `light-client` module. The
+  epoch catchup seed reads from the upstreams (`--peers`), not from `--state-peers`.
 
 It does not need staking keys, an orchestrator or cliquenet; those options are ignored. `--state-peers` and
 `--config-peers` default to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to
