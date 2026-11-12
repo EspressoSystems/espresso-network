@@ -1,10 +1,11 @@
-### Upgrade query nodes before light clients and followers
+### Upgrade query nodes before the nodes that read from them
 
 Urgency: Medium
 
-Upgrade the query nodes a light client or follower reads from (the follower's `--peers`) to this release before the
-light client or follower itself.
+A node on this release cannot read finality proofs for blocks from before protocol version 0.6 from a query node on an
+older release. This applies to every node that fetches from query peers (`--peers`, `ESPRESSO_NODE_API_PEERS`): query
+nodes, followers and standalone light clients.
 
-A light client on this release only accepts a finality proof for a block from before protocol version 0.6 when the query
-node serving it runs this release too. Against an older query node, requests for those blocks fail and a light client
-without a stored stake table cannot catch up from genesis. Blocks from version 0.6 on are not affected.
+Upgrade query nodes first, and give each upgraded node at least one peer that is already on this release. Until then it
+cannot fetch those blocks from peers, and a light client without a stored stake table cannot catch up from genesis.
+Blocks from version 0.6 on are not affected.

@@ -1148,7 +1148,7 @@ impl From<&FinalityProof> for proto::FinalityProof {
             } => Proof::HotStuff2(proto::HotStuff2Finality {
                 committing_qc: Some(committing_qc.as_ref().into()),
                 deciding_qc: Some(deciding_qc.as_ref().into()),
-                deciding_leaf: deciding_leaf.as_deref().map(Into::into),
+                deciding_leaf: Some(deciding_leaf.as_ref().into()),
             }),
             FinalityProof::NewProtocol { cert2, leaf_qc } => {
                 Proof::NewProtocol(proto::NewProtocolFinality {
@@ -1166,8 +1166,8 @@ impl From<&FinalityProof> for proto::FinalityProof {
                 precommit_qc: Some(precommit_qc.as_ref().into()),
                 committing_qc: Some(committing_qc.as_ref().into()),
                 deciding_qc: Some(deciding_qc.as_ref().into()),
-                committing_leaf: committing_leaf.as_deref().map(Into::into),
-                deciding_leaf: deciding_leaf.as_deref().map(Into::into),
+                committing_leaf: Some(committing_leaf.as_ref().into()),
+                deciding_leaf: Some(deciding_leaf.as_ref().into()),
             }),
         };
         proto::FinalityProof { proof: Some(arm) }

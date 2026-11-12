@@ -35,22 +35,16 @@ pub enum FinalityProof {
     /// * `committing_qc.leaf_commit() == leaf.commit()`
     /// * `committing_qc.view_number() == leaf.view_number()`
     /// * `deciding_qc.view_number() == committing_qc.view_number() + 1`
-    /// * `deciding_qc` signs `deciding_leaf`, whose parent is the leaf. Views alone do not show
-    ///   this: after a timeout a leader builds on the parent of the previous view's leaf, and the
-    ///   QC for that sibling comes from the next view too.
+    /// * `deciding_qc` signs `deciding_leaf`, whose parent is the leaf. Consecutive views do not
+    ///   imply this: after a timeout a leader builds on the parent of the previous view's leaf,
+    ///   and that sibling's QC is from the view right after the leaf's QC.
     /// * Both QCs have a valid threshold signature given a stake table. When the leaf is the last
     ///   leaf of an epoch, the deciding QC is produced in the subsequent epoch and is checked
     ///   against the next epoch's stake table.
     HotStuff2 {
         committing_qc: Arc<Certificate>,
         deciding_qc: Arc<Certificate>,
-
-        /// The leaf `deciding_qc` signs.
-        ///
-        /// Optional only so that proofs from provers which predate it still deserialize. They
-        /// fail verification.
-        #[serde(default)]
-        deciding_leaf: Option<Box<Leaf2>>,
+        deciding_leaf: Box<Leaf2>,
     },
 
     /// The finality follows from a Certificate2 in the new protocol.
@@ -72,14 +66,8 @@ pub enum FinalityProof {
         precommit_qc: Arc<Certificate>,
         committing_qc: Arc<Certificate>,
         deciding_qc: Arc<Certificate>,
-
-        /// The leaf `committing_qc` signs. Optional for the same reason as in `HotStuff2`.
-        #[serde(default)]
-        committing_leaf: Option<Box<Leaf2>>,
-
-        /// The leaf `deciding_qc` signs. Optional for the same reason as in `HotStuff2`.
-        #[serde(default)]
-        deciding_leaf: Option<Box<Leaf2>>,
+        committing_leaf: Box<Leaf2>,
+        deciding_leaf: Box<Leaf2>,
     },
 }
 /// A hint that allows a verifier to verify a proof.
@@ -181,9 +169,6 @@ impl LeafProof {
                 },
                 LeafProofHint::Quorum(quorum),
             ) => {
-                let deciding_leaf = deciding_leaf.as_deref().context(
-                    "HotStuff2 finality proof is missing the leaf its deciding QC signs",
-                )?;
                 ensure_signs_child(deciding_qc, deciding_leaf, curr)?;
 
                 // Check that the given QCs form a 2-chain, which proves `curr` finalized under
@@ -222,10 +207,6 @@ impl LeafProof {
                 },
                 LeafProofHint::Quorum(quorum),
             ) => {
-                let (committing_leaf, deciding_leaf) = committing_leaf
-                    .as_deref()
-                    .zip(deciding_leaf.as_deref())
-                    .context("HotStuff finality proof is missing the leaves its QCs sign")?;
                 ensure_signs_child(committing_qc, committing_leaf, curr)?;
                 ensure_signs_child(deciding_qc, deciding_leaf, committing_leaf)?;
 
@@ -335,14 +316,14 @@ impl LeafProof {
             if committing_qc.view_number() == self.leaves[len - 2].view_number()
                 && deciding_qc.view_number() == committing_qc.view_number() + 1
             {
-                // Sanity check: if we have a chain of QCs from consecutive views, they must refer
-                // to consecutive leaves.
+                // Sanity check: the leaves are a chain, so each one's justify QC signs the leaf
+                // before it.
                 debug_assert!(committing_qc.leaf_commit() == self.leaves[len - 2].commit());
                 debug_assert!(deciding_qc.leaf_commit() == self.leaves[len - 1].commit());
 
                 // The last leaf is not one this chain proves. It leaves the chain and goes into the
                 // proof as the leaf the deciding QC signs.
-                let deciding_leaf = self.leaves.pop().map(Box::new);
+                let deciding_leaf = Box::new(self.leaves.remove(len - 1));
                 self.proof = FinalityProof::HotStuff2 {
                     committing_qc: Arc::new(committing_qc),
                     deciding_qc: Arc::new(deciding_qc),
@@ -363,15 +344,15 @@ impl LeafProof {
                 && committing_qc.view_number() == precommit_qc.view_number() + 1
                 && deciding_qc.view_number() == committing_qc.view_number() + 1
             {
-                // Sanity check: if we have a chain of QCs from consecutive views, they must refer
-                // to consecutive leaves.
+                // Sanity check: the leaves are a chain, so each one's justify QC signs the leaf
+                // before it.
                 debug_assert!(precommit_qc.leaf_commit() == self.leaves[len - 3].commit());
                 debug_assert!(committing_qc.leaf_commit() == self.leaves[len - 2].commit());
                 debug_assert!(deciding_qc.leaf_commit() == self.leaves[len - 1].commit());
 
                 // As for HotStuff2, the last two leaves are the ones the later QCs sign.
-                let deciding_leaf = self.leaves.pop().map(Box::new);
-                let committing_leaf = self.leaves.pop().map(Box::new);
+                let deciding_leaf = Box::new(self.leaves.remove(len - 1));
+                let committing_leaf = Box::new(self.leaves.remove(len - 2));
                 self.proof = FinalityProof::HotStuff {
                     precommit_qc: Arc::new(precommit_qc),
                     committing_qc: Arc::new(committing_qc),
@@ -431,8 +412,15 @@ impl LeafProof {
 
 fn ensure_signs_child(qc: &Certificate, child: &Leaf2, parent: &Leaf2) -> Result<()> {
     ensure!(
-        qc.leaf_commit() == child.commit() && qc.view_number() == child.view_number(),
+        qc.leaf_commit() == child.commit(),
         "QC from view {} does not sign leaf {} at view {}",
+        qc.view_number(),
+        child.height(),
+        child.view_number()
+    );
+    ensure!(
+        qc.view_number() == child.view_number(),
+        "QC from view {} signs leaf {} from view {}",
         qc.view_number(),
         child.height(),
         child.view_number()
@@ -495,7 +483,7 @@ mod test {
             proof: FinalityProof::HotStuff2 {
                 committing_qc: Arc::new(committing_qc),
                 deciding_qc: Arc::new(deciding_qc),
-                deciding_leaf: Some(Box::new(deciding_leaf.leaf().clone())),
+                deciding_leaf: Box::new(deciding_leaf.leaf().clone()),
             },
         }
     }
@@ -736,99 +724,91 @@ mod test {
     /// so QCs from consecutive views do not have to sign a leaf and its child.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_two_chain_through_sibling_rejected() {
-        let orphaned = leaf_chain(1..=2, EPOCH_VERSION).await;
-        let decided = custom_leaf_chain(Upgrade::trivial(EPOCH_VERSION), 1..=2, |proposal| {
+        let chain = leaf_chain(1..=3, EPOCH_VERSION).await;
+        let fork = custom_leaf_chain(Upgrade::trivial(EPOCH_VERSION), 1..=2, |proposal| {
             if proposal.block_header.height() == 2 {
                 proposal.view_number = ViewNumber::new(3);
             }
         })
         .await;
-        assert_eq!(orphaned[0], decided[0]);
-        assert_eq!(
-            decided[1].leaf().parent_commitment(),
-            orphaned[1].leaf().parent_commitment()
-        );
+        assert_eq!(chain[0], fork[0]);
 
-        let proof = hand_crafted_two_chain(
-            &orphaned[1],
-            Certificate::non_epoch_change(orphaned[1].qc().clone()),
-            Certificate::non_epoch_change(decided[1].qc().clone()),
-            &decided[1],
-        );
-        let err = proof
-            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
-                LEAF_CHAIN_EPOCH_HEIGHT,
-            )))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("does not extend"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_three_chain_through_sibling_rejected() {
-        let orphaned = leaf_chain(1..=2, LEGACY_VERSION).await;
-        let decided = custom_leaf_chain(Upgrade::trivial(LEGACY_VERSION), 1..=3, |proposal| {
-            let height = proposal.block_header.height();
-            if height >= 2 {
-                proposal.view_number = ViewNumber::new(height + 1);
-            }
-        })
-        .await;
-        assert_eq!(orphaned[0], decided[0]);
-
-        let proof = LeafProof {
-            leaves: vec![orphaned[1].leaf().clone()],
-            proof: FinalityProof::HotStuff {
-                precommit_qc: Arc::new(Certificate::non_epoch_change(orphaned[1].qc().clone())),
-                committing_qc: Arc::new(Certificate::non_epoch_change(decided[1].qc().clone())),
-                deciding_qc: Arc::new(Certificate::non_epoch_change(decided[2].qc().clone())),
-                committing_leaf: Some(Box::new(decided[1].leaf().clone())),
-                deciding_leaf: Some(Box::new(decided[2].leaf().clone())),
-            },
-        };
-        let err = proof
-            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
-                LEAF_CHAIN_EPOCH_HEIGHT,
-            )))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("does not extend"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    /// Provers from before the proof carried the signed leaves send JSON without those fields.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_proof_without_signed_leaves_rejected() {
-        for (version, variant) in [(EPOCH_VERSION, "HotStuff2"), (LEGACY_VERSION, "HotStuff")] {
-            let mut proof = LeafProof::default();
-            for leaf in leaf_chain(1..=4, version).await {
-                if proof.push(leaf) {
-                    break;
-                }
-            }
-
-            let mut json = serde_json::to_value(&proof).unwrap();
-            json["proof"][variant]
-                .as_object_mut()
-                .unwrap()
-                .retain(|field, _| !field.ends_with("_leaf"));
-            let proof: LeafProof = serde_json::from_value(json).unwrap();
-
+        for (deciding_leaf, error) in [
+            (
+                &fork[1],
+                "leaf 2 at view 3 does not extend leaf 2 at view 2",
+            ),
+            (&chain[2], "QC from view 3 does not sign leaf 3 at view 3"),
+        ] {
+            let proof = hand_crafted_two_chain(
+                &chain[1],
+                Certificate::non_epoch_change(chain[1].qc().clone()),
+                Certificate::non_epoch_change(fork[1].qc().clone()),
+                deciding_leaf,
+            );
             let err = proof
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
                     LEAF_CHAIN_EPOCH_HEIGHT,
                 )))
                 .await
                 .unwrap_err();
-            assert!(
-                err.to_string().contains("finality proof is missing"),
-                "unexpected error for {variant}: {err:#}"
-            );
+            assert!(err.to_string().contains(error), "unexpected error: {err:#}");
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_three_chain_through_sibling_rejected() {
+        let chain = leaf_chain(1..=4, LEGACY_VERSION).await;
+        let fork = custom_leaf_chain(Upgrade::trivial(LEGACY_VERSION), 1..=4, |proposal| {
+            let height = proposal.block_header.height();
+            if height >= 3 {
+                proposal.view_number = ViewNumber::new(height + 1);
+            }
+        })
+        .await;
+        assert_eq!(chain[1], fork[1]);
+
+        let qc = |leaf: &LeafQueryData<SeqTypes>| {
+            Arc::new(Certificate::non_epoch_change(leaf.qc().clone()))
+        };
+        let through_committing_qc = LeafProof {
+            leaves: vec![chain[2].leaf().clone()],
+            proof: FinalityProof::HotStuff {
+                precommit_qc: qc(&chain[2]),
+                committing_qc: qc(&fork[2]),
+                deciding_qc: qc(&fork[3]),
+                committing_leaf: Box::new(fork[2].leaf().clone()),
+                deciding_leaf: Box::new(fork[3].leaf().clone()),
+            },
+        };
+        let through_deciding_qc = LeafProof {
+            leaves: vec![chain[1].leaf().clone()],
+            proof: FinalityProof::HotStuff {
+                precommit_qc: qc(&chain[1]),
+                committing_qc: qc(&chain[2]),
+                deciding_qc: qc(&fork[2]),
+                committing_leaf: Box::new(chain[2].leaf().clone()),
+                deciding_leaf: Box::new(chain[3].leaf().clone()),
+            },
+        };
+
+        for (proof, error) in [
+            (
+                through_committing_qc,
+                "leaf 3 at view 4 does not extend leaf 3 at view 3",
+            ),
+            (
+                through_deciding_qc,
+                "QC from view 4 does not sign leaf 4 at view 4",
+            ),
+        ] {
+            let err = proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
+                    LEAF_CHAIN_EPOCH_HEIGHT,
+                )))
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains(error), "unexpected error: {err:#}");
         }
     }
 
