@@ -9,6 +9,7 @@ use hotshot_types::{
         EpochNumber, UpgradeProposal2, VidDisperseShare2, ViewNumber,
         vid_disperse::AvidmGf2DisperseShareFragment,
     },
+    epoch::EpochLength,
     message::{Proposal as SignedProposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
@@ -19,7 +20,6 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    utils::{epoch_from_block_number, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 pub use hotshot_types::{
@@ -403,7 +403,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
     /// What the embedded proposal claims about itself and its parent is checked
     /// by the same functions the proposal path uses, except for the boundary
     /// Cert2 only the first proposal of an epoch carries.
-    pub fn well_formed(&self, epoch_height: u64) -> Result<(), EpochChangeError> {
+    pub fn well_formed(&self, epoch_length: EpochLength) -> Result<(), EpochChangeError> {
         let block_number = self.cert2.data.block_number;
         if self.cert1.view_number() > self.cert2.view_number()
             || self.cert1.epoch() != self.cert2.epoch()
@@ -412,10 +412,10 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         {
             return Err(EpochChangeError::CertificateMismatch);
         }
-        if !is_last_block(block_number, epoch_height) {
+        if !epoch_length.position(block_number).is_last() {
             return Err(EpochChangeError::NotLastBlock);
         }
-        if self.cert2.data.epoch != epoch_from_block_number(block_number, epoch_height).into() {
+        if self.cert2.data.epoch != epoch_length.epoch_of(block_number) {
             return Err(EpochChangeError::WrongEpoch);
         }
         if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
@@ -426,9 +426,9 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         {
             return Err(EpochChangeError::ProposalCertificateMismatch);
         }
-        epoch_matches_height(&self.proposal, epoch_height)?;
-        justify_qc_matches_parent(&self.proposal, epoch_height)?;
-        state_cert_matches_parent(&self.proposal, epoch_height)?;
+        epoch_matches_height(&self.proposal, epoch_length)?;
+        justify_qc_matches_parent(&self.proposal, epoch_length)?;
+        state_cert_matches_parent(&self.proposal, epoch_length)?;
         view_change_evidence_matches_parent(&self.proposal)?;
         Ok(())
     }
@@ -511,7 +511,7 @@ impl<T: NodeType> ReVote<T> {
     }
 
     /// Structural validity, independent of signatures.
-    pub fn well_formed(&self, epoch_height: u64) -> Result<(), ReVoteError> {
+    pub fn well_formed(&self, epoch_length: EpochLength) -> Result<(), ReVoteError> {
         let data = &self.cert1.data;
         if data.epoch != Some(self.epoch) {
             return Err(ReVoteError::Epoch);
@@ -519,9 +519,7 @@ impl<T: NodeType> ReVote<T> {
         let Some(block) = data.block_number else {
             return Err(ReVoteError::NotLastBlock);
         };
-        if !is_last_block(block, epoch_height)
-            || EpochNumber::new(epoch_from_block_number(block, epoch_height)) != self.epoch
-        {
+        if !epoch_length.position(block).is_last() || epoch_length.epoch_of(block) != self.epoch {
             return Err(ReVoteError::NotLastBlock);
         }
         let parent = self.cert1.view_number();

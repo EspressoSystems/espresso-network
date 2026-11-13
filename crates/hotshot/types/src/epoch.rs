@@ -31,7 +31,8 @@ impl EpochLength {
     }
 
     /// Genesis belongs mathematically to epoch one; this does not imply epochs are enabled.
-    pub fn epoch_of(self, height: BlockNumber) -> EpochNumber {
+    pub fn epoch_of(self, height: impl Into<BlockNumber>) -> EpochNumber {
+        let height = height.into();
         EpochNumber::new(if *height == 0 {
             1
         } else {
@@ -73,7 +74,8 @@ impl EpochLength {
         self.block_before_boundary(epoch, TRANSITION_DISTANCE)
     }
 
-    pub fn position(self, height: BlockNumber) -> EpochPosition {
+    pub fn position(self, height: impl Into<BlockNumber>) -> EpochPosition {
+        let height = height.into();
         EpochPosition {
             length: self,
             epoch: self.epoch_of(height),

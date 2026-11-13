@@ -361,7 +361,11 @@ impl NodeState {
         .expect("genesis without duplicate keys");
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap().into(),
+            &storage,
+        );
         Self::new(
             0,
             chain_config,
@@ -394,7 +398,11 @@ impl NodeState {
         )
         .expect("genesis without duplicate keys");
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap().into(),
+            &storage,
+        );
 
         Self::new(
             0,
@@ -427,7 +435,11 @@ impl NodeState {
         .expect("genesis without duplicate keys");
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap().into(),
+            &storage,
+        );
         Self::new(
             0,
             ChainConfig::default(),
@@ -524,7 +536,11 @@ impl Default for NodeState {
         )
         .expect("genesis without duplicate keys");
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap().into(),
+            &storage,
+        );
 
         Self::new(
             1u64,

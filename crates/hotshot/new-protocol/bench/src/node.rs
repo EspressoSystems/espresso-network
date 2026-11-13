@@ -138,7 +138,7 @@ async fn build_coordinator(
     tracer: Option<LeaderTracerHandle>,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
-    let epoch_height = u64::MAX;
+    let epoch_length = membership.epoch_length();
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
@@ -159,7 +159,7 @@ async fn build_coordinator(
         cfg.total_nodes,
         upgrade_lock.clone(),
         genesis_leaf.clone(),
-        epoch_height,
+        epoch_length,
     );
     consensus.set_tracer(tracer.clone());
 
@@ -172,7 +172,7 @@ async fn build_coordinator(
         VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
-    let epoch_manager = EpochManager::new(epoch_height, membership.clone());
+    let epoch_manager = EpochManager::new(epoch_length, membership.clone());
 
     let mut vid_disperser = VidDisperser::new(
         membership.clone(),
@@ -220,12 +220,12 @@ async fn build_coordinator(
 
     let proposal_validator = ProposalValidator::new(
         membership.clone(),
-        epoch_height,
+        epoch_length,
         upgrade_lock.clone(),
         consensus.cert1_at(ViewNumber::genesis()),
     );
     let share_validator =
-        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        VidShareValidator::new(membership.clone(), epoch_length, upgrade_lock.clone());
 
     let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
 

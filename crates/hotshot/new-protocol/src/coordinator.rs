@@ -29,7 +29,6 @@ use hotshot_types::{
         signature_key::{SignatureKey, StateSignatureKey},
     },
     upgrade_config::UpgradeConfig,
-    utils::{is_epoch_root, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -217,14 +216,14 @@ where
             stake_table_capacity,
             upgrade_lock.clone(),
             initializer.anchor_leaf().clone(),
-            initializer.epoch_height(),
+            membership_coordinator.epoch_length(),
         );
         consensus.set_tracer(leader_tracer.clone());
 
         let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
-            .epoch(initializer.epoch_height())
+            .epoch(membership_coordinator.epoch_length().get())
             .unwrap_or(EpochNumber::genesis());
         let cert1 = initializer.high_qc().clone();
         let parent_proposal = message::Proposal {
@@ -412,7 +411,7 @@ where
                 lock.clone(),
             ))
             .epoch_manager(EpochManager::new(
-                initializer.epoch_height(),
+                membership_coordinator.epoch_length(),
                 membership_coordinator.clone(),
             ))
             .block_builder(
@@ -435,13 +434,13 @@ where
             )
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height(),
+                membership_coordinator.epoch_length(),
                 upgrade_lock.clone(),
                 genesis_qc.as_ref(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height(),
+                membership_coordinator.epoch_length(),
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key).with_metrics(metrics))
@@ -996,7 +995,7 @@ where
                 // from on restart (highest epoch wins) and what `load_state_cert_by_epoch`
                 // serves.
                 if let Some(state_cert) =
-                    validated_state_cert(&proposal.data, *self.consensus.epoch_height)
+                    validated_state_cert(&proposal.data, self.consensus.epoch_length)
                 {
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
@@ -1481,7 +1480,7 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
-                    if !vote1.vote.data.is_well_formed(*self.consensus.epoch_height) {
+                    if !vote1.vote.data.is_well_formed(self.consensus.epoch_length) {
                         warn!(%node, %sender, %view, "vote1 is not well formed");
                         return None;
                     }
@@ -1491,8 +1490,8 @@ where
                         crate::leader_trace::LeaderEvent::Vote1VMinus1Arrived
                     );
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
-                    let epoch_height = *self.consensus.epoch_height;
-                    let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
+                    let epoch_length = self.consensus.epoch_length;
+                    let is_epoch_root_vote = epoch_length.position(bn).is_root();
                     debug!(
                         %node, %sender, %view,
                         epoch_root = is_epoch_root_vote,
@@ -1543,7 +1542,7 @@ where
                         warn!(%node, %sender, %view, "vote2 signing key != sender");
                         return None;
                     }
-                    if !vote2.data.is_well_formed(*self.consensus.epoch_height) {
+                    if !vote2.data.is_well_formed(self.consensus.epoch_length) {
                         warn!(%node, %sender, %view, "vote2 is not well formed");
                         return None;
                     }
@@ -1638,7 +1637,7 @@ where
                         return None;
                     }
                     // Checked before the lock's epoch can start a catchup.
-                    if let Err(err) = revote.revote.well_formed(*self.consensus.epoch_height) {
+                    if let Err(err) = revote.revote.well_formed(self.consensus.epoch_length) {
                         warn!(%node, %sender, %view, %err, "malformed re-vote request");
                         return None;
                     }
@@ -2003,7 +2002,12 @@ where
     /// is the fallback when there is no proposal yet or its epoch's stake table is unknown.
     fn upcoming_leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let expected = self.consensus.last_proposal_before(view).map(|p| {
-            if is_last_block(p.block_header.block_number(), *self.consensus.epoch_height) {
+            if self
+                .consensus
+                .epoch_length
+                .position(p.block_header.block_number())
+                .is_last()
+            {
                 p.epoch + 1
             } else {
                 p.epoch

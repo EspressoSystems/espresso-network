@@ -112,7 +112,11 @@ mod tests {
             EpochNumber::new(FIRST_EPOCH),
         )
         .expect("genesis without duplicate keys");
-        EpochMembershipCoordinator::new(committees, EPOCH_HEIGHT, &TestStorage::default())
+        EpochMembershipCoordinator::new(
+            committees,
+            std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap().into(),
+            &TestStorage::default(),
+        )
     }
 
     /// A node started on an empty database has consensus at the genesis epoch, below the first

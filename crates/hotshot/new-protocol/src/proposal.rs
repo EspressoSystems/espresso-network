@@ -5,6 +5,7 @@ use committable::Committable;
 use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
+    epoch::EpochLength,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
@@ -16,7 +17,6 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    utils::{epoch_from_block_number, is_epoch_root, is_last_block},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::{self, ensure};
@@ -66,7 +66,7 @@ pub struct VidShareValidator<T: NodeType> {
 
 struct Validator<T: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     upgrade_lock: UpgradeLock<T>,
 
     /// The data of the genesis QC, the only `justify_qc` a proposal may carry
@@ -82,7 +82,7 @@ impl<T: NodeType> ProposalValidator<T> {
     /// genesis view, and no other certificate there.
     pub fn new(
         c: EpochMembershipCoordinator<T>,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         upgrade_lock: UpgradeLock<T>,
         genesis_qc: Option<&Certificate1<T>>,
     ) -> Self {
@@ -90,7 +90,7 @@ impl<T: NodeType> ProposalValidator<T> {
             tasks: JoinSet::new(),
             validator: Arc::new(Validator {
                 membership_coordinator: c,
-                epoch_height,
+                epoch_length,
                 upgrade_lock,
                 genesis_qc: genesis_qc.map(|qc| qc.data),
             }),
@@ -111,7 +111,7 @@ impl<T: NodeType> ProposalValidator<T> {
     fn spawn_validation(&mut self, p: ProposalMessage<T, Unchecked>, fetched: bool) {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
-            let parts = well_formed(&p.proposal.data, v.epoch_height)?;
+            let parts = well_formed(&p.proposal.data, v.epoch_length)?;
             let sender = v.signature(&p.proposal).await?;
             v.certificates(&p.proposal.data, &parts).await?;
             v.state_cert(&p.proposal.data, &parts).await?;
@@ -141,14 +141,14 @@ impl<T: NodeType> ProposalValidator<T> {
 impl<T: NodeType> VidShareValidator<T> {
     pub fn new(
         c: EpochMembershipCoordinator<T>,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         Self {
             tasks: JoinSet::new(),
             validator: Arc::new(Validator {
                 membership_coordinator: c,
-                epoch_height,
+                epoch_length,
                 upgrade_lock,
                 genesis_qc: None,
             }),
@@ -183,16 +183,16 @@ impl<T: NodeType> VidShareValidator<T> {
 /// epoch to resolve their committee through.
 pub(crate) fn well_formed<T: NodeType>(
     proposal: &Proposal<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 ) -> Result<Parts<'_, T>, MalformedProposal> {
-    epoch_matches_height(proposal, epoch_height)?;
-    let justify_qc_epoch = justify_qc_matches_parent(proposal, epoch_height)?;
+    epoch_matches_height(proposal, epoch_length)?;
+    let justify_qc_epoch = justify_qc_matches_parent(proposal, epoch_length)?;
     Ok(Parts {
         justify_qc_epoch,
-        state_cert: state_cert_matches_parent(proposal, epoch_height)?,
+        state_cert: state_cert_matches_parent(proposal, epoch_length)?,
         next_epoch_justify_qc: next_epoch_justify_qc_matches_parent(
             proposal,
-            epoch_height,
+            epoch_length,
             justify_qc_epoch,
         )?,
         view_change_evidence: view_change_evidence_matches_parent(proposal)?,
@@ -217,10 +217,10 @@ pub(crate) struct Parts<'a, T: NodeType> {
 /// The proposal's epoch must be the one its block number falls in.
 pub(crate) fn epoch_matches_height<T: NodeType>(
     proposal: &Proposal<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 ) -> Result<(), MalformedProposal> {
     let block_number = proposal.block_header.block_number();
-    let expected = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
+    let expected = epoch_length.epoch_of(block_number);
     if proposal.epoch != expected {
         return Err(MalformedProposal::Epoch {
             view: proposal.view_number(),
@@ -248,14 +248,14 @@ pub(crate) fn epoch_matches_height<T: NodeType>(
 /// Returns that epoch, which the QC checks resolve their membership through.
 pub(crate) fn justify_qc_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 ) -> Result<EpochNumber, MalformedProposal> {
     let view = proposal.view_number();
     let Some(claimed_epoch) = proposal.justify_qc.epoch() else {
         return Err(MalformedProposal::JustifyQcWithoutEpoch(view));
     };
     let parent_block = proposal.block_header.block_number().saturating_sub(1);
-    let expected_epoch = EpochNumber::new(epoch_from_block_number(parent_block, epoch_height));
+    let expected_epoch = epoch_length.epoch_of(parent_block);
     if claimed_epoch != expected_epoch {
         return Err(MalformedProposal::JustifyQcEpoch {
             view,
@@ -296,14 +296,14 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
 /// function is what enforces its presence, which nothing else does.
 pub(crate) fn state_cert_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 ) -> Result<Option<&LightClientStateUpdateCertificateV2<T>>, MalformedProposal> {
     let view = proposal.view_number();
     let requires_state_cert = proposal
         .justify_qc
         .data
         .block_number
-        .is_some_and(|bn| is_epoch_root(bn, epoch_height));
+        .is_some_and(|bn| epoch_length.position(bn).is_root());
     match (proposal.state_cert.as_ref(), requires_state_cert) {
         (Some(_), false) => Err(MalformedProposal::StateCertUnexpected(view)),
         (None, true) => Err(MalformedProposal::StateCertMissing(view)),
@@ -326,12 +326,12 @@ pub(crate) fn state_cert_matches_parent<T: NodeType>(
 /// re-vote commits the block at a view of its own.
 pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     justify_qc_epoch: EpochNumber,
 ) -> Result<Option<&Certificate2<T>>, MalformedProposal> {
     let view = proposal.view_number();
     let parent_block = proposal.block_header.block_number().saturating_sub(1);
-    if !is_last_block(parent_block, epoch_height) {
+    if !epoch_length.position(parent_block).is_last() {
         if proposal.next_epoch_justify_qc.is_some() {
             return Err(MalformedProposal::NextEpochJustifyQcUnexpected(view));
         }
@@ -512,7 +512,7 @@ impl<T: NodeType> Validator<T> {
                 tc,
                 &entries,
                 membership.success_threshold(),
-                self.epoch_height,
+                self.epoch_length,
                 &self.upgrade_lock,
                 &self.membership_coordinator,
             )
@@ -555,7 +555,7 @@ impl<T: NodeType> Validator<T> {
         let Some(state_cert) = parts.state_cert else {
             return Ok(());
         };
-        if !check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, self.epoch_height)
+        if !check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, self.epoch_length)
         {
             return Err(ValidationError::StateCertCorrespondence);
         }
@@ -689,7 +689,7 @@ fn verify_timeout_evidence<T: NodeType>(
     tc: &TimeoutEvidence<T>,
     stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
     threshold: U256,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     upgrade_lock: &UpgradeLock<T>,
     memberships: &EpochMembershipCoordinator<T>,
 ) -> anytrace::Result<()> {
@@ -711,7 +711,7 @@ fn verify_timeout_evidence<T: NodeType>(
             cert,
             stake_table,
             threshold,
-            epoch_height,
+            epoch_length,
             upgrade_lock,
             memberships,
         ),

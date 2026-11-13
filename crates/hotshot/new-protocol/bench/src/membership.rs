@@ -50,7 +50,10 @@ pub async fn make_membership(
     let (_tx, rx) = async_broadcast::broadcast(1);
     membership.set_leaf_fetcher(leaf_fetcher_network, TestStorage::default(), public_key, rx);
 
-    let coordinator =
-        EpochMembershipCoordinator::new(membership, u64::MAX, &TestStorage::<TestTypes>::default());
+    let coordinator = EpochMembershipCoordinator::new(
+        membership,
+        std::num::NonZeroU64::MAX.into(),
+        &TestStorage::<TestTypes>::default(),
+    );
     (coordinator, client)
 }

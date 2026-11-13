@@ -1980,8 +1980,11 @@ mod test_headers {
             EpochNumber::genesis(),
         )
         .expect("genesis without duplicate keys");
-        genesis_state.coordinator =
-            EpochMembershipCoordinator::new(membership, 100, &TestStorage::default());
+        genesis_state.coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap().into(),
+            &TestStorage::default(),
+        );
 
         let genesis = GenesisForTest::default().await;
 
