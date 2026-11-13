@@ -6092,13 +6092,6 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
         let tip = network.server.decided_leaf().await.height();
         assert_follows_to(&follower, &follower_client, tip).await?;
-        // Init requests the first stake table before the API or state loop can start a walk.
-        timeout(
-            FOLLOW_TIMEOUT,
-            wait_for_metric(follower_port, "consensus_catchup_lc_contract_seeds", 1.0),
-        )
-        .await
-        .context("the follower never seeded from the LC contract")?;
 
         let export = reqwest::get(format!(
             "http://localhost:{follower_port}/v1/status/metrics"
@@ -6106,6 +6099,11 @@ mod test {
         .await?
         .text()
         .await?;
+        // The follower cannot ingest without the table the first poll needs, so init seeded it.
+        assert!(
+            metric_value(&export, "consensus_catchup_lc_contract_seeds") >= Some(1.0),
+            "{export}"
+        );
         assert!(
             metric_value(&export, "light_client_follower_block_height") > Some(tip as f64),
             "{export}"
@@ -6241,22 +6239,6 @@ mod test {
         export
             .lines()
             .find_map(|line| line.strip_prefix(series)?.strip_prefix(' ')?.parse().ok())
-    }
-
-    /// Polls the follower's `status/metrics` until `series` reaches `at_least`.
-    async fn wait_for_metric(port: u16, series: &str, at_least: f64) {
-        loop {
-            let export = reqwest::get(format!("http://localhost:{port}/v1/status/metrics"))
-                .await
-                .expect("metrics request")
-                .text()
-                .await
-                .expect("metrics body");
-            if metric_value(&export, series) >= Some(at_least) {
-                return;
-            }
-            sleep(Duration::from_millis(500)).await;
-        }
     }
 
     async fn start_follower<D: TestableSqlDataSource>(

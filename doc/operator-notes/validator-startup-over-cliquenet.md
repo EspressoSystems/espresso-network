@@ -21,7 +21,8 @@ the LC contract by its post-start catchup, over request-response, after about on
 - `/v1/node/all-validators/{epoch_number}/{offset}/{limit}` is empty for epochs a seed skipped.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
   For followers it bounds the wait for the stake table it needs, at startup and at each poll. Exceeding it or failing
-  logs a warning and the next poll retries; a follower no longer exits at startup when the upstreams or L1 are down.
+  logs a warning and the next poll retries. With a stored network config, startup does not need the upstreams;
+  a first start fetches the config from the config peers. The L1 provider must answer at startup.
 - Followers no longer walk epochs at startup either. They have no request-response: their state peers
   (`--state-peers`, or the upstreams when unset) serve the seed over HTTP at once, and `--http-catchup-delay` does not
   apply.

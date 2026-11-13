@@ -8,7 +8,7 @@
 //! default to the very upstreams it verifies. Pin the genesis wherever the upstreams are not
 //! trusted on first start.
 
-use std::{cmp::max, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
+use std::{cmp::max, collections::HashMap, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient, LightClientMetrics,
@@ -56,7 +56,7 @@ use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
 use tokio::{
     sync::watch,
-    time::{Instant, error::Elapsed, sleep, timeout, timeout_at},
+    time::{Instant, sleep, timeout, timeout_at},
 };
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
@@ -271,8 +271,7 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    // The seed fetches through the catchup provider: `--state-peers`, else the upstreams. A replay
-    // node has no upstreams (`legacy_chain::replay_params`) and walks.
+    // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
     if !params.upstreams.is_empty()
         && let Some(seed) = LcContractSeed::new(&node_state.chain_config, &*metrics)
     {
@@ -333,7 +332,7 @@ where
         next,
     };
     let mut tasks = TaskList::default();
-    follower.start_catchup().await;
+    follower.catch_up_at_startup().await;
     tasks.spawn("light client follower", follower.run());
 
     Ok(FollowerHandle {
@@ -609,28 +608,6 @@ pub(crate) struct VerifiedBlock {
     pub(crate) vid_common: VidCommonQueryData<SeqTypes>,
 }
 
-/// The newest stake table following from `height` needs: the next epoch's and, once the epoch's
-/// root block lies below `height`, the one after.
-fn needed_stake_table_epoch(height: u64, epoch_height: u64) -> EpochNumber {
-    let epoch = epoch_from_block_number(height, epoch_height);
-    let root_skipped = root_block_in_epoch(epoch, epoch_height) < height;
-    EpochNumber::new(epoch + 1 + u64::from(root_skipped))
-}
-
-/// A failed or timed out wait is an error only while the table is missing.
-fn stake_table_wait_outcome<T, E: Display>(
-    waited: Result<Result<T, E>, Elapsed>,
-    needed: EpochNumber,
-    table_held: bool,
-) -> anyhow::Result<()> {
-    let err = match waited {
-        Ok(Ok(_)) => return Ok(()),
-        Ok(Err(err)) => anyhow!("catching up to the stake table of epoch {needed}: {err}"),
-        Err(_) => anyhow!("catching up to the stake table of epoch {needed} timed out"),
-    };
-    if table_held { Ok(()) } else { Err(err) }
-}
-
 impl<P: SequencerPersistence> Follower<P> {
     async fn run(mut self) {
         tracing::info!(from = self.next, "following the chain");
@@ -665,7 +642,12 @@ impl<P: SequencerPersistence> Follower<P> {
             );
             self.next = from;
         }
-        self.require_stake_tables(from).await?;
+        timeout(
+            self.bootstrap_epoch_catchup_timeout,
+            self.require_stake_table(from),
+        )
+        .await
+        .context("the stake table catchup timed out")??;
         for block in self.source.fetch_range(from, tip).await? {
             let height = block.leaf.height();
             ensure!(
@@ -768,13 +750,13 @@ impl<P: SequencerPersistence> Follower<P> {
 
     /// Requests the stake tables and the DRB the first poll needs, within one catchup timeout. A
     /// failure is logged and the first poll retries it.
-    async fn start_catchup(&self) {
+    async fn catch_up_at_startup(&self) {
         let deadline = Instant::now() + self.bootstrap_epoch_catchup_timeout;
         let Some(from) = self.start_height(deadline).await else {
             tracing::warn!("no chain height known; the first poll requests the stake tables");
             return;
         };
-        match timeout_at(deadline, self.require_stake_tables(from)).await {
+        match timeout_at(deadline, self.require_stake_table(from)).await {
             Ok(Ok(())) => {},
             Ok(Err(err)) => tracing::warn!(from, "startup stake table catchup failed: {err:#}"),
             Err(_) => tracing::warn!(from, "startup stake table catchup timed out"),
@@ -800,17 +782,18 @@ impl<P: SequencerPersistence> Follower<P> {
     /// Holds the stake tables that following from `height` needs. Far behind, the coordinator
     /// seeds. A failed catchup is not an error while the table is held: its DRB step can fail for
     /// a follower, which supplies DRB results itself from the next transition block on.
-    async fn require_stake_tables(&self, height: u64) -> anyhow::Result<()> {
+    async fn require_stake_table(&self, height: u64) -> anyhow::Result<()> {
         let needed = needed_stake_table_epoch(height, self.epoch_height);
         if needed <= self.coordinator.membership().first_epoch() + 1 {
             return Ok(());
         }
-        let waited = timeout(
-            self.bootstrap_epoch_catchup_timeout,
-            self.coordinator.wait_for_stake_table(needed),
-        )
-        .await;
-        stake_table_wait_outcome(waited, needed, self.has_stake_table(needed))
+        if let Err(err) = self.coordinator.wait_for_stake_table(needed).await {
+            ensure!(
+                self.has_stake_table(needed),
+                "catching up to the stake table of epoch {needed}: {err}"
+            );
+        }
+        Ok(())
     }
 
     fn has_stake_table(&self, epoch: EpochNumber) -> bool {
@@ -846,6 +829,14 @@ impl<P: SequencerPersistence> Follower<P> {
             ),
         }
     }
+}
+
+/// The newest stake table following from `height` needs: the next epoch's and, once the epoch's
+/// root block lies below `height`, the one after.
+fn needed_stake_table_epoch(height: u64, epoch_height: u64) -> EpochNumber {
+    let epoch = epoch_from_block_number(height, epoch_height);
+    let root_skipped = root_block_in_epoch(epoch, epoch_height) < height;
+    EpochNumber::new(epoch + 1 + u64::from(root_skipped))
 }
 
 #[async_trait]
@@ -929,8 +920,6 @@ async fn connect_light_client(
 
 #[cfg(test)]
 mod tests {
-    use std::future::pending;
-
     use rstest::rstest;
 
     use super::*;
@@ -953,17 +942,5 @@ mod tests {
             needed_stake_table_epoch(height, EPOCH_HEIGHT),
             EpochNumber::new(expected)
         );
-    }
-
-    #[tokio::test]
-    async fn wait_outcome_cases() {
-        let needed = EpochNumber::new(3);
-        let failed = || Ok(Err::<(), _>("derivation failed"));
-        let elapsed = || timeout(Duration::ZERO, pending::<Result<(), &str>>());
-
-        assert!(stake_table_wait_outcome(failed(), needed, true).is_ok());
-        assert!(stake_table_wait_outcome(failed(), needed, false).is_err());
-        assert!(stake_table_wait_outcome(elapsed().await, needed, true).is_ok());
-        assert!(stake_table_wait_outcome(elapsed().await, needed, false).is_err());
     }
 }

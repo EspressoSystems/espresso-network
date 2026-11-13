@@ -50,8 +50,10 @@ optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
 without one the catchup walks only. The follower installs the same seed, fetching through its catchup provider:
-`--state-peers`, or the upstreams when unset. It asks the coordinator for the stake tables of the epoch it is about
-to ingest, at startup and at each poll. A failed or timed out request logs a warning and the next poll retries it.
+`--state-peers`, or the upstreams when unset. It asks the coordinator for the one table it needs before ingesting:
+that of the next epoch, or of the one after once the epoch root is passed, at startup and at each poll. A failed
+or timed out request logs a warning and the next poll retries it. A follower has no request-response: its state peers
+answer at once.
 
 A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
 one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
@@ -76,7 +78,6 @@ seed at a time:
    is read from `/v1/catchup/{F}/leafchain`, a proof from `/v1/light-client/header/{F}/{height}`; both are verified
    before they are accepted. Peers are asked in `PeerScore` order, each under `--catchup-base-timeout`; the first
    verified answer of either source wins.
-   A follower has no request-response: its state peers answer at once.
 
 An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
 tables are present and skipped.
