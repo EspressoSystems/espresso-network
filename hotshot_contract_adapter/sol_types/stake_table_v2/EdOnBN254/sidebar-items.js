@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["new"],"struct":["EdOnBN254Instance","EdOnBN254Point"]};
