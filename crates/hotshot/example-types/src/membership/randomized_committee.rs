@@ -72,11 +72,11 @@ where
         }
     }
 
-    fn stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+    fn stake_table(&self, _epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         self.quorum_members.clone()
     }
 
-    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+    fn da_stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         self.da_committees
             .get(epoch)
             .unwrap_or(self.da_members.clone())
@@ -86,7 +86,7 @@ where
         self.quorum_members.clone()
     }
 
-    fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
+    fn lookup_leader(&self, view_number: u64, _epoch: u64) -> anyhow::Result<PubKey> {
         let res = select_randomized_leader(&self.randomized_committee, view_number);
 
         Ok(PubKey::public_key(&res))

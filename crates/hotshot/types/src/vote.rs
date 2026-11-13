@@ -292,7 +292,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         vote: &LightClientStateUpdateVote2<TYPES>,
         membership: &EpochMembership<TYPES>,
     ) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
-        let epoch = membership.epoch()?;
+        let epoch = membership.epoch();
         let threshold = membership.success_threshold();
         let PeerConfig {
             stake_table_entry,
