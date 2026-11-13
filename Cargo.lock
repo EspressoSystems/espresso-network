@@ -1000,6 +1000,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-bls12-381"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be2ede2c0c96fa37d5d3484e8a59fec566c4a52b8c84bf993eaa6c67d7225a4c"
+dependencies = [
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+]
+
+[[package]]
 name = "ark-bn254"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1020,6 +1032,17 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-r1cs-std",
  "ark-std 0.5.0",
+]
+
+[[package]]
+name = "ark-bn254"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bc66f96ebe2a17a499475b4f94791d379817592ef494171586967ffdc6f95db"
+dependencies = [
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-std 0.6.0",
 ]
 
 [[package]]
@@ -1109,6 +1132,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-ec"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8352a2b2aedf6ba2cc38f7520fc51191d518dde96175c729af19f2d059f191c4"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.17.1",
+ "itertools 0.14.0",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "zeroize",
+]
+
+[[package]]
 name = "ark-ed-on-bls12-377"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1126,7 +1170,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba93ca6e75e5f589c139e5a41ebd783ebf2153de0025cd2b00da2963929c92ec"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
@@ -1142,6 +1186,18 @@ dependencies = [
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
+]
+
+[[package]]
+name = "ark-ed-on-bn254"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4585ccc828ac1a1c0973a6d859b8cd9ae6055a0ee943139c8e254dfd87d6f38"
+dependencies = [
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-std 0.6.0",
 ]
 
 [[package]]
@@ -1217,6 +1273,7 @@ dependencies = [
  "educe",
  "num-bigint",
  "num-traits",
+ "rayon",
  "zeroize",
 ]
 
@@ -1341,6 +1398,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-poly"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75f55af10b672002b8d953e230282c51206842e20e5791a94432219b4201de5c"
+dependencies = [
+ "ahash 0.8.12",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "educe",
+ "fnv",
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "ark-poly-commit"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1439,6 +1511,7 @@ dependencies = [
  "ark-std 0.6.0",
  "digest 0.10.7",
  "num-bigint",
+ "rayon",
  "serde_with",
 ]
 
@@ -1537,7 +1610,6 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
 dependencies = [
- "colored",
  "num-traits",
  "rand 0.8.6",
  "rayon",
@@ -1549,8 +1621,10 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "367c9c827ed431bff6868b7aa926e05b16eb46603cc8b6e768e4a5553fa1d155"
 dependencies = [
+ "colored",
  "num-traits",
  "rand 0.8.6",
+ "rayon",
 ]
 
 [[package]]
@@ -1908,7 +1982,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -3303,12 +3377,12 @@ name = "diff-test-hotshot"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-std 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-std 0.6.0",
  "clap",
  "espresso-types",
  "hotshot-contract-adapter",
@@ -3639,7 +3713,7 @@ dependencies = [
  "aide",
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -3714,9 +3788,9 @@ dependencies = [
 name = "espresso-crypto-helper"
 version = "0.1.0"
 dependencies = [
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "committable",
  "espresso-types",
  "hotshot-types",
@@ -3833,8 +3907,8 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "async-broadcast",
  "async-channel",
  "async-lock",
@@ -3951,7 +4025,7 @@ name = "espresso-telemetry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "axum",
  "base64 0.22.1",
  "clap",
@@ -3988,9 +4062,9 @@ dependencies = [
  "alloy-compat",
  "alloy-rlp",
  "anyhow",
- "ark-ec 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-ec 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
  "async-broadcast",
  "async-lock",
  "async-trait",
@@ -4070,7 +4144,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "clap",
  "committable",
  "log-panics",
@@ -4837,13 +4911,13 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
  "bincode",
  "derive_more 2.1.1",
  "hotshot-types",
@@ -4986,7 +5060,7 @@ version = "0.1.76"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "async-lock",
  "async-trait",
  "atomic_store",
@@ -5046,7 +5120,7 @@ name = "hotshot-query-service-types"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "bincode",
  "committable",
  "derivative",
@@ -5075,13 +5149,13 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-bn254 0.5.0",
- "ark-ec 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "ark-srs",
- "ark-std 0.5.0",
+ "ark-std 0.6.0",
  "axum",
  "clap",
  "displaydoc",
@@ -5125,12 +5199,12 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "anyhow",
- "ark-bn254 0.5.0",
- "ark-ed-on-bn254",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
+ "ark-bn254 0.6.0",
+ "ark-ed-on-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "ark-srs",
- "ark-std 0.5.0",
+ "ark-std 0.6.0",
  "async-trait",
  "bincode",
  "bitvec 1.1.0",
@@ -5773,7 +5847,7 @@ version = "0.4.2"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.4.2#0d86d16d47e07cf9fe8934dfda4865a5c37d648f"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -5804,7 +5878,7 @@ version = "0.3.1"
 source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.3.1#4b935eeb59e404b38f823694eb488c1377468f36"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -5916,7 +5990,7 @@ name = "jf-poseidon2"
 version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-poseidon2-v0.2.0#f1538793f7f0e391495cb17bbb0c8703ec5f689d"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
@@ -5943,7 +6017,7 @@ version = "0.5.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0#b33995b68641a2742e4ad2c05ee4e15621ff43b0"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-ec 0.5.0",
@@ -5969,7 +6043,7 @@ version = "0.5.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-ec 0.5.0",
@@ -5995,13 +6069,13 @@ version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0#e6cc2704a91bca87152e39bd4bc01288f0c5f265"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-crypto-primitives",
  "ark-ed-on-bls12-377",
  "ark-ed-on-bls12-381",
- "ark-ed-on-bn254",
+ "ark-ed-on-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "displaydoc",
@@ -6021,13 +6095,13 @@ version = "0.3.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
  "ark-bls12-377",
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-bw6-761",
  "ark-crypto-primitives",
  "ark-ed-on-bls12-377",
  "ark-ed-on-bls12-381",
- "ark-ed-on-bn254",
+ "ark-ed-on-bn254 0.5.0",
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "displaydoc",
@@ -6046,7 +6120,7 @@ name = "jf-signature"
 version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat#11e54d4e97858610d5f423bac2603a331c0046f6"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -6076,7 +6150,7 @@ name = "jf-signature"
 version = "0.4.2"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.2#b1581c26f7195962d17fc5ff3768ac55db610ca1"
 dependencies = [
- "ark-bls12-381",
+ "ark-bls12-381 0.5.0",
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
  "ark-ff 0.5.0",
@@ -9600,7 +9674,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-serialize 0.5.0",
+ "ark-serialize 0.6.0",
  "assert_cmd",
  "chrono",
  "clap",
@@ -10877,12 +10951,12 @@ name = "vid"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-bls12-381",
- "ark-bn254 0.5.0",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-bls12-381 0.6.0",
+ "ark-bn254 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-poly 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
  "base64-bytes",
  "blake3",
  "criterion 0.8.2",
