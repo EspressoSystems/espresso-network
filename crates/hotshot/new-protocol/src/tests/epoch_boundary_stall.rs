@@ -9,8 +9,6 @@
 //! then votes2 on `L`'s own vote data again, at that view, and the resulting
 //! `Certificate2` commits `L`.
 
-use std::collections::BTreeSet;
-
 use committable::Commitment;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
@@ -20,15 +18,14 @@ use hotshot_types::{
     simple_certificate::TimeoutEvidence,
     simple_vote::LockView,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
     vote::HasViewNumber,
 };
 
 use super::common::{
     assertions::{any, decides_view, is_proposal_certified, is_vote2_for_view},
     utils::{
-        ConsensusHarness, TEST_DRB_RESULT, TestData, build_cert1, build_cert2,
-        build_timeout_cert3_with_lock, payload_requests, timeout_cert_input, timeout_cert_of,
+        ConsensusHarness, TestData, build_cert1, build_cert2, build_timeout_cert3_with_lock,
+        payload_requests, timeout_cert_input, timeout_cert_of,
     },
 };
 use crate::{
@@ -93,18 +90,6 @@ async fn node_before_the_boundary_block(
 ) -> ConsensusHarness {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
     let mut harness = ConsensusHarness::new_with_upgrade_lock(node_index, EPOCH_HEIGHT, lock).await;
-    let mut drb_epochs = BTreeSet::new();
-    for v in &test_data.views[..=BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
-            drb_epochs.insert(v.epoch_number + 1);
-        }
-    }
-    for e in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(e, TEST_DRB_RESULT))
-            .await;
-    }
     for v in &test_data.views[..BOUNDARY] {
         harness
             .apply_pair(v.proposal_input_consensus(&node_key))
@@ -1736,18 +1721,6 @@ async fn node_without_the_boundary_block(test_data: &TestData) -> ConsensusHarne
     let mut harness =
         ConsensusHarness::new_with_upgrade_lock(NODE, EPOCH_HEIGHT, test_timeout_epoch_lock())
             .await;
-    let mut drb_epochs = BTreeSet::new();
-    for v in &test_data.views[..=BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
-            drb_epochs.insert(v.epoch_number + 1);
-        }
-    }
-    for e in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(e, TEST_DRB_RESULT))
-            .await;
-    }
     for v in &test_data.views[..BOUNDARY] {
         harness
             .apply_pair(v.proposal_input_consensus(&node_key))
@@ -1778,15 +1751,6 @@ async fn first_block_after_a_revote_drops_a_timeout_certificate_of_the_old_epoch
         ConsensusHarness::new_with_upgrade_lock(leader, EPOCH_HEIGHT, test_timeout_epoch_lock())
             .await;
     for v in &test_data.views[..BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
-            harness
-                .apply(ConsensusInput::DrbResult(
-                    v.epoch_number + 1,
-                    TEST_DRB_RESULT,
-                ))
-                .await;
-        }
         harness
             .apply_pair(v.proposal_input_consensus(&node_key))
             .await;
@@ -1794,9 +1758,6 @@ async fn first_block_after_a_revote_drops_a_timeout_certificate_of_the_old_epoch
         harness.apply(v.cert1_input()).await;
         harness.apply(v.cert2_input()).await;
     }
-    harness
-        .apply(ConsensusInput::DrbResult(epoch(2), TEST_DRB_RESULT))
-        .await;
     harness
         .apply_pair(boundary.proposal_input_consensus(&node_key))
         .await;
