@@ -202,6 +202,14 @@ pub(in crate::api) async fn init_query_module(
         update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
     );
 
+    // A pruned node has no aggregator, so it never reads or adds to the totals an earlier run left.
+    if mod_opt.prune {
+        tasks.spawn(
+            "delete transaction and payload totals",
+            delete_totals(inner_storage.clone()),
+        );
+    }
+
     // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
     if mod_opt.archive && !mod_opt.archive_full_state {
         let get_node_state = {
@@ -253,6 +261,19 @@ pub(in crate::api) async fn init_query_module(
         Box::new(ApiEventConsumer::from(ds)),
         Some(RequestResponseStorage::Sql(inner_storage)),
     ))
+}
+
+/// Heights of transaction and payload totals deleted per transaction.
+const TOTALS_DELETE_HEIGHTS: u64 = 1000;
+
+/// Delete the transaction and payload totals in small transactions, so that the write lock, which
+/// consensus shares on SQLite, is never held for long.
+async fn delete_totals(storage: Arc<SqlStorage>) {
+    match storage.delete_aggregates(TOTALS_DELETE_HEIGHTS).await {
+        Ok(0) => {},
+        Ok(rows) => tracing::info!(rows, "deleted the totals an earlier run left"),
+        Err(err) => tracing::warn!("failed to delete the totals an earlier run left: {err:#}"),
+    }
 }
 
 /// Prune archive state older than the light client contract's retained history. Block merkle paths
