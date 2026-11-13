@@ -13,7 +13,7 @@
 //! Reads of the views before the first epoch go through the
 //! [`GenesisStakeTables`] from [`Membership::genesis_stake_tables`].
 
-use std::{fmt::Debug, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use alloy_primitives::U256;
 use committable::{Commitment, Committable};
@@ -199,126 +199,82 @@ pub enum StakeTableAvailability {
 /// The stake tables of views before the first epoch, when epochs were not
 /// enabled yet: the genesis stake table and the genesis DA committee.
 ///
-/// The members of the stake table take turns as leader, in order, whatever
-/// their stake. Epochs pick leaders at random instead.
-#[derive(Debug)]
+/// Clones share the tables, so cloning is cheap.
+#[derive(Debug, Clone)]
 pub struct GenesisStakeTables<T: NodeType> {
-    stake_table: Vec<PeerConfig<T>>,
-    da_stake_table: Vec<PeerConfig<T>>,
-    /// The keys of `stake_table`, in the same order.
-    committee_members: Vec<T::SignatureKey>,
-    /// The keys of `da_stake_table`, in the same order.
-    da_committee_members: Vec<T::SignatureKey>,
+    tables: Arc<Tables<T>>,
 }
 
 impl<T: NodeType> GenesisStakeTables<T> {
     /// Keeps both tables as given, in order.
-    pub fn new(stake_table: Vec<PeerConfig<T>>, da_stake_table: Vec<PeerConfig<T>>) -> Self {
-        Self {
-            committee_members: keys(&stake_table),
-            da_committee_members: keys(&da_stake_table),
-            stake_table,
-            da_stake_table,
-        }
-    }
-
-    pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
-        self.stake_table.iter()
-    }
-
-    pub fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
-        self.da_stake_table.iter()
-    }
-
-    pub fn committee_members(&self) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
-        self.committee_members.iter()
-    }
-
-    pub fn da_committee_members(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_ {
-        self.da_committee_members.iter()
-    }
-
-    pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        entry(&self.committee_members, &self.stake_table, key)
-    }
-
-    pub fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        entry(&self.da_committee_members, &self.da_stake_table, key)
-    }
-
-    pub fn has_stake(&self, key: &T::SignatureKey) -> bool {
-        self.stake(key)
-            .is_some_and(|p| p.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    pub fn has_da_stake(&self, key: &T::SignatureKey) -> bool {
-        self.da_stake(key)
-            .is_some_and(|p| p.stake_table_entry.stake() > U256::ZERO)
-    }
-
-    /// The leader for `view`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the stake table is empty.
-    pub fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
-        if self.committee_members.is_empty() {
-            return Err(anytrace::info!(
-                "Failed to get leader for view {view}: the genesis stake table is empty"
-            ));
-        }
-        let index = *view as usize % self.committee_members.len();
-        Ok(self.committee_members[index].clone())
+    /// Returns an error if a table holds a key twice.
+    pub fn new(
+        stake_table: Vec<PeerConfig<T>>,
+        da_stake_table: Vec<PeerConfig<T>>,
+    ) -> anyhow::Result<Self> {
+        let stake_index = index_keys(&stake_table, "stake table")?;
+        index_keys(&da_stake_table, "DA committee")?;
+        Ok(Self {
+            tables: Arc::new(Tables {
+                stake_table,
+                da_stake_table,
+                stake_index,
+            }),
+        })
     }
 
-    pub fn total_nodes(&self) -> usize {
-        self.stake_table.len()
+    pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
+        self.tables.stake_table.iter()
     }
 
-    pub fn da_total_nodes(&self) -> usize {
-        self.da_stake_table.len()
+    pub fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
+        self.tables.da_stake_table.iter()
+    }
+
+    pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
+        let &position = self.tables.stake_index.get(key)?;
+        Some(self.tables.stake_table[position].clone())
     }
 
     pub fn success_threshold(&self) -> U256 {
-        supermajority_threshold(total_stake(&self.stake_table))
-    }
-
-    pub fn da_success_threshold(&self) -> U256 {
-        supermajority_threshold(total_stake(&self.da_stake_table))
-    }
-
-    pub fn failure_threshold(&self) -> U256 {
-        one_honest_threshold(total_stake(&self.stake_table))
-    }
-
-    pub fn upgrade_threshold(&self) -> U256 {
-        upgrade_threshold(total_stake(&self.stake_table))
+        supermajority_threshold(
+            self.tables
+                .stake_table
+                .iter()
+                .map(|p| p.stake_table_entry.stake())
+                .sum(),
+        )
     }
 }
 
-fn keys<T: NodeType>(table: &[PeerConfig<T>]) -> Vec<T::SignatureKey> {
-    table
-        .iter()
-        .map(|p| p.stake_table_entry.public_key())
-        .collect()
+#[derive(Debug)]
+struct Tables<T: NodeType> {
+    stake_table: Vec<PeerConfig<T>>,
+    da_stake_table: Vec<PeerConfig<T>>,
+    /// The position of each key in `stake_table`.
+    stake_index: HashMap<T::SignatureKey, usize>,
 }
 
-/// The entry of `table` for `key`, where `keys` are the keys of `table`.
-fn entry<T: NodeType>(
-    keys: &[T::SignatureKey],
+/// The position of each key in `table`, the genesis `name`.
+///
+/// # Errors
+///
+/// Returns an error if `table` holds a key twice.
+fn index_keys<T: NodeType>(
     table: &[PeerConfig<T>],
-    key: &T::SignatureKey,
-) -> Option<PeerConfig<T>> {
-    let index = keys.iter().position(|k| k == key)?;
-    Some(table[index].clone())
-}
-
-fn total_stake<T: NodeType>(table: &[PeerConfig<T>]) -> U256 {
-    table
-        .iter()
-        .fold(U256::ZERO, |acc, p| acc + p.stake_table_entry.stake())
+    name: &str,
+) -> anyhow::Result<HashMap<T::SignatureKey, usize>> {
+    let mut index = HashMap::with_capacity(table.len());
+    for (position, peer) in table.iter().enumerate() {
+        let key = peer.stake_table_entry.public_key();
+        if index.insert(key.clone(), position).is_some() {
+            anyhow::bail!("the genesis {name} holds the key {key} twice");
+        }
+    }
+    Ok(index)
 }
 
 /// A protocol for determining membership in and participating in a committee.
@@ -341,7 +297,7 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot>;
 
     /// The stake tables of views before the first epoch.
-    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>>;
+    fn genesis_stake_tables(&self) -> GenesisStakeTables<T>;
 
     /// The first epoch, which runs on the genesis stake table.
     fn first_epoch(&self) -> EpochNumber;

@@ -10,8 +10,9 @@
 //! What a real proposal carries and the specification does not model is filled
 //! in as the Rust node expects it: the parent's `Certificate2` for the first
 //! block of an epoch, the state certificate after an epoch root, and the DRB
-//! result in an epoch's transition blocks, which is the harness's
-//! `TEST_DRB_RESULT` throughout.
+//! result in an epoch's transition blocks, which is the one computed from the
+//! epoch root the block descends from, as the harness computes it once it
+//! decides that root.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -29,6 +30,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidDisperse2, VidDisperseShare2, ViewNumber},
+    drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     signature_key::{BLSPrivKey, BLSPubKey},
@@ -43,7 +45,10 @@ use hotshot_types::{
         election::Membership,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
+    utils::{
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
+        root_block_in_epoch,
+    },
     vote::{Certificate, Vote},
 };
 
@@ -54,14 +59,12 @@ use crate::{
     tests::common::{
         coordinator_builder::build_genesis_cert1,
         utils::{
-            MockBlock, STAKE_TABLE_CAPACITY, StakeTableSchedule, TEST_DRB_RESULT,
+            MockBlock, STAKE_TABLE_CAPACITY, StakeTableSchedule, StateCert,
             build_state_cert_for_test, extract_vid_shares,
             mock_membership_with_client_and_schedule,
         },
     },
 };
-
-type StateCert = hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<TestTypes>;
 
 /// The anchor's identity in every scenario.
 pub const ANCHOR: u64 = 1;
@@ -107,6 +110,9 @@ pub struct Cache {
     timeout_certs: BTreeMap<(u64, u64, Option<CertKey>), TimeoutCertificate3<TestTypes>>,
     /// Each node's keys, by its number less one.
     keys: Vec<(BLSPubKey, BLSPrivKey)>,
+    /// The DRB result computed from an epoch root, by the root's leaf
+    /// commitment and the epoch the result is for.
+    drbs: BTreeMap<(Commitment<Leaf2<TestTypes>>, u64), DrbResult>,
 }
 
 type CertKey = (Commitment<Leaf2<TestTypes>>, u64, u64, u64);
@@ -119,6 +125,7 @@ pub struct World {
     nodes: u64,
     epoch_height: u64,
     membership: EpochMembershipCoordinator<TestTypes>,
+    committees: Committees,
     keys: BTreeMap<BLSPubKey, BLSPrivKey>,
     /// Each node's keys, by its number less one.
     node_keys: Vec<(BLSPubKey, BLSPrivKey)>,
@@ -168,6 +175,7 @@ impl World {
             nodes,
             epoch_height,
             membership,
+            committees: committees.clone(),
             keys: node_keys.iter().cloned().collect(),
             node_keys,
             genesis,
@@ -194,7 +202,7 @@ impl World {
     pub fn leader(&self, epoch: u64, view: u64) -> (BLSPubKey, BLSPrivKey) {
         let leader = self
             .membership
-            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .membership_for_epoch(EpochNumber::new(epoch))
             .expect("the epoch's committee is known")
             .leader(ViewNumber::new(view))
             .expect("every view has a leader");
@@ -212,7 +220,7 @@ impl World {
     pub fn block_leader(&self, id: u64) -> Option<BLSPubKey> {
         let def = self.defs.get(&id)?;
         self.membership
-            .membership_for_epoch(Some(EpochNumber::new(self.epoch_of(def))))
+            .membership_for_epoch(EpochNumber::new(self.epoch_of(def)))
             .ok()?
             .leader(ViewNumber::new(def.view))
             .ok()
@@ -278,7 +286,7 @@ impl World {
         let leader = self.leader(*epoch, def.view).0;
         let leaf = Leaf2::from(proposal.data.clone());
         if is_epoch_root(def.height, self.epoch_height) {
-            self.register_epoch_root(&proposal.data.block_header).await;
+            self.register_epoch_root(&leaf).await;
         }
         self.own.insert(id);
         self.built.insert(
@@ -457,7 +465,7 @@ impl World {
 
     fn committee(&self, epoch: u64) -> hotshot_types::epoch_membership::EpochMembership<TestTypes> {
         self.membership
-            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .membership_for_epoch(EpochNumber::new(epoch))
             .unwrap_or_else(|e| panic!("the committee of epoch {epoch} is known: {e}"))
     }
 
@@ -479,7 +487,7 @@ impl World {
             payload,
             &self.membership,
             ViewNumber::new(view),
-            Some(epoch),
+            epoch,
             Some(epoch),
             metadata,
         )
@@ -538,9 +546,7 @@ impl World {
             None
         };
         let state_cert = self.state_cert(def.parent).await;
-        let next_drb_result = (epoch > EpochNumber::genesis()
-            && is_epoch_transition(def.height, self.epoch_height))
-        .then_some(TEST_DRB_RESULT);
+        let next_drb_result = self.next_drb_result(&def).await;
         let view_change_evidence = match def.evidence {
             Some(tc) => Some(TimeoutEvidence::V3(self.timeout_cert(tc).await)),
             None => None,
@@ -561,7 +567,7 @@ impl World {
         let signature = <BLSPubKey as SignatureKey>::sign(&leader_key, leaf.commit().as_ref())
             .expect("the leader signs the leaf");
         if is_epoch_root(def.height, self.epoch_height) {
-            self.register_epoch_root(&proposal.block_header).await;
+            self.register_epoch_root(&leaf).await;
         }
         Built {
             commit: leaf.commit(),
@@ -575,6 +581,36 @@ impl World {
             vid,
             leader,
         }
+    }
+
+    /// The DRB result a transition block of epoch 2 or later carries for the
+    /// next epoch: the one computed from the epoch root it descends from, two
+    /// epochs before the one the result is for. `None` for any other block,
+    /// and for one a misbehaving leader built that descends from no such root.
+    async fn next_drb_result(&mut self, def: &format::Block) -> Option<DrbResult> {
+        if def.epoch <= *EpochNumber::genesis()
+            || !is_epoch_transition(def.height, self.epoch_height)
+            || def.epoch != epoch_from_block_number(def.height, self.epoch_height)
+        {
+            return None;
+        }
+        let root_height = root_block_in_epoch(def.epoch - 1, self.epoch_height);
+        let mut ancestor = def.parent;
+        while ancestor.height > root_height {
+            ancestor = self
+                .defs
+                .get(&ancestor.block)
+                .expect("a transition block's ancestors are in the scenario's block list")
+                .parent;
+        }
+        // A misbehaving leader's chain may skip the root's height.
+        if ancestor.height != root_height {
+            return None;
+        }
+        let root = self.leaf_commit(ancestor.block).await;
+        let target = def.epoch + 1;
+        let drb = self.cache.drbs.get(&(root, target));
+        Some(*drb.expect("an epoch root's DRB result"))
     }
 
     /// The light-client state certificate that goes with a `Cert1` over an epoch
@@ -624,26 +660,50 @@ impl World {
         self.cert2(seen.unwrap_or(parent)).await
     }
 
-    /// Register the epochs an epoch root decides, as the harness does once the
-    /// root is decided, so the committee that signs the later epochs' certificates
-    /// is known here too.
+    /// Register the epochs an epoch root decides and compute the DRB result
+    /// from it, as the harness does once the root is decided, so the committee
+    /// that signs the later epochs' certificates is known here too, and the
+    /// transition blocks descending from the root carry the result the node
+    /// expects.
     ///
     /// Registered when a root is built, not when it is decided, so only the
     /// first root built at a height registers: a faulty leader can build
-    /// another block there.
-    async fn register_epoch_root(&mut self, header: &TestBlockHeader) {
-        let height = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(header);
-        let target = epoch_from_block_number(height, self.epoch_height) + 2;
-        if !self.registered_epochs.insert(target) {
+    /// another block there. Each root's result is kept, for the blocks that
+    /// descend from it, across the scenarios of a run.
+    async fn register_epoch_root(&mut self, root: &Leaf2<TestTypes>) {
+        let height = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(root.block_header());
+        let target = EpochNumber::new(epoch_from_block_number(height, self.epoch_height) + 2);
+        let drb = match self.cache.drbs.get(&(root.commit(), *target)) {
+            Some(drb) => *drb,
+            None => self.root_drb(target, root).await,
+        };
+        self.cache.drbs.insert((root.commit(), *target), drb);
+        if !self.registered_epochs.insert(*target) {
             return;
         }
         self.membership
-            .add_epoch_root(header.clone())
+            .add_epoch_root(root.block_header().clone())
             .await
             .expect("an epoch root registers");
-        self.membership
-            .membership()
-            .add_drb_result(EpochNumber::new(target), TEST_DRB_RESULT);
+        self.membership.membership().add_drb_result(target, drb);
+    }
+
+    /// The DRB result of epoch `target` computed from `root`.
+    ///
+    /// On a membership of its own, as the node deciding `root` has: a
+    /// membership resumes an epoch's computation from where an earlier one got
+    /// to, so one shared by two roots at a height would give the second the
+    /// first's result.
+    async fn root_drb(&self, target: EpochNumber, root: &Leaf2<TestTypes>) -> DrbResult {
+        let membership = scheduled_membership(self.nodes, self.epoch_height, &self.committees);
+        membership
+            .add_epoch_root(root.block_header().clone())
+            .await
+            .expect("an epoch root registers");
+        membership
+            .compute_drb_result(target, root.clone())
+            .await
+            .expect("an epoch root's DRB result computes")
     }
 }
 

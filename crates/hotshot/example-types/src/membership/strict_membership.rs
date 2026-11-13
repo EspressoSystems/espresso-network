@@ -40,6 +40,8 @@ where
     S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
     inner: Arc<RwLock<Inner<T, S>>>,
+    /// The members given to `new`, which run the views before the first epoch.
+    genesis: GenesisStakeTables<T>,
     epoch_height: BlockNumber,
 }
 
@@ -78,6 +80,8 @@ where
         epoch_height: u64,
         first_epoch: EpochNumber,
     ) -> Self {
+        let genesis = GenesisStakeTables::new(quorum_members.clone(), da_members.clone())
+            .expect("genesis members without duplicate keys");
         let membership = Self {
             inner: Arc::new(RwLock::new(Inner {
                 table: TestStakeTable::new(
@@ -89,6 +93,7 @@ where
                 drbs: HashSet::new(),
                 fetcher: None,
             })),
+            genesis,
             epoch_height: epoch_height.into(),
         };
         membership.seed_first_epoch(first_epoch);
@@ -181,20 +186,8 @@ where
         ))
     }
 
-    fn genesis_stake_tables(&self) -> Arc<GenesisStakeTables<T>> {
-        let table = &self.inner.read().table;
-        Arc::new(GenesisStakeTables::new(
-            table
-                .stake_table(None)
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            table
-                .da_stake_table(None)
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        ))
+    fn genesis_stake_tables(&self) -> GenesisStakeTables<T> {
+        self.genesis.clone()
     }
 
     fn add_drb_result(&self, e: EpochNumber, drb: DrbResult) {
@@ -235,7 +228,7 @@ where
 
         let (stake_table, fetcher) = {
             let inner = self.inner.read();
-            let table = inner.table.stake_table(Some(*e));
+            let table = inner.table.stake_table(*e);
             let fetcher = inner
                 .fetcher
                 .clone()
@@ -282,7 +275,7 @@ where
             };
 
             let drb_block_height = transition_block_for_epoch(previous_epoch, *epoch_height);
-            let stake_table = self.inner.read().table.stake_table(Some(previous_epoch));
+            let stake_table = self.inner.read().table.stake_table(previous_epoch);
             let fetcher = fetcher.expect("get_epoch_drb called before set_leaf_fetcher_network");
 
             let mut drb_leaf = None;
@@ -362,8 +355,8 @@ where
     S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
     fn build(epoch: EpochNumber, first_epoch: EpochNumber, has_drb: bool, table: S) -> Self {
-        let stake_entries = table.stake_table(Some(*epoch));
-        let da_entries = table.da_stake_table(Some(*epoch));
+        let stake_entries = table.stake_table(*epoch);
+        let da_entries = table.da_stake_table(*epoch);
         let committee_keys = stake_entries
             .iter()
             .map(|e| e.signature_key.clone())
@@ -463,14 +456,12 @@ where
     }
 
     fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
-        self.table
-            .stake(key.clone(), Some(*self.epoch))
-            .map(Into::into)
+        self.table.stake(key.clone(), *self.epoch).map(Into::into)
     }
 
     fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
         self.table
-            .da_stake(key.clone(), Some(*self.epoch))
+            .da_stake(key.clone(), *self.epoch)
             .map(Into::into)
     }
 
@@ -485,6 +476,132 @@ where
     }
 
     fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error> {
-        Ok(self.table.lookup_leader(*view, Some(*self.epoch))?)
+        Ok(self.table.lookup_leader(*view, *self.epoch)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::U256;
+    use hotshot_types::{
+        ValidatorConfig,
+        signature_key::{BLSPubKey, SchnorrPubKey},
+        traits::signature_key::StakeTableEntryType,
+    };
+
+    use super::*;
+    use crate::{
+        membership::{
+            helpers::StableQuorumFilterConfig, randomized_committee::RandomizedStakeTable,
+            randomized_committee_members::RandomizedCommitteeMembers,
+            static_committee::StaticStakeTable,
+            static_committee_leader_two_views::StaticStakeTableLeaderForTwoViews,
+        },
+        node_types::TestTypes,
+    };
+
+    type Strict<S> = StrictMembership<TestTypes, S>;
+
+    fn first_epoch() -> EpochNumber {
+        EpochNumber::new(3)
+    }
+
+    fn peer(seed: u8, index: u64, stake: u64) -> PeerConfig<TestTypes> {
+        ValidatorConfig::<TestTypes>::generated_from_seed_indexed(
+            [seed; 32],
+            index,
+            U256::from(stake),
+            true,
+        )
+        .public_config()
+    }
+
+    /// Quorum members sorted neither by index nor by stake, one of them without
+    /// stake, and DA members that are some of the quorum members, in another
+    /// order.
+    fn genesis_members() -> (Vec<PeerConfig<TestTypes>>, Vec<PeerConfig<TestTypes>>) {
+        let quorum: Vec<_> = [(4, 300), (0, 0), (2, 500), (1, 200), (3, 400)]
+            .into_iter()
+            .map(|(index, stake)| peer(42, index, stake))
+            .collect();
+        let da = [3, 0, 2].map(|i| quorum[i].clone()).to_vec();
+        (quorum, da)
+    }
+
+    fn new_membership<S>(
+        quorum: &[PeerConfig<TestTypes>],
+        da: &[PeerConfig<TestTypes>],
+    ) -> Strict<S>
+    where
+        S: TestStakeTable<BLSPubKey, SchnorrPubKey>,
+    {
+        let public_key = quorum[0].stake_table_entry.public_key();
+        Strict::<S>::new(quorum.to_vec(), da.to_vec(), public_key, 10, first_epoch())
+    }
+
+    /// Adds a DA committee for the first epoch and for a later one.
+    fn add_da_committees<S>(membership: &Strict<S>)
+    where
+        S: TestStakeTable<BLSPubKey, SchnorrPubKey>,
+    {
+        for (seed, epoch) in [(7, first_epoch()), (8, first_epoch() + 4)] {
+            let committee = (0..2).map(|i| peer(seed, i, 50)).collect();
+            membership.add_da_committee(epoch, committee);
+        }
+    }
+
+    fn assert_genesis_stake_tables<S>(
+        membership: &Strict<S>,
+        quorum: &[PeerConfig<TestTypes>],
+        da: &[PeerConfig<TestTypes>],
+    ) where
+        S: TestStakeTable<BLSPubKey, SchnorrPubKey>,
+    {
+        let table = std::any::type_name::<S>();
+        let genesis = membership.genesis_stake_tables();
+        let stake_table: Vec<_> = genesis.stake_table().cloned().collect();
+        assert_eq!(stake_table, quorum, "{table}: genesis stake table");
+        let da_stake_table: Vec<_> = genesis.da_stake_table().cloned().collect();
+        assert_eq!(da_stake_table, da, "{table}: genesis DA stake table");
+    }
+
+    // The views before the first epoch run on the members given to `new`. A
+    // committee added for the first epoch or a later one does not change them.
+    #[test]
+    fn genesis_stake_tables_keep_given_members_after_quorum_and_da_committees() {
+        let (quorum, da) = genesis_members();
+        let membership = new_membership::<StaticStakeTable<BLSPubKey, SchnorrPubKey>>(&quorum, &da);
+        for (seed, epoch) in [(5, first_epoch()), (6, first_epoch() + 4)] {
+            let committee = (0..3).map(|i| peer(seed, i, 100)).collect();
+            membership.add_quorum_committee(epoch, committee);
+        }
+        add_da_committees(&membership);
+
+        assert_genesis_stake_tables(&membership, &quorum, &da);
+    }
+
+    // Only `StaticStakeTable` takes quorum committees, so the other tables get
+    // DA committees only.
+    #[test]
+    fn genesis_stake_tables_keep_given_members_after_da_committees() {
+        type Filter = StableQuorumFilterConfig<123, 0>;
+        let (quorum, da) = genesis_members();
+
+        let two_views = new_membership::<StaticStakeTableLeaderForTwoViews<BLSPubKey, SchnorrPubKey>>(
+            &quorum, &da,
+        );
+        add_da_committees(&two_views);
+        assert_genesis_stake_tables(&two_views, &quorum, &da);
+
+        let randomized =
+            new_membership::<RandomizedStakeTable<BLSPubKey, SchnorrPubKey>>(&quorum, &da);
+        add_da_committees(&randomized);
+        assert_genesis_stake_tables(&randomized, &quorum, &da);
+
+        let members = new_membership::<
+            RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, Filter, Filter>,
+        >(&quorum, &da);
+        add_da_committees(&members);
+        assert_genesis_stake_tables(&members, &quorum, &da);
     }
 }

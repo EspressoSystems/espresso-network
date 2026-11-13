@@ -203,8 +203,13 @@ impl<T: NodeType> Fetcher<T> {
         }
     }
 
+    /// Drop the fetches for views before `view`, that of a block just decided.
+    ///
+    /// The decided block's own fetch stays: the payload of the newest decided
+    /// block is still needed to vote on its children, and a decide can follow
+    /// the request at once.
     pub fn gc(&mut self, view: ViewNumber) {
-        self.requested.retain(|(v, _), _| *v > view);
+        self.requested.retain(|(v, _), _| *v >= view);
     }
 
     /// `sender` answered a request at `view` without the payload asked for.
@@ -236,7 +241,7 @@ impl<T: NodeType> Fetcher<T> {
         let epoch = consensus
             .proposal_with_payload(view, payload_commitment)?
             .epoch;
-        let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
+        let membership = membership.stake_table_for_epoch(epoch).ok()?;
 
         let mut rng = rand::thread_rng();
         let mut fetch = self.requested.get_mut(&(view, payload_commitment));
@@ -573,6 +578,23 @@ mod tests {
             fetcher.requested[&(view(), commitment)].asked.is_empty(),
             "the new round forgot who was asked"
         );
+    }
+
+    /// A decide keeps the fetch of the decided block's own payload, which its
+    /// children still need, and drops those of earlier views.
+    #[tokio::test]
+    async fn gc_keeps_the_fetch_of_the_decided_view() {
+        let (_, commitment, _harness) = payload_and_consensus().await;
+        let mut fetcher = fetcher_expecting(key(1), commitment);
+        let earlier = ViewNumber::new(view().u64() - 1);
+        fetcher
+            .requested
+            .insert((earlier, commitment), Fetch::default());
+
+        fetcher.gc(view());
+
+        assert!(fetcher.requested.contains_key(&(view(), commitment)));
+        assert!(!fetcher.requested.contains_key(&(earlier, commitment)));
     }
 
     /// Only a peer that owes us an answer sends us to another one, and only

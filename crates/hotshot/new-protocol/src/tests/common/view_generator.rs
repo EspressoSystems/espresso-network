@@ -168,7 +168,7 @@ impl TestViewGenerator {
             &payload,
             &membership.coordinator,
             view_number,
-            Some(EpochNumber::genesis()),
+            EpochNumber::genesis(),
             Some(EpochNumber::genesis()),
             &metadata,
         )
@@ -209,7 +209,7 @@ impl TestViewGenerator {
 
     fn epoch_membership(&self) -> EpochMembership<TestTypes> {
         self.membership
-            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .membership_for_epoch(EpochNumber::genesis())
             .unwrap()
     }
 

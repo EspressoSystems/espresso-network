@@ -11,3 +11,6 @@ espresso-types = { path = "../../crates/espresso/types" }
 # enables `custom`; transitive-dep features cannot be set on the command line
 getrandom = { version = "0.2", features = ["custom"] }
 light-client = { path = "../../crates/light-client", features = ["rlp"] }
+
+[lints]
+workspace = true

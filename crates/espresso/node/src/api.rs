@@ -59,7 +59,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::{
-        election::{Membership, MembershipSnapshot},
+        election::{GenesisStakeTables, Membership, MembershipSnapshot},
         metrics::Metrics,
     },
     utils::epoch_from_block_number,
@@ -161,6 +161,16 @@ impl ApiState {
     async fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.context().await.network_config()
     }
+
+    /// The stake tables of the views before the first epoch.
+    async fn genesis_stake_tables(&self) -> GenesisStakeTables<SeqTypes> {
+        self.consensus()
+            .await
+            .membership_coordinator()
+            .await
+            .membership()
+            .genesis_stake_tables()
+    }
 }
 
 type StorageState<D> = ExtensibleDataSource<D, ApiState>;
@@ -189,7 +199,7 @@ impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_stake_table(epoch).await
     }
@@ -202,7 +212,7 @@ impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_da_stake_table(epoch).await
     }
@@ -310,26 +320,23 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let handle = self.consensus().await;
-        if let Some(requested) = epoch {
-            let first_epoch = handle
-                .membership_coordinator()
-                .await
-                .membership()
-                .first_epoch();
-            if requested < first_epoch {
-                return Err(anyhow::anyhow!(
-                    "requested stake table for epoch {requested:?} is below the first epoch \
-                     {first_epoch}"
-                ));
-            }
+        let first_epoch = handle
+            .membership_coordinator()
+            .await
+            .membership()
+            .first_epoch();
+        if epoch < first_epoch {
+            return Err(anyhow::anyhow!(
+                "requested stake table for epoch {epoch} is below the first epoch {first_epoch}"
+            ));
         }
         let highest_epoch = handle.current_epoch().await.map(|e| e + 1);
-        if epoch > highest_epoch {
+        if Some(epoch) > highest_epoch {
             return Err(anyhow::anyhow!(
-                "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
+                "requested stake table for epoch {epoch} is beyond the current epoch + 1 \
                  {highest_epoch:?}"
             ));
         }
@@ -344,32 +351,30 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
     /// Get the stake table for the current epoch and return it along with the epoch number
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.current_epoch().await;
+        let stake_table = match epoch {
+            Some(epoch) => self.get_stake_table(epoch).await?,
+            None => self
+                .genesis_stake_tables()
+                .await
+                .stake_table()
+                .cloned()
+                .collect(),
+        };
 
-        Ok(StakeTableWithEpochNumber {
-            epoch,
-            stake_table: self.get_stake_table(epoch).await?,
-        })
+        Ok(StakeTableWithEpochNumber { epoch, stake_table })
     }
 
     /// Get the DA stake table for a given epoch
     async fn get_da_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let coordinator = self.consensus().await.membership_coordinator().await;
-        Ok(match epoch {
-            Some(e) => coordinator
-                .membership()
-                .snapshot(e)
-                .map(|s| s.da_stake_table().cloned().collect())
-                .unwrap_or_default(),
-            None => coordinator
-                .membership()
-                .genesis_stake_tables()
-                .da_stake_table()
-                .cloned()
-                .collect(),
-        })
+        Ok(coordinator
+            .membership()
+            .snapshot(epoch)
+            .map(|s| s.da_stake_table().cloned().collect())
+            .unwrap_or_default())
     }
 
     /// Get the DA stake table for the current epoch and return it along with the epoch number
@@ -377,11 +382,17 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
         &self,
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.current_epoch().await;
+        let stake_table = match epoch {
+            Some(epoch) => self.get_da_stake_table(epoch).await?,
+            None => self
+                .genesis_stake_tables()
+                .await
+                .da_stake_table()
+                .cloned()
+                .collect(),
+        };
 
-        Ok(StakeTableWithEpochNumber {
-            epoch,
-            stake_table: self.get_da_stake_table(epoch).await?,
-        })
+        Ok(StakeTableWithEpochNumber { epoch, stake_table })
     }
 
     async fn get_block_reward(
@@ -406,10 +417,9 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
             .await
             .membership_coordinator()
             .await
-            .membership_for_epoch(Some(e))
+            .membership_for_epoch(e)
             .context("membership not found")?
             .snapshot()
-            .with_context(|| format!("no committee for epoch={e}"))?
             .validators()
             .clone())
     }
@@ -600,7 +610,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         )?;
 
         tracing::info!("fetching state certificate for epoch={epoch}");
-        if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
+        if let Err(err) = coordinator.stake_table_for_epoch(EpochNumber::new(epoch)) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
             );
@@ -617,7 +627,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
         }
 
         let membership = coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
+            .stake_table_for_epoch(EpochNumber::new(epoch))
             .map_err(|e| {
                 StateCertFetchError::Other(
                     anyhow::Error::new(e)
@@ -4491,6 +4501,48 @@ mod test {
         );
     }
 
+    /// While the current epoch is unknown, the `current` stake table endpoints serve the genesis
+    /// tables with no epoch. A dead coordinator is one way a node loses its current epoch.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_current_stake_tables_serve_genesis_without_current_epoch() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<Sqlite, 2>().await;
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(Sqlite::options(&storage[0], Options::with_port(port)))
+            .network_config(TestConfigBuilder::default().build())
+            .persistences(persistence)
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        // The kill does nothing until the coordinator runs, which a decided leaf proves.
+        while network.server.decided_leaf().await.height() < 1 {
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        let handle = network.server.consensus_handle();
+        handle.kill_coordinator();
+        timeout(Duration::from_secs(10), handle.stopped())
+            .await
+            .expect("the coordinator did not stop after it was killed");
+        assert_eq!(handle.current_epoch().await, None, "current epoch");
+
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        // Every genesis member has stake, so the genesis tables are the configured ones.
+        let genesis = network.cfg.hotshot_config();
+        for (route, expected) in [
+            ("node/stake-table/current", &genesis.known_nodes_with_stake),
+            ("node/da-stake-table/current", &genesis.known_da_nodes),
+        ] {
+            let current: StakeTableWithEpochNumber<SeqTypes> = client
+                .get(route)
+                .send()
+                .await
+                .unwrap_or_else(|err| panic!("{route}: {err}"));
+            assert_eq!(current.epoch, None, "{route}: epoch");
+            assert_eq!(&current.stake_table, expected, "{route}: stake table");
+        }
+    }
+
     /// After shutdown the readers serve the coordinator's last decide, not the anchor the node
     /// started from, and the leaf and state they serve belong to the same block.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -6561,18 +6613,20 @@ mod test {
                     if leaf.height() <= height_before_restart {
                         continue;
                     }
-                    let membership =
-                        match coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT)) {
-                            Ok(membership) => membership,
-                            Err(err) => {
-                                tracing::warn!(
-                                    height = leaf.height(),
-                                    %err,
-                                    "no membership for epoch",
-                                );
-                                continue;
-                            },
-                        };
+                    let membership = match coordinator.membership_for_epoch(
+                        leaf.epoch(EPOCH_HEIGHT)
+                            .expect("new-protocol leaves have an epoch"),
+                    ) {
+                        Ok(membership) => membership,
+                        Err(err) => {
+                            tracing::warn!(
+                                height = leaf.height(),
+                                %err,
+                                "no membership for epoch",
+                            );
+                            continue;
+                        },
+                    };
                     match membership.leader(leaf.view_number()) {
                         Ok(leader) if leader == node_1_key => return Some(leaf.height()),
                         Ok(_) => {},
@@ -7048,11 +7102,11 @@ mod test {
         // Verify that the restarted node catches up for each epoch
         for epoch_num in 1..=7 {
             let epoch = EpochNumber::new(epoch_num);
-            let node_em = match coordinator.membership_for_epoch(Some(epoch)) {
+            let node_em = match coordinator.membership_for_epoch(epoch) {
                 Ok(em) => em,
                 Err(_) => coordinator.wait_for_catchup(epoch).await.unwrap(),
             };
-            let server_em = match server_coordinator.membership_for_epoch(Some(epoch)) {
+            let server_em = match server_coordinator.membership_for_epoch(epoch) {
                 Ok(em) => em,
                 Err(_) => server_coordinator.wait_for_catchup(epoch).await.unwrap(),
             };
@@ -7176,7 +7230,7 @@ mod test {
         println!("trigger catchup in this order: {rand_epochs:?}");
         for epoch_num in rand_epochs {
             let epoch = EpochNumber::new(epoch_num);
-            let _ = coordinator.membership_for_epoch(Some(epoch));
+            let _ = coordinator.membership_for_epoch(epoch);
         }
 
         // Verify that the restarted node catches up for each epoch
@@ -7184,7 +7238,7 @@ mod test {
             println!("getting stake table for epoch = {epoch_num}");
             let epoch = EpochNumber::new(epoch_num);
             let node_em = coordinator.wait_for_catchup(epoch).await.unwrap();
-            let server_em = match server_coordinator.membership_for_epoch(Some(epoch)) {
+            let server_em = match server_coordinator.membership_for_epoch(epoch) {
                 Ok(em) => em,
                 Err(_) => server_coordinator.wait_for_catchup(epoch).await.unwrap(),
             };
