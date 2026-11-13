@@ -142,21 +142,32 @@ impl EpochPosition {
 
     /// Includes the transition block and the epoch's last block.
     pub fn is_epoch_transition(self) -> bool {
-        self.length.get() > 3 && self.offset > 0 && self.length.get() - self.offset <= 3
+        self.is_within_boundary(3)
     }
 
     pub fn is_at_or_after_root(self) -> bool {
-        self.length.get() > 5 && self.offset > 0 && self.length.get() - self.offset <= 5
+        self.is_within_boundary(5)
     }
 
     pub fn is_after_root(self) -> bool {
-        self.length.get() > 5 && self.offset > 0 && self.length.get() - self.offset < 5
+        self.is_at_or_after_root() && !self.is_root()
     }
 
     fn is_before_boundary(self, distance: u64) -> bool {
+        self.length.get() > distance && self.blocks_to_boundary() == Some(distance)
+    }
+
+    fn is_within_boundary(self, distance: u64) -> bool {
         self.length.get() > distance
-            && self.offset > 0
-            && self.length.get() - self.offset == distance
+            && self
+                .blocks_to_boundary()
+                .is_some_and(|left| left <= distance)
+    }
+
+    /// Blocks left until this epoch's last block. `None` at genesis, which precedes every
+    /// boundary position.
+    fn blocks_to_boundary(self) -> Option<u64> {
+        (self.offset > 0).then(|| self.length.get() - self.offset)
     }
 }
 
