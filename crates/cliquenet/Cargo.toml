@@ -29,4 +29,5 @@ tokio      = { workspace = true, features = ["test-util"] }
 name = "bench1"
 harness = false
 
+# Workspace lints disabled due to false positives.
 [lints]
