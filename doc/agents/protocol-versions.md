@@ -16,6 +16,9 @@
   - timeout votes and certificates bind the epoch (`TimeoutData3`, `TimeoutVote3`, `TimeoutCertificate3`,
     `CatchupEvidence::Tc3`; form chosen by `UpgradeLock::timeout_epoch_bound`)
   - `Header::V7` is the V0_6 header without `builder_commitment`
+  - `CANONICAL_STAKE_TABLE_ORDER_VERSION`: for epochs whose root header is at this version or later,
+    `select_active_validator_set()` ranks equal stakes by address and lists the committee by address, so the committee
+    depends only on what the stake table hash covers, not on registration order
   - `LargeBlock` chain-config change raises `max_block_size`, run by the new protocol's upgrade sub-protocol
     (`crates/hotshot/new-protocol/src/upgrade.rs`)
   - vote rules switch to the certificate rule (`UpgradeLock::certificate_rule`):

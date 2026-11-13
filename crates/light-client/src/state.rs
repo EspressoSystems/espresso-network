@@ -1263,20 +1263,39 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 mod test {
     use std::collections::HashSet;
 
+    use alloy::primitives::{Address, U256};
+    use bitvec::vec::BitVec;
+    use committable::Commitment;
     use espresso_types::{
-        NsIndex, RegisteredValidatorMap, StakeTableState, ValidatorSet, v0_3::RegisteredValidator,
+        NsIndex, PrivKey, RegisteredValidatorMap, StakeTableState, ValidatorSet,
+        v0_3::{AuthenticatedValidator, RegisteredValidator},
     };
     use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_query_service_types::availability::TransactionIndex;
-    use hotshot_types::{addr::NetAddr, utils::epoch_from_block_number, x25519};
+    use hotshot_types::{
+        addr::NetAddr,
+        data::ViewNumber,
+        message::UpgradeLock,
+        signature_key::SchnorrPubKey,
+        simple_certificate::QuorumCertificate2,
+        simple_vote::{QuorumData2, VersionedVoteData},
+        stake_table::supermajority_threshold,
+        traits::signature_key::{SignatureKey, StateSignatureKey},
+        utils::epoch_from_block_number,
+        vote::Certificate as _,
+        x25519,
+    };
     use itertools::izip;
     use pretty_assertions::assert_eq;
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+    use versions::{
+        CANONICAL_STAKE_TABLE_ORDER_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION,
+        NEW_PROTOCOL_VERSION, Upgrade,
+    };
 
     use super::*;
     use crate::{
         storage::SqlStorage,
-        testing::{TestClient, leaf_chain, random_validator},
+        testing::{TestClient, leaf_chain, random_validator, register_validator_events},
     };
 
     #[tokio::test]
@@ -2640,6 +2659,185 @@ mod test {
             genesis.clone(),
         );
         assert_eq!(lc.genesis(), genesis);
+    }
+
+    /// Signing keys of the test client's validators, which it derives from the default seed.
+    fn test_client_keys(n: usize) -> HashMap<PubKey, PrivKey> {
+        (0..n as u64)
+            .map(|i| PubKey::generated_from_seed_indexed(Default::default(), i))
+            .collect()
+    }
+
+    /// A quorum certificate over made-up data, signed by `signers`, with the signers'
+    /// positions taken from `entries`.
+    fn signed_qc(
+        entries: &[StakeTableEntry<PubKey>],
+        keys: &HashMap<PubKey, PrivKey>,
+        signers: &[PubKey],
+    ) -> QuorumCertificate2<SeqTypes> {
+        let total = entries
+            .iter()
+            .fold(U256::ZERO, |total, e| total + e.stake_amount);
+        let pp = PubKey::public_parameter(entries, supermajority_threshold(total));
+        let view = ViewNumber::new(1);
+        let data = QuorumData2 {
+            leaf_commit: Commitment::from_raw([7; 32]),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(1),
+        };
+        let commit = VersionedVoteData::new_infallible(
+            data,
+            view,
+            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)),
+        )
+        .commit();
+        let signed = |e: &&StakeTableEntry<PubKey>| signers.contains(&e.stake_key);
+        let bits: BitVec = entries.iter().map(|e| signed(&e)).collect();
+        let signatures: Vec<_> = entries
+            .iter()
+            .filter(signed)
+            .map(|e| PubKey::sign(&keys[&e.stake_key], commit.as_ref()).unwrap())
+            .collect();
+        let signature = PubKey::assemble(&pp, &bits, &signatures);
+        QuorumCertificate2::create_signed_certificate(commit, data, signature, view)
+    }
+
+    /// A server that serves one epoch's registrations in another order must not change the
+    /// light client's stake table: the light client either refuses the events or ends up
+    /// with the network's quorum, and accepts the network's certificates, for that epoch and
+    /// for the next, which it catches up from what it stored.
+    ///
+    /// Holds from `CANONICAL_STAKE_TABLE_ORDER_VERSION` on, the version every epoch root
+    /// here has. Epochs selected before it depend on the order validators registered in,
+    /// which the stake table hash does not cover: there the light client accepts and stores
+    /// the reordered table, and rejects the network's certificates.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_reordered_registrations_keep_the_quorum() {
+        let db = SqlStorage::default().await.unwrap();
+        let client = TestClient::default();
+        client.register_network_info().await;
+        client
+            .set_upgrade(1, CANONICAL_STAKE_TABLE_ORDER_VERSION)
+            .await;
+        let genesis = client.genesis().await;
+        let epoch = genesis.first_epoch_with_dynamic_stake_table;
+        let keys = test_client_keys(client.quorum_for_epoch(epoch + 1).await.len());
+
+        // A certificate of the network's committee, signed by all members but the first.
+        let genuine = |network: &[StakeTableEntry<PubKey>]| {
+            let signers: Vec<_> = network[1..].iter().map(|e| e.stake_key).collect();
+            signed_qc(network, &keys, &signers)
+        };
+
+        client.reorder_registrations(epoch).await;
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+        let accepted = lc.quorum_for_epoch(epoch).await.unwrap();
+        let network = client.quorum_for_epoch(epoch).await;
+        assert_eq!(
+            Vec::from((*accepted).clone()),
+            network,
+            "the reordered quorum"
+        );
+        accepted
+            .verify_cert::<DrbAndHeaderUpgradeVersion, _>(&genuine(&network))
+            .await
+            .expect("the light client accepts the network's certificate");
+
+        // The server turns honest and the light client restarts from what it stored.
+        client.restore_registration_order(epoch).await;
+        let lc = LightClient::from_genesis(db, client.clone(), genesis);
+        for epoch in [epoch, epoch + 1] {
+            let stored = lc.quorum_for_epoch(epoch).await.unwrap();
+            let network = client.quorum_for_epoch(epoch).await;
+            assert_eq!(Vec::from((*stored).clone()), network, "epoch {epoch}");
+            stored
+                .verify_cert::<DrbAndHeaderUpgradeVersion, _>(&genuine(&network))
+                .await
+                .expect("the light client accepts the network's certificate");
+        }
+    }
+
+    /// Stake tables with the same hash must give the same committee, or a server could
+    /// change the light client's committee without the hash check noticing.
+    ///
+    /// The hash does not cover the order validators registered in, so a server can serve
+    /// the registrations in any order. Two things could depend on that order: who is in the
+    /// committee when stakes tie at the cut-off, and where each member is listed, which is
+    /// how a certificate names its signers. With the attacker's validator in place of a tied
+    /// honest one, colluders short of a supermajority in the network's committee would reach
+    /// one in the light client's; with the members listed in another order, the light client
+    /// would reject the network's certificates. From `CANONICAL_STAKE_TABLE_ORDER_VERSION` on,
+    /// neither depends on the order.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_equal_stake_table_hashes_keep_the_committee() {
+        let esp = U256::from(10).pow(U256::from(18));
+        let validator = |i: u64, stake: U256| {
+            let (bls, priv_key) = PubKey::generated_from_seed_indexed([2; 32], i);
+            let (schnorr, _) = SchnorrPubKey::generated_from_seed_indexed([2; 32], i);
+            let mut x25519_key = [1u8; 32];
+            x25519_key[..8].copy_from_slice(&i.to_be_bytes());
+            let validator: AuthenticatedValidator<PubKey> = RegisteredValidator {
+                account: Address::left_padding_from(&i.to_be_bytes()),
+                stake_table_key: Some(bls),
+                state_ver_key: Some(schnorr),
+                stake,
+                commission: 1,
+                delegators: [(Address::left_padding_from(&(1000 + i).to_be_bytes()), stake)]
+                    .into_iter()
+                    .collect(),
+                authenticated: true,
+                x25519_key: Some(x25519::PublicKey::try_from(x25519_key.as_slice()).unwrap()),
+                p2p_addr: Some("127.0.0.1:9000".parse::<NetAddr>().unwrap()),
+            }
+            .try_into()
+            .unwrap();
+            (priv_key, validator)
+        };
+        // One fewer than a committee with more stake, then two tied below them.
+        let others: Vec<_> = (0..99)
+            .map(|i| validator(i, U256::from(10_000 + i) * esp))
+            .collect();
+        let tied = U256::from(5_000) * esp;
+        let honest = validator(99, tied);
+        let attacker = validator(100, tied);
+
+        let state = |order: Vec<&(PrivKey, AuthenticatedValidator<PubKey>)>| {
+            let mut events = vec![];
+            for (_, v) in order {
+                register_validator_events(&mut events, v);
+            }
+            let mut state = StakeTableState::default();
+            for e in events {
+                state.apply_event(e).unwrap().unwrap();
+            }
+            state
+        };
+        // The network saw the validators register in one order; the server serves the reverse.
+        let registered: Vec<_> = others.iter().chain([&honest, &attacker]).collect();
+        let network_state = state(registered.clone());
+        let served_state = state(registered.into_iter().rev().collect());
+        assert_eq!(network_state.commit(), served_state.commit());
+
+        let quorum = |state: &StakeTableState, version| -> Vec<StakeTableEntry<PubKey>> {
+            stake_table_state_to_quorum(state, version).unwrap().into()
+        };
+        let has = |q: &[StakeTableEntry<PubKey>], v: &AuthenticatedValidator<PubKey>| {
+            q.iter().any(|e| e.stake_key == *v.stake_table_key())
+        };
+        // Before the canonical order the tie goes to whoever registered first, so the
+        // served order swaps the attacker in. This is what makes the tie decide below.
+        let reordered = quorum(&served_state, DRB_AND_HEADER_UPGRADE_VERSION);
+        assert!(has(&reordered, &attacker.1) && !has(&reordered, &honest.1));
+
+        let network = quorum(&network_state, CANONICAL_STAKE_TABLE_ORDER_VERSION);
+        let served = quorum(&served_state, CANONICAL_STAKE_TABLE_ORDER_VERSION);
+        assert!(has(&network, &honest.1) && !has(&network, &attacker.1));
+        assert_eq!(
+            served, network,
+            "tables with the same hash give different committees"
+        );
     }
 }
 
