@@ -72,7 +72,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     );
 
     let membership = coordinator
-        .stake_table_for_epoch(Some(epoch))
+        .stake_table_for_epoch(epoch)
         .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
     let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
     cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
@@ -117,7 +117,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
             );
         }
         let membership = coordinator
-            .stake_table_for_epoch(Some(qc_epoch))
+            .stake_table_for_epoch(qc_epoch)
             .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
         let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
         justify_qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;

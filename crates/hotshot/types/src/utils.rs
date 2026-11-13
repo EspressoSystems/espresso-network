@@ -118,7 +118,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
     // stake table that verifies its own signatures.
     let validate_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
         let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
-        let membership = match qc.data.epoch() {
+        let (entries, threshold) = match qc.data.epoch() {
             // QCs formed before epochs were enabled carry no epoch. Epochs start part way
             // through the first epoch, which runs on the genesis stake table like the
             // non-epoch chain before it, so no later height may be certified this way.
@@ -128,7 +128,11 @@ pub async fn verify_leaf_chain<T: NodeType>(
                     "QC claims no epoch but certifies the leaf at height {certified_height} in \
                      epoch {epoch}, after the first epoch {first_epoch}"
                 );
-                coordinator.stake_table_for_epoch(None)
+                let genesis = coordinator.membership().genesis_stake_tables();
+                (
+                    StakeTableEntries::<T>::from_iter(genesis.stake_table()).0,
+                    genesis.success_threshold(),
+                )
             },
             Some(claimed) => {
                 ensure!(
@@ -136,10 +140,15 @@ pub async fn verify_leaf_chain<T: NodeType>(
                     "QC claims epoch {claimed} but certifies the leaf at height \
                      {certified_height} in epoch {epoch}"
                 );
-                coordinator.stake_table_for_epoch(Some(epoch))
+                let membership = coordinator.stake_table_for_epoch(epoch).map_err(|err| {
+                    anyhow!("no stake table available for epoch {epoch}: {err:?}")
+                })?;
+                (
+                    StakeTableEntries::<T>::from_iter(membership.stake_table()).0,
+                    membership.success_threshold(),
+                )
             },
-        }
-        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+        };
         if let Some(block_number) = qc.data.block_number {
             ensure!(
                 block_number == certified_height,
@@ -147,8 +156,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
                  {certified_height}"
             );
         }
-        let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
-        qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+        qc.is_valid_cert(&entries, threshold, upgrade_lock)?;
         Ok(())
     };
 

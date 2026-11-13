@@ -9,8 +9,6 @@
 //! then votes2 on `L`'s own vote data again, at that view, and the resulting
 //! `Certificate2` commits `L`.
 
-use std::collections::BTreeSet;
-
 use committable::Commitment;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
@@ -18,7 +16,7 @@ use hotshot_types::{
     message::UpgradeLock,
     signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
-    simple_vote::{HasEpoch, LockView},
+    simple_vote::LockView,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     vote::HasViewNumber,
 };
@@ -26,8 +24,8 @@ use hotshot_types::{
 use super::common::{
     assertions::{any, decides_view, is_proposal_certified, is_vote2_for_view},
     utils::{
-        ConsensusHarness, TEST_DRB_RESULT, TestData, build_cert1, build_cert2,
-        build_timeout_cert3_with_lock, epoch_length,
+        ConsensusHarness, TestData, build_cert1, build_cert2, build_timeout_cert3_with_lock,
+        epoch_length, payload_requests, timeout_cert_input, timeout_cert_of,
     },
 };
 use crate::{
@@ -92,21 +90,6 @@ async fn node_before_the_boundary_block(
 ) -> ConsensusHarness {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
     let mut harness = ConsensusHarness::new_with_upgrade_lock(node_index, EPOCH_HEIGHT, lock).await;
-    let mut drb_epochs = BTreeSet::new();
-    for v in &test_data.views[..=BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if epoch_length(EPOCH_HEIGHT)
-            .position(block)
-            .is_epoch_transition()
-        {
-            drb_epochs.insert(v.epoch_number + 1);
-        }
-    }
-    for e in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(e, TEST_DRB_RESULT))
-            .await;
-    }
     for v in &test_data.views[..BOUNDARY] {
         harness
             .apply_pair(v.proposal_input_consensus(&node_key))
@@ -158,31 +141,6 @@ fn timeout_cert(
     lock: Option<Certificate1<TestTypes>>,
 ) -> TimeoutEvidence<TestTypes> {
     timeout_cert_of(harness, epoch(1), timed_out, lock)
-}
-
-/// The timeout certificate of `e` for `timed_out`, its signers all locked on
-/// `lock`.
-fn timeout_cert_of(
-    harness: &ConsensusHarness,
-    e: EpochNumber,
-    timed_out: ViewNumber,
-    lock: Option<Certificate1<TestTypes>>,
-) -> TimeoutEvidence<TestTypes> {
-    let membership = harness
-        .membership_coordinator
-        .membership_for_epoch(Some(e))
-        .unwrap();
-    TimeoutEvidence::V3(build_timeout_cert3_with_lock(
-        timed_out,
-        e,
-        lock,
-        &membership,
-    ))
-}
-
-fn timeout_cert_input(tc: TimeoutEvidence<TestTypes>) -> ConsensusInput<TestTypes> {
-    let e = HasEpoch::epoch(&tc).expect("a lock-carrying certificate names its epoch");
-    ConsensusInput::TimeoutCertificate(ValidCert::new(tc, e))
 }
 
 /// Problem 3: a `Certificate1` arriving after the timeout leaves the boundary
@@ -262,7 +220,7 @@ async fn late_certificate1_at_the_boundary_is_committed_by_a_revote() {
     // The re-vote's Certificate1 locks the node at view 12, and it votes2 there.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -397,6 +355,317 @@ fn revote_from_leader(
     ConsensusInput::ReVote(ReVoteMessage::new(revote, &leader_key).unwrap())
 }
 
+/// A timeout certificate a re-vote request carries is taken as one received on
+/// its own: a duplicate still has its lock kept, which decides the block it
+/// certifies once the node holds the block's `Certificate2`. The request's own
+/// certificate is over the last block, and decides nothing here.
+#[tokio::test]
+async fn revote_request_keeps_a_duplicate_timeout_certificates_lock() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let block = &test_data.views[BOUNDARY - 1];
+    let boundary = &test_data.views[BOUNDARY];
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    harness
+        .apply_pair(block.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(block.block_reconstructed_input()).await;
+    harness.apply(block.cert2_input()).await;
+    assert!(
+        !any(harness.outputs(), |o| decides_view(o, 9)),
+        "setup: no decide without the Certificate1"
+    );
+
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timeout_cert(&harness, view(10), None),
+            epoch(1),
+        )))
+        .await;
+    let TimeoutEvidence::V3(timeout) = timeout_cert(&harness, view(10), Some(block.cert1.clone()))
+    else {
+        unreachable!("a lock-carrying certificate binds its epoch")
+    };
+    let revote = ReVote {
+        view: view(11),
+        epoch: epoch(1),
+        cert1: boundary.cert1.clone(),
+        timeout: Some(timeout),
+    };
+    revote
+        .well_formed(epoch_length(EPOCH_HEIGHT))
+        .expect("a well-formed re-vote request");
+    harness.apply(revote_from_leader(&harness, revote)).await;
+
+    assert!(any(harness.outputs(), |o| decides_view(o, 9)));
+}
+
+/// A timeout does not make the node ask for the payload of an epoch's last
+/// block that it decided without the payload, when the block waiting on it is
+/// the first of the next epoch: that block's vote1 does not check its parent.
+#[tokio::test]
+async fn timeout_fetches_no_payload_of_a_decided_last_block() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let first = &test_data.views[BOUNDARY + 1];
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    // Not a leader of either block, which would hold its own block's payload.
+    let node = (0..)
+        .find(|n| {
+            *n != leader_index(&probe, boundary.view_number, epoch(1))
+                && *n != leader_index(&probe, first.view_number, epoch(2))
+        })
+        .expect("a node that leads neither view");
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node).0;
+    let mut harness =
+        node_before_the_boundary_block(node, &test_data, test_timeout_epoch_lock()).await;
+    // The last block of epoch 1 decided without its payload.
+    harness
+        .apply_pair(boundary.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(boundary.cert1_input()).await;
+    harness.apply(boundary.cert2_input()).await;
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: the last block is decided"
+    );
+    assert_eq!(
+        harness.consensus.lock_view().map(|lock| lock.view),
+        Some(view(9)),
+        "setup: no lock on the last block, whose payload the node lacks"
+    );
+    harness
+        .apply_pair(first.proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        harness.consensus.proposal_at(view(11)).is_some(),
+        "setup: the first block of the next epoch waits on it"
+    );
+    assert_eq!(
+        payload_requests(&harness, view(10)),
+        0,
+        "setup: nothing asked for yet"
+    );
+
+    harness
+        .apply(timeout_cert_input(timeout_cert_of(
+            &harness,
+            epoch(2),
+            view(12),
+            None,
+        )))
+        .await;
+
+    assert_eq!(payload_requests(&harness, view(10)), 0);
+}
+
+/// A timeout certificate whose lock is a re-vote's certificate over an epoch's
+/// last block, which this node decided without its payload, fetches no
+/// payload: the block needs no vote, and its only child, the next epoch's
+/// first block, does not check its parent.
+#[tokio::test]
+async fn revote_lock_over_a_decided_last_block_fetches_no_payload() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let leaf = proposal_commitment(&boundary.proposal.data);
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    // Not the leader of the block, which would hold its own block's payload.
+    let node = non_leader(&probe, boundary.view_number, epoch(1));
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node).0;
+    let mut harness =
+        node_before_the_boundary_block(node, &test_data, test_timeout_epoch_lock()).await;
+    harness
+        .apply_pair(boundary.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(boundary.cert1_input()).await;
+    harness.apply(boundary.cert2_input()).await;
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: the last block is decided"
+    );
+    assert_eq!(
+        harness.consensus.lock_view().map(|lock| lock.view),
+        Some(view(9)),
+        "setup: no lock on the last block, whose payload the node lacks"
+    );
+    assert_eq!(
+        payload_requests(&harness, view(10)),
+        0,
+        "setup: nothing asked for yet"
+    );
+
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(epoch(1))
+        .unwrap();
+    let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
+    let cert1_12 = build_cert1(leaf, epoch(1), block, &membership, view(12), &pk, &sk);
+    // Of epoch 1, which the node is still in: a lock of an epoch it has left
+    // fetches nothing whatever its block.
+    assert_eq!(harness.consensus.current_epoch(), epoch(1));
+    let tc = timeout_cert(&harness, view(12), Some(cert1_12));
+    harness.apply(timeout_cert_input(tc)).await;
+
+    assert_eq!(payload_requests(&harness, view(10)), 0);
+}
+
+/// The last block of an epoch that a timeout certificate's lock asked for, and
+/// that is decided as it arrives, has no payload fetched: once decided it
+/// needs no vote, and its only child does not check its parent.
+#[tokio::test]
+async fn fetched_lock_block_decided_as_a_last_block_fetches_no_payload() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    // Not the leader of the block, which would build its own block there.
+    let node = non_leader(&probe, boundary.view_number, epoch(1));
+    let mut harness =
+        node_before_the_boundary_block(node, &test_data, test_timeout_epoch_lock()).await;
+    harness.apply(boundary.cert2_input()).await;
+    let tc = timeout_cert(&harness, view(10), Some(boundary.cert1.clone()));
+    harness.apply(timeout_cert_input(tc)).await;
+    assert!(
+        fetches(&harness, boundary.cert1.data.leaf_commit),
+        "setup: the lock asks for its block"
+    );
+
+    harness
+        .apply(ConsensusInput::FetchedProposal(boundary.proposal_message()))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: the block is decided as it arrives"
+    );
+    assert_eq!(payload_requests(&harness, view(10)), 0);
+}
+
+/// The same holds when the block is decided by a re-vote's `Certificate2` at a
+/// later view, which its arrival also allows.
+#[tokio::test]
+async fn fetched_lock_block_decided_by_a_revote_fetches_no_payload() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let leaf = proposal_commitment(&boundary.proposal.data);
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    // Not the leader of the block, which would build its own block there.
+    let node = non_leader(&probe, boundary.view_number, epoch(1));
+    let mut harness =
+        node_before_the_boundary_block(node, &test_data, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(epoch(1))
+        .unwrap();
+    let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
+    let cert2_12 = build_cert2(leaf, epoch(1), block, &membership, view(12), &pk, &sk);
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2_12,
+            epoch(1),
+        )))
+        .await;
+    let tc = timeout_cert(&harness, view(10), Some(boundary.cert1.clone()));
+    harness.apply(timeout_cert_input(tc)).await;
+    assert!(
+        fetches(&harness, boundary.cert1.data.leaf_commit),
+        "setup: the lock asks for its block"
+    );
+
+    harness
+        .apply(ConsensusInput::FetchedProposal(boundary.proposal_message()))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: the block is decided as it arrives"
+    );
+    assert_eq!(payload_requests(&harness, view(10)), 0);
+}
+
+/// The boundary certificate is persisted once, however often a timeout
+/// certificate brings it again as its lock.
+#[tokio::test]
+async fn boundary_certificate_is_persisted_once() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let mut harness =
+        node_before_the_boundary_certificate(0, &test_data, test_timeout_epoch_lock()).await;
+    let persisted = |harness: &ConsensusHarness| {
+        harness
+            .outputs()
+            .iter()
+            .filter(|o| matches!(o, ConsensusOutput::PersistBoundaryQc(_)))
+            .count()
+    };
+    // Locked on the block's own certificate, without a vote2: view 10 timed out.
+    harness.apply(ConsensusInput::Timeout(view(10))).await;
+    let lock = test_data.views[BOUNDARY - 1].cert1.clone();
+    harness
+        .apply(timeout_cert_input(timeout_cert(
+            &harness,
+            view(10),
+            Some(lock),
+        )))
+        .await;
+    harness.apply(boundary.cert1_input()).await;
+    assert_eq!(
+        harness.consensus.lock_view().map(|lock| lock.view),
+        Some(view(10))
+    );
+    assert!(!vote2_views(&harness).contains(&view(10)));
+    assert_eq!(persisted(&harness), 1, "setup: persisted with the lock");
+
+    let tc = timeout_cert(&harness, view(11), Some(boundary.cert1.clone()));
+    harness.apply(timeout_cert_input(tc)).await;
+
+    assert_eq!(persisted(&harness), 1);
+}
+
+/// A block's own `Certificate1` decides it through a re-vote's `Certificate2`
+/// at a later view whatever message carries it: here one that advances the
+/// node's view.
+#[tokio::test]
+async fn own_certificate1_advancing_the_view_decides_a_revoted_block() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let leaf = proposal_commitment(&boundary.proposal.data);
+    let mut harness =
+        node_before_the_boundary_certificate(0, &test_data, test_timeout_epoch_lock()).await;
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(epoch(1))
+        .unwrap();
+    let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
+    let cert2_12 = build_cert2(leaf, epoch(1), block, &membership, view(12), &pk, &sk);
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2_12,
+            epoch(1),
+        )))
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| decides_view(o, 10)),
+        "setup: no decide without a Certificate1 over the block"
+    );
+
+    harness
+        .apply(ConsensusInput::AdvanceView(ValidCert::new(
+            boundary.cert1.clone(),
+            epoch(1),
+        )))
+        .await;
+
+    assert!(any(harness.outputs(), |o| decides_view(o, 10)));
+}
+
 /// A re-vote request for a view the node has left, by a timeout certificate it
 /// received but did not sign, still gets a vote1.
 ///
@@ -491,7 +760,7 @@ async fn revote_behind_its_timeout_certificates_lock_gets_no_vote1() {
     // A lock at view 11 over another last block of epoch 1.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -840,15 +1109,7 @@ async fn lock_payload_is_requested_once_per_view() {
     let mut harness =
         ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
     let locked = &test_data.views[0];
-    let requests = |harness: &ConsensusHarness| {
-        harness
-            .outputs()
-            .iter()
-            .filter(|o| {
-                matches!(o, ConsensusOutput::RequestMissingPayload { view: v, .. } if *v == locked.view_number)
-            })
-            .count()
-    };
+    let requests = |harness: &ConsensusHarness| payload_requests(harness, locked.view_number);
 
     // The block of the lock, without its payload.
     harness
@@ -1041,7 +1302,7 @@ fn revote_certs(
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     (
@@ -1423,10 +1684,10 @@ async fn revote_fetches_the_block_and_then_its_payload() {
     harness
         .apply(ConsensusInput::FetchedProposal(boundary.proposal_message()))
         .await;
-    let requested_payload = harness.outputs().iter().any(
-        |o| matches!(o, ConsensusOutput::RequestMissingPayload { view: v, .. } if *v == view(10)),
+    assert!(
+        payload_requests(&harness, view(10)) > 0,
+        "and then its payload"
     );
-    assert!(requested_payload, "and then its payload");
 
     harness.apply(boundary.block_reconstructed_input()).await;
     assert!(
@@ -1477,21 +1738,6 @@ async fn node_without_the_boundary_block(test_data: &TestData) -> ConsensusHarne
     let mut harness =
         ConsensusHarness::new_with_upgrade_lock(NODE, EPOCH_HEIGHT, test_timeout_epoch_lock())
             .await;
-    let mut drb_epochs = BTreeSet::new();
-    for v in &test_data.views[..=BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if epoch_length(EPOCH_HEIGHT)
-            .position(block)
-            .is_epoch_transition()
-        {
-            drb_epochs.insert(v.epoch_number + 1);
-        }
-    }
-    for e in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(e, TEST_DRB_RESULT))
-            .await;
-    }
     for v in &test_data.views[..BOUNDARY] {
         harness
             .apply_pair(v.proposal_input_consensus(&node_key))
@@ -1522,18 +1768,6 @@ async fn first_block_after_a_revote_drops_a_timeout_certificate_of_the_old_epoch
         ConsensusHarness::new_with_upgrade_lock(leader, EPOCH_HEIGHT, test_timeout_epoch_lock())
             .await;
     for v in &test_data.views[..BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if epoch_length(EPOCH_HEIGHT)
-            .position(block)
-            .is_epoch_transition()
-        {
-            harness
-                .apply(ConsensusInput::DrbResult(
-                    v.epoch_number + 1,
-                    TEST_DRB_RESULT,
-                ))
-                .await;
-        }
         harness
             .apply_pair(v.proposal_input_consensus(&node_key))
             .await;
@@ -1541,9 +1775,6 @@ async fn first_block_after_a_revote_drops_a_timeout_certificate_of_the_old_epoch
         harness.apply(v.cert1_input()).await;
         harness.apply(v.cert2_input()).await;
     }
-    harness
-        .apply(ConsensusInput::DrbResult(epoch(2), TEST_DRB_RESULT))
-        .await;
     harness
         .apply_pair(boundary.proposal_input_consensus(&node_key))
         .await;
@@ -1599,7 +1830,7 @@ async fn late_lock_of_the_next_epoch_does_not_refuse_an_admitted_first_block() {
     // View 11 timed out under epoch 2 with the boundary block as the lock.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(2)))
+        .membership_for_epoch(epoch(2))
         .unwrap();
     let tc = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         view(11),

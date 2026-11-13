@@ -62,7 +62,7 @@ fn responder_membership(
         .flatten()
         .find_map(|epoch| {
             memberships
-                .stake_table_for_epoch(Some(epoch))
+                .stake_table_for_epoch(epoch)
                 .inspect_err(|err| debug!(%epoch, %err, "no stake table to draw responders from"))
                 .ok()
         })
@@ -110,7 +110,8 @@ mod tests {
             Fetcher::mock(),
             EPOCH_HEIGHT,
             EpochNumber::new(FIRST_EPOCH),
-        );
+        )
+        .expect("genesis without duplicate keys");
         EpochMembershipCoordinator::new(
             committees,
             hotshot_types::epoch::EpochLength::new(EPOCH_HEIGHT).unwrap(),
@@ -125,7 +126,7 @@ mod tests {
     async fn responders_before_the_first_epoch_come_from_the_newest_stake_table() {
         let membership = responder_membership(&memberships(), EpochNumber::genesis()).unwrap();
 
-        assert_eq!(membership.epoch(), Some(EpochNumber::new(FIRST_EPOCH + 1)));
+        assert_eq!(membership.epoch(), EpochNumber::new(FIRST_EPOCH + 1));
         assert_eq!(membership.stake_table().len(), STAKERS as usize);
     }
 
@@ -134,6 +135,6 @@ mod tests {
         let membership =
             responder_membership(&memberships(), EpochNumber::new(FIRST_EPOCH)).unwrap();
 
-        assert_eq!(membership.epoch(), Some(EpochNumber::new(FIRST_EPOCH)));
+        assert_eq!(membership.epoch(), EpochNumber::new(FIRST_EPOCH));
     }
 }

@@ -764,7 +764,7 @@ impl Header {
 
         let coordinator = instance_state.coordinator.clone();
         coordinator
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
 
         // Resolve the leader for this view and find their index in the stake table.
@@ -1381,7 +1381,7 @@ impl BlockHeader<SeqTypes> for Header {
                 // first 2 epochs don't have a stake table hash because they are configured.
                 if epoch > first_epoch {
                     let epoch_membership = coordinator
-                        .stake_table_for_epoch(Some(epoch + 1))
+                        .stake_table_for_epoch(epoch + 1)
                         .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
                     next_stake_table_hash = Some(
                         epoch_membership
@@ -1978,7 +1978,8 @@ mod test_headers {
             Fetcher::mock(),
             100,
             EpochNumber::genesis(),
-        );
+        )
+        .expect("genesis without duplicate keys");
         genesis_state.coordinator = EpochMembershipCoordinator::new(
             membership,
             hotshot_types::epoch::EpochLength::new(100).unwrap(),

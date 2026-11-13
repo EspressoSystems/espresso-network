@@ -76,8 +76,7 @@ where
         }
     }
 
-    fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
+    fn stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         if epoch != 0 && epoch.is_multiple_of(2) {
             self.quorum_1_members.clone()
         } else {
@@ -85,8 +84,7 @@ where
         }
     }
 
-    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
+    fn da_stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         if epoch != 0 && epoch.is_multiple_of(2) {
             self.da_1_members.clone()
         } else {
@@ -102,7 +100,7 @@ where
             .collect()
     }
 
-    fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
+    fn lookup_leader(&self, view_number: u64, epoch: u64) -> anyhow::Result<PubKey> {
         let stake_table = self.stake_table(epoch);
 
         let index = view_number as usize % stake_table.len();

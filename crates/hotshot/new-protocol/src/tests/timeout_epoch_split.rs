@@ -25,14 +25,14 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::SuccessThreshold,
     simple_vote::{TimeoutVote2, TimeoutVote3},
-    traits::{block_contents::BlockHeader, signature_key::SignatureKey},
+    traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use super::common::{
     runner::{DropInbound, NodeAction, NodeChange, TestError, TestRunner},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, epoch_length, mock_membership},
+    utils::{ConsensusHarness, TestData, mock_membership},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -78,24 +78,6 @@ async fn boundary_timeout_vote(
 ) -> (EpochNumber, TimeoutVote<TestTypes>) {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
     let mut harness = ConsensusHarness::new_with_upgrade_lock(node_index, EPOCH_HEIGHT, lock).await;
-
-    // Pre-feed the DRB results the transition proposals need, as the other
-    // epoch-change tests do.
-    let mut drb_epochs = BTreeSet::new();
-    for view in &test_data.views[..=BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&view.proposal.data.block_header);
-        if epoch_length(EPOCH_HEIGHT)
-            .position(block)
-            .is_epoch_transition()
-        {
-            drb_epochs.insert(view.epoch_number + 1);
-        }
-    }
-    for e in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(e, TEST_DRB_RESULT))
-            .await;
-    }
 
     let boundary = &test_data.views[BOUNDARY];
     for view in &test_data.views[..=BOUNDARY] {
