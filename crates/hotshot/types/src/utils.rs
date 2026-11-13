@@ -410,11 +410,6 @@ pub enum EpochTransitionIndicator {
 pub fn is_transition_block(block_number: u64, epoch_height: u64) -> bool {
     epoch_position(block_number, epoch_height).is_some_and(EpochPosition::is_transition_block)
 }
-/// returns true if it's the first transition block (epoch height - 2)
-#[must_use]
-pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
-    epoch_position(block_number, epoch_height).is_some_and(EpochPosition::is_first_transition_block)
-}
 /// Returns true if the block is part of the epoch transition (including the last non null block)
 #[must_use]
 pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
@@ -427,17 +422,6 @@ pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
     epoch_position(block_number, epoch_height).is_some_and(EpochPosition::is_last)
 }
 
-/// Returns true if the block number is in trasntion but not the transition block
-/// or the last block in the epoch.
-///
-/// This function is useful for determining if a proposal extending this QC must follow
-/// the special rules for transition blocks.
-#[must_use]
-pub fn is_middle_transition_block(block_number: u64, epoch_height: u64) -> bool {
-    epoch_position(block_number, epoch_height)
-        .is_some_and(EpochPosition::is_middle_transition_block)
-}
-
 /// Returns true if the given block number is five blocks before an epoch boundary.
 #[must_use]
 pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
@@ -448,11 +432,6 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
 #[must_use]
 pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     epoch_position(block_number, epoch_height).is_some_and(EpochPosition::is_at_or_after_root)
-}
-
-/// Returns true if the given block number is strictly greater than the epoch root block
-pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
-    epoch_position(block_number, epoch_height).is_some_and(EpochPosition::is_after_root)
 }
 
 /// `None` when epochs are disabled (`epoch_height == 0`).
@@ -545,25 +524,12 @@ mod test {
                     positive && (h + 3) % blocks == 0
                 );
                 assert_eq!(
-                    is_first_transition_block(h, blocks),
-                    positive && h % blocks == blocks - 2
-                );
-                assert_eq!(
                     is_epoch_transition(h, blocks),
                     positive && (h % blocks >= blocks - 3 || h % blocks == 0)
-                );
-                let left = blocks - h % blocks;
-                assert_eq!(
-                    is_middle_transition_block(h, blocks),
-                    positive && (left == 1 || left == 2)
                 );
                 assert_eq!(
                     is_ge_epoch_root(h, blocks),
                     positive && (h % blocks == 0 || h % blocks >= blocks - 5)
-                );
-                assert_eq!(
-                    is_gt_epoch_root(h, blocks),
-                    positive && (h % blocks == 0 || h % blocks > blocks - 5)
                 );
                 assert_eq!(
                     option_epoch_from_block_number(true, h, blocks),
@@ -589,11 +555,8 @@ mod test {
             assert!(!is_last_block(h, 0));
             assert!(!is_epoch_root(h, 0));
             assert!(!is_transition_block(h, 0));
-            assert!(!is_first_transition_block(h, 0));
             assert!(!is_epoch_transition(h, 0));
-            assert!(!is_middle_transition_block(h, 0));
             assert!(!is_ge_epoch_root(h, 0));
-            assert!(!is_gt_epoch_root(h, 0));
             assert_eq!(root_block_in_epoch(h, 0), 0);
             assert_eq!(transition_block_for_epoch(h, 0), 0);
         }
@@ -611,10 +574,7 @@ mod test {
                 assert_eq!(is_last_block(h, blocks), h > 0 && h % blocks == 0);
                 assert!(!is_epoch_root(h, blocks));
                 assert!(!is_ge_epoch_root(h, blocks));
-                assert!(!is_gt_epoch_root(h, blocks));
                 assert!(!is_transition_block(h, blocks));
-                assert!(!is_first_transition_block(h, blocks));
-                assert!(!is_middle_transition_block(h, blocks));
                 assert!(!is_epoch_transition(h, blocks));
             }
             for epoch in 1..=3 {
@@ -629,7 +589,6 @@ mod test {
         // u64::MAX % 10 == 5, so it is the root of its epoch.
         assert!(is_epoch_root(u64::MAX, 10));
         assert!(is_ge_epoch_root(u64::MAX, 10));
-        assert!(!is_gt_epoch_root(u64::MAX, 10));
         assert!(!is_transition_block(u64::MAX, 10));
         // u64::MAX % 6 == 3, so it is the transition block of its epoch.
         assert!(is_transition_block(u64::MAX, 6));

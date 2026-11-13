@@ -147,17 +147,6 @@ impl EpochPosition {
         self.is_before_boundary(TRANSITION_DISTANCE)
     }
 
-    /// The first block after the transition block, matching the legacy predicate's naming.
-    pub fn is_first_transition_block(self) -> bool {
-        self.is_before_boundary(TRANSITION_DISTANCE - 1)
-    }
-
-    /// Strictly between the transition block and the epoch's last block.
-    pub fn is_middle_transition_block(self) -> bool {
-        self.blocks_to_boundary()
-            .is_some_and(|left| 0 < left && left < TRANSITION_DISTANCE)
-    }
-
     /// Includes the transition block and the epoch's last block.
     pub fn is_epoch_transition(self) -> bool {
         self.is_within_boundary(TRANSITION_DISTANCE)
@@ -165,10 +154,6 @@ impl EpochPosition {
 
     pub fn is_at_or_after_root(self) -> bool {
         self.is_within_boundary(ROOT_DISTANCE)
-    }
-
-    pub fn is_after_root(self) -> bool {
-        self.is_at_or_after_root() && !self.is_root()
     }
 
     fn is_before_boundary(self, distance: u64) -> bool {
@@ -416,8 +401,6 @@ mod tests {
                 position.is_epoch_transition(),
                 (7..=10).contains(&h) || h == 20
             );
-            assert_eq!(position.is_middle_transition_block(), h == 8 || h == 9);
-            assert_eq!(position.is_first_transition_block(), h == 8);
         }
         assert_eq!(length.first_block(epoch(1)), Ok(height(0)));
         assert_eq!(length.first_block(epoch(2)), Ok(height(11)));
@@ -487,10 +470,7 @@ mod tests {
                 assert_eq!(position.is_last(), h > 0 && h % blocks == 0);
                 assert!(!position.is_root());
                 assert!(!position.is_at_or_after_root());
-                assert!(!position.is_after_root());
                 assert!(!position.is_transition_block());
-                assert!(!position.is_first_transition_block());
-                assert!(!position.is_middle_transition_block());
                 assert!(!position.is_epoch_transition());
             }
         }
@@ -503,23 +483,16 @@ mod tests {
             for h in 0..=blocks * 3 {
                 let position = length.position(height(h));
                 let implies = |inner: bool, outer: bool| !inner || outer;
+                // A short epoch still has a last block, but no transition for it to end.
                 assert!(implies(
-                    position.is_first_transition_block(),
-                    position.is_middle_transition_block()
-                ));
-                assert!(implies(
-                    position.is_middle_transition_block() || position.is_transition_block(),
+                    position.is_transition_block() || (length.holds_root() && position.is_last()),
                     position.is_epoch_transition()
                 ));
                 assert!(implies(
-                    position.is_epoch_transition(),
-                    position.is_after_root()
+                    position.is_root() || position.is_epoch_transition(),
+                    position.is_at_or_after_root()
                 ));
-                assert_eq!(
-                    position.is_at_or_after_root(),
-                    position.is_root() || position.is_after_root()
-                );
-                assert!(!(position.is_root() && position.is_after_root()));
+                assert!(!(position.is_root() && position.is_epoch_transition()));
                 assert_eq!(
                     position.is_last(),
                     length
@@ -630,7 +603,6 @@ mod tests {
             assert_eq!(position.is_transition_block(), holds_root && remaining == 3);
             assert_eq!(position.is_last(), remaining == 0);
             assert_eq!(position.is_at_or_after_root(), holds_root && remaining <= 5);
-            assert_eq!(position.is_after_root(), holds_root && remaining < 5);
         }
     }
 
@@ -660,6 +632,7 @@ mod tests {
     fn solidity_v2_v3_boundary_vectors() {
         // LightClientV2.sol's epochFromBlockNumber/isEpochRoot/isGtEpochRoot;
         // V3 inherits this geometry. Values avoid Solidity's checked h+5 overflow domain.
+        // `after_root` is isGtEpochRoot, which has no Rust caller and so no method here.
         let length = EpochLength::new(10).unwrap();
         for (h, e, root, after_root) in [
             (0, 1, false, false),
@@ -676,7 +649,6 @@ mod tests {
             let position = length.position(height(h));
             assert_eq!(position.epoch(), epoch(e));
             assert_eq!(position.is_root(), root);
-            assert_eq!(position.is_after_root(), after_root);
             assert_eq!(position.is_at_or_after_root(), root || after_root);
         }
         let length = EpochLength::new(6).unwrap();
