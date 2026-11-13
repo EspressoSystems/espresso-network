@@ -176,7 +176,7 @@
 <a href=#176 id=176 data-nosnippet>176</a>                // spawns a catchup task and returns a "catchup in progress"
 <a href=#177 id=177 data-nosnippet>177</a>                // error.  Either way, `wait_for_catchup` resolves once the
 <a href=#178 id=178 data-nosnippet>178</a>                // stake table + DRB are both in place.
-<a href=#179 id=179 data-nosnippet>179</a>                </span><span class="kw">let </span>membership = <span class="kw">match </span>membership_coordinator.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)) {
+<a href=#179 id=179 data-nosnippet>179</a>                </span><span class="kw">let </span>membership = <span class="kw">match </span>membership_coordinator.membership_for_epoch(epoch) {
 <a href=#180 id=180 data-nosnippet>180</a>                    <span class="prelude-val">Ok</span>(m) =&gt; m,
 <a href=#181 id=181 data-nosnippet>181</a>                    <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; membership_coordinator
 <a href=#182 id=182 data-nosnippet>182</a>                        .wait_for_catchup(epoch)

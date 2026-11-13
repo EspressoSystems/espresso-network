@@ -599,236 +599,233 @@
 <a href=#599 id=599 data-nosnippet>599</a>    }
 <a href=#600 id=600 data-nosnippet>600</a>
 <a href=#601 id=601 data-nosnippet>601</a>    <span class="kw">async fn </span>membership(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; <span class="prelude-ty">Result</span>&lt;EpochMembership&lt;T&gt;&gt; {
-<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw">match </span><span class="self">self
-<a href=#603 id=603 data-nosnippet>603</a>            </span>.membership_coordinator
-<a href=#604 id=604 data-nosnippet>604</a>            .membership_for_epoch(<span class="prelude-val">Some</span>(epoch))
-<a href=#605 id=605 data-nosnippet>605</a>        {
-<a href=#606 id=606 data-nosnippet>606</a>            <span class="prelude-val">Ok</span>(m) =&gt; <span class="prelude-val">Ok</span>(m),
-<a href=#607 id=607 data-nosnippet>607</a>            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="self">self
-<a href=#608 id=608 data-nosnippet>608</a>                </span>.membership_coordinator
-<a href=#609 id=609 data-nosnippet>609</a>                .wait_for_catchup(epoch) <span class="comment">// TODO: timeout?
-<a href=#610 id=610 data-nosnippet>610</a>                </span>.<span class="kw">await
-<a href=#611 id=611 data-nosnippet>611</a>                </span>.map_err(|e| ValidationError::NoMembershipForEpoch(epoch, e)),
-<a href=#612 id=612 data-nosnippet>612</a>        }
-<a href=#613 id=613 data-nosnippet>613</a>    }
-<a href=#614 id=614 data-nosnippet>614</a>}
-<a href=#615 id=615 data-nosnippet>615</a>
-<a href=#616 id=616 data-nosnippet>616</a><span class="attr">#[derive(Debug, thiserror::Error)]
-<a href=#617 id=617 data-nosnippet>617</a></span><span class="kw">pub enum </span>ValidationError {
-<a href=#618 id=618 data-nosnippet>618</a>    <span class="attr">#[error(transparent)]
-<a href=#619 id=619 data-nosnippet>619</a>    </span>Malformed(<span class="attr">#[from] </span>MalformedProposal),
+<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw">match </span><span class="self">self</span>.membership_coordinator.membership_for_epoch(epoch) {
+<a href=#603 id=603 data-nosnippet>603</a>            <span class="prelude-val">Ok</span>(m) =&gt; <span class="prelude-val">Ok</span>(m),
+<a href=#604 id=604 data-nosnippet>604</a>            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="self">self
+<a href=#605 id=605 data-nosnippet>605</a>                </span>.membership_coordinator
+<a href=#606 id=606 data-nosnippet>606</a>                .wait_for_catchup(epoch) <span class="comment">// TODO: timeout?
+<a href=#607 id=607 data-nosnippet>607</a>                </span>.<span class="kw">await
+<a href=#608 id=608 data-nosnippet>608</a>                </span>.map_err(|e| ValidationError::NoMembershipForEpoch(epoch, e)),
+<a href=#609 id=609 data-nosnippet>609</a>        }
+<a href=#610 id=610 data-nosnippet>610</a>    }
+<a href=#611 id=611 data-nosnippet>611</a>}
+<a href=#612 id=612 data-nosnippet>612</a>
+<a href=#613 id=613 data-nosnippet>613</a><span class="attr">#[derive(Debug, thiserror::Error)]
+<a href=#614 id=614 data-nosnippet>614</a></span><span class="kw">pub enum </span>ValidationError {
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="attr">#[error(transparent)]
+<a href=#616 id=616 data-nosnippet>616</a>    </span>Malformed(<span class="attr">#[from] </span>MalformedProposal),
+<a href=#617 id=617 data-nosnippet>617</a>
+<a href=#618 id=618 data-nosnippet>618</a>    <span class="attr">#[error(<span class="string">"invalid proposal signature"</span>)]
+<a href=#619 id=619 data-nosnippet>619</a>    </span>InvalidProposalSignature,
 <a href=#620 id=620 data-nosnippet>620</a>
-<a href=#621 id=621 data-nosnippet>621</a>    <span class="attr">#[error(<span class="string">"invalid proposal signature"</span>)]
-<a href=#622 id=622 data-nosnippet>622</a>    </span>InvalidProposalSignature,
+<a href=#621 id=621 data-nosnippet>621</a>    <span class="attr">#[error(<span class="string">"invalid proposal justify qc: {0}"</span>)]
+<a href=#622 id=622 data-nosnippet>622</a>    </span>InvalidJustifyQc(<span class="attr">#[source] </span>anytrace::Error),
 <a href=#623 id=623 data-nosnippet>623</a>
-<a href=#624 id=624 data-nosnippet>624</a>    <span class="attr">#[error(<span class="string">"invalid proposal justify qc: {0}"</span>)]
-<a href=#625 id=625 data-nosnippet>625</a>    </span>InvalidJustifyQc(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#624 id=624 data-nosnippet>624</a>    <span class="attr">#[error(<span class="string">"justify_qc of proposal at view {0} is at the genesis view but is not the genesis QC"</span>)]
+<a href=#625 id=625 data-nosnippet>625</a>    </span>NotGenesisQc(ViewNumber),
 <a href=#626 id=626 data-nosnippet>626</a>
-<a href=#627 id=627 data-nosnippet>627</a>    <span class="attr">#[error(<span class="string">"justify_qc of proposal at view {0} is at the genesis view but is not the genesis QC"</span>)]
-<a href=#628 id=628 data-nosnippet>628</a>    </span>NotGenesisQc(ViewNumber),
+<a href=#627 id=627 data-nosnippet>627</a>    <span class="attr">#[error(<span class="string">"invalid next_epoch_justify_qc: {0}"</span>)]
+<a href=#628 id=628 data-nosnippet>628</a>    </span>InvalidNextEpochJustifyQc(<span class="attr">#[source] </span>anytrace::Error),
 <a href=#629 id=629 data-nosnippet>629</a>
-<a href=#630 id=630 data-nosnippet>630</a>    <span class="attr">#[error(<span class="string">"invalid next_epoch_justify_qc: {0}"</span>)]
-<a href=#631 id=631 data-nosnippet>631</a>    </span>InvalidNextEpochJustifyQc(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="attr">#[error(<span class="string">"vid share does not match proposal"</span>)]
+<a href=#631 id=631 data-nosnippet>631</a>    </span>VidCommitmentDoesNotMatchProposal,
 <a href=#632 id=632 data-nosnippet>632</a>
-<a href=#633 id=633 data-nosnippet>633</a>    <span class="attr">#[error(<span class="string">"vid share does not match proposal"</span>)]
-<a href=#634 id=634 data-nosnippet>634</a>    </span>VidCommitmentDoesNotMatchProposal,
+<a href=#633 id=633 data-nosnippet>633</a>    <span class="attr">#[error(<span class="string">"failed to verify vid share"</span>)]
+<a href=#634 id=634 data-nosnippet>634</a>    </span>VidShareNotVerified,
 <a href=#635 id=635 data-nosnippet>635</a>
-<a href=#636 id=636 data-nosnippet>636</a>    <span class="attr">#[error(<span class="string">"failed to verify vid share"</span>)]
-<a href=#637 id=637 data-nosnippet>637</a>    </span>VidShareNotVerified,
+<a href=#636 id=636 data-nosnippet>636</a>    <span class="attr">#[error(<span class="string">"vid commitment not v2"</span>)]
+<a href=#637 id=637 data-nosnippet>637</a>    </span>InvalidVidCommitmentVersion,
 <a href=#638 id=638 data-nosnippet>638</a>
-<a href=#639 id=639 data-nosnippet>639</a>    <span class="attr">#[error(<span class="string">"vid commitment not v2"</span>)]
-<a href=#640 id=640 data-nosnippet>640</a>    </span>InvalidVidCommitmentVersion,
+<a href=#639 id=639 data-nosnippet>639</a>    <span class="attr">#[error(<span class="string">"missing epoch number in view {0} ({1})"</span>)]
+<a href=#640 id=640 data-nosnippet>640</a>    </span>MissingEpoch(ViewNumber, <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str),
 <a href=#641 id=641 data-nosnippet>641</a>
-<a href=#642 id=642 data-nosnippet>642</a>    <span class="attr">#[error(<span class="string">"missing epoch number in view {0} ({1})"</span>)]
-<a href=#643 id=643 data-nosnippet>643</a>    </span>MissingEpoch(ViewNumber, <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str),
-<a href=#644 id=644 data-nosnippet>644</a>
-<a href=#645 id=645 data-nosnippet>645</a>    <span class="attr">#[error(
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="string">"view change evidence of proposal at view {view} is of epoch {evidence_epoch}, which the \
-<a href=#647 id=647 data-nosnippet>647</a>         proposal's epoch {epoch} does not admit"
-<a href=#648 id=648 data-nosnippet>648</a>    </span>)]
-<a href=#649 id=649 data-nosnippet>649</a>    </span>ViewChangeEvidenceEpoch {
-<a href=#650 id=650 data-nosnippet>650</a>        view: ViewNumber,
-<a href=#651 id=651 data-nosnippet>651</a>        evidence_epoch: EpochNumber,
-<a href=#652 id=652 data-nosnippet>652</a>        epoch: EpochNumber,
-<a href=#653 id=653 data-nosnippet>653</a>    },
+<a href=#642 id=642 data-nosnippet>642</a>    <span class="attr">#[error(
+<a href=#643 id=643 data-nosnippet>643</a>        <span class="string">"view change evidence of proposal at view {view} is of epoch {evidence_epoch}, which the \
+<a href=#644 id=644 data-nosnippet>644</a>         proposal's epoch {epoch} does not admit"
+<a href=#645 id=645 data-nosnippet>645</a>    </span>)]
+<a href=#646 id=646 data-nosnippet>646</a>    </span>ViewChangeEvidenceEpoch {
+<a href=#647 id=647 data-nosnippet>647</a>        view: ViewNumber,
+<a href=#648 id=648 data-nosnippet>648</a>        evidence_epoch: EpochNumber,
+<a href=#649 id=649 data-nosnippet>649</a>        epoch: EpochNumber,
+<a href=#650 id=650 data-nosnippet>650</a>    },
+<a href=#651 id=651 data-nosnippet>651</a>
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="attr">#[error(<span class="string">"failed to get membership for epoch {0}: {1}"</span>)]
+<a href=#653 id=653 data-nosnippet>653</a>    </span>NoMembershipForEpoch(EpochNumber, <span class="attr">#[source] </span>anytrace::Error),
 <a href=#654 id=654 data-nosnippet>654</a>
-<a href=#655 id=655 data-nosnippet>655</a>    <span class="attr">#[error(<span class="string">"failed to get membership for epoch {0}: {1}"</span>)]
-<a href=#656 id=656 data-nosnippet>656</a>    </span>NoMembershipForEpoch(EpochNumber, <span class="attr">#[source] </span>anytrace::Error),
+<a href=#655 id=655 data-nosnippet>655</a>    <span class="attr">#[error(<span class="string">"failed to get leader for view {0}, epoch {1}: {2}"</span>)]
+<a href=#656 id=656 data-nosnippet>656</a>    </span>NoLeader(ViewNumber, EpochNumber, <span class="attr">#[source] </span>anytrace::Error),
 <a href=#657 id=657 data-nosnippet>657</a>
-<a href=#658 id=658 data-nosnippet>658</a>    <span class="attr">#[error(<span class="string">"failed to get leader for view {0}, epoch {1}: {2}"</span>)]
-<a href=#659 id=659 data-nosnippet>659</a>    </span>NoLeader(ViewNumber, EpochNumber, <span class="attr">#[source] </span>anytrace::Error),
+<a href=#658 id=658 data-nosnippet>658</a>    <span class="attr">#[error(<span class="string">"state_cert does not correspond to justify_qc"</span>)]
+<a href=#659 id=659 data-nosnippet>659</a>    </span>StateCertCorrespondence,
 <a href=#660 id=660 data-nosnippet>660</a>
-<a href=#661 id=661 data-nosnippet>661</a>    <span class="attr">#[error(<span class="string">"state_cert does not correspond to justify_qc"</span>)]
-<a href=#662 id=662 data-nosnippet>662</a>    </span>StateCertCorrespondence,
+<a href=#661 id=661 data-nosnippet>661</a>    <span class="attr">#[error(<span class="string">"state_cert signature validation failed: {0}"</span>)]
+<a href=#662 id=662 data-nosnippet>662</a>    </span>InvalidStateCert(<span class="attr">#[source] </span>anytrace::Error),
 <a href=#663 id=663 data-nosnippet>663</a>
-<a href=#664 id=664 data-nosnippet>664</a>    <span class="attr">#[error(<span class="string">"state_cert signature validation failed: {0}"</span>)]
-<a href=#665 id=665 data-nosnippet>665</a>    </span>InvalidStateCert(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#664 id=664 data-nosnippet>664</a>    <span class="attr">#[error(<span class="string">"invalid vid share proposal signature"</span>)]
+<a href=#665 id=665 data-nosnippet>665</a>    </span>InvalidVidShareProposalSignature,
 <a href=#666 id=666 data-nosnippet>666</a>
-<a href=#667 id=667 data-nosnippet>667</a>    <span class="attr">#[error(<span class="string">"invalid vid share proposal signature"</span>)]
-<a href=#668 id=668 data-nosnippet>668</a>    </span>InvalidVidShareProposalSignature,
+<a href=#667 id=667 data-nosnippet>667</a>    <span class="attr">#[error(<span class="string">"view-change evidence (timeout certificate) is invalid: {0}"</span>)]
+<a href=#668 id=668 data-nosnippet>668</a>    </span>InvalidViewChangeEvidence(<span class="attr">#[source] </span>anytrace::Error),
 <a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>    <span class="attr">#[error(<span class="string">"view-change evidence (timeout certificate) is invalid: {0}"</span>)]
-<a href=#671 id=671 data-nosnippet>671</a>    </span>InvalidViewChangeEvidence(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#670 id=670 data-nosnippet>670</a>    <span class="attr">#[error(<span class="string">"upgrade certificate data differs from the expected upgrade data"</span>)]
+<a href=#671 id=671 data-nosnippet>671</a>    </span>UnexpectedUpgradeCertificateData,
 <a href=#672 id=672 data-nosnippet>672</a>
-<a href=#673 id=673 data-nosnippet>673</a>    <span class="attr">#[error(<span class="string">"upgrade certificate data differs from the expected upgrade data"</span>)]
-<a href=#674 id=674 data-nosnippet>674</a>    </span>UnexpectedUpgradeCertificateData,
+<a href=#673 id=673 data-nosnippet>673</a>    <span class="attr">#[error(<span class="string">"proposal at view {0} carries an upgrade certificate expired at view {1}"</span>)]
+<a href=#674 id=674 data-nosnippet>674</a>    </span>ExpiredUpgradeCertificate(ViewNumber, ViewNumber),
 <a href=#675 id=675 data-nosnippet>675</a>
-<a href=#676 id=676 data-nosnippet>676</a>    <span class="attr">#[error(<span class="string">"proposal at view {0} carries an upgrade certificate expired at view {1}"</span>)]
-<a href=#677 id=677 data-nosnippet>677</a>    </span>ExpiredUpgradeCertificate(ViewNumber, ViewNumber),
-<a href=#678 id=678 data-nosnippet>678</a>
-<a href=#679 id=679 data-nosnippet>679</a>    <span class="attr">#[error(<span class="string">"invalid upgrade certificate: {0}"</span>)]
-<a href=#680 id=680 data-nosnippet>680</a>    </span>InvalidUpgradeCertificate(<span class="attr">#[source] </span>anytrace::Error),
-<a href=#681 id=681 data-nosnippet>681</a>}
-<a href=#682 id=682 data-nosnippet>682</a>
-<a href=#683 id=683 data-nosnippet>683</a><span class="doccomment">/// Check that a timeout certificate has the form its view requires, names that
-<a href=#684 id=684 data-nosnippet>684</a>/// view in its data, and carries a quorum's signatures.
-<a href=#685 id=685 data-nosnippet>685</a>///
-<a href=#686 id=686 data-nosnippet>686</a>/// `TimeoutEvidence::is_valid_cert` checks the same, except that it skips the
-<a href=#687 id=687 data-nosnippet>687</a>/// signatures at the genesis view. Every timeout certificate is formed from
-<a href=#688 id=688 data-nosnippet>688</a>/// signed votes, at the genesis view as at any other, so none is exempt here.
-<a href=#689 id=689 data-nosnippet>689</a>/// A certificate that carries a lock has its lock certificate checked against
-<a href=#690 id=690 data-nosnippet>690</a>/// the lock's own epoch's committee.
-<a href=#691 id=691 data-nosnippet>691</a></span><span class="kw">fn </span>verify_timeout_evidence&lt;T: NodeType&gt;(
-<a href=#692 id=692 data-nosnippet>692</a>    tc: <span class="kw-2">&amp;</span>TimeoutEvidence&lt;T&gt;,
-<a href=#693 id=693 data-nosnippet>693</a>    stake_table: <span class="kw-2">&amp;</span>[&lt;T::SignatureKey <span class="kw">as </span>SignatureKey&gt;::StakeTableEntry],
-<a href=#694 id=694 data-nosnippet>694</a>    threshold: U256,
-<a href=#695 id=695 data-nosnippet>695</a>    epoch_height: u64,
-<a href=#696 id=696 data-nosnippet>696</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;T&gt;,
-<a href=#697 id=697 data-nosnippet>697</a>    memberships: <span class="kw-2">&amp;</span>EpochMembershipCoordinator&lt;T&gt;,
-<a href=#698 id=698 data-nosnippet>698</a>) -&gt; anytrace::Result&lt;()&gt; {
-<a href=#699 id=699 data-nosnippet>699</a>    <span class="kw">let </span>view = tc.view_number();
-<a href=#700 id=700 data-nosnippet>700</a>    <span class="macro">ensure!</span>(
-<a href=#701 id=701 data-nosnippet>701</a>        tc.binds_epoch() == upgrade_lock.timeout_epoch_bound(view),
-<a href=#702 id=702 data-nosnippet>702</a>        <span class="string">"timeout certificate for view {view} has the wrong form for its version"
-<a href=#703 id=703 data-nosnippet>703</a>    </span>);
-<a href=#704 id=704 data-nosnippet>704</a>    <span class="kw">match </span>tc {
-<a href=#705 id=705 data-nosnippet>705</a>        TimeoutEvidence::V2(cert) =&gt; {
-<a href=#706 id=706 data-nosnippet>706</a>            <span class="macro">ensure!</span>(
-<a href=#707 id=707 data-nosnippet>707</a>                view == cert.data.view,
-<a href=#708 id=708 data-nosnippet>708</a>                <span class="string">"timeout certificate view {view} != data view {}"</span>,
-<a href=#709 id=709 data-nosnippet>709</a>                cert.data.view
-<a href=#710 id=710 data-nosnippet>710</a>            );
-<a href=#711 id=711 data-nosnippet>711</a>            verify_signatures(cert, stake_table, threshold, upgrade_lock)
-<a href=#712 id=712 data-nosnippet>712</a>        },
-<a href=#713 id=713 data-nosnippet>713</a>        TimeoutEvidence::V3(cert) =&gt; verify_timeout3(
-<a href=#714 id=714 data-nosnippet>714</a>            cert,
-<a href=#715 id=715 data-nosnippet>715</a>            stake_table,
-<a href=#716 id=716 data-nosnippet>716</a>            threshold,
-<a href=#717 id=717 data-nosnippet>717</a>            epoch_height,
-<a href=#718 id=718 data-nosnippet>718</a>            upgrade_lock,
-<a href=#719 id=719 data-nosnippet>719</a>            memberships,
-<a href=#720 id=720 data-nosnippet>720</a>        ),
-<a href=#721 id=721 data-nosnippet>721</a>    }
-<a href=#722 id=722 data-nosnippet>722</a>}
-<a href=#723 id=723 data-nosnippet>723</a>
-<a href=#724 id=724 data-nosnippet>724</a><span class="doccomment">/// Reason a proposal is not [well-formed](well_formed).
-<a href=#725 id=725 data-nosnippet>725</a></span><span class="attr">#[derive(Copy, Clone, Debug, thiserror::Error)]
-<a href=#726 id=726 data-nosnippet>726</a></span><span class="kw">pub enum </span>MalformedProposal {
-<a href=#727 id=727 data-nosnippet>727</a>    <span class="attr">#[error(
-<a href=#728 id=728 data-nosnippet>728</a>        <span class="string">"proposal at view {view} claims epoch {claimed}, but block number {block_number} falls in \
-<a href=#729 id=729 data-nosnippet>729</a>         epoch {expected}"
-<a href=#730 id=730 data-nosnippet>730</a>    </span>)]
-<a href=#731 id=731 data-nosnippet>731</a>    </span>Epoch {
-<a href=#732 id=732 data-nosnippet>732</a>        view: ViewNumber,
-<a href=#733 id=733 data-nosnippet>733</a>        block_number: u64,
-<a href=#734 id=734 data-nosnippet>734</a>        expected: EpochNumber,
-<a href=#735 id=735 data-nosnippet>735</a>        claimed: EpochNumber,
-<a href=#736 id=736 data-nosnippet>736</a>    },
+<a href=#676 id=676 data-nosnippet>676</a>    <span class="attr">#[error(<span class="string">"invalid upgrade certificate: {0}"</span>)]
+<a href=#677 id=677 data-nosnippet>677</a>    </span>InvalidUpgradeCertificate(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#678 id=678 data-nosnippet>678</a>}
+<a href=#679 id=679 data-nosnippet>679</a>
+<a href=#680 id=680 data-nosnippet>680</a><span class="doccomment">/// Check that a timeout certificate has the form its view requires, names that
+<a href=#681 id=681 data-nosnippet>681</a>/// view in its data, and carries a quorum's signatures.
+<a href=#682 id=682 data-nosnippet>682</a>///
+<a href=#683 id=683 data-nosnippet>683</a>/// `TimeoutEvidence::is_valid_cert` checks the same, except that it skips the
+<a href=#684 id=684 data-nosnippet>684</a>/// signatures at the genesis view. Every timeout certificate is formed from
+<a href=#685 id=685 data-nosnippet>685</a>/// signed votes, at the genesis view as at any other, so none is exempt here.
+<a href=#686 id=686 data-nosnippet>686</a>/// A certificate that carries a lock has its lock certificate checked against
+<a href=#687 id=687 data-nosnippet>687</a>/// the lock's own epoch's committee.
+<a href=#688 id=688 data-nosnippet>688</a></span><span class="kw">fn </span>verify_timeout_evidence&lt;T: NodeType&gt;(
+<a href=#689 id=689 data-nosnippet>689</a>    tc: <span class="kw-2">&amp;</span>TimeoutEvidence&lt;T&gt;,
+<a href=#690 id=690 data-nosnippet>690</a>    stake_table: <span class="kw-2">&amp;</span>[&lt;T::SignatureKey <span class="kw">as </span>SignatureKey&gt;::StakeTableEntry],
+<a href=#691 id=691 data-nosnippet>691</a>    threshold: U256,
+<a href=#692 id=692 data-nosnippet>692</a>    epoch_height: u64,
+<a href=#693 id=693 data-nosnippet>693</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;T&gt;,
+<a href=#694 id=694 data-nosnippet>694</a>    memberships: <span class="kw-2">&amp;</span>EpochMembershipCoordinator&lt;T&gt;,
+<a href=#695 id=695 data-nosnippet>695</a>) -&gt; anytrace::Result&lt;()&gt; {
+<a href=#696 id=696 data-nosnippet>696</a>    <span class="kw">let </span>view = tc.view_number();
+<a href=#697 id=697 data-nosnippet>697</a>    <span class="macro">ensure!</span>(
+<a href=#698 id=698 data-nosnippet>698</a>        tc.binds_epoch() == upgrade_lock.timeout_epoch_bound(view),
+<a href=#699 id=699 data-nosnippet>699</a>        <span class="string">"timeout certificate for view {view} has the wrong form for its version"
+<a href=#700 id=700 data-nosnippet>700</a>    </span>);
+<a href=#701 id=701 data-nosnippet>701</a>    <span class="kw">match </span>tc {
+<a href=#702 id=702 data-nosnippet>702</a>        TimeoutEvidence::V2(cert) =&gt; {
+<a href=#703 id=703 data-nosnippet>703</a>            <span class="macro">ensure!</span>(
+<a href=#704 id=704 data-nosnippet>704</a>                view == cert.data.view,
+<a href=#705 id=705 data-nosnippet>705</a>                <span class="string">"timeout certificate view {view} != data view {}"</span>,
+<a href=#706 id=706 data-nosnippet>706</a>                cert.data.view
+<a href=#707 id=707 data-nosnippet>707</a>            );
+<a href=#708 id=708 data-nosnippet>708</a>            verify_signatures(cert, stake_table, threshold, upgrade_lock)
+<a href=#709 id=709 data-nosnippet>709</a>        },
+<a href=#710 id=710 data-nosnippet>710</a>        TimeoutEvidence::V3(cert) =&gt; verify_timeout3(
+<a href=#711 id=711 data-nosnippet>711</a>            cert,
+<a href=#712 id=712 data-nosnippet>712</a>            stake_table,
+<a href=#713 id=713 data-nosnippet>713</a>            threshold,
+<a href=#714 id=714 data-nosnippet>714</a>            epoch_height,
+<a href=#715 id=715 data-nosnippet>715</a>            upgrade_lock,
+<a href=#716 id=716 data-nosnippet>716</a>            memberships,
+<a href=#717 id=717 data-nosnippet>717</a>        ),
+<a href=#718 id=718 data-nosnippet>718</a>    }
+<a href=#719 id=719 data-nosnippet>719</a>}
+<a href=#720 id=720 data-nosnippet>720</a>
+<a href=#721 id=721 data-nosnippet>721</a><span class="doccomment">/// Reason a proposal is not [well-formed](well_formed).
+<a href=#722 id=722 data-nosnippet>722</a></span><span class="attr">#[derive(Copy, Clone, Debug, thiserror::Error)]
+<a href=#723 id=723 data-nosnippet>723</a></span><span class="kw">pub enum </span>MalformedProposal {
+<a href=#724 id=724 data-nosnippet>724</a>    <span class="attr">#[error(
+<a href=#725 id=725 data-nosnippet>725</a>        <span class="string">"proposal at view {view} claims epoch {claimed}, but block number {block_number} falls in \
+<a href=#726 id=726 data-nosnippet>726</a>         epoch {expected}"
+<a href=#727 id=727 data-nosnippet>727</a>    </span>)]
+<a href=#728 id=728 data-nosnippet>728</a>    </span>Epoch {
+<a href=#729 id=729 data-nosnippet>729</a>        view: ViewNumber,
+<a href=#730 id=730 data-nosnippet>730</a>        block_number: u64,
+<a href=#731 id=731 data-nosnippet>731</a>        expected: EpochNumber,
+<a href=#732 id=732 data-nosnippet>732</a>        claimed: EpochNumber,
+<a href=#733 id=733 data-nosnippet>733</a>    },
+<a href=#734 id=734 data-nosnippet>734</a>
+<a href=#735 id=735 data-nosnippet>735</a>    <span class="attr">#[error(<span class="string">"justify_qc of proposal at view {0} names no epoch"</span>)]
+<a href=#736 id=736 data-nosnippet>736</a>    </span>JustifyQcWithoutEpoch(ViewNumber),
 <a href=#737 id=737 data-nosnippet>737</a>
-<a href=#738 id=738 data-nosnippet>738</a>    <span class="attr">#[error(<span class="string">"justify_qc of proposal at view {0} names no epoch"</span>)]
-<a href=#739 id=739 data-nosnippet>739</a>    </span>JustifyQcWithoutEpoch(ViewNumber),
+<a href=#738 id=738 data-nosnippet>738</a>    <span class="attr">#[error(<span class="string">"justify_qc of proposal at view {0} names no block number"</span>)]
+<a href=#739 id=739 data-nosnippet>739</a>    </span>JustifyQcWithoutBlockNumber(ViewNumber),
 <a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a>    <span class="attr">#[error(<span class="string">"justify_qc of proposal at view {0} names no block number"</span>)]
-<a href=#742 id=742 data-nosnippet>742</a>    </span>JustifyQcWithoutBlockNumber(ViewNumber),
-<a href=#743 id=743 data-nosnippet>743</a>
-<a href=#744 id=744 data-nosnippet>744</a>    <span class="attr">#[error(
-<a href=#745 id=745 data-nosnippet>745</a>        <span class="string">"justify_qc of proposal at view {view} is at the genesis view but certifies block \
-<a href=#746 id=746 data-nosnippet>746</a>         {claimed}, not the genesis block"
-<a href=#747 id=747 data-nosnippet>747</a>    </span>)]
-<a href=#748 id=748 data-nosnippet>748</a>    </span>GenesisJustifyQcBlockNumber { view: ViewNumber, claimed: u64 },
-<a href=#749 id=749 data-nosnippet>749</a>
-<a href=#750 id=750 data-nosnippet>750</a>    <span class="attr">#[error(
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="string">"justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \
-<a href=#752 id=752 data-nosnippet>752</a>         {parent_block} falls in epoch {expected}"
-<a href=#753 id=753 data-nosnippet>753</a>    </span>)]
-<a href=#754 id=754 data-nosnippet>754</a>    </span>JustifyQcEpoch {
-<a href=#755 id=755 data-nosnippet>755</a>        view: ViewNumber,
-<a href=#756 id=756 data-nosnippet>756</a>        parent_block: u64,
-<a href=#757 id=757 data-nosnippet>757</a>        expected: EpochNumber,
-<a href=#758 id=758 data-nosnippet>758</a>        claimed: EpochNumber,
-<a href=#759 id=759 data-nosnippet>759</a>    },
-<a href=#760 id=760 data-nosnippet>760</a>
-<a href=#761 id=761 data-nosnippet>761</a>    <span class="attr">#[error(
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="string">"justify_qc of proposal at view {view} certifies block {claimed}, not its parent block \
-<a href=#763 id=763 data-nosnippet>763</a>         {expected}"
-<a href=#764 id=764 data-nosnippet>764</a>    </span>)]
-<a href=#765 id=765 data-nosnippet>765</a>    </span>JustifyQcBlockNumber {
-<a href=#766 id=766 data-nosnippet>766</a>        view: ViewNumber,
-<a href=#767 id=767 data-nosnippet>767</a>        expected: u64,
-<a href=#768 id=768 data-nosnippet>768</a>        claimed: u64,
-<a href=#769 id=769 data-nosnippet>769</a>    },
-<a href=#770 id=770 data-nosnippet>770</a>
-<a href=#771 id=771 data-nosnippet>771</a>    <span class="attr">#[error(
-<a href=#772 id=772 data-nosnippet>772</a>        <span class="string">"next_epoch_justify_qc on proposal at view {0}, which does not follow a boundary block"
-<a href=#773 id=773 data-nosnippet>773</a>    </span>)]
-<a href=#774 id=774 data-nosnippet>774</a>    </span>NextEpochJustifyQcUnexpected(ViewNumber),
+<a href=#741 id=741 data-nosnippet>741</a>    <span class="attr">#[error(
+<a href=#742 id=742 data-nosnippet>742</a>        <span class="string">"justify_qc of proposal at view {view} is at the genesis view but certifies block \
+<a href=#743 id=743 data-nosnippet>743</a>         {claimed}, not the genesis block"
+<a href=#744 id=744 data-nosnippet>744</a>    </span>)]
+<a href=#745 id=745 data-nosnippet>745</a>    </span>GenesisJustifyQcBlockNumber { view: ViewNumber, claimed: u64 },
+<a href=#746 id=746 data-nosnippet>746</a>
+<a href=#747 id=747 data-nosnippet>747</a>    <span class="attr">#[error(
+<a href=#748 id=748 data-nosnippet>748</a>        <span class="string">"justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \
+<a href=#749 id=749 data-nosnippet>749</a>         {parent_block} falls in epoch {expected}"
+<a href=#750 id=750 data-nosnippet>750</a>    </span>)]
+<a href=#751 id=751 data-nosnippet>751</a>    </span>JustifyQcEpoch {
+<a href=#752 id=752 data-nosnippet>752</a>        view: ViewNumber,
+<a href=#753 id=753 data-nosnippet>753</a>        parent_block: u64,
+<a href=#754 id=754 data-nosnippet>754</a>        expected: EpochNumber,
+<a href=#755 id=755 data-nosnippet>755</a>        claimed: EpochNumber,
+<a href=#756 id=756 data-nosnippet>756</a>    },
+<a href=#757 id=757 data-nosnippet>757</a>
+<a href=#758 id=758 data-nosnippet>758</a>    <span class="attr">#[error(
+<a href=#759 id=759 data-nosnippet>759</a>        <span class="string">"justify_qc of proposal at view {view} certifies block {claimed}, not its parent block \
+<a href=#760 id=760 data-nosnippet>760</a>         {expected}"
+<a href=#761 id=761 data-nosnippet>761</a>    </span>)]
+<a href=#762 id=762 data-nosnippet>762</a>    </span>JustifyQcBlockNumber {
+<a href=#763 id=763 data-nosnippet>763</a>        view: ViewNumber,
+<a href=#764 id=764 data-nosnippet>764</a>        expected: u64,
+<a href=#765 id=765 data-nosnippet>765</a>        claimed: u64,
+<a href=#766 id=766 data-nosnippet>766</a>    },
+<a href=#767 id=767 data-nosnippet>767</a>
+<a href=#768 id=768 data-nosnippet>768</a>    <span class="attr">#[error(
+<a href=#769 id=769 data-nosnippet>769</a>        <span class="string">"next_epoch_justify_qc on proposal at view {0}, which does not follow a boundary block"
+<a href=#770 id=770 data-nosnippet>770</a>    </span>)]
+<a href=#771 id=771 data-nosnippet>771</a>    </span>NextEpochJustifyQcUnexpected(ViewNumber),
+<a href=#772 id=772 data-nosnippet>772</a>
+<a href=#773 id=773 data-nosnippet>773</a>    <span class="attr">#[error(<span class="string">"first proposal of an epoch at view {0} is missing next_epoch_justify_qc"</span>)]
+<a href=#774 id=774 data-nosnippet>774</a>    </span>NextEpochJustifyQcMissing(ViewNumber),
 <a href=#775 id=775 data-nosnippet>775</a>
-<a href=#776 id=776 data-nosnippet>776</a>    <span class="attr">#[error(<span class="string">"first proposal of an epoch at view {0} is missing next_epoch_justify_qc"</span>)]
-<a href=#777 id=777 data-nosnippet>777</a>    </span>NextEpochJustifyQcMissing(ViewNumber),
-<a href=#778 id=778 data-nosnippet>778</a>
-<a href=#779 id=779 data-nosnippet>779</a>    <span class="attr">#[error(
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="string">"next_epoch_justify_qc of proposal at view {0} certifies another leaf than its justify_qc"
-<a href=#781 id=781 data-nosnippet>781</a>    </span>)]
-<a href=#782 id=782 data-nosnippet>782</a>    </span>NextEpochJustifyQcLeafCommit(ViewNumber),
-<a href=#783 id=783 data-nosnippet>783</a>
-<a href=#784 id=784 data-nosnippet>784</a>    <span class="attr">#[error(
-<a href=#785 id=785 data-nosnippet>785</a>        <span class="string">"next_epoch_justify_qc of proposal at view {view} is at view {claimed_view}, which is not \
-<a href=#786 id=786 data-nosnippet>786</a>         earlier"
-<a href=#787 id=787 data-nosnippet>787</a>    </span>)]
-<a href=#788 id=788 data-nosnippet>788</a>    </span>NextEpochJustifyQcNotEarlier {
-<a href=#789 id=789 data-nosnippet>789</a>        view: ViewNumber,
-<a href=#790 id=790 data-nosnippet>790</a>        claimed_view: ViewNumber,
-<a href=#791 id=791 data-nosnippet>791</a>    },
-<a href=#792 id=792 data-nosnippet>792</a>
-<a href=#793 id=793 data-nosnippet>793</a>    <span class="attr">#[error(
-<a href=#794 id=794 data-nosnippet>794</a>        <span class="string">"next_epoch_justify_qc of proposal at view {view} certifies view {claimed_view} of epoch \
-<a href=#795 id=795 data-nosnippet>795</a>         {claimed_epoch} at block {claimed_block}, not view {parent_view} or later of epoch \
-<a href=#796 id=796 data-nosnippet>796</a>         {parent_epoch} at block {parent_block}"
-<a href=#797 id=797 data-nosnippet>797</a>    </span>)]
-<a href=#798 id=798 data-nosnippet>798</a>    </span>NextEpochJustifyQcParent {
-<a href=#799 id=799 data-nosnippet>799</a>        view: ViewNumber,
-<a href=#800 id=800 data-nosnippet>800</a>        claimed_view: ViewNumber,
-<a href=#801 id=801 data-nosnippet>801</a>        claimed_epoch: EpochNumber,
-<a href=#802 id=802 data-nosnippet>802</a>        claimed_block: u64,
-<a href=#803 id=803 data-nosnippet>803</a>        parent_view: ViewNumber,
-<a href=#804 id=804 data-nosnippet>804</a>        parent_epoch: EpochNumber,
-<a href=#805 id=805 data-nosnippet>805</a>        parent_block: u64,
-<a href=#806 id=806 data-nosnippet>806</a>    },
-<a href=#807 id=807 data-nosnippet>807</a>
-<a href=#808 id=808 data-nosnippet>808</a>    <span class="attr">#[error(
-<a href=#809 id=809 data-nosnippet>809</a>        <span class="string">"proposal at view {view} has a justify_qc for view {parent_view}, which is not earlier"
-<a href=#810 id=810 data-nosnippet>810</a>    </span>)]
-<a href=#811 id=811 data-nosnippet>811</a>    </span>ParentNotEarlier {
-<a href=#812 id=812 data-nosnippet>812</a>        view: ViewNumber,
-<a href=#813 id=813 data-nosnippet>813</a>        parent_view: ViewNumber,
-<a href=#814 id=814 data-nosnippet>814</a>    },
+<a href=#776 id=776 data-nosnippet>776</a>    <span class="attr">#[error(
+<a href=#777 id=777 data-nosnippet>777</a>        <span class="string">"next_epoch_justify_qc of proposal at view {0} certifies another leaf than its justify_qc"
+<a href=#778 id=778 data-nosnippet>778</a>    </span>)]
+<a href=#779 id=779 data-nosnippet>779</a>    </span>NextEpochJustifyQcLeafCommit(ViewNumber),
+<a href=#780 id=780 data-nosnippet>780</a>
+<a href=#781 id=781 data-nosnippet>781</a>    <span class="attr">#[error(
+<a href=#782 id=782 data-nosnippet>782</a>        <span class="string">"next_epoch_justify_qc of proposal at view {view} is at view {claimed_view}, which is not \
+<a href=#783 id=783 data-nosnippet>783</a>         earlier"
+<a href=#784 id=784 data-nosnippet>784</a>    </span>)]
+<a href=#785 id=785 data-nosnippet>785</a>    </span>NextEpochJustifyQcNotEarlier {
+<a href=#786 id=786 data-nosnippet>786</a>        view: ViewNumber,
+<a href=#787 id=787 data-nosnippet>787</a>        claimed_view: ViewNumber,
+<a href=#788 id=788 data-nosnippet>788</a>    },
+<a href=#789 id=789 data-nosnippet>789</a>
+<a href=#790 id=790 data-nosnippet>790</a>    <span class="attr">#[error(
+<a href=#791 id=791 data-nosnippet>791</a>        <span class="string">"next_epoch_justify_qc of proposal at view {view} certifies view {claimed_view} of epoch \
+<a href=#792 id=792 data-nosnippet>792</a>         {claimed_epoch} at block {claimed_block}, not view {parent_view} or later of epoch \
+<a href=#793 id=793 data-nosnippet>793</a>         {parent_epoch} at block {parent_block}"
+<a href=#794 id=794 data-nosnippet>794</a>    </span>)]
+<a href=#795 id=795 data-nosnippet>795</a>    </span>NextEpochJustifyQcParent {
+<a href=#796 id=796 data-nosnippet>796</a>        view: ViewNumber,
+<a href=#797 id=797 data-nosnippet>797</a>        claimed_view: ViewNumber,
+<a href=#798 id=798 data-nosnippet>798</a>        claimed_epoch: EpochNumber,
+<a href=#799 id=799 data-nosnippet>799</a>        claimed_block: u64,
+<a href=#800 id=800 data-nosnippet>800</a>        parent_view: ViewNumber,
+<a href=#801 id=801 data-nosnippet>801</a>        parent_epoch: EpochNumber,
+<a href=#802 id=802 data-nosnippet>802</a>        parent_block: u64,
+<a href=#803 id=803 data-nosnippet>803</a>    },
+<a href=#804 id=804 data-nosnippet>804</a>
+<a href=#805 id=805 data-nosnippet>805</a>    <span class="attr">#[error(
+<a href=#806 id=806 data-nosnippet>806</a>        <span class="string">"proposal at view {view} has a justify_qc for view {parent_view}, which is not earlier"
+<a href=#807 id=807 data-nosnippet>807</a>    </span>)]
+<a href=#808 id=808 data-nosnippet>808</a>    </span>ParentNotEarlier {
+<a href=#809 id=809 data-nosnippet>809</a>        view: ViewNumber,
+<a href=#810 id=810 data-nosnippet>810</a>        parent_view: ViewNumber,
+<a href=#811 id=811 data-nosnippet>811</a>    },
+<a href=#812 id=812 data-nosnippet>812</a>
+<a href=#813 id=813 data-nosnippet>813</a>    <span class="attr">#[error(<span class="string">"proposal at view {0} skips views but carries no view-change evidence"</span>)]
+<a href=#814 id=814 data-nosnippet>814</a>    </span>ViewChangeEvidenceMissing(ViewNumber),
 <a href=#815 id=815 data-nosnippet>815</a>
-<a href=#816 id=816 data-nosnippet>816</a>    <span class="attr">#[error(<span class="string">"proposal at view {0} skips views but carries no view-change evidence"</span>)]
-<a href=#817 id=817 data-nosnippet>817</a>    </span>ViewChangeEvidenceMissing(ViewNumber),
-<a href=#818 id=818 data-nosnippet>818</a>
-<a href=#819 id=819 data-nosnippet>819</a>    <span class="attr">#[error(
-<a href=#820 id=820 data-nosnippet>820</a>        <span class="string">"view-change evidence for proposal at view {view} certifies view {evidence_view}, not the \
-<a href=#821 id=821 data-nosnippet>821</a>         immediately preceding view"
-<a href=#822 id=822 data-nosnippet>822</a>    </span>)]
-<a href=#823 id=823 data-nosnippet>823</a>    </span>ViewChangeEvidenceView {
-<a href=#824 id=824 data-nosnippet>824</a>        view: ViewNumber,
-<a href=#825 id=825 data-nosnippet>825</a>        evidence_view: ViewNumber,
-<a href=#826 id=826 data-nosnippet>826</a>    },
+<a href=#816 id=816 data-nosnippet>816</a>    <span class="attr">#[error(
+<a href=#817 id=817 data-nosnippet>817</a>        <span class="string">"view-change evidence for proposal at view {view} certifies view {evidence_view}, not the \
+<a href=#818 id=818 data-nosnippet>818</a>         immediately preceding view"
+<a href=#819 id=819 data-nosnippet>819</a>    </span>)]
+<a href=#820 id=820 data-nosnippet>820</a>    </span>ViewChangeEvidenceView {
+<a href=#821 id=821 data-nosnippet>821</a>        view: ViewNumber,
+<a href=#822 id=822 data-nosnippet>822</a>        evidence_view: ViewNumber,
+<a href=#823 id=823 data-nosnippet>823</a>    },
+<a href=#824 id=824 data-nosnippet>824</a>
+<a href=#825 id=825 data-nosnippet>825</a>    <span class="attr">#[error(<span class="string">"state_cert on proposal at view {0}, whose justify_qc is not at an epoch-root block"</span>)]
+<a href=#826 id=826 data-nosnippet>826</a>    </span>StateCertUnexpected(ViewNumber),
 <a href=#827 id=827 data-nosnippet>827</a>
-<a href=#828 id=828 data-nosnippet>828</a>    <span class="attr">#[error(<span class="string">"state_cert on proposal at view {0}, whose justify_qc is not at an epoch-root block"</span>)]
-<a href=#829 id=829 data-nosnippet>829</a>    </span>StateCertUnexpected(ViewNumber),
-<a href=#830 id=830 data-nosnippet>830</a>
-<a href=#831 id=831 data-nosnippet>831</a>    <span class="attr">#[error(<span class="string">"epoch-root-parent proposal at view {0} is missing state_cert"</span>)]
-<a href=#832 id=832 data-nosnippet>832</a>    </span>StateCertMissing(ViewNumber),
-<a href=#833 id=833 data-nosnippet>833</a>}
+<a href=#828 id=828 data-nosnippet>828</a>    <span class="attr">#[error(<span class="string">"epoch-root-parent proposal at view {0} is missing state_cert"</span>)]
+<a href=#829 id=829 data-nosnippet>829</a>    </span>StateCertMissing(ViewNumber),
+<a href=#830 id=830 data-nosnippet>830</a>}
 </code></pre></div></section></main></body></html>

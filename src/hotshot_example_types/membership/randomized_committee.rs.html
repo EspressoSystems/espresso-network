@@ -72,11 +72,11 @@
 <a href=#72 id=72 data-nosnippet>72</a>        }
 <a href=#73 id=73 data-nosnippet>73</a>    }
 <a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">fn </span>stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _epoch: <span class="prelude-ty">Option</span>&lt;u64&gt;) -&gt; Vec&lt;TestStakeTableEntry&lt;PubKey, StatePubKey&gt;&gt; {
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">fn </span>stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _epoch: u64) -&gt; Vec&lt;TestStakeTableEntry&lt;PubKey, StatePubKey&gt;&gt; {
 <a href=#76 id=76 data-nosnippet>76</a>        <span class="self">self</span>.quorum_members.clone()
 <a href=#77 id=77 data-nosnippet>77</a>    }
 <a href=#78 id=78 data-nosnippet>78</a>
-<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">fn </span>da_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: <span class="prelude-ty">Option</span>&lt;u64&gt;) -&gt; Vec&lt;TestStakeTableEntry&lt;PubKey, StatePubKey&gt;&gt; {
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">fn </span>da_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; Vec&lt;TestStakeTableEntry&lt;PubKey, StatePubKey&gt;&gt; {
 <a href=#80 id=80 data-nosnippet>80</a>        <span class="self">self</span>.da_committees
 <a href=#81 id=81 data-nosnippet>81</a>            .get(epoch)
 <a href=#82 id=82 data-nosnippet>82</a>            .unwrap_or(<span class="self">self</span>.da_members.clone())
@@ -86,7 +86,7 @@
 <a href=#86 id=86 data-nosnippet>86</a>        <span class="self">self</span>.quorum_members.clone()
 <a href=#87 id=87 data-nosnippet>87</a>    }
 <a href=#88 id=88 data-nosnippet>88</a>
-<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">fn </span>lookup_leader(<span class="kw-2">&amp;</span><span class="self">self</span>, view_number: u64, _epoch: <span class="prelude-ty">Option</span>&lt;u64&gt;) -&gt; anyhow::Result&lt;PubKey&gt; {
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">fn </span>lookup_leader(<span class="kw-2">&amp;</span><span class="self">self</span>, view_number: u64, _epoch: u64) -&gt; anyhow::Result&lt;PubKey&gt; {
 <a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>res = select_randomized_leader(<span class="kw-2">&amp;</span><span class="self">self</span>.randomized_committee, view_number);
 <a href=#91 id=91 data-nosnippet>91</a>
 <a href=#92 id=92 data-nosnippet>92</a>        <span class="prelude-val">Ok</span>(PubKey::public_key(<span class="kw-2">&amp;</span>res))

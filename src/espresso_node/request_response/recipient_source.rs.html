@@ -62,7 +62,7 @@
 <a href=#62 id=62 data-nosnippet>62</a>        .flatten()
 <a href=#63 id=63 data-nosnippet>63</a>        .find_map(|epoch| {
 <a href=#64 id=64 data-nosnippet>64</a>            memberships
-<a href=#65 id=65 data-nosnippet>65</a>                .stake_table_for_epoch(<span class="prelude-val">Some</span>(epoch))
+<a href=#65 id=65 data-nosnippet>65</a>                .stake_table_for_epoch(epoch)
 <a href=#66 id=66 data-nosnippet>66</a>                .inspect_err(|err| <span class="macro">debug!</span>(%epoch, %err, <span class="string">"no stake table to draw responders from"</span>))
 <a href=#67 id=67 data-nosnippet>67</a>                .ok()
 <a href=#68 id=68 data-nosnippet>68</a>        })
@@ -110,27 +110,28 @@
 <a href=#110 id=110 data-nosnippet>110</a>            Fetcher::mock(),
 <a href=#111 id=111 data-nosnippet>111</a>            EPOCH_HEIGHT,
 <a href=#112 id=112 data-nosnippet>112</a>            EpochNumber::new(FIRST_EPOCH),
-<a href=#113 id=113 data-nosnippet>113</a>        );
-<a href=#114 id=114 data-nosnippet>114</a>        EpochMembershipCoordinator::new(committees, EPOCH_HEIGHT, <span class="kw-2">&amp;</span>TestStorage::default())
-<a href=#115 id=115 data-nosnippet>115</a>    }
-<a href=#116 id=116 data-nosnippet>116</a>
-<a href=#117 id=117 data-nosnippet>117</a>    <span class="doccomment">/// A node started on an empty database has consensus at the genesis epoch, below the first
-<a href=#118 id=118 data-nosnippet>118</a>    /// epoch, so neither that epoch nor the one before it has a stake table. Its responders must
-<a href=#119 id=119 data-nosnippet>119</a>    /// still come from the stake tables it holds, or every request fails before it is sent.
-<a href=#120 id=120 data-nosnippet>120</a>    </span><span class="attr">#[tokio::test]
-<a href=#121 id=121 data-nosnippet>121</a>    </span><span class="kw">async fn </span>responders_before_the_first_epoch_come_from_the_newest_stake_table() {
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">let </span>membership = responder_membership(<span class="kw-2">&amp;</span>memberships(), EpochNumber::genesis()).unwrap();
-<a href=#123 id=123 data-nosnippet>123</a>
-<a href=#124 id=124 data-nosnippet>124</a>        <span class="macro">assert_eq!</span>(membership.epoch(), <span class="prelude-val">Some</span>(EpochNumber::new(FIRST_EPOCH + <span class="number">1</span>)));
-<a href=#125 id=125 data-nosnippet>125</a>        <span class="macro">assert_eq!</span>(membership.stake_table().len(), STAKERS <span class="kw">as </span>usize);
-<a href=#126 id=126 data-nosnippet>126</a>    }
-<a href=#127 id=127 data-nosnippet>127</a>
-<a href=#128 id=128 data-nosnippet>128</a>    <span class="attr">#[tokio::test]
-<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">async fn </span>responders_come_from_the_current_epoch_when_its_stake_table_is_held() {
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">let </span>membership =
-<a href=#131 id=131 data-nosnippet>131</a>            responder_membership(<span class="kw-2">&amp;</span>memberships(), EpochNumber::new(FIRST_EPOCH)).unwrap();
-<a href=#132 id=132 data-nosnippet>132</a>
-<a href=#133 id=133 data-nosnippet>133</a>        <span class="macro">assert_eq!</span>(membership.epoch(), <span class="prelude-val">Some</span>(EpochNumber::new(FIRST_EPOCH)));
-<a href=#134 id=134 data-nosnippet>134</a>    }
-<a href=#135 id=135 data-nosnippet>135</a>}
+<a href=#113 id=113 data-nosnippet>113</a>        )
+<a href=#114 id=114 data-nosnippet>114</a>        .expect(<span class="string">"genesis without duplicate keys"</span>);
+<a href=#115 id=115 data-nosnippet>115</a>        EpochMembershipCoordinator::new(committees, EPOCH_HEIGHT, <span class="kw-2">&amp;</span>TestStorage::default())
+<a href=#116 id=116 data-nosnippet>116</a>    }
+<a href=#117 id=117 data-nosnippet>117</a>
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="doccomment">/// A node started on an empty database has consensus at the genesis epoch, below the first
+<a href=#119 id=119 data-nosnippet>119</a>    /// epoch, so neither that epoch nor the one before it has a stake table. Its responders must
+<a href=#120 id=120 data-nosnippet>120</a>    /// still come from the stake tables it holds, or every request fails before it is sent.
+<a href=#121 id=121 data-nosnippet>121</a>    </span><span class="attr">#[tokio::test]
+<a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">async fn </span>responders_before_the_first_epoch_come_from_the_newest_stake_table() {
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>membership = responder_membership(<span class="kw-2">&amp;</span>memberships(), EpochNumber::genesis()).unwrap();
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>        <span class="macro">assert_eq!</span>(membership.epoch(), EpochNumber::new(FIRST_EPOCH + <span class="number">1</span>));
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="macro">assert_eq!</span>(membership.stake_table().len(), STAKERS <span class="kw">as </span>usize);
+<a href=#127 id=127 data-nosnippet>127</a>    }
+<a href=#128 id=128 data-nosnippet>128</a>
+<a href=#129 id=129 data-nosnippet>129</a>    <span class="attr">#[tokio::test]
+<a href=#130 id=130 data-nosnippet>130</a>    </span><span class="kw">async fn </span>responders_come_from_the_current_epoch_when_its_stake_table_is_held() {
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw">let </span>membership =
+<a href=#132 id=132 data-nosnippet>132</a>            responder_membership(<span class="kw-2">&amp;</span>memberships(), EpochNumber::new(FIRST_EPOCH)).unwrap();
+<a href=#133 id=133 data-nosnippet>133</a>
+<a href=#134 id=134 data-nosnippet>134</a>        <span class="macro">assert_eq!</span>(membership.epoch(), EpochNumber::new(FIRST_EPOCH));
+<a href=#135 id=135 data-nosnippet>135</a>    }
+<a href=#136 id=136 data-nosnippet>136</a>}
 </code></pre></div></section></main></body></html>

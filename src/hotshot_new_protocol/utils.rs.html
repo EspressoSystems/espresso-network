@@ -73,7 +73,7 @@
 <a href=#73 id=73 data-nosnippet>73</a>    );
 <a href=#74 id=74 data-nosnippet>74</a>
 <a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">let </span>membership = coordinator
-<a href=#76 id=76 data-nosnippet>76</a>        .stake_table_for_epoch(<span class="prelude-val">Some</span>(epoch))
+<a href=#76 id=76 data-nosnippet>76</a>        .stake_table_for_epoch(epoch)
 <a href=#77 id=77 data-nosnippet>77</a>        .map_err(|err| <span class="macro">anyhow!</span>(<span class="string">"no stake table available for epoch {epoch}: {err:?}"</span>))<span class="question-mark">?</span>;
 <a href=#78 id=78 data-nosnippet>78</a>    <span class="kw">let </span>entries = StakeTableEntries::&lt;T&gt;::from_iter(membership.stake_table()).<span class="number">0</span>;
 <a href=#79 id=79 data-nosnippet>79</a>    cert2.is_valid_cert(<span class="kw-2">&amp;</span>entries, membership.success_threshold(), upgrade_lock)<span class="question-mark">?</span>;
@@ -121,7 +121,7 @@
 <a href=#121 id=121 data-nosnippet>121</a>            );
 <a href=#122 id=122 data-nosnippet>122</a>        }
 <a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>membership = coordinator
-<a href=#124 id=124 data-nosnippet>124</a>            .stake_table_for_epoch(<span class="prelude-val">Some</span>(qc_epoch))
+<a href=#124 id=124 data-nosnippet>124</a>            .stake_table_for_epoch(qc_epoch)
 <a href=#125 id=125 data-nosnippet>125</a>            .map_err(|err| <span class="macro">anyhow!</span>(<span class="string">"no stake table available for epoch {qc_epoch}: {err:?}"</span>))<span class="question-mark">?</span>;
 <a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">let </span>entries = StakeTableEntries::&lt;T&gt;::from_iter(membership.stake_table()).<span class="number">0</span>;
 <a href=#127 id=127 data-nosnippet>127</a>        justify_qc.is_valid_cert(<span class="kw-2">&amp;</span>entries, membership.success_threshold(), upgrade_lock)<span class="question-mark">?</span>;

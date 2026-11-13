@@ -289,7 +289,7 @@
 <a href=#289 id=289 data-nosnippet>289</a>        }
 <a href=#290 id=290 data-nosnippet>290</a>        revote.well_formed(epoch_height).wrap()<span class="question-mark">?</span>;
 <a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>leader = memberships
-<a href=#292 id=292 data-nosnippet>292</a>            .membership_for_epoch(<span class="prelude-val">Some</span>(revote.epoch))
+<a href=#292 id=292 data-nosnippet>292</a>            .membership_for_epoch(revote.epoch)
 <a href=#293 id=293 data-nosnippet>293</a>            .wrap()<span class="question-mark">?
 <a href=#294 id=294 data-nosnippet>294</a>            </span>.leader(revote.view)<span class="question-mark">?</span>;
 <a href=#295 id=295 data-nosnippet>295</a>        <span class="macro">ensure!</span> {
@@ -335,7 +335,7 @@
 <a href=#335 id=335 data-nosnippet>335</a>        <span class="string">"timeout certificate lock is not well formed"
 <a href=#336 id=336 data-nosnippet>336</a>    </span>}
 <a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">let </span>epoch = LockView::of(cert).epoch;
-<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">let </span>membership = memberships.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)).wrap()<span class="question-mark">?</span>;
+<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">let </span>membership = memberships.membership_for_epoch(epoch).wrap()<span class="question-mark">?</span>;
 <a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">let </span>entries = StakeTableEntries::from_iter(membership.stake_table()).<span class="number">0</span>;
 <a href=#340 id=340 data-nosnippet>340</a>    verify_signatures(cert, <span class="kw-2">&amp;</span>entries, membership.success_threshold(), upgrade_lock)
 <a href=#341 id=341 data-nosnippet>341</a>}
@@ -416,7 +416,7 @@
 <a href=#416 id=416 data-nosnippet>416</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
 <a href=#417 id=417 data-nosnippet>417</a>        }
 <a href=#418 id=418 data-nosnippet>418</a>
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(membership) = <span class="self">self</span>.membership.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)) <span class="kw">else </span>{
+<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(membership) = <span class="self">self</span>.membership.membership_for_epoch(epoch) <span class="kw">else </span>{
 <a href=#420 id=420 data-nosnippet>420</a>            <span class="self">self</span>.pending_membership
 <a href=#421 id=421 data-nosnippet>421</a>                .entry(key)
 <a href=#422 id=422 data-nosnippet>422</a>                .or_default()
@@ -425,7 +425,7 @@
 <a href=#425 id=425 data-nosnippet>425</a>        };
 <a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">let </span>missing = cert
 <a href=#427 id=427 data-nosnippet>427</a>            .epochs()
-<a href=#428 id=428 data-nosnippet>428</a>            .find(|epoch| <span class="self">self</span>.membership.membership_for_epoch(<span class="prelude-val">Some</span>(<span class="kw-2">*</span>epoch)).is_err());
+<a href=#428 id=428 data-nosnippet>428</a>            .find(|epoch| <span class="self">self</span>.membership.membership_for_epoch(<span class="kw-2">*</span>epoch).is_err());
 <a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(missing) = missing {
 <a href=#430 id=430 data-nosnippet>430</a>            <span class="self">self</span>.pending_membership
 <a href=#431 id=431 data-nosnippet>431</a>                .entry(key)
@@ -645,13 +645,13 @@
 <a href=#645 id=645 data-nosnippet>645</a>            <span class="kw">return </span><span class="prelude-val">None</span>;
 <a href=#646 id=646 data-nosnippet>646</a>        }
 <a href=#647 id=647 data-nosnippet>647</a>
-<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(membership) = <span class="self">self</span>.membership.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)) <span class="kw">else </span>{
+<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(membership) = <span class="self">self</span>.membership.membership_for_epoch(epoch) <span class="kw">else </span>{
 <a href=#649 id=649 data-nosnippet>649</a>            <span class="self">self</span>.pending.insert(sender, cert);
 <a href=#650 id=650 data-nosnippet>650</a>            <span class="kw">return </span><span class="prelude-val">Some</span>(epoch);
 <a href=#651 id=651 data-nosnippet>651</a>        };
 <a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">let </span>missing = cert
 <a href=#653 id=653 data-nosnippet>653</a>            .epochs()
-<a href=#654 id=654 data-nosnippet>654</a>            .find(|epoch| <span class="self">self</span>.membership.membership_for_epoch(<span class="prelude-val">Some</span>(<span class="kw-2">*</span>epoch)).is_err());
+<a href=#654 id=654 data-nosnippet>654</a>            .find(|epoch| <span class="self">self</span>.membership.membership_for_epoch(<span class="kw-2">*</span>epoch).is_err());
 <a href=#655 id=655 data-nosnippet>655</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(missing) = missing {
 <a href=#656 id=656 data-nosnippet>656</a>            <span class="self">self</span>.pending.insert(sender, cert);
 <a href=#657 id=657 data-nosnippet>657</a>            <span class="kw">return </span><span class="prelude-val">Some</span>(missing);
@@ -941,7 +941,7 @@
 <a href=#941 id=941 data-nosnippet>941</a>
 <a href=#942 id=942 data-nosnippet>942</a>    <span class="kw">fn </span>valid_tc(view: u64) -&gt; TimeoutCertificate2&lt;TestTypes&gt; {
 <a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span>epoch = EpochNumber::genesis();
-<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">let </span>membership = mock_membership().membership_for_epoch(<span class="prelude-val">Some</span>(epoch)).unwrap();
+<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">let </span>membership = mock_membership().membership_for_epoch(epoch).unwrap();
 <a href=#945 id=945 data-nosnippet>945</a>        <span class="kw">let </span>(pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>);
 <a href=#946 id=946 data-nosnippet>946</a>        <span class="kw">match </span>build_timeout_cert(
 <a href=#947 id=947 data-nosnippet>947</a>            ViewNumber::new(view),
@@ -974,7 +974,7 @@
 <a href=#974 id=974 data-nosnippet>974</a>
 <a href=#975 id=975 data-nosnippet>975</a>    <span class="kw">fn </span>junk_tc3(view: ViewNumber, epoch: EpochNumber) -&gt; TimeoutCertificate3&lt;TestTypes&gt; {
 <a href=#976 id=976 data-nosnippet>976</a>        <span class="comment">// Signed by a quorum, but over another view than the one it is for.
-<a href=#977 id=977 data-nosnippet>977</a>        </span><span class="kw">let </span>membership = mock_membership().membership_for_epoch(<span class="prelude-val">Some</span>(epoch)).unwrap();
+<a href=#977 id=977 data-nosnippet>977</a>        </span><span class="kw">let </span>membership = mock_membership().membership_for_epoch(epoch).unwrap();
 <a href=#978 id=978 data-nosnippet>978</a>        <span class="kw">let </span><span class="kw-2">mut </span>cert = build_timeout_cert3_with_lock(view + <span class="number">1</span>, epoch, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>membership);
 <a href=#979 id=979 data-nosnippet>979</a>        cert.view_number = view;
 <a href=#980 id=980 data-nosnippet>980</a>        cert
@@ -994,7 +994,7 @@
 <a href=#994 id=994 data-nosnippet>994</a>        <span class="kw">let </span>(pk, sk) = BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>);
 <a href=#995 id=995 data-nosnippet>995</a>        <span class="kw">let </span>cert = |epoch: u64, block: u64| {
 <a href=#996 id=996 data-nosnippet>996</a>            <span class="kw">let </span>epoch = EpochNumber::new(epoch);
-<a href=#997 id=997 data-nosnippet>997</a>            <span class="kw">let </span>membership = coordinator.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)).unwrap();
+<a href=#997 id=997 data-nosnippet>997</a>            <span class="kw">let </span>membership = coordinator.membership_for_epoch(epoch).unwrap();
 <a href=#998 id=998 data-nosnippet>998</a>            <span class="kw">let </span>leaf = committable::RawCommitmentBuilder::new(<span class="string">"leaf"</span>)
 <a href=#999 id=999 data-nosnippet>999</a>                .u64(block)
 <a href=#1000 id=1000 data-nosnippet>1000</a>                .finalize();
@@ -1017,8 +1017,8 @@
 <a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">for </span>e <span class="kw">in </span>[lock_epoch, epoch] {
 <a href=#1018 id=1018 data-nosnippet>1018</a>            known.membership().register_epoch(e, TEST_DRB_RESULT);
 <a href=#1019 id=1019 data-nosnippet>1019</a>        }
-<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="kw">let </span>lock_membership = known.membership_for_epoch(<span class="prelude-val">Some</span>(lock_epoch)).unwrap();
-<a href=#1021 id=1021 data-nosnippet>1021</a>        <span class="kw">let </span>membership = known.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)).unwrap();
+<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="kw">let </span>lock_membership = known.membership_for_epoch(lock_epoch).unwrap();
+<a href=#1021 id=1021 data-nosnippet>1021</a>        <span class="kw">let </span>membership = known.membership_for_epoch(epoch).unwrap();
 <a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span>(pk, sk) = BLSPubKey::generated_from_seed_indexed([<span class="number">0u8</span>; <span class="number">32</span>], <span class="number">0</span>);
 <a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="kw">let </span>leaf = committable::RawCommitmentBuilder::new(<span class="string">"leaf"</span>)
 <a href=#1024 id=1024 data-nosnippet>1024</a>            .u64(<span class="number">29</span>)
@@ -1039,8 +1039,8 @@
 <a href=#1039 id=1039 data-nosnippet>1039</a>            .membership()
 <a href=#1040 id=1040 data-nosnippet>1040</a>            .register_epoch(epoch, TEST_DRB_RESULT);
 <a href=#1041 id=1041 data-nosnippet>1041</a>        <span class="macro">assert!</span>(
-<a href=#1042 id=1042 data-nosnippet>1042</a>            coordinator.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)).is_ok()
-<a href=#1043 id=1043 data-nosnippet>1043</a>                &amp;&amp; coordinator.membership_for_epoch(<span class="prelude-val">Some</span>(lock_epoch)).is_err(),
+<a href=#1042 id=1042 data-nosnippet>1042</a>            coordinator.membership_for_epoch(epoch).is_ok()
+<a href=#1043 id=1043 data-nosnippet>1043</a>                &amp;&amp; coordinator.membership_for_epoch(lock_epoch).is_err(),
 <a href=#1044 id=1044 data-nosnippet>1044</a>            <span class="string">"setup: the certificate's committee is known, the lock's is not"
 <a href=#1045 id=1045 data-nosnippet>1045</a>        </span>);
 <a href=#1046 id=1046 data-nosnippet>1046</a>        <span class="kw">let </span><span class="kw-2">mut </span>verifier = CertBySenderVerifier::&lt;TestTypes, TimeoutCertificate3&lt;TestTypes&gt;&gt;::new(

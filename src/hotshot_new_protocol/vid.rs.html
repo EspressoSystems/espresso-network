@@ -59,7 +59,7 @@
 <a href=#59 id=59 data-nosnippet>59</a>    membership: <span class="kw-2">&amp;</span>EpochMembershipCoordinator&lt;T&gt;,
 <a href=#60 id=60 data-nosnippet>60</a>    epoch: EpochNumber,
 <a href=#61 id=61 data-nosnippet>61</a>) -&gt; <span class="prelude-ty">Option</span>&lt;AvidmGf2Param&gt; {
-<a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">let </span>membership = membership.stake_table_for_epoch(<span class="prelude-val">Some</span>(epoch)).ok()<span class="question-mark">?</span>;
+<a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">let </span>membership = membership.stake_table_for_epoch(epoch).ok()<span class="question-mark">?</span>;
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">let </span>total_weight = vid_total_weight::&lt;T, <span class="kw">_</span>&gt;(membership.stake_table(), <span class="prelude-val">Some</span>(epoch));
 <a href=#64 id=64 data-nosnippet>64</a>    init_avidm_gf2_param(total_weight).ok()
 <a href=#65 id=65 data-nosnippet>65</a>}

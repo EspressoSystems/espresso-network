@@ -292,7 +292,7 @@
 <a href=#292 id=292 data-nosnippet>292</a>        vote: <span class="kw-2">&amp;</span>LightClientStateUpdateVote2&lt;TYPES&gt;,
 <a href=#293 id=293 data-nosnippet>293</a>        membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
 <a href=#294 id=294 data-nosnippet>294</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt; {
-<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">let </span>epoch = membership.epoch()<span class="question-mark">?</span>;
+<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">let </span>epoch = membership.epoch();
 <a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">let </span>threshold = membership.success_threshold();
 <a href=#297 id=297 data-nosnippet>297</a>        <span class="kw">let </span>PeerConfig {
 <a href=#298 id=298 data-nosnippet>298</a>            stake_table_entry,
