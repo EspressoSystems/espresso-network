@@ -305,7 +305,8 @@ pub trait StateCatchup: Send + Sync {
     }
 
     /// The block Merkle root of the header at `lc_contract_state.height`, accepted by
-    /// `LcContractFinalizedState::verify_header`. One attempt. Default: unsupported error.
+    /// `LcContractFinalizedState::verify_header`. One attempt. An implementation returns a verified
+    /// value and the caller installs it without checking again. Default: unsupported error.
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         _retry: usize,
@@ -315,7 +316,8 @@ pub trait StateCatchup: Send + Sync {
     }
 
     /// The header at `height`, proven against `root`, the block Merkle root of the header at
-    /// `root_height`. One attempt. Default: unsupported error.
+    /// `root_height`. One attempt. An implementation returns a verified header and the caller installs
+    /// it without checking again. Default: unsupported error.
     async fn try_fetch_proven_header(
         &self,
         _retry: usize,

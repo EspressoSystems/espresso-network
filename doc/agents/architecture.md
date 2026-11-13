@@ -42,10 +42,11 @@ StakeTable contract for peer discovery.
 
 ## Validator startup
 
-`SequencerContext::init` applies the stored anchor's epoch to cliquenet and dials the active validators at the L1
-finalized block (`Fetcher::validator_set_at`); an error fails startup. Their keys, dialed or already held, are extra
-request-response responders; responders are the table keys and these keys that the network holds at request time.
-`state_peers` is optional for validators.
+`SequencerContext::init` applies the stored anchor's epoch to cliquenet (an error is logged) and dials the active
+validators at the L1 finalized block (`Fetcher::validator_set_at`); an error reading the L1 finalized block or the
+validators, or dialing them, fails startup. Their keys, dialed or already held, are extra request-response
+responders; responders are the table keys and these keys that the network holds at request time. `state_peers` is
+optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
 without one the catchup walks only. The follower has no seed and walks at startup (`bootstrap_epoch_window`).
@@ -54,27 +55,28 @@ A node behind the stored window is caught up by `EpochMembershipCoordinator::cat
 one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
 seed at a time:
 
-1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block; `E* = epoch(F)`. The seed
-   runs when `target > start + 1` and `E* > start + 1`, with `start` the top of the held pair. The window ends at
-   `top = min(E*+1, target)`: only roots below `F` are provable, so never above `E*+1`. The DRB of a target at or
-   below `E*+1` needs `ST(target-1)` and `ST(target-2)`, which are installed or held.
+1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block. `seed_window`
+   (`crates/espresso/types/src/v0/impls/lc_contract.rs`) decides from `F`, the held start and the target whether a seed
+   runs and which tables it installs.
 2. Fetches the header at `F` through the catchup provider (`Fetcher::peers()`, request-response) and accepts it iff
    its height is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
    the preceding root where the reward of the lowest table reads its block time. Each request is up to 5 attempts of
-   one provider bound each (6 s on request-response) with backoff between them. The L1 read and each install are
-   bounded.
-4. Installs `ST(max(top-4, start+1, 3)) ..= ST(top)`, each with a block reward computed from the proven roots, each
-   root bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from `top` up
-   to the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
+   one provider bound each (6 s on request-response) with backoff between them. The backoff is
+   `BackoffParams::default()`: it reads the `ESPRESSO_NODE_CATCHUP_BACKOFF_*` environment variables, not the
+   `--catchup-*` flags, and with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a request makes one attempt. The L1 read
+   and each install are bounded.
+4. Installs the tables of the `seed_window`, each with a block reward computed from the proven roots, each root
+   bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from the top of
+   the window up to the target; `drb_ready` supplies the target's DRB.
 5. State peers (`--state-peers`) are the second source of each request, through `ParallelStateCatchup`: asked
    `--http-catchup-delay` after the request starts, at once when request-response is not registered. The root header
    is read from `/v1/catchup/{F}/leafchain`, a proof from `/v1/light-client/header/{F}/{height}`; both are verified
    before they are accepted. Peers are asked in `PeerScore` order, each under `--catchup-base-timeout`; the first
    verified answer of either source wins.
 
-An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held
-start; installed tables are present and skipped.
+An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
+tables are present and skipped.
 
 ## Consensus upgrades
 

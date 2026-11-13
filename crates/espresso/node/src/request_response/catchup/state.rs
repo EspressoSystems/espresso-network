@@ -13,7 +13,6 @@ use espresso_types::{
         forgotten_accounts_include,
     },
 };
-use futures::FutureExt;
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
@@ -177,38 +176,29 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         "request-response".to_string()
     }
 
-    /// `Request::Leaf(height)` under `request_batch_interval * 3`; an answer `verify_header`
-    /// rejects is skipped and the request keeps waiting.
+    /// `Request::Leaf(height)` under `request_batch_interval * 3`; an answer
+    /// `verified_lc_contract_root` rejects is skipped and the request keeps waiting.
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         _retry: usize,
         lc_contract_state: &LcContractFinalizedState,
     ) -> anyhow::Result<BlockMerkleCommitment> {
         let timeout_duration = self.config.request_batch_interval * 3;
-        let checked_state = lc_contract_state.clone();
+        let lc_contract_state = lc_contract_state.clone();
         let request = self.request_indefinitely(
             Request::Leaf(lc_contract_state.height),
             move |_: &Request, response: Response| {
-                let lc_contract_state = checked_state.clone();
-                async move {
-                    let Response::Leaf(leaves) = response else {
-                        bail!("expected leaf response");
-                    };
-                    let header = leaves.first().context("empty leaf chain")?.block_header();
-                    lc_contract_state.verify_header(header)
-                }
-                .map(|result| {
-                    result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
-                })
+                let result = verified_lc_contract_root(&lc_contract_state, response);
+                async move { result }
             },
         );
         Ok(timeout(timeout_duration, request)
             .await
-            .with_context(|| "timed out while fetching the LC contract header")??)
+            .context("timed out while fetching the LC contract header")??)
     }
 
     /// `Request::HeaderProof { root: root_height, height }` under `request_batch_interval * 3`; an
-    /// answer `verify_at_height` rejects is skipped.
+    /// answer `verified_proven_header` rejects is skipped.
     async fn try_fetch_proven_header(
         &self,
         _retry: usize,
@@ -223,20 +213,13 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                 height,
             },
             move |_: &Request, response: Response| {
-                async move {
-                    let Response::HeaderProof(proof) = response else {
-                        bail!("expected header proof response");
-                    };
-                    proof.verify_at_height(root, height)
-                }
-                .map(|result| {
-                    result.inspect_err(|err| tracing::debug!("header proof rejected: {err:#}"))
-                })
+                let result = verified_proven_header(root, height, response);
+                async move { result }
             },
         );
         Ok(timeout(timeout_duration, request)
             .await
-            .with_context(|| "timed out while fetching the header proof")??)
+            .context("timed out while fetching the header proof")??)
     }
 
     async fn fetch_accounts(
@@ -586,5 +569,184 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
     fn is_local(&self) -> bool {
         false
+    }
+}
+
+/// The block Merkle root of the header the leaf chain in `response` starts with, if
+/// `lc_contract_state` accepts that header.
+fn verified_lc_contract_root(
+    lc_contract_state: &LcContractFinalizedState,
+    response: Response,
+) -> anyhow::Result<BlockMerkleCommitment> {
+    let Response::Leaf(leaves) = response else {
+        bail!("expected leaf response");
+    };
+    let header = leaves.first().context("empty leaf chain")?.block_header();
+    lc_contract_state.verify_header(header)
+}
+
+/// The header in `response`, if its proof verifies against `root` and it is at `height`.
+fn verified_proven_header(
+    root: BlockMerkleCommitment,
+    height: u64,
+    response: Response,
+) -> anyhow::Result<Header> {
+    let Response::HeaderProof(proof) = response else {
+        bail!("expected header proof response");
+    };
+    proof.verify_at_height(root, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot_query_service::availability::BlockId;
+    use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
+    use light_client::{client::Client, testing::TestClient};
+
+    use super::*;
+
+    const EPOCH_HEIGHT: u64 = 10;
+    const LC_CONTRACT_HEIGHT: usize = 62;
+
+    /// A client with a chain past `LC_CONTRACT_HEIGHT` and the contract state at that height.
+    async fn client_and_state() -> (TestClient, LcContractFinalizedState) {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let leaf = client.leaf(LC_CONTRACT_HEIGHT).await;
+        let lc_contract_state = LcContractFinalizedState {
+            height: LC_CONTRACT_HEIGHT as u64,
+            block_comm_root: leaf
+                .header()
+                .get_light_client_state(ViewNumber::new(0))
+                .unwrap()
+                .block_comm_root,
+        };
+        (client, lc_contract_state)
+    }
+
+    async fn leaf_response(client: &TestClient, height: usize) -> Response {
+        Response::Leaf(vec![client.leaf(height).await.leaf().clone()])
+    }
+
+    async fn proof_response(client: &TestClient, height: usize) -> Response {
+        let proof = client
+            .header_proof(LC_CONTRACT_HEIGHT as u64, BlockId::Number(height))
+            .await
+            .unwrap();
+        Response::HeaderProof(Box::new(proof))
+    }
+
+    /// The root of a leaf at the contract height is accepted.
+    #[tokio::test]
+    async fn lc_contract_root_accepts_the_contract_header_ok() {
+        let (client, state) = client_and_state().await;
+        let response = leaf_response(&client, LC_CONTRACT_HEIGHT).await;
+
+        let root = verified_lc_contract_root(&state, response).unwrap();
+
+        let header = client.leaf(LC_CONTRACT_HEIGHT).await;
+        assert_eq!(root, header.header().block_merkle_tree_root());
+    }
+
+    /// A response of another variant is rejected.
+    #[tokio::test]
+    async fn lc_contract_root_wrong_variant_fails() {
+        let (client, state) = client_and_state().await;
+        let response = proof_response(&client, 15).await;
+
+        let err = verified_lc_contract_root(&state, response).unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("expected leaf response"),
+            "{err:#}"
+        );
+    }
+
+    /// A header whose block Merkle root differs from the contract's commitment is rejected.
+    #[tokio::test]
+    async fn lc_contract_root_mismatched_commitment_fails() {
+        let (client, mut state) = client_and_state().await;
+        state.block_comm_root = client
+            .leaf(LC_CONTRACT_HEIGHT - 1)
+            .await
+            .header()
+            .get_light_client_state(ViewNumber::new(0))
+            .unwrap()
+            .block_comm_root;
+        let response = leaf_response(&client, LC_CONTRACT_HEIGHT).await;
+
+        let err = verified_lc_contract_root(&state, response).unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("does not match the LC contract"),
+            "{err:#}"
+        );
+    }
+
+    /// A proof of the asked height is accepted.
+    #[tokio::test]
+    async fn proven_header_accepts_the_asked_height_ok() {
+        let (client, _) = client_and_state().await;
+        let root = client
+            .leaf(LC_CONTRACT_HEIGHT)
+            .await
+            .header()
+            .block_merkle_tree_root();
+        let response = proof_response(&client, 15).await;
+
+        let header = verified_proven_header(root, 15, response).unwrap();
+
+        assert_eq!(header.height(), 15);
+    }
+
+    /// A response of another variant is rejected.
+    #[tokio::test]
+    async fn proven_header_wrong_variant_fails() {
+        let (client, _) = client_and_state().await;
+        let root = client
+            .leaf(LC_CONTRACT_HEIGHT)
+            .await
+            .header()
+            .block_merkle_tree_root();
+        let response = leaf_response(&client, 15).await;
+
+        let err = verified_proven_header(root, 15, response).unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("expected header proof response"),
+            "{err:#}"
+        );
+    }
+
+    /// A valid proof for another height than asked is rejected.
+    #[tokio::test]
+    async fn proven_header_wrong_height_fails() {
+        let (client, _) = client_and_state().await;
+        let root = client
+            .leaf(LC_CONTRACT_HEIGHT)
+            .await
+            .header()
+            .block_merkle_tree_root();
+        let response = proof_response(&client, 16).await;
+
+        let err = verified_proven_header(root, 15, response).unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("header proof is for height 16, expected 15"),
+            "{err:#}"
+        );
+    }
+
+    /// A proof against another root is rejected.
+    #[tokio::test]
+    async fn proven_header_wrong_root_fails() {
+        let (client, _) = client_and_state().await;
+        let root = client
+            .leaf(LC_CONTRACT_HEIGHT - 1)
+            .await
+            .header()
+            .block_merkle_tree_root();
+        let response = proof_response(&client, 15).await;
+
+        verified_proven_header(root, 15, response).unwrap_err();
     }
 }

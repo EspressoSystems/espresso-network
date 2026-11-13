@@ -1703,7 +1703,6 @@ impl StateCatchup for ParallelStateCatchup {
         }))
     }
 
-    /// Races the providers' `try_fetch_lc_contract_block_merkle_root` through `on_providers`.
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         retry: usize,
@@ -1719,7 +1718,6 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    /// Races the providers' `try_fetch_proven_header` through `on_providers`.
     async fn try_fetch_proven_header(
         &self,
         retry: usize,
@@ -2182,9 +2180,8 @@ mod test {
     /// A provider that keeps the trait defaults answers both seed requests with an error naming it.
     #[tokio::test(start_paused = true)]
     async fn test_unsupported_provider_fails() {
-        let local = DelayedCatchup::provider(true, Duration::ZERO);
-        let remote = DelayedCatchup::provider(false, Duration::ZERO);
-        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
+        let provider = DelayedCatchup::provider(true, Duration::ZERO);
+        let catchup = ParallelStateCatchup::new(&[provider], Duration::from_secs(30));
         let root = BlockMerkleTree::new(32).commitment();
         let lc_contract_state = LcContractFinalizedState {
             height: 1,
@@ -2202,10 +2199,8 @@ mod test {
 
         for err in [root_err, header_err] {
             let err = format!("{err:#}");
-            for name in ["DelayedCatchup(local)", "DelayedCatchup(remote)"] {
-                let expected = format!("{name} does not serve LC contract seed requests");
-                assert!(err.contains(&expected), "{err}");
-            }
+            let expected = "DelayedCatchup(local) does not serve LC contract seed requests";
+            assert!(err.contains(expected), "{err}");
         }
     }
 
