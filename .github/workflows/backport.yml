@@ -104,7 +104,20 @@ jobs:
           for pr in $pr_numbers; do
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
             git fetch origin "$branch"
-            if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
+            # Files scripts/backport-dispatch flagged because git left them without markers. Read
+            # them only from its own commit, whose subject it writes exactly like this: after a
+            # clean cherry-pick the tip is the original commit, whose message can carry copied
+            # trailers.
+            spec=${branch#backport-}
+            dispatch_subject="backport: cherry-pick #${spec%%-to-*} to ${spec#*-to-}"
+            flagged=""
+            if [[ "$(git log -1 --format=%s "origin/$branch")" == "$dispatch_subject" ]]; then
+              flagged=$(git log -1 --format='%(trailers:key=Backport-Missing,key=Backport-Deleted,key=Backport-Unresolved)' "origin/$branch")
+            fi
+            if [ -n "$flagged" ]; then
+              printf 'PR #%s:\n%s\n' "$pr" "$flagged" >> "$RUNNER_TEMP/flagged-files.txt"
+            fi
+            if [ -n "$flagged" ] || git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
               needs_claude="$needs_claude $pr"
             else
               gh pr ready "$pr" || true
@@ -125,8 +138,9 @@ jobs:
           # Read the prompt from the triggering commit: the working tree is now on
           # the backport branch, which may predate this file.
           prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
-          prompt=$(printf 'Mergiraf left conflict markers in these backport PRs:\n%s\n\n%s' \
-            "$NEEDS_CLAUDE" "$prompt_body")
+          flagged_files=$(cat "$RUNNER_TEMP/flagged-files.txt" 2>/dev/null || echo none)
+          prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles without conflict markers, per PR:\n%s\n\n%s' \
+            "$NEEDS_CLAUDE" "$flagged_files" "$prompt_body")
           claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
 
       - name: Install protoc
