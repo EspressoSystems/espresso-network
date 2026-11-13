@@ -24,7 +24,6 @@ ark-ed-on-bn254 = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
-async-broadcast = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
@@ -59,12 +58,9 @@ serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
-test-utils = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
 typenum = { workspace = true }
 url = { workspace = true }

@@ -28,3 +28,5 @@ tokio      = { workspace = true, features = ["test-util"] }
 [[bench]]
 name = "bench1"
 harness = false
+
+[lints]
