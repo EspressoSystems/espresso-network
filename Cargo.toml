@@ -48,8 +48,9 @@ members = [
     "tests",
 ]
 
-# All crates except espresso-dev-node, crypto-helper and fuzz.
+# All crates except espresso-dev-node, hotshot-new-protocol-bench, crypto-helper and fuzz.
 # espresso-dev-node: enables the espresso-node testing feature
+# hotshot-new-protocol-bench: enables the hotshot-new-protocol testing feature
 # crypto-helper: vendored openssl leaks to workspace via feature unification
 # fuzz: compiles libFuzzer, and is run through cargo-fuzz
 default-members = [
@@ -74,7 +75,6 @@ default-members = [
     "crates/hotshot-state-prover",
     "crates/hotshot/example-types",
     "crates/hotshot/new-protocol",
-    "crates/hotshot/new-protocol/bench",
     "crates/hotshot/orchestrator",
     "crates/hotshot/types",
     "crates/hotshot/utils",

@@ -50,6 +50,7 @@ jobs:
           - binary: espresso-node
           - binary: other
           - binary: espresso-dev-node
+          - binary: new-protocol-bench-node
 
     steps:
       - uses: actions/checkout@v7
@@ -120,6 +121,7 @@ jobs:
           - binary: espresso-node
           - binary: other
           - binary: espresso-dev-node
+          - binary: new-protocol-bench-node
 
     steps:
       - uses: actions/checkout@v7

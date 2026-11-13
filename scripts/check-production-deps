@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
-# Fail if a test-only crate is a normal dependency of a package that ships a binary.
+# Fail if a workspace default member has a test-only crate as a normal dependency.
 #
-# cargo-udeps (.github/workflows/unused-deps.yml) runs with --all-targets, so a normal
-# dependency that only tests use counts as used there; this check covers that gap.
+# The release binaries are built from the default members (scripts/ci-build-binary), and Cargo
+# merges features across the packages of one build. So the graph is resolved over all default
+# members at once: a `testing` feature that one package turns on reaches the others. cargo-udeps
+# (.github/workflows/unused-deps.yml) runs with --all-targets and counts a normal dependency
+# that only tests use as used; this check covers that gap.
+#
+# espresso-dev-node and hotshot-new-protocol-bench are not default members: both are built on
+# test doubles on purpose, in builds of their own.
 set -euo pipefail
-
-# espresso-dev-node is left out: it is built on the node's `testing` feature on purpose.
-shipped=(
-    deployment-info
-    espresso-contract-deployer
-    espresso-deploy
-    espresso-node
-    hotshot-state-prover
-    light-client-query-service
-    node-metrics
-    query-watchdog
-    staking-cli
-)
 
 test_only=(
     hotshot-example-types
@@ -24,13 +17,23 @@ test_only=(
     test-utils
 )
 
+is_test_only() {
+    local name
+    for name in "${test_only[@]}"; do
+        [ "$name" = "$1" ] && return 0
+    done
+    return 1
+}
+
 status=0
-for pkg in "${shipped[@]}"; do
-    graph=$(cargo tree --locked -p "$pkg" -e normal --prefix none)
-    for crate in "${test_only[@]}"; do
-        if grep -q "^$crate " <<<"$graph"; then
-            echo "error: test-only crate $crate is a normal dependency of $pkg" >&2
-            echo "       see: cargo tree -p $pkg -e normal -i $crate" >&2
+for crate in "${test_only[@]}"; do
+    # Direct dependents through normal edges; the first line is the crate itself.
+    dependents=$(cargo tree --locked -e normal --prefix none --depth 1 -i "$crate" \
+        | tail -n +2 | awk '{print $1}' | sort -u)
+    for dependent in $dependents; do
+        if ! is_test_only "$dependent"; then
+            echo "error: $dependent has the test-only crate $crate as a normal dependency" >&2
+            echo "       see: cargo tree -e normal -i $crate" >&2
             status=1
         fi
     done
