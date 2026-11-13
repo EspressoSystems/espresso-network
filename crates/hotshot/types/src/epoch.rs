@@ -18,7 +18,7 @@ const TRANSITION_DISTANCE: u64 = 3;
 
 /// A mathematical epoch length. A length of [`ROOT_DISTANCE`] blocks or fewer still assigns
 /// heights to epochs, but holds no root and therefore no transition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct EpochLength(NonZeroU64);
 
 impl EpochLength {
