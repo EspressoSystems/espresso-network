@@ -75,10 +75,6 @@ impl EpochLength {
         self.block_before_boundary(epoch, TRANSITION_DISTANCE)
     }
 
-    pub fn boundary_at_or_before(self, height: BlockNumber) -> BlockNumber {
-        BlockNumber::new(*height - *height % self.get())
-    }
-
     pub fn position(self, height: BlockNumber) -> EpochPosition {
         EpochPosition {
             length: self,
@@ -404,10 +400,6 @@ mod tests {
         }
         assert_eq!(length.first_block(epoch(1)), Ok(height(0)));
         assert_eq!(length.first_block(epoch(2)), Ok(height(11)));
-        assert_eq!(length.boundary_at_or_before(height(0)), height(0));
-        assert_eq!(length.boundary_at_or_before(height(9)), height(0));
-        assert_eq!(length.boundary_at_or_before(height(10)), height(10));
-        assert_eq!(length.boundary_at_or_before(height(11)), height(10));
     }
 
     #[test]
@@ -663,10 +655,6 @@ mod tests {
             let expected = if h == 0 { 1 } else { (h as u128).div_ceil(blocks as u128) };
             let epoch = length.epoch_of(height(h));
             if *epoch as u128 != expected || length.position(height(h)).epoch() != epoch {
-                return false;
-            }
-            let boundary = length.boundary_at_or_before(height(h));
-            if *boundary > h || !boundary.is_multiple_of(blocks) || h - *boundary >= blocks {
                 return false;
             }
             let first = length.first_block(epoch).unwrap();
