@@ -1939,12 +1939,9 @@ impl Fetcher {
             },
         };
 
-        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version) {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                bail!("failed to construct stake table {e:?}");
-            },
-        }
+        // The source error stays in the chain so callers can downcast to `StakeTableError`.
+        ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version)
+            .context("failed to construct stake table")
     }
 
     /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
