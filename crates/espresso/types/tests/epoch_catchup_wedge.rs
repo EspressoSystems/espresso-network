@@ -638,7 +638,7 @@ async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
                         .membership()
                         .load_stake_table(EpochNumber::new(epoch))
                         .await;
-                    loaded.lock().push((epoch, found));
+                    loaded.lock().push((epoch, found.is_some()));
                 }
                 Ok(EpochNumber::new(TARGET_EPOCH - 1))
             })
