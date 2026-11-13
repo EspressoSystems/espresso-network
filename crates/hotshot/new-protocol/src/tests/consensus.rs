@@ -2561,14 +2561,12 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     // Process views 1-3 fully → locked_qc = cert1 for view 3
-    for i in 0..3 {
+    for view in &test_data.views[..3] {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
     }
 
     // Receive timeout cert for view 3 → view advances to 4.
