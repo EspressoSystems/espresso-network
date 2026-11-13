@@ -1,6 +1,6 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use anyhow::Context;
 use espresso_types::{
@@ -113,35 +113,24 @@ async fn fetch_headers(
     preceding_height: Option<u64>,
     proven_heights: Vec<u64>,
 ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
-    // Not `peers.backoff()`: disabled on `ParallelStateCatchup`, unreachable on request-response.
-    let backoff = BackoffParams::default();
-    let root = backoff
-        .retry_if(
-            SEED_REQUEST_RETRIES,
-            |_| true,
-            || peers.try_fetch_lc_contract_block_merkle_root(0, lc_contract_state),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "fetching the LC contract header at height {}",
-                lc_contract_state.height
-            )
-        })?;
+    let root =
+        retry_request(|| peers.try_fetch_lc_contract_block_merkle_root(0, lc_contract_state))
+            .await
+            .with_context(|| {
+                format!(
+                    "fetching the LC contract header at height {}",
+                    lc_contract_state.height
+                )
+            })?;
     let heights = preceding_height.into_iter().chain(proven_heights);
     let mut headers: Vec<Header> = stream::iter(heights)
         .map(|height| {
-            backoff
-                .retry_if(
-                    SEED_REQUEST_RETRIES,
-                    |_| true,
-                    move || {
-                        peers.try_fetch_proven_header(0, lc_contract_state.height, root, height)
-                    },
-                )
-                .map(move |result| {
-                    result.with_context(|| format!("fetching the header proof at height {height}"))
-                })
+            retry_request(move || {
+                peers.try_fetch_proven_header(0, lc_contract_state.height, root, height)
+            })
+            .map(move |result| {
+                result.with_context(|| format!("fetching the header proof at height {height}"))
+            })
         })
         .buffered(MAX_CONCURRENT_REQUESTS)
         .try_collect()
@@ -150,11 +139,23 @@ async fn fetch_headers(
     Ok((preceding, headers))
 }
 
+/// `request` with up to `SEED_REQUEST_RETRIES` retries.
+async fn retry_request<T, Fut>(request: impl Fn() -> Fut) -> anyhow::Result<T>
+where
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    // Not `peers.backoff()`: disabled on `ParallelStateCatchup`, unreachable on request-response.
+    BackoffParams::default()
+        .retry_if(SEED_REQUEST_RETRIES, |_| true, request)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use espresso_types::v0::mock::MockStateCatchup;
     use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
     use light_client::testing::TestClient;
+    use rstest::rstest;
 
     use super::*;
 
@@ -201,38 +202,28 @@ mod tests {
         assert_eq!(preceding.map(|root| root.height()), Some(5));
     }
 
-    /// A request that fails twice succeeds on its third attempt.
+    /// A request is retried up to `SEED_REQUEST_RETRIES` times, then the error surfaces.
+    #[rstest]
+    #[case::retried_ok(2, 3, true)]
+    #[case::bounded_fails(usize::MAX, SEED_REQUEST_RETRIES as usize + 1, false)]
     #[tokio::test(start_paused = true)]
-    async fn fetch_headers_retries_a_failed_request_ok() {
+    async fn fetch_headers_retries_failed_request(
+        #[case] failing_calls: usize,
+        #[case] expected_calls: usize,
+        #[case] expect_ok: bool,
+    ) {
         let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
-        let peers = peers.with_failing_seed_calls(2);
+        let peers = peers.with_failing_seed_calls(failing_calls);
 
-        let (preceding, roots) = fetch_headers(&peers, &lc_contract_state, None, vec![15])
-            .await
-            .unwrap();
+        let result = fetch_headers(&peers, &lc_contract_state, None, vec![15]).await;
 
-        assert!(preceding.is_none());
-        assert_eq!(roots.len(), 1);
-        assert_eq!(peers.proven_header_calls(), 3);
-    }
-
-    /// A request that always fails errors after `SEED_REQUEST_RETRIES + 1` calls.
-    #[tokio::test(start_paused = true)]
-    async fn fetch_headers_attempts_are_bounded_fails() {
-        let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
-        let peers = peers.with_failing_seed_calls(usize::MAX);
-
-        let err = fetch_headers(&peers, &lc_contract_state, None, vec![15])
-            .await
-            .unwrap_err();
-
-        assert!(
-            format!("{err:#}").contains("the header proof at height 15"),
-            "{err:#}"
-        );
-        assert_eq!(
-            peers.proven_header_calls(),
-            SEED_REQUEST_RETRIES as usize + 1
-        );
+        assert_eq!(result.is_ok(), expect_ok, "{result:?}");
+        if let Err(err) = result {
+            assert!(
+                format!("{err:#}").contains("the header proof at height 15"),
+                "{err:#}"
+            );
+        }
+        assert_eq!(peers.proven_header_calls(), expected_calls);
     }
 }
