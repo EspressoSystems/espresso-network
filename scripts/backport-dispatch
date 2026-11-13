@@ -9,17 +9,34 @@ fi
 pr_number="$1"
 target_branch="$2"
 
+# Whoever can label a PR sets the target, so allow a plain branch name only, never a git option.
+if [[ ! "${target_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+  echo "invalid target branch: ${target_branch}" >&2
+  exit 1
+fi
+
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
 : "${GH_TOKEN:?GH_TOKEN is not set}"
 
-meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit \
-  -q '{state,title,sha:.mergeCommit.oid}')
+meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit,commits \
+  -q '{state,title,sha:.mergeCommit.oid,commits:(.commits | length)}')
 if [[ "$(jq -r '.state' <<<"${meta}")" != "MERGED" ]]; then
   echo "PR #${pr_number} is not merged; refusing to backport" >&2
   exit 1
 fi
 title=$(jq -r '.title' <<<"${meta}")
 sha=$(jq -r '.sha' <<<"${meta}")
+commits=$(jq -r '.commits' <<<"${meta}")
+
+# The cherry-pick below takes only the merge commit, which holds the whole change only after a
+# squash merge. GitHub titles a squash commit "<PR title> (#<number>)".
+subject=$(git log -1 --format=%s "${sha}")
+if git rev-parse -q --verify "${sha}^2" >/dev/null ||
+  [[ "${commits}" -gt 1 && "${subject}" != *"(#${pr_number})" ]]; then
+  echo "PR #${pr_number} was not squash-merged, so ${sha} does not hold the whole change;" \
+    "backport it by hand" >&2
+  exit 1
+fi
 
 echo "backporting PR #${pr_number} (${sha}) to ${target_branch}"
 
@@ -38,16 +55,55 @@ cherry_status=0
 git cherry-pick -x "${sha}" || cherry_status=$?
 
 if [[ "${cherry_status}" -ne 0 ]]; then
-  mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
+  # -z: raw paths. Without it, git quotes non-ASCII paths and `git add` cannot match them.
+  mapfile -d '' -t conflicted < <(git diff -z --name-only --diff-filter=U)
 
   if [[ ${#conflicted[@]} -eq 0 ]]; then
     echo "cherry-pick failed (status ${cherry_status}) with no conflicted paths" >&2
     exit 1
   fi
 
-  git add -- "${conflicted[@]}"
-  git commit -m "backport: cherry-pick #${pr_number} to ${target_branch}" \
-             -m "Cherry-picked from ${sha}; conflict markers committed for resolution."
+  # Name each conflict that markers alone do not show in a trailer, for the resolution step. A
+  # file changed on one side and deleted on the other (DU, UD) gets no markers; committing it as
+  # git leaves it would keep the source branch's whole copy of a file the target lacks, or a file
+  # the original PR deleted, so it is removed.
+  mapfile -d '' -t status < <(git status --porcelain -z --untracked-files=no)
+  trailers=()
+  for ((i = 0; i < ${#status[@]}; i++)); do
+    entry="${status[i]}"
+    path="${entry:3}"
+    case "${entry:0:2}" in
+      DU)
+        trailers+=(--trailer "Backport-Missing: ${path}")
+        git --literal-pathspecs rm -q -f -- "${path}"
+        ;;
+      UD)
+        trailers+=(--trailer "Backport-Deleted: ${path}")
+        git --literal-pathspecs rm -q -f -- "${path}"
+        ;;
+      # Both sides renamed the file: it is present under both names, with markers in both when
+      # the merge driver merged the content.
+      AU | UA) trailers+=(--trailer "Backport-Unresolved: ${path}") ;;
+      # A binary file or a symlink keeps the target's version, with no markers. -I: a binary file
+      # never counts as having markers.
+      UU | AA)
+        if [[ -L "${path}" ]] || { [[ -f "${path}" ]] && ! grep -q -I -e '^<<<<<<< ' -- "${path}"; }; then
+          trailers+=(--trailer "Backport-Unresolved: ${path}")
+        fi
+        ;;
+      # A rename or copy carries its source path in the next entry.
+      R? | C? | ?R | ?C) i=$((i + 1)) ;;
+    esac
+  done
+
+  mapfile -d '' -t conflicted < <(git diff -z --name-only --diff-filter=U)
+  if [[ ${#conflicted[@]} -gt 0 ]]; then
+    git --literal-pathspecs add -- "${conflicted[@]}"
+  fi
+  # --allow-empty: removing the files above can leave nothing to commit.
+  git commit --allow-empty -m "backport: cherry-pick #${pr_number} to ${target_branch}" \
+             -m "Cherry-picked from ${sha}; conflicts committed for resolution." \
+             ${trailers[@]+"${trailers[@]}"}
 fi
 
 git push -u origin "${branch}"
