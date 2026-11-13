@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt::{Debug, Display},
     future::Future,
     path::PathBuf,
@@ -11,8 +11,9 @@ use anyhow::{Context, ensure};
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
+    v0_3::StakeTableError,
 };
 use futures::{
     future::join_all,
@@ -21,14 +22,15 @@ use futures::{
 use hotshot_new_protocol::{
     coordinator::Coordinator,
     leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
-    network::{Cliquenet, NetworkError},
+    network::{Cliquenet, NetworkError, Role},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     HotShotConfig, PeerConfig, ValidatorConfig,
+    addr::NetAddr,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::drb_difficulty_selector,
     epoch_membership::EpochMembershipCoordinator,
     initializer::{HotShotInitializer, load_start_epoch_info},
@@ -40,6 +42,7 @@ use hotshot_types::{
         metrics::{Counter, Gauge, Histogram, Metrics},
     },
     upgrade_config::UpgradeConfig,
+    x25519,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -61,6 +64,7 @@ use crate::{
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
+    lc_contract_seed::LcContractSeed,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         RequestResponseProtocol,
@@ -68,7 +72,6 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::bootstrap_epoch_window,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 
@@ -138,7 +141,6 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
         leader_trace_dir: Option<PathBuf>,
@@ -175,25 +177,24 @@ where
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
-        let epoch_height = initializer.epoch_height();
-
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
+
+        // Before the anchor `apply_epoch` in `connect_startup_peers`, which can start a catchup.
+        if let Some(seed) = LcContractSeed::new(&instance_state.chain_config, metrics) {
+            seed.install(&membership_coordinator);
+        }
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
-        let current_epoch = bootstrap_epoch_window(
+        let l1_finalized_peers = connect_startup_peers(
+            &mut coordinator_network,
             &membership_coordinator,
-            epoch_height,
-            bootstrap_epoch_catchup_timeout,
+            &initializer,
+            version,
+            pub_key,
         )
-        .await
-        .context("startup stake-table catchup failed")?;
-        tracing::info!(%current_epoch, "Startup catchup complete");
-
-        // For cliquenet this dials the N-1/N/N+1 epoch window before consensus starts.
-        if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
-            tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
-        }
+        .await?;
+        let network_sender = coordinator_network.sender().clone();
 
         // Restore the persisted lock so the new protocol resumes with the lock
         // it actually held, not the older decided-anchor QC.
@@ -301,9 +302,11 @@ where
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
             RecipientSource {
-                memberships: membership_coordinator,
+                memberships: membership_coordinator.clone(),
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
+                l1_finalized_peers,
+                network: network_sender,
             },
             DataSource {
                 node_state: instance_state.clone(),
@@ -605,6 +608,113 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
         .decided_upgrade_cert()
         .map(|cert| cert.data.new_version)
         .unwrap_or(upgrade_lock.upgrade().base)
+}
+
+/// Applies the stored anchor's epoch to `network` and dials the active validators at the L1
+/// finalized block that it does not hold. Returns the keys of all of them with connect info,
+/// without `own_key`.
+///
+/// Held keys keep the connect info of the held tables, which may be older than L1's. A dial error
+/// fails startup. The first `apply_epoch` for a higher epoch with a table drops the dialed peers
+/// outside that epoch's window.
+async fn connect_startup_peers(
+    network: &mut Cliquenet<SeqTypes>,
+    membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    initializer: &HotShotInitializer<SeqTypes>,
+    version: Version,
+    own_key: PubKey,
+) -> anyhow::Result<Vec<PubKey>> {
+    // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
+    let anchor_epoch = initializer
+        .anchor_leaf()
+        .epoch(initializer.epoch_height())
+        .unwrap_or_else(EpochNumber::genesis);
+    if let Err(err) = network.apply_epoch(anchor_epoch, membership_coordinator) {
+        tracing::warn!(%anchor_epoch, %err, "coordinator apply_epoch failed at startup");
+    }
+
+    let instance_state = initializer.instance_state();
+    if instance_state.chain_config.stake_table_contract.is_none() {
+        return Ok(Vec::new());
+    }
+
+    let started = Instant::now();
+    let held = network.sender().peer_keys();
+    let l1_finalized_peers = {
+        let l1_block = instance_state
+            .l1_client
+            .finalized_number_within_wait()
+            .await
+            .context("dialing the validators active on L1")?;
+        let validators = match membership_coordinator
+            .membership()
+            .fetcher()
+            .validator_set_at(l1_block, version)
+            .await
+        {
+            Ok(set) => set
+                .active_validators()
+                .values()
+                .map(|validator| {
+                    (
+                        *validator.stake_table_key(),
+                        validator.x25519_key,
+                        validator.p2p_addr.clone(),
+                    )
+                })
+                .collect(),
+            Err(err) if is_no_valid_validators(&err) => Vec::new(),
+            Err(err) => return Err(err.context("dialing the validators active on L1")),
+        };
+        let (l1_active_keys, targets) =
+            startup_dial_targets(&own_key, validators.into_iter(), &held);
+        let targets = targets
+            .into_iter()
+            .map(|(key, (x25519_key, addr))| (key, (x25519_key.into(), addr)))
+            .collect();
+        network
+            .add_peers(Role::Active, targets)
+            .context("dialing the validators active on L1")?;
+        l1_active_keys
+    };
+    info!(
+        target: "announce::catchup",
+        %anchor_epoch,
+        l1_finalized_peers = l1_finalized_peers.len(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "startup peers"
+    );
+    Ok(l1_finalized_peers)
+}
+
+/// Whether `err` is the stake table having no valid validator, which leaves nothing to dial.
+fn is_no_valid_validators(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<StakeTableError>(),
+        Some(StakeTableError::NoValidValidators)
+    )
+}
+
+/// A validator key with its x25519 key and address.
+type DialTarget = (PubKey, (x25519::PublicKey, NetAddr));
+
+/// The keys of the `validators` other than `own_key` that have an x25519 key and an address, and
+/// the `(key, (x25519 key, address))` of those that `held` lacks.
+fn startup_dial_targets(
+    own_key: &PubKey,
+    validators: impl Iterator<Item = (PubKey, Option<x25519::PublicKey>, Option<NetAddr>)>,
+    held: &HashSet<PubKey>,
+) -> (Vec<PubKey>, Vec<DialTarget>) {
+    let connectable: Vec<_> = validators
+        .filter(|(key, ..)| key != own_key)
+        .filter_map(|(key, x25519_key, p2p_addr)| Some((key, (x25519_key?, p2p_addr?))))
+        .collect();
+    let keys = connectable.iter().map(|(key, _)| *key).collect();
+    let to_dial = connectable
+        .into_iter()
+        .filter(|(key, _)| !held.contains(key))
+        .collect();
+    (keys, to_dial)
 }
 
 async fn seed_membership(
@@ -936,5 +1046,79 @@ impl TaskList {
 impl Drop for TaskList {
     fn drop(&mut self) {
         self.shut_down()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+    use rstest::rstest;
+
+    use super::*;
+
+    fn key(i: u64) -> PubKey {
+        BLSPubKey::generated_from_seed_indexed([0; 32], i).0
+    }
+
+    fn x25519_key() -> Option<x25519::PublicKey> {
+        Some(x25519::Keypair::generate().unwrap().public_key())
+    }
+
+    fn addr() -> Option<NetAddr> {
+        Some("127.0.0.1:9000".parse().unwrap())
+    }
+
+    /// Only the typed no-validators error, with or without added context, leaves nothing to dial.
+    #[rstest]
+    #[case::no_validators(anyhow::Error::new(StakeTableError::NoValidValidators), true)]
+    #[case::no_validators_with_context(
+        anyhow::Error::new(StakeTableError::NoValidValidators).context("construct"),
+        true
+    )]
+    #[case::other_stake_table_error(
+        anyhow::Error::new(StakeTableError::BlsKeyAlreadyUsed("k".into())),
+        false
+    )]
+    #[case::unrelated(anyhow::anyhow!("failed to fetch stake table events"), false)]
+    fn is_no_valid_validators_cases(#[case] err: anyhow::Error, #[case] expected: bool) {
+        assert_eq!(is_no_valid_validators(&err), expected);
+    }
+
+    /// A validator is listed when it has an x25519 key and an address and is not the node itself, and
+    /// dialed when it is also not held.
+    #[rstest]
+    #[case::complete(false, true, true, false, true, true)]
+    #[case::held(true, true, true, false, true, false)]
+    #[case::no_x25519_key(false, false, true, false, false, false)]
+    #[case::no_address(false, true, false, false, false, false)]
+    #[case::held_without_address(true, true, false, false, false, false)]
+    #[case::own_key(false, true, true, true, false, false)]
+    fn startup_dial_targets_cases(
+        #[case] held: bool,
+        #[case] has_key: bool,
+        #[case] has_addr: bool,
+        #[case] is_own: bool,
+        #[case] listed: bool,
+        #[case] dialed: bool,
+    ) {
+        let validator = (
+            key(1),
+            has_key.then(x25519_key).flatten(),
+            has_addr.then(addr).flatten(),
+        );
+        let held = if held {
+            HashSet::from([key(1)])
+        } else {
+            HashSet::new()
+        };
+        let own_key = if is_own { key(1) } else { key(9) };
+
+        let (keys, targets) = startup_dial_targets(&own_key, [validator].into_iter(), &held);
+
+        assert_eq!(keys, if listed { vec![key(1)] } else { vec![] });
+        assert_eq!(
+            targets.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            if dialed { vec![key(1)] } else { vec![] }
+        );
     }
 }

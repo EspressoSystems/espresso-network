@@ -13,8 +13,8 @@ use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
-    ValidatedState,
+    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Header, LcContractFinalizedState, Leaf2,
+    NodeState, SeqTypes, ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
@@ -1667,6 +1667,36 @@ impl StateCatchup for ParallelStateCatchup {
             ..self.clone()
         }))
     }
+
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        self.on_providers(clone! {(lc_contract_state) move |provider| {
+            clone! {(lc_contract_state) async move {
+                provider
+                    .try_fetch_lc_contract_block_merkle_root(retry, &lc_contract_state)
+                    .await
+            }}
+        }})
+        .await
+    }
+
+    async fn try_fetch_proven_header(
+        &self,
+        retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        self.on_providers(move |provider| async move {
+            provider
+                .try_fetch_proven_header(retry, root_height, root, height)
+                .await
+        })
+        .await
+    }
 }
 
 /// Add accounts to the in-memory consensus state.
@@ -2110,6 +2140,33 @@ mod test {
         .await
         .expect("local result should not wait for the remote provider")
         .unwrap();
+    }
+
+    /// A provider that keeps the trait defaults answers both seed requests with an error naming it.
+    #[tokio::test(start_paused = true)]
+    async fn test_unsupported_provider_fails() {
+        let provider = DelayedCatchup::provider(true, Duration::ZERO);
+        let catchup = ParallelStateCatchup::new(&[provider], Duration::from_secs(30));
+        let root = BlockMerkleTree::new(32).commitment();
+        let lc_contract_state = LcContractFinalizedState {
+            height: 1,
+            block_comm_root: Default::default(),
+        };
+
+        let root_err = catchup
+            .try_fetch_lc_contract_block_merkle_root(0, &lc_contract_state)
+            .await
+            .unwrap_err();
+        let header_err = catchup
+            .try_fetch_proven_header(0, 1, root, 0)
+            .await
+            .unwrap_err();
+
+        for err in [root_err, header_err] {
+            let err = format!("{err:#}");
+            let expected = "DelayedCatchup(local) does not serve LC contract seed requests";
+            assert!(err.contains(expected), "{err}");
+        }
     }
 
     #[tokio::test(start_paused = true)]

@@ -1,8 +1,12 @@
-use std::sync::Arc;
+use std::{
+    collections::{BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
+use hotshot_new_protocol::network::Sender;
 use hotshot_types::{
     data::EpochNumber,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
@@ -21,6 +25,12 @@ pub struct RecipientSource<P: SequencerPersistence> {
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
     pub public_key: PubKey,
+    /// Keys of the validators active at the L1 finalized block at startup, held or not; responders
+    /// are these and the keys of the consensus-epoch table that the network holds at request time,
+    /// deduplicated, without self.
+    pub l1_finalized_peers: Vec<PubKey>,
+    /// The network, for the keys it holds at request time.
+    pub network: Sender<SeqTypes>,
 }
 
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
@@ -35,22 +45,39 @@ impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for Recipien
             .unwrap_or(EpochNumber::genesis());
         let membership = responder_membership(&self.memberships, current_epoch)?;
 
-        // Sum all participants in the membership
-        Ok(membership
+        let table_keys = membership
             .stake_table()
-            .map(|entry| entry.stake_table_entry.stake_key)
-            .filter(|key| *key != self.public_key)
-            .collect())
+            .map(|entry| entry.stake_table_entry.stake_key);
+        Ok(responders(
+            table_keys,
+            &self.l1_finalized_peers,
+            &self.network.peer_keys(),
+            &self.public_key,
+        ))
     }
+}
+
+/// The `table_keys` and `l1_finalized_peers` that are in `held`, deduplicated, without `own_key`.
+fn responders(
+    table_keys: impl Iterator<Item = PubKey>,
+    l1_finalized_peers: &[PubKey],
+    held: &HashSet<PubKey>,
+    own_key: &PubKey,
+) -> Vec<PubKey> {
+    let keys: BTreeSet<PubKey> = table_keys
+        .chain(l1_finalized_peers.iter().copied())
+        .filter(|key| held.contains(key) && key != own_key)
+        .collect();
+    keys.into_iter().collect()
 }
 
 /// The stake table to draw responders from: the current epoch's, else the previous epoch's, else
 /// the newest one this node holds.
 ///
-/// The newest covers a node whose consensus has not reached the network's epoch yet. One started
-/// on an empty database sits at the genesis epoch, below the first epoch, while startup catchup has
-/// already loaded recent stake tables. Without it every request fails before it is sent, including
-/// the ones catchup makes to bring the node to the network's epoch.
+/// The newest covers a node whose consensus is below the epochs it holds tables for, such as one
+/// started on an empty database at the genesis epoch. It always resolves, since the genesis pair is
+/// never pruned. Without it every request fails before it is sent, including the ones catchup
+/// makes to bring the node to the network's epoch.
 fn responder_membership(
     memberships: &EpochMembershipCoordinator<SeqTypes>,
     current_epoch: EpochNumber,
@@ -79,7 +106,9 @@ mod tests {
     use alloy::primitives::U256;
     use espresso_types::{EpochCommittees, v0_3::Fetcher};
     use hotshot_example_types::storage_types::TestStorage;
-    use hotshot_types::{PeerConfig, ValidatorConfig};
+    use hotshot_types::{
+        PeerConfig, ValidatorConfig, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+    };
 
     use super::*;
 
@@ -89,6 +118,24 @@ mod tests {
     const EPOCH_HEIGHT: u64 = 100;
 
     const STAKERS: u64 = 4;
+
+    fn key(i: u64) -> PubKey {
+        BLSPubKey::generated_from_seed_indexed([0; 32], i).0
+    }
+
+    #[test]
+    fn responders_union_of_held_without_self() {
+        let own = key(0);
+        let table = [own, key(1), key(2)];
+        let l1_finalized = [key(2), key(3), key(4), own];
+        let held = HashSet::from([key(1), key(3), own]);
+
+        let out = responders(table.into_iter(), &l1_finalized, &held, &own);
+
+        let mut expected = vec![key(1), key(3)];
+        expected.sort();
+        assert_eq!(out, expected);
+    }
 
     /// A membership holding the stake tables for `FIRST_EPOCH` and the epoch after it.
     fn memberships() -> EpochMembershipCoordinator<SeqTypes> {

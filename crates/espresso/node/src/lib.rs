@@ -1,4 +1,5 @@
 mod external_event_handler;
+mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
@@ -100,9 +101,6 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -435,7 +433,6 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
         leader_trace_dir,
@@ -618,13 +615,15 @@ where
 
     let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout)
         .with_fallback_delay(catchup.http_delay);
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
-        catchup.state_peers,
-        catchup.backoff,
-        catchup.base_timeout,
-        metrics,
-    );
-    state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    if !catchup.state_peers.is_empty() {
+        let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+            catchup.state_peers,
+            catchup.backoff,
+            catchup.base_timeout,
+            metrics,
+        );
+        state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    }
     // Local is a single attempt per call; remote providers retry.
     match persistence
         .clone()
@@ -714,11 +713,9 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
-/// the first step, which silently downgrades the node to a stale epoch window when it
-/// exceeds its timeout. Untimed: an unreachable L1 panics after
-/// `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, so that the follower walk,
+/// the seed's installs and the startup dial do not load that scan onto their first read.
+/// Untimed: an unreachable L1 panics after `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
@@ -845,8 +842,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, Header, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -854,7 +851,10 @@ pub mod testing {
         future::join_all,
         stream::{Stream, StreamExt},
     };
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::{
+        sol_types::{LightClientStateSol, LightClientV3Mock},
+        stake_table::StakeTableContractVersion,
+    };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
@@ -1404,6 +1404,42 @@ pub mod testing {
             self.contracts.clone()
         }
 
+        /// Sets the mock LC contract's `finalizedState` to `header`'s height and `block_comm_root`,
+        /// as a prover would after proving it; `viewNum` keeps its value. `commitment_header`
+        /// supplies the `block_comm_root`: `header` for a valid state, another header for one no
+        /// header at that height matches. `contracts` are those the network deployed.
+        pub async fn set_lc_contract_finalized_state(
+            &self,
+            contracts: &Contracts,
+            header: &Header,
+            commitment_header: &Header,
+        ) -> anyhow::Result<()> {
+            let address = contracts
+                .address(Contract::LightClientProxy)
+                .context("no LightClientProxy deployed")?;
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(self.signer.clone()))
+                .connect_http(self.l1_url.clone());
+            let lc = LightClientV3Mock::new(address, &provider);
+            let current = LightClientStateSol::from(lc.finalizedState().call().await?);
+            let proven =
+                LightClientStateSol::from(header.get_light_client_state(ViewNumber::new(0))?);
+            let committed = LightClientStateSol::from(
+                commitment_header.get_light_client_state(ViewNumber::new(0))?,
+            );
+            let state = LightClientStateSol {
+                viewNum: current.viewNum,
+                blockCommRoot: committed.blockCommRoot,
+                ..proven
+            };
+            lc.setFinalizedState(state.into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            Ok(())
+        }
+
         pub fn validator_providers(
             &self,
         ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
@@ -1657,7 +1693,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
                 None,

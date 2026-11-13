@@ -1248,6 +1248,11 @@ impl Fetcher {
         }
     }
 
+    /// The catchup provider the stake table catchup fetches from.
+    pub fn peers(&self) -> &dyn StateCatchup {
+        &*self.peers
+    }
+
     #[cfg(feature = "node")]
     pub async fn spawn_update_loop(&self) {
         let mut update_task = self.update_task.0.lock().await;
@@ -1896,11 +1901,6 @@ impl Fetcher {
 
     #[cfg(feature = "node")]
     pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
-        let chain_config = *self.chain_config.lock().await;
-        let Some(address) = chain_config.stake_table_contract else {
-            bail!("No stake table contract address found in Chain config");
-        };
-
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
             bail!(
                 "The epoch root for epoch {epoch} is missing the L1 finalized block info. This is \
@@ -1908,8 +1908,28 @@ impl Fetcher {
             );
         };
 
+        // Selection runs at the epoch root header's protocol version: that header's
+        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
+        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
+        // than each event's wall-clock version.
+        self.validator_set_at(l1_finalized_block_info.number(), header.version())
+            .await
+    }
+
+    /// The validator set from stake table events up to `l1_block`, selected under `version`.
+    #[cfg(feature = "node")]
+    pub async fn validator_set_at(
+        &self,
+        l1_block: u64,
+        version: Version,
+    ) -> anyhow::Result<ValidatorSet> {
+        let chain_config = *self.chain_config.lock().await;
+        let Some(address) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+
         let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
+            .fetch_and_store_stake_table_events(address, l1_block)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
         {
@@ -1919,16 +1939,9 @@ impl Fetcher {
             },
         };
 
-        // Selection runs at the epoch root header's protocol version: that header's
-        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
-        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
-        // than each event's wall-clock version.
-        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), header.version()) {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                bail!("failed to construct stake table {e:?}");
-            },
-        }
+        // The source error stays in the chain so callers can downcast to `StakeTableError`.
+        ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version)
+            .context("failed to construct stake table")
     }
 
     /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
