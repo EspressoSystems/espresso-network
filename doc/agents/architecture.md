@@ -43,9 +43,9 @@ StakeTable contract for peer discovery.
 ## Validator startup
 
 `SequencerContext::init` applies the stored anchor's epoch to cliquenet and dials the active validators at the L1
-finalized block (`Fetcher::validator_set_at`), bounded to 60 s. Their keys are extra request-response responders;
-responders are the table keys and these keys that the network holds at request time. `state_peers` is optional for
-validators.
+finalized block (`Fetcher::validator_set_at`), bounded to 60 s. Their keys, dialed or already held, are extra
+request-response responders; responders are the table keys and these keys that the network holds at request time.
+`state_peers` is optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
 without one the catchup walks only. The follower has no seed and walks at startup (`bootstrap_epoch_window`).
@@ -64,14 +64,16 @@ seed at a time:
    the preceding root where the reward of the lowest table reads its block time. The L1 read, each peer request (30 s)
    and each install are bounded.
 4. Installs `ST(max(top-4, start+1, 3)) ..= ST(top)`, each with a block reward computed from the proven roots, each
-   root bounded by the catchup timeout. A stake table hash mismatch ends the process; a timeout or another error keeps
-   the installed tables and the catchup retries above them. The walk then runs from `top` up to the target (nothing
-   for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
+   root bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from `top` up
+   to the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
 5. Requests go over request-response. With `--state-peers`, they also go over HTTP, eligible `--http-catchup-delay`
    after the fetch starts (one delay for the whole fetch), at once when the protocol is not available. The state peers
    are asked in order; a peer that fails or answers wrongly moves to the back for the rest of the process. When both
    sides fail, the error carries both reasons. The delay is at most a third of the 30 s request bound, and the timeout
    error of a request carries the last state peer error.
+
+An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
+tables are present and skipped.
 
 ## Consensus upgrades
 

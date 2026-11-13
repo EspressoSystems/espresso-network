@@ -60,7 +60,7 @@ type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTa
 
 /// Hook that may install stake tables for `catchup(target)` when the held pair `(start-1, start)` is
 /// more than one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk
-/// start `start'`, at or above `start`, or an error that ends the catchup attempt without a walk.
+/// start `start'`, at or above `start`, or an error, which is logged; the walk then runs from `start`.
 /// The pair `(start'-1, start')` is held on return, and so is the table of epoch `start'-2` (the next
 /// install's block reward reads it). The hook bounds its own duration (no timeout,
 /// `seed_lock` held) and must not await a catchup on this coordinator.
@@ -355,7 +355,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// where the walk stops, not where it starts, so an epoch nobody can serve
     /// costs one fetch attempt at the first gap rather than a probe of every
     /// earlier epoch.
-    /// A set catchup seed hook may move the start; it runs under `seed_lock`.
+    /// A set catchup seed hook may move the start; it runs under `seed_lock`. An error from the hook
+    /// is logged and the walk runs from the held pair.
     ///
     /// Concurrent catchups walk the same epochs and share one attempt per
     /// epoch, so whichever reaches an epoch first fetches it while the others
@@ -380,9 +381,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             let _seeding = self.seed_lock.lock().await;
             start = self.held_pair_top(epoch, seeded).await?;
             if start + 1 < epoch {
-                start = seed(epoch, start, self.clone()).await.map_err(|err| {
-                    anytrace::error!("catchup seed for epoch {epoch} failed: {err:#}")
-                })?;
+                match seed(epoch, start, self.clone()).await {
+                    Ok(seeded_start) => start = seeded_start,
+                    Err(err) => warn!(%epoch, %start, "catchup seed failed, walking: {err:#}"),
+                }
             }
         }
 

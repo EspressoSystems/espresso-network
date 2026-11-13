@@ -8,8 +8,9 @@ by its post-start catchup, over request-response, after about one view timeout.
 - Espresso's own nodes upgrade first and serve the seed over HTTP as state peers. Other nodes with SQL storage serve
   the new `HeaderProof` request over request-response; peers on older releases log `Received invalid message` for it
   until they upgrade, and filesystem-storage nodes do not answer it. Each peer request of a seed attempt has
-  a 30 s bound; if no peer answers within it the attempt fails and is retried on the next catchup trigger. State peers
-  are eligible `--http-catchup-delay` after a seed fetch starts, or at once when request-response is not available.
+  a 30 s bound; if no peer answers within it the seed errors, a warning is logged and the catchup walks epochs from
+  the held start as before. State peers are eligible `--http-catchup-delay` after a seed fetch starts, or at once when
+  request-response is not available.
 - `--state-peers` is optional for validators. When set, it serves the seed over HTTP (`/availability`,
   `/light-client`) after `--http-catchup-delay`; a validator whose cliquenet peers do not answer `HeaderProof` yet can
   set it.
