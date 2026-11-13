@@ -222,19 +222,19 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
-    /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
+    /// Legacy fixed-leader GPU VID setting; retained for config compatibility, unused by consensus.
     pub fixed_leader_for_gpuvid: usize,
-    /// Base duration for next-view timeout, in milliseconds
+    /// Legacy next-view timeout; retained for config compatibility, unused by consensus.
     pub next_view_timeout: u64,
-    /// Duration of view sync round timeouts
+    /// Legacy view-sync timeout; retained for config compatibility, unused by consensus.
     pub view_sync_timeout: Duration,
-    /// Number of network bootstrap nodes
+    /// Legacy bootstrap-node count; retained for config compatibility, unused by consensus.
     pub num_bootstrap: usize,
-    /// The maximum amount of time a leader can wait to get a block from a builder
+    /// Legacy external-builder timeout; retained for config compatibility, unused by consensus.
     pub builder_timeout: Duration,
-    /// time to wait until we request data associated with a proposal
+    /// Legacy proposal data-request delay; retained for config compatibility, unused by consensus.
     pub data_request_delay: Duration,
-    /// Builder API base URL
+    /// Legacy external-builder URLs; retained for config compatibility, unused by consensus.
     pub builder_urls: Vec1<Url>,
     /// View to start proposing an upgrade
     pub start_proposing_view: u64,

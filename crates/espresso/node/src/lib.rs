@@ -93,9 +93,6 @@ pub struct NetworkParams {
     pub orchestrator_url: Url,
     pub state_relay_server_url: Url,
 
-    /// The URLs of the builders to use for submitting transactions
-    pub builder_urls: Vec<Url>,
-
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
@@ -345,12 +342,6 @@ where
     };
 
     apply_genesis_overrides(&mut network_config, &genesis);
-
-    // Override the builder URLs in the network config with the ones from the command line
-    // if any were provided
-    if !network_params.builder_urls.is_empty() {
-        network_config.config.builder_urls = network_params.builder_urls.try_into().unwrap();
-    }
 
     let version_upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
     tracing::warn!("setting version_upgrade={version_upgrade}");
