@@ -1444,16 +1444,12 @@ impl Inner {
         );
     }
 
-    /// Evict snapshots more than [`RECENT_STAKE_TABLES_LIMIT`] epochs below
-    /// `added`. Below `prune_cutoff` only a table whose successor is held goes, as the successor
-    /// install is what stores it.
+    /// Evict snapshots more than [`RECENT_STAKE_TABLES_LIMIT`] epochs below `added`, only when the
+    /// successor table is held: the successor install is what stores a table.
     ///
-    /// `prune_cutoff` only ever moves forward: `add_epoch_root` also runs for old
-    /// epochs during catchup, and a lagging insert must neither evict newer
-    /// state nor evict itself before its readers had a chance to observe it.
-    /// An insert below `prune_cutoff`, a walk below a seeded window, evicts
-    /// below its own cutoff and leaves everything above it. A contiguous walk keeps its
-    /// last `RECENT_STAKE_TABLES_LIMIT + 1` tables.
+    /// A lagging insert (`add_epoch_root` also runs for old epochs during catchup) evicts below its
+    /// own cutoff and leaves everything above it. A contiguous walk keeps its last
+    /// `RECENT_STAKE_TABLES_LIMIT + 1` tables.
     ///
     /// `da_committees` is exempt: it holds one entry per configured DA
     /// committee (seeded from config at startup and on upgrade certificates),
@@ -1462,7 +1458,6 @@ impl Inner {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn prune_epochs(&mut self, added: EpochNumber) {
         let cutoff = EpochNumber::new(added.saturating_sub(RECENT_STAKE_TABLES_LIMIT));
-        let below_cutoff = cutoff < self.prune_cutoff;
         self.prune_cutoff = self.prune_cutoff.max(cutoff);
         // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
         // `new`) are never evicted:
@@ -1470,11 +1465,7 @@ impl Inner {
         let evict: Vec<_> = self
             .snapshots
             .keys()
-            .filter(|e| {
-                **e > keep
-                    && **e < cutoff
-                    && (!below_cutoff || self.snapshots.contains_key(&(**e + 1)))
-            })
+            .filter(|e| **e > keep && **e < cutoff && self.snapshots.contains_key(&(**e + 1)))
             .copied()
             .collect();
         for epoch in evict {
@@ -1952,13 +1943,16 @@ mod tests {
             expected
         );
 
-        // A catchup insert below the cutoff is not evicted by its own
-        // insertion; it goes once the tip advances past it.
-        inner.put_epoch_committee(EpochNumber::new(5), template);
+        // A catchup insert below the cutoff is not evicted by its own insertion; it goes once
+        // the tip advances past it and its successor is held.
+        inner.put_epoch_committee(EpochNumber::new(5), template.clone());
         inner.prune_epochs(EpochNumber::new(5));
+        inner.prune_epochs(EpochNumber::new(51));
         assert!(inner.snapshots.contains_key(&EpochNumber::new(5)));
+        inner.put_epoch_committee(EpochNumber::new(6), template);
         inner.prune_epochs(EpochNumber::new(51));
         assert!(!inner.snapshots.contains_key(&EpochNumber::new(5)));
+        assert!(inner.snapshots.contains_key(&EpochNumber::new(6)));
     }
 
     // Concurrent reads must not panic or deadlock while a writer drives
@@ -4171,6 +4165,30 @@ mod tests {
         assert!(inner.snapshots.contains_key(&EpochNumber::new(101)));
     }
 
+    /// A tip prune with a cutoff at or above `prune_cutoff` keeps a walk table whose successor is
+    /// not held yet, because the successor install is what stores it.
+    #[test]
+    fn tip_prune_keeps_walk_table_without_successor() {
+        let committees = build_committees(4);
+        let mut inner = committees.inner.write();
+        inner.first_epoch = EpochNumber::new(1);
+        inner.prune_cutoff = EpochNumber::new(200);
+        let template = inner
+            .epoch_committee(EpochNumber::genesis())
+            .expect("genesis committee exists")
+            .clone();
+
+        inner.put_epoch_committee(EpochNumber::new(100), template.clone());
+        inner.prune_epochs(EpochNumber::new(100));
+        inner.put_epoch_committee(EpochNumber::new(300), template.clone());
+        inner.prune_epochs(EpochNumber::new(300));
+        assert!(inner.snapshots.contains_key(&EpochNumber::new(100)));
+
+        inner.put_epoch_committee(EpochNumber::new(101), template);
+        inner.prune_epochs(EpochNumber::new(300));
+        assert!(!inner.snapshots.contains_key(&EpochNumber::new(100)));
+    }
+
     /// Requests epoch 25 with a seed hook that records `(target, start)` and fails. Returns the
     /// recorded calls and the storage loads made by the catchup before the hook ran.
     async fn catchup_seed_calls(setup: &StalledInstall) -> (Vec<(u64, u64)>, usize) {
@@ -4228,6 +4246,7 @@ mod tests {
     async fn install_epoch_roots_success_sets_rewards_and_prunes() {
         let (committees, coordinator) = seed_window_setup(60, 64).await;
         put_prefilled(&committees, 5, Some(StakeTableState::default().commit()));
+        put_prefilled(&committees, 6, Some(StakeTableState::default().commit()));
         let (preceding, roots) = seed_window_roots(60, 64).await;
 
         committees
@@ -4241,6 +4260,7 @@ mod tests {
             EpochNumber::new(64 - RECENT_STAKE_TABLES_LIMIT)
         );
         assert!(inner.epoch_committee(EpochNumber::new(5)).is_none());
+        assert!(inner.epoch_committee(EpochNumber::new(6)).is_some());
         for epoch in 60..=64 {
             let committee = inner.epoch_committee(EpochNumber::new(epoch)).unwrap();
             assert!(
