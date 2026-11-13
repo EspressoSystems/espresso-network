@@ -2344,18 +2344,6 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ea181bf566f71cb9a5d17a59e1871af638180a18fb0035c92ae62b705207123"
-dependencies = [
- "bitflags 1.3.2",
- "clap_lex 0.2.4",
- "indexmap 1.9.3",
- "textwrap",
-]
-
-[[package]]
-name = "clap"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
@@ -2365,22 +2353,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "clap-serde"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d9609b451fd69eec0ecd379932d605a64bba1746397b31455962c8ba2fdfb7"
-dependencies = [
- "clap 3.2.25",
- "serde",
-]
-
-[[package]]
 name = "clap-serde-derive"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4b7d643cbdc3a4eb0b5db8b9844ab2002bc4be44c1244db5cd27df8e594c125"
 dependencies = [
- "clap 4.6.1",
+ "clap",
  "clap-serde-proc",
  "serde",
 ]
@@ -2404,7 +2382,7 @@ checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
 dependencies = [
  "anstream",
  "anstyle",
- "clap_lex 1.1.0",
+ "clap_lex",
  "strsim",
 ]
 
@@ -2418,15 +2396,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
-]
-
-[[package]]
-name = "clap_lex"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2850f2f5a82cbf437dd5af4d49848fbdfc27c157c3d010345776f952765261c5"
-dependencies = [
- "os_str_bytes",
 ]
 
 [[package]]
@@ -2835,7 +2804,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.6.1",
+ "clap",
  "criterion-plot 0.5.0",
  "is-terminal",
  "itertools 0.10.5",
@@ -2862,7 +2831,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.6.1",
+ "clap",
  "criterion-plot 0.8.2",
  "itertools 0.13.0",
  "num-traits",
@@ -3166,7 +3135,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "clap 4.6.1",
+ "clap",
  "dotenvy",
  "espresso-contract-deployer",
  "espresso-utils",
@@ -3340,7 +3309,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-poly 0.5.0",
  "ark-std 0.5.0",
- "clap 4.6.1",
+ "clap",
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
@@ -3719,7 +3688,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "chrono",
- "clap 4.6.1",
+ "clap",
  "derive_builder",
  "derive_more 2.1.1",
  "dotenvy",
@@ -3765,7 +3734,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "clap 4.6.1",
+ "clap",
  "espresso-contract-deployer",
  "espresso-types",
  "espresso-utils",
@@ -3784,7 +3753,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "axum",
- "clap 4.6.1",
+ "clap",
  "committable",
  "escargot",
  "espresso-contract-deployer",
@@ -3838,7 +3807,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "blake3",
- "clap 4.6.1",
+ "clap",
  "derivative",
  "dotenvy",
  "hotshot-types",
@@ -3880,7 +3849,7 @@ dependencies = [
  "bs58",
  "byteorder",
  "chrono",
- "clap 4.6.1",
+ "clap",
  "client",
  "committable",
  "csv",
@@ -3956,7 +3925,6 @@ dependencies = [
  "vbs",
  "vec1",
  "vergen",
- "vergen-gitcl",
  "versions",
  "vid",
 ]
@@ -3986,7 +3954,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "axum",
  "base64 0.22.1",
- "clap 4.6.1",
+ "clap",
  "derivative",
  "espresso-utils",
  "flate2",
@@ -4032,7 +4000,7 @@ dependencies = [
  "bincode",
  "blake3",
  "bytesize",
- "clap 4.6.1",
+ "clap",
  "cld",
  "committable",
  "criterion 0.5.1",
@@ -4103,7 +4071,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "ark-serialize 0.5.0",
- "clap 4.6.1",
+ "clap",
  "committable",
  "log-panics",
  "reqwest 0.12.28",
@@ -4528,7 +4496,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "ark-srs",
- "clap 4.6.1",
+ "clap",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
@@ -4913,7 +4881,6 @@ dependencies = [
  "jf-advz",
  "parking_lot",
  "rand 0.8.6",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4973,7 +4940,7 @@ dependencies = [
  "async-broadcast",
  "async-lock",
  "async-trait",
- "clap 4.6.1",
+ "clap",
  "cliquenet",
  "committable",
  "csv",
@@ -4997,7 +4964,7 @@ dependencies = [
  "anyhow",
  "async-lock",
  "axum",
- "clap 4.6.1",
+ "clap",
  "csv",
  "futures",
  "hotshot-example-types",
@@ -5116,14 +5083,13 @@ dependencies = [
  "ark-srs",
  "ark-std 0.5.0",
  "axum",
- "clap 4.6.1",
+ "clap",
  "displaydoc",
  "espresso-contract-deployer",
  "espresso-types",
  "espresso-utils",
  "futures",
  "hotshot-contract-adapter",
- "hotshot-query-service",
  "hotshot-types",
  "http-client",
  "http-wire",
@@ -5165,13 +5131,12 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-srs",
  "ark-std 0.5.0",
- "async-broadcast",
  "async-trait",
  "bincode",
  "bitvec 1.1.0",
  "blake3",
  "bs58",
- "clap 4.6.1",
+ "clap",
  "cliquenet-types",
  "committable",
  "derive_more 2.1.1",
@@ -5201,12 +5166,9 @@ dependencies = [
  "sha2 0.10.9",
  "tagged-base64",
  "test-log",
- "test-utils",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-util",
- "toml",
  "tracing",
  "typenum",
  "url",
@@ -6384,7 +6346,7 @@ dependencies = [
  "async-lock",
  "async-trait",
  "bitvec 1.1.0",
- "clap 4.6.1",
+ "clap",
  "committable",
  "derivative",
  "derive_builder",
@@ -6425,7 +6387,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "clap 4.6.1",
+ "clap",
  "disco-types",
  "espresso-node",
  "espresso-types",
@@ -6742,7 +6704,7 @@ dependencies = [
  "bincode",
  "bitvec 1.1.0",
  "circular-buffer",
- "clap 4.6.1",
+ "clap",
  "espresso-types",
  "espresso-utils",
  "futures",
@@ -7183,12 +7145,6 @@ dependencies = [
  "dlv-list",
  "hashbrown 0.14.5",
 ]
-
-[[package]]
-name = "os_str_bytes"
-version = "6.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
 
 [[package]]
 name = "p3-maybe-rayon"
@@ -7871,7 +7827,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
- "clap 4.6.1",
+ "clap",
  "directories 6.0.0",
  "futures",
  "humantime",
@@ -9272,7 +9228,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-lock",
- "clap 4.6.1",
+ "clap",
  "committable",
  "derivative",
  "espresso-contract-deployer",
@@ -9646,8 +9602,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "assert_cmd",
  "chrono",
- "clap 4.6.1",
- "clap-serde",
+ "clap",
  "clap-serde-derive",
  "derive_more 2.1.1",
  "directories 6.0.0",
@@ -9997,12 +9952,6 @@ dependencies = [
  "vbs",
  "versions",
 ]
-
-[[package]]
-name = "textwrap"
-version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
 
 [[package]]
 name = "thiserror"
