@@ -364,6 +364,12 @@ struct PruneState {
     minimum_retention_height: u64,
 }
 
+/// A data batch deletes at most `CERT2_PRUNE_FACTOR * batch_size` cert2s, the lowest first.
+///
+/// A node that pruned before cert2s were pruned has a backlog of them below its pruned height.
+/// Each batch adds up to `batch_size` more, so the backlog only shrinks with a factor above 1.
+const CERT2_PRUNE_FACTOR: u64 = 10;
+
 fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
     // A zero step would underflow the subtraction to `u64::MAX` and prune the whole table.
     let step = batch_size.max(1);
@@ -838,29 +844,9 @@ impl SqlStorage {
             .prune_write()
             .await
             .context("opening pruning transaction")?;
-        tx.delete_batch(to).await?;
-        tx.commit().await.context("committing deleted batch")?;
-
-        self.delete_cert2s(to, cfg.batch_size().max(1)).await
-    }
-
-    /// Delete the cert2s at or below `to`, at most `chunk` per transaction.
-    ///
-    /// A node upgraded from a version that never pruned cert2s still has every one below its
-    /// pruned height. In one transaction, its first batch would hold the write lock, which
-    /// consensus shares on SQLite, until all of them are gone.
-    async fn delete_cert2s(&self, to: u64, chunk: u64) -> anyhow::Result<()> {
-        loop {
-            let mut tx = self
-                .prune_write()
-                .await
-                .context("opening cert2 pruning transaction")?;
-            let deleted = tx.delete_cert2_chunk(to, chunk).await?;
-            tx.commit().await.context("committing deleted cert2s")?;
-            if deleted < chunk {
-                return Ok(());
-            }
-        }
+        let cert2_limit = cfg.batch_size().saturating_mul(CERT2_PRUNE_FACTOR);
+        tx.delete_batch(to, cert2_limit).await?;
+        tx.commit().await.context("committing deleted batch")
     }
 
     /// Record `height` as the data pruned height, without deleting anything: data at or below it
@@ -1955,9 +1941,9 @@ mod test {
         assert_eq!(count_rows(&storage, "cert2").await, 0);
     }
 
-    /// The first batch after an upgrade deletes the backlog of cert2s that older versions left
-    /// below the pruned height, when the backlog holds more rows than `batch_size` and is not a
-    /// multiple of it. The cert2s above the batch stay.
+    /// A batch deletes the backlog of cert2s that older versions left below the pruned height,
+    /// when the backlog fits in the batch's cert2 limit but holds more rows than `batch_size` and
+    /// is not a multiple of it. The cert2s above the batch stay.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cert2_pruning_backlog_larger_than_batch() {
         let db = TmpDb::init().await;
@@ -1995,7 +1981,7 @@ mod test {
         assert_cert2s_pruned_to(&storage, &chain, 6, &[7, 8]).await;
     }
 
-    /// The first batch after an upgrade deletes the backlog together with the cert2s at its own
+    /// A batch deletes a backlog that fits in its cert2 limit together with the cert2s at its own
     /// heights.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cert2_pruning_backlog_with_batch_window() {
@@ -2013,6 +1999,79 @@ mod test {
         pruner.as_mut().unwrap().data.target_height = 6;
         assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
         assert_cert2s_pruned_to(&storage, &chain, 5, &[6, 8]).await;
+    }
+
+    /// A batch deletes at most `CERT2_PRUNE_FACTOR * batch_size` cert2s, the lowest first, so a
+    /// larger backlog shrinks over several batches. A cert2 at a batch's own height waits until
+    /// the backlog below it is gone, and the cert2s above the batch stay.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_bounded_per_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(1);
+        let limit = CERT2_PRUNE_FACTOR * cfg.batch_size();
+        // Two full batches of backlog and 3 rows more, so not a multiple of the limit.
+        let backlog_end = 2 * limit + 3;
+        // In the window of the first batch, in the window of the third batch, and above all
+        // batches.
+        let window_cert2s = [backlog_end + 1, backlog_end + 3, backlog_end + 5];
+        let (storage, chain) = storage_with_leaves(&db, &cfg, (backlog_end + 5) as usize).await;
+        insert_cert2s(&storage, &chain, window_cert2s).await;
+
+        let mut pruner = Some(data_pruner(&cfg, backlog_end + 1));
+        for to in 0..=backlog_end {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=backlog_end).await;
+        let kept_from =
+            |lowest: u64| -> Vec<u64> { (lowest..=backlog_end).chain(window_cert2s).collect() };
+
+        pruner.as_mut().unwrap().data.target_height = backlog_end + 4;
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 1)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, limit, &kept_from(limit + 1)).await;
+
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 2)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, 2 * limit, &kept_from(2 * limit + 1)).await;
+
+        // The rest of the backlog and the cert2s of the first and third windows fit in the limit.
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 3)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, backlog_end + 3, &[backlog_end + 5]).await;
+    }
+
+    /// A batch whose window holds no header still deletes the cert2s at or below its end: the
+    /// backlog, and a cert2 in the window without a leaf. The cert2 above the batch stays.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_batch_without_headers() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, mut chain) = storage_with_leaves(&db, &cfg, 3).await;
+        // Blocks 4 to 6 are missing, so the batch window 4 to 5 has no header. Block 7 has its
+        // leaf, so a header that the batch must not delete exists.
+        chain.push_empty(4).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf(&chain.blocks()[7].leaf).await.unwrap();
+        tx.commit().await.unwrap();
+        insert_cert2s(&storage, &chain, [5, 7]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 4));
+        for to in [1, 3] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=3).await;
+        assert_eq!(count_rows(&storage, "header").await, 1);
+
+        pruner.as_mut().unwrap().data.target_height = 6;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
+        assert_eq!(count_rows(&storage, "header").await, 1);
+        assert_cert2s_pruned_to(&storage, &chain, 5, &[7]).await;
     }
 
     /// Storage with leaves at heights 0 to 4 and cert2s at heights 1, 2 and 4 only: a leaf

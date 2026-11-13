@@ -517,8 +517,14 @@ impl Transaction<Prune> {
     /// and re-evaluates with a fresh snapshot after the insert commits. If the payload was
     /// already deleted, the inserting SERIALIZABLE transaction gets a serialization error
     /// and retries, recreating the payload.
+    ///
+    /// Deletes at most `cert2_limit` cert2s at or below `height`, the lowest first.
     #[instrument(skip(self))]
-    pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(super) async fn delete_batch(
+        &mut self,
+        height: u64,
+        cert2_limit: u64,
+    ) -> anyhow::Result<()> {
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
@@ -532,6 +538,8 @@ impl Transaction<Prune> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+
+        self.delete_cert2s(height, cert2_limit).await?;
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -581,16 +589,12 @@ impl Transaction<Prune> {
         Ok(())
     }
 
-    /// Delete the lowest `limit` cert2s at or below `height`, returning how many were deleted.
+    /// Delete the lowest `limit` cert2s at or below `height`.
     ///
     /// Every reader of a cert2 needs the leaf at its height too, so cert2s are pruned with the
-    /// leaves.
-    #[instrument(skip(self))]
-    pub(super) async fn delete_cert2_chunk(
-        &mut self,
-        height: u64,
-        limit: u64,
-    ) -> anyhow::Result<u64> {
+    /// leaves. The limit keeps a batch small on a node that has a backlog of cert2s from versions
+    /// that did not prune them.
+    async fn delete_cert2s(&mut self, height: u64, limit: u64) -> anyhow::Result<()> {
         // Neither backend has a portable `DELETE ... LIMIT`.
         let res = query(
             "DELETE FROM cert2 WHERE height IN (
@@ -603,7 +607,7 @@ impl Transaction<Prune> {
         .await
         .context("deleting cert2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned cert2");
-        Ok(res.rows_affected())
+        Ok(())
     }
 
     /// Record the height of the latest pruned merklized state.
