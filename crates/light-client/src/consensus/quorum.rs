@@ -577,10 +577,15 @@ mod test {
         .unwrap_err();
     }
 
+    const EPOCH_HEIGHT: u64 = 10;
+
+    /// The last five blocks of the first epoch: block 6 precedes the transition, 7 to 10 are in it.
+    const EPOCH_END: std::ops::RangeInclusive<u64> = 6..=10;
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change() {
-        let leaves = epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION).await;
-        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
+        let leaves = epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION).await;
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -592,12 +597,13 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_missing_eqc() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
-            // Delete the next epoch justify QC, making this an invalid epoch change QC.
-            proposal.next_epoch_justify_qc = None;
-        })
-        .await;
-        EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
+                // Delete the next epoch justify QC, making this an invalid epoch change QC.
+                proposal.next_epoch_justify_qc = None;
+            })
+            .await;
+        EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -608,14 +614,15 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_inconsistent_eqc_view_number() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
-            // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
-            if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
-                next_epoch_justify_qc.view_number += 1;
-            }
-        })
-        .await;
-        EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
+                // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
+                if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
+                    next_epoch_justify_qc.view_number += 1;
+                }
+            })
+            .await;
+        EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -626,14 +633,15 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_inconsistent_eqc_data() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
-            // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
-            if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
-                *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
-            }
-        })
-        .await;
-        EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
+                // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
+                if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
+                    *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
+                }
+            })
+            .await;
+        EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -644,12 +652,13 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_absent_eqc_before_upgrade() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, LEGACY_VERSION, |proposal| {
-            // Delete the next epoch justify QC; this is allowed since epochs are not enabled yet.
-            proposal.next_epoch_justify_qc = None;
-        })
-        .await;
-        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, LEGACY_VERSION, |proposal| {
+                // Delete the next epoch justify QC; this is allowed since epochs are not enabled yet.
+                proposal.next_epoch_justify_qc = None;
+            })
+            .await;
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
