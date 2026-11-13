@@ -16,7 +16,6 @@ use hotshot_types::{
     },
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    simple_vote::HasEpoch,
     traits::{
         node_implementation::NodeType,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
@@ -170,7 +169,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 
-    let epoch_membership = membership_coordinator.membership_for_epoch(state_cert.epoch())?;
+    let epoch_membership = membership_coordinator.membership_for_epoch(state_cert.epoch)?;
 
     let membership_stake_table = epoch_membership.stake_table();
     let membership_success_threshold = epoch_membership.success_threshold();

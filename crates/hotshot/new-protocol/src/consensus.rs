@@ -1435,10 +1435,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn leader_of(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.stake_table_coordinator.membership_for_epoch(epoch) {
             Ok(stake_table) => match stake_table.leader(view) {
                 Ok(leader) => Some(leader),
                 Err(err) => {
@@ -3318,7 +3315,7 @@ impl<T: NodeType> Consensus<T> {
             .map_err(|e| anyhow::anyhow!("failed to fetch auth root: {e}"))?;
         let membership = self
             .stake_table_coordinator
-            .membership_for_epoch(Some(proposal.epoch))
+            .membership_for_epoch(proposal.epoch)
             .map_err(|e| anyhow::anyhow!("membership lookup failed: {e}"))?;
         let next_stake_table = membership
             .next_epoch_stake_table()
@@ -4222,10 +4219,7 @@ impl<T: NodeType> Consensus<T> {
     /// when the stake table is not available.  Used by timeout logging so a
     /// reader can immediately see which validator failed to make progress.
     fn leader_label(&self, view: ViewNumber, epoch: EpochNumber) -> String {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.stake_table_coordinator.membership_for_epoch(epoch) {
             Ok(stake_table) => match stake_table.leader(view) {
                 Ok(leader) => KeyPrefix::from(&leader).to_string(),
                 Err(_) => "unknown".to_string(),
@@ -4240,10 +4234,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.stake_table_coordinator.membership_for_epoch(epoch) {
             Ok(stake_table) => stake_table.has_stake(&self.public_key),
             Err(err) => {
                 warn!(%epoch, %err, "failed to get stake table");

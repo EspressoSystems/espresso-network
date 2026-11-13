@@ -135,7 +135,7 @@ impl Setup {
     async fn new() -> Self {
         let epoch = EpochNumber::genesis();
         let membership = mock_membership()
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("the genesis epoch resolves");
         let stake_table = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
         Self {

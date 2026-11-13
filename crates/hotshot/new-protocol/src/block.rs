@@ -376,7 +376,7 @@ impl<T: NodeType> BlockBuilder<T> {
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
             let stake_table: Vec<_> = membership
-                .stake_table_for_epoch(Some(epoch))
+                .stake_table_for_epoch(epoch)
                 .map_err(|_| BlockError::StakeTableUnavailable)?
                 .stake_table()
                 .cloned()

@@ -79,7 +79,7 @@ async fn test_gc_aborts_pending_writes() {
 async fn test_gc_does_not_abort_the_boundary_certificate() {
     let (mut storage, inner) = test_storage();
     let epoch = EpochNumber::genesis();
-    let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+    let membership = mock_membership().membership_for_epoch(epoch).unwrap();
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let leaf = RawCommitmentBuilder::new("leaf").u64(9).finalize();
     let view = ViewNumber::new(10);

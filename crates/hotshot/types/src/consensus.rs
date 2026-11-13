@@ -463,7 +463,7 @@ fn resolve_participation_stake_table<TYPES: NodeType>(
     membership: &EpochMembershipCoordinator<TYPES>,
     epoch: EpochNumber,
 ) -> (HSStakeTable<TYPES>, U256) {
-    match membership.stake_table_for_epoch(Some(epoch)) {
+    match membership.stake_table_for_epoch(epoch) {
         Ok(m) => (
             HSStakeTable::from_iter(m.stake_table()),
             m.success_threshold(),
@@ -497,7 +497,7 @@ fn track_decided_qc_participation<TYPES: NodeType>(
             .context(warn!("Updating vote participation"))?;
     } else if qc_epoch == vote.current_epoch()
         && vote.stake_table_unresolved()
-        && let Ok(m) = membership.stake_table_for_epoch(Some(qc_epoch))
+        && let Ok(m) = membership.stake_table_for_epoch(qc_epoch)
     {
         vote.reseed_stake_table(
             HSStakeTable::from_iter(m.stake_table()),

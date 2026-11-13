@@ -241,7 +241,7 @@ impl<T: NodeType> Fetcher<T> {
         let epoch = consensus
             .proposal_with_payload(view, payload_commitment)?
             .epoch;
-        let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
+        let membership = membership.stake_table_for_epoch(epoch).ok()?;
 
         let mut rng = rand::thread_rng();
         let mut fetch = self.requested.get_mut(&(view, payload_commitment));
