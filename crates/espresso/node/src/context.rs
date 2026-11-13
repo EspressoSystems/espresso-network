@@ -190,6 +190,7 @@ where
             &membership_coordinator,
             &initializer,
             version,
+            pub_key,
         )
         .await;
         let network_sender = coordinator_network.sender().clone();
@@ -617,7 +618,8 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
 const STARTUP_DIAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Applies the stored anchor's epoch to `network` and dials the active validators at the L1
-/// finalized block that it does not hold. Returns the dialed keys.
+/// finalized block that it does not hold. Returns the keys of all of them with connect info,
+/// without `own_key`.
 ///
 /// Held keys keep the connect info of the held tables, which may be older than L1's. The dial runs
 /// once, bounded by `STARTUP_DIAL_TIMEOUT`; a failure leaves no extra peers until restart. The
@@ -628,6 +630,7 @@ async fn connect_startup_peers(
     membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
     initializer: &HotShotInitializer<SeqTypes>,
     version: Version,
+    own_key: PubKey,
 ) -> Vec<PubKey> {
     // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
     let anchor_epoch = initializer
@@ -651,7 +654,8 @@ async fn connect_startup_peers(
             .fetcher()
             .validator_set_at(l1_block, version)
             .await?;
-        let targets = startup_dial_targets(
+        let (l1_active_keys, targets) = startup_dial_targets(
+            &own_key,
             validators.active_validators().values().map(|validator| {
                 (
                     *validator.stake_table_key(),
@@ -661,13 +665,12 @@ async fn connect_startup_peers(
             }),
             &held,
         );
-        let dialed = targets.iter().map(|(key, _)| *key).collect();
         let targets = targets
             .into_iter()
             .map(|(key, (x25519_key, addr))| (key, (x25519_key.into(), addr)))
             .collect();
         network.add_peers(Role::Active, targets)?;
-        anyhow::Ok(dialed)
+        anyhow::Ok(l1_active_keys)
     };
     let l1_finalized_peers = tokio::time::timeout(STARTUP_DIAL_TIMEOUT, dial)
         .await
@@ -686,15 +689,26 @@ async fn connect_startup_peers(
     l1_finalized_peers
 }
 
-/// The `(key, (x25519 key, address))` of the `validators` that `held` lacks and that have both.
+/// A validator key with its x25519 key and address.
+type DialTarget = (PubKey, (x25519::PublicKey, NetAddr));
+
+/// The keys of the `validators` other than `own_key` that have an x25519 key and an address, and
+/// the `(key, (x25519 key, address))` of those that `held` lacks.
 fn startup_dial_targets(
+    own_key: &PubKey,
     validators: impl Iterator<Item = (PubKey, Option<x25519::PublicKey>, Option<NetAddr>)>,
     held: &HashSet<PubKey>,
-) -> Vec<(PubKey, (x25519::PublicKey, NetAddr))> {
-    validators
-        .filter(|(key, ..)| !held.contains(key))
+) -> (Vec<PubKey>, Vec<DialTarget>) {
+    let connectable: Vec<_> = validators
+        .filter(|(key, ..)| key != own_key)
         .filter_map(|(key, x25519_key, p2p_addr)| Some((key, (x25519_key?, p2p_addr?))))
-        .collect()
+        .collect();
+    let keys = connectable.iter().map(|(key, _)| *key).collect();
+    let to_dial = connectable
+        .into_iter()
+        .filter(|(key, _)| !held.contains(key))
+        .collect();
+    (keys, to_dial)
 }
 
 async fn seed_membership(
@@ -1048,17 +1062,21 @@ mod tests {
         Some("127.0.0.1:9000".parse().unwrap())
     }
 
-    /// A validator is a dial target when it is not held and has an x25519 key and an address.
+    /// A validator is listed when it has an x25519 key and an address and is not the node itself, and
+    /// dialed when it is also not held.
     #[rstest]
-    #[case::complete(false, true, true, true)]
-    #[case::held(true, true, true, false)]
-    #[case::no_x25519_key(false, false, true, false)]
-    #[case::no_address(false, true, false, false)]
-    #[case::held_without_address(true, true, false, false)]
+    #[case::complete(false, true, true, false, true, true)]
+    #[case::held(true, true, true, false, true, false)]
+    #[case::no_x25519_key(false, false, true, false, false, false)]
+    #[case::no_address(false, true, false, false, false, false)]
+    #[case::held_without_address(true, true, false, false, false, false)]
+    #[case::own_key(false, true, true, true, false, false)]
     fn startup_dial_targets_cases(
         #[case] held: bool,
         #[case] has_key: bool,
         #[case] has_addr: bool,
+        #[case] is_own: bool,
+        #[case] listed: bool,
         #[case] dialed: bool,
     ) {
         let validator = (
@@ -1071,9 +1089,11 @@ mod tests {
         } else {
             HashSet::new()
         };
+        let own_key = if is_own { key(1) } else { key(9) };
 
-        let targets = startup_dial_targets([validator].into_iter(), &held);
+        let (keys, targets) = startup_dial_targets(&own_key, [validator].into_iter(), &held);
 
+        assert_eq!(keys, if listed { vec![key(1)] } else { vec![] });
         assert_eq!(
             targets.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
             if dialed { vec![key(1)] } else { vec![] }
@@ -1090,8 +1110,10 @@ mod tests {
             (key(4), x25519_key(), addr()),
         ];
 
-        let targets = startup_dial_targets(validators.into_iter(), &HashSet::from([key(3)]));
+        let (keys, targets) =
+            startup_dial_targets(&key(9), validators.into_iter(), &HashSet::from([key(3)]));
 
+        assert_eq!(keys, vec![key(1), key(3), key(4)]);
         assert_eq!(
             targets.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
             vec![key(1), key(4)]
