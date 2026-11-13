@@ -43,7 +43,6 @@ use hotshot_types::{
         election::Membership,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{Certificate, Vote},
 };
 
@@ -55,7 +54,7 @@ use crate::{
         coordinator_builder::build_genesis_cert1,
         utils::{
             MockBlock, STAKE_TABLE_CAPACITY, StakeTableSchedule, TEST_DRB_RESULT,
-            build_state_cert_for_test, extract_vid_shares,
+            build_state_cert_for_test, epoch_length, extract_vid_shares,
             mock_membership_with_client_and_schedule,
         },
     },
@@ -277,7 +276,10 @@ impl World {
         );
         let leader = self.leader(*epoch, def.view).0;
         let leaf = Leaf2::from(proposal.data.clone());
-        if is_epoch_root(def.height, self.epoch_height) {
+        if epoch_length(self.epoch_height)
+            .position(def.height)
+            .is_root()
+        {
             self.register_epoch_root(&proposal.data.block_header).await;
         }
         self.own.insert(id);
@@ -492,7 +494,10 @@ impl World {
     /// The epoch a block's height puts it in, given its parent, whatever epoch the
     /// proposal names: the one whose committee disperses and signs for it.
     fn epoch_of(&self, def: &format::Block) -> u64 {
-        if is_last_block(def.parent.height, self.epoch_height) {
+        if epoch_length(self.epoch_height)
+            .position(def.parent.height)
+            .is_last()
+        {
             def.parent.epoch + 1
         } else {
             def.parent.epoch.max(1)
@@ -532,14 +537,19 @@ impl World {
             random: def.id,
             version: TEST_VERSIONS.test.base,
         };
-        let next_epoch_justify_qc = if is_last_block(def.parent.height, self.epoch_height) {
+        let next_epoch_justify_qc = if epoch_length(self.epoch_height)
+            .position(def.parent.height)
+            .is_last()
+        {
             Some(self.parent_cert2(def.parent).await)
         } else {
             None
         };
         let state_cert = self.state_cert(def.parent).await;
         let next_drb_result = (epoch > EpochNumber::genesis()
-            && is_epoch_transition(def.height, self.epoch_height))
+            && epoch_length(self.epoch_height)
+                .position(def.height)
+                .is_epoch_transition())
         .then_some(TEST_DRB_RESULT);
         let view_change_evidence = match def.evidence {
             Some(tc) => Some(TimeoutEvidence::V3(self.timeout_cert(tc).await)),
@@ -560,7 +570,10 @@ impl World {
         let (leader, leader_key) = self.leader(*committee_epoch, def.view);
         let signature = <BLSPubKey as SignatureKey>::sign(&leader_key, leaf.commit().as_ref())
             .expect("the leader signs the leaf");
-        if is_epoch_root(def.height, self.epoch_height) {
+        if epoch_length(self.epoch_height)
+            .position(def.height)
+            .is_root()
+        {
             self.register_epoch_root(&proposal.block_header).await;
         }
         Built {
@@ -581,7 +594,7 @@ impl World {
     /// root, at the certificate's view, as the node's state-vote tally pairs them;
     /// none for any other block.
     pub async fn state_cert(&mut self, c: Cert) -> Option<StateCert> {
-        if !is_epoch_root(c.height, self.epoch_height) {
+        if !epoch_length(self.epoch_height).position(c.height).is_root() {
             return None;
         }
         let key = self.cert_key(c).await;
@@ -633,7 +646,7 @@ impl World {
     /// another block there.
     async fn register_epoch_root(&mut self, header: &TestBlockHeader) {
         let height = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(header);
-        let target = epoch_from_block_number(height, self.epoch_height) + 2;
+        let target = *epoch_length(self.epoch_height).epoch_of(height) + 2;
         if !self.registered_epochs.insert(target) {
             return;
         }

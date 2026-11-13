@@ -396,7 +396,7 @@ impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
                         &cert,
                         &entries,
                         threshold,
-                        *self.membership.coordinator.epoch_height(),
+                        self.membership.coordinator.epoch_length(),
                         &self.upgrade_lock,
                         &self.membership.coordinator,
                     )?;
@@ -452,7 +452,7 @@ impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
         };
         if !cert
             .data
-            .is_well_formed(*self.membership.coordinator.epoch_height())
+            .is_well_formed(self.membership.coordinator.epoch_length())
         {
             return false;
         }
@@ -1459,7 +1459,7 @@ mod tests {
                 &tc,
                 &entries,
                 membership.success_threshold(),
-                *coordinator.epoch_height(),
+                coordinator.epoch_length(),
                 &lock,
                 &coordinator,
             )

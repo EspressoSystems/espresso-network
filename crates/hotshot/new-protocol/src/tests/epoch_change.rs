@@ -4,13 +4,12 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
     vote::HasViewNumber,
 };
 
 use super::common::{
     assertions::{is_send_epoch_change, is_view_changed},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData},
+    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, epoch_length},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -38,7 +37,10 @@ async fn run_views_full(
     for i in range.clone() {
         let block_number =
             BlockHeader::<TestTypes>::block_number(&test_data.views[i].proposal.data.block_header);
-        if is_epoch_transition(block_number, EPOCH_HEIGHT) {
+        if epoch_length(EPOCH_HEIGHT)
+            .position(block_number)
+            .is_epoch_transition()
+        {
             drb_epochs.insert(test_data.views[i].epoch_number + 1);
         }
     }
@@ -174,7 +176,7 @@ async fn test_epoch_change_mismatched_views_not_well_formed() {
     );
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 }
@@ -196,7 +198,7 @@ async fn test_epoch_change_cross_epoch_certificates_not_well_formed() {
     );
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 }
@@ -214,7 +216,7 @@ async fn test_epoch_change_wrong_block_number_not_well_formed() {
         EpochChangeMessage::validated(mid_view.cert1.clone(), mid_view.cert2.clone(), proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::NotLastBlock)
     ));
 }
@@ -235,7 +237,7 @@ async fn test_epoch_change_proposal_mismatch_not_well_formed() {
     );
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::ProposalMismatch)
     ));
 }
@@ -256,7 +258,7 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
         epoch_view.cert2.clone(),
         proposal.clone(),
     );
-    assert!(genuine.well_formed(EPOCH_HEIGHT).is_ok());
+    assert!(genuine.well_formed(epoch_length(EPOCH_HEIGHT)).is_ok());
 
     proposal.epoch += 1;
     assert_eq!(
@@ -269,7 +271,7 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
         EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(MalformedProposal::Epoch { .. }))
     ));
 }
@@ -305,7 +307,7 @@ async fn test_epoch_change_state_cert_unexpected_not_well_formed() {
         EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(
             MalformedProposal::StateCertUnexpected(_)
         ))
@@ -330,7 +332,7 @@ async fn test_epoch_change_certificates_at_another_view_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::ProposalCertificateMismatch)
     ));
 }
@@ -358,7 +360,7 @@ async fn test_epoch_change_certificates_for_another_block_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::ProposalCertificateMismatch)
     ));
 }
@@ -379,7 +381,7 @@ async fn test_epoch_change_certificates_for_different_blocks_not_well_formed() {
         EpochChangeMessage::validated(cert1, epoch_view.cert2.clone(), proposal.clone());
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 
@@ -388,7 +390,7 @@ async fn test_epoch_change_certificates_for_different_blocks_not_well_formed() {
     let epoch_change =
         EpochChangeMessage::validated(without_block_number, epoch_view.cert2.clone(), proposal);
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 }
@@ -414,7 +416,7 @@ async fn test_epoch_change_proposal_justify_qc_mismatch_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(
             MalformedProposal::JustifyQcEpoch { .. }
         ))
@@ -441,7 +443,7 @@ async fn test_epoch_change_proposal_view_order_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(
             MalformedProposal::ParentNotEarlier { .. }
         ))

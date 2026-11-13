@@ -3,6 +3,7 @@ use std::{fmt::Display, ops::RangeInclusive};
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    epoch::EpochLength,
     simple_certificate::{LightClientStateUpdateCertificateV2, check_qc_state_cert_correspondence},
     traits::node_implementation::NodeType,
 };
@@ -55,10 +56,10 @@ pub fn proposal_commitment<T: NodeType>(proposal: &Proposal<T>) -> Commitment<Le
 /// validated proposal: the threshold signature check only happens there.
 pub fn validated_state_cert<T: NodeType>(
     proposal: &Proposal<T>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 ) -> Option<&LightClientStateUpdateCertificateV2<T>> {
     let state_cert = proposal.state_cert.as_ref()?;
-    check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, epoch_height)
+    check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, epoch_length)
         .then_some(state_cert)
 }
 

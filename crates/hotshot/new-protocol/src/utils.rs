@@ -1,12 +1,11 @@
 use anyhow::{anyhow, ensure};
 use committable::Committable;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
-    utils::{epoch_from_block_number, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 
@@ -58,13 +57,13 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     );
     ensure!(
         cert2.view_number() == newest.view_number()
-            || is_last_block(newest.height(), *coordinator.epoch_height()),
+            || coordinator
+                .epoch_length()
+                .position(newest.height())
+                .is_last(),
         "cert2 view is after the newest leaf's, which is not the last block of its epoch"
     );
-    let epoch = EpochNumber::new(epoch_from_block_number(
-        cert2.data.block_number,
-        *coordinator.epoch_height(),
-    ));
+    let epoch = coordinator.epoch_length().epoch_of(cert2.data.block_number);
     ensure!(
         cert2.data.epoch == epoch,
         "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
@@ -103,10 +102,7 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
             leaf.height().checked_add(1) == Some(current.height()),
             "leaf heights do not chain"
         );
-        let qc_epoch = EpochNumber::new(epoch_from_block_number(
-            leaf.height(),
-            *coordinator.epoch_height(),
-        ));
+        let qc_epoch = coordinator.epoch_length().epoch_of(leaf.height());
         ensure!(
             justify_qc.data().epoch == Some(qc_epoch),
             "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
@@ -152,7 +148,7 @@ mod test {
     };
     use hotshot_types::{
         PeerConfig,
-        data::{QuorumProposal2, QuorumProposalWrapper, VidCommitment},
+        data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment},
         signature_key::{BLSPubKey, SchnorrPubKey},
         simple_certificate::QuorumCertificate2,
         simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},

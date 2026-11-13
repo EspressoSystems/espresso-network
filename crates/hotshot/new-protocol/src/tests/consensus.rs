@@ -13,7 +13,6 @@ use hotshot_types::{
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
     simple_vote::{HasEpoch, LockView, QuorumData2, SimpleVote, TimeoutData2, Vote2Data},
     traits::{ValidatedState, block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_root,
     vote::HasViewNumber,
 };
 
@@ -22,7 +21,7 @@ use super::common::{
     utils::{
         TestData, TestView, build_cert1, build_cert2, build_state_cert_for_test,
         build_timeout_cert2_signed_by, build_timeout_cert3, build_timeout_cert3_with_lock,
-        mock_membership,
+        epoch_length, mock_membership,
     },
 };
 use crate::{
@@ -392,26 +391,32 @@ fn test_quorum_data_well_formedness() {
         epoch: epoch.map(EpochNumber::new),
         block_number,
     };
-    assert!(vote1(Some(1), Some(0)).is_well_formed(height), "genesis");
     assert!(
-        vote1(Some(1), Some(10)).is_well_formed(height),
+        vote1(Some(1), Some(0)).is_well_formed(epoch_length(height)),
+        "genesis"
+    );
+    assert!(
+        vote1(Some(1), Some(10)).is_well_formed(epoch_length(height)),
         "an epoch's last block"
     );
     assert!(
-        vote1(Some(2), Some(11)).is_well_formed(height),
+        vote1(Some(2), Some(11)).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote1(Some(2), Some(10)).is_well_formed(height),
+        !vote1(Some(2), Some(10)).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
     assert!(
-        !vote1(Some(1), Some(11)).is_well_formed(height),
+        !vote1(Some(1), Some(11)).is_well_formed(epoch_length(height)),
         "an epoch its height has left"
     );
-    assert!(!vote1(None, Some(10)).is_well_formed(height), "no epoch");
     assert!(
-        !vote1(Some(1), None).is_well_formed(height),
+        !vote1(None, Some(10)).is_well_formed(epoch_length(height)),
+        "no epoch"
+    );
+    assert!(
+        !vote1(Some(1), None).is_well_formed(epoch_length(height)),
         "no block number"
     );
 
@@ -420,13 +425,16 @@ fn test_quorum_data_well_formedness() {
         epoch: EpochNumber::new(epoch),
         block_number,
     };
-    assert!(vote2(1, 10).is_well_formed(height), "an epoch's last block");
     assert!(
-        vote2(2, 11).is_well_formed(height),
+        vote2(1, 10).is_well_formed(epoch_length(height)),
+        "an epoch's last block"
+    );
+    assert!(
+        vote2(2, 11).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote2(2, 10).is_well_formed(height),
+        !vote2(2, 10).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
 }
@@ -3587,7 +3595,7 @@ async fn test_unvalidated_state_cert_is_not_stored() {
     // Precondition: a non-epoch-root parent QC is what makes the validator skip entirely.
     let parent_block = view.proposal.data.justify_qc.data.block_number;
     assert!(
-        parent_block.is_none_or(|bn| !is_epoch_root(bn, EPOCH_HEIGHT)),
+        parent_block.is_none_or(|bn| !epoch_length(EPOCH_HEIGHT).position(bn).is_root()),
         "fixture precondition: parent QC must not be an epoch root, got {parent_block:?}"
     );
     assert!(
@@ -3672,7 +3680,7 @@ async fn test_validated_state_cert_is_stored() {
         .block_number
         .expect("a state_cert-bearing proposal must have a parent block number");
     assert!(
-        is_epoch_root(parent_block, EPOCH_HEIGHT),
+        epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
         "fixture precondition: parent QC must be an epoch root, got block {parent_block}"
     );
 
@@ -3743,7 +3751,7 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
 
     let mut validator = ProposalValidator::new(
         harness.membership_coordinator.clone(),
-        EPOCH_HEIGHT,
+        epoch_length(EPOCH_HEIGHT),
         test_upgrade_lock(),
         None,
     );

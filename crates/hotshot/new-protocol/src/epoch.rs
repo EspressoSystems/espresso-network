@@ -4,11 +4,11 @@ use std::{
 };
 
 use hotshot_types::{
-    data::{BlockNumber, EpochNumber, Leaf2},
+    data::{EpochNumber, Leaf2},
     drb::DrbResult,
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::{is_epoch_root, is_transition_block},
 };
 use hotshot_utils::anytrace;
 use tokio::task::{AbortHandle, JoinSet};
@@ -35,7 +35,7 @@ type TaskOutput = (EpochNumber, Result<EpochRootResult, EpochManagerError>);
 /// compute) to [`EpochMembershipCoordinator::membership_for_epoch`].  This
 /// manager exists only to issue the request and dedup concurrent callers.
 pub struct EpochManager<T: NodeType> {
-    epoch_height: BlockNumber,
+    epoch_length: EpochLength,
     membership_coordinator: EpochMembershipCoordinator<T>,
     tasks: JoinSet<TaskOutput>,
     handles: BTreeMap<EpochNumber, Vec<AbortHandle>>,
@@ -48,12 +48,12 @@ pub struct EpochManager<T: NodeType> {
 }
 
 impl<T: NodeType> EpochManager<T> {
-    pub fn new<B>(epoch_height: B, membership_coordinator: EpochMembershipCoordinator<T>) -> Self
-    where
-        B: Into<BlockNumber>,
-    {
+    pub fn new(
+        epoch_length: EpochLength,
+        membership_coordinator: EpochMembershipCoordinator<T>,
+    ) -> Self {
         Self {
-            epoch_height: epoch_height.into(),
+            epoch_length,
             membership_coordinator,
             tasks: JoinSet::new(),
             handles: BTreeMap::new(),
@@ -94,8 +94,8 @@ impl<T: NodeType> EpochManager<T> {
 
         // At every epoch root, trigger DRB computation for the epoch that
         // will use this root (epoch + 2).
-        if is_epoch_root(block_number, *self.epoch_height) {
-            let Some(epoch) = leaf.epoch(*self.epoch_height) else {
+        if self.epoch_length.position(block_number).is_root() {
+            let Some(epoch) = leaf.epoch(self.epoch_length.get()) else {
                 error!("Leaf has no epoch");
                 return;
             };
@@ -131,8 +131,11 @@ impl<T: NodeType> EpochManager<T> {
         }
 
         // If this is the transition block of an epoch feed the DRB result to the coordinator.
-        if is_transition_block(block_number, *self.epoch_height)
-            && let Some(epoch) = leaf.epoch(*self.epoch_height)
+        if self
+            .epoch_length
+            .position(block_number)
+            .is_transition_block()
+            && let Some(epoch) = leaf.epoch(self.epoch_length.get())
             && let Some(drb) = leaf.next_drb_result
         {
             let target_epoch = epoch + 1;

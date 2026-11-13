@@ -26,14 +26,13 @@ use hotshot_types::{
     simple_certificate::SuccessThreshold,
     simple_vote::{TimeoutVote2, TimeoutVote3},
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
     vote::HasViewNumber,
 };
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use super::common::{
     runner::{DropInbound, NodeAction, NodeChange, TestError, TestRunner},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, mock_membership},
+    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, epoch_length, mock_membership},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -85,7 +84,10 @@ async fn boundary_timeout_vote(
     let mut drb_epochs = BTreeSet::new();
     for view in &test_data.views[..=BOUNDARY] {
         let block = BlockHeader::<TestTypes>::block_number(&view.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
+        if epoch_length(EPOCH_HEIGHT)
+            .position(block)
+            .is_epoch_transition()
+        {
             drb_epochs.insert(view.epoch_number + 1);
         }
     }

@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use super::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
     utils::{
-        mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
+        epoch_length, mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
         record_output_leaders,
     },
 };
@@ -98,7 +98,7 @@ impl TestHarness {
         let (membership, storage, client) =
             mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
 
-        let epoch_manager = EpochManager::new(10, membership.clone());
+        let epoch_manager = EpochManager::new(epoch_length(10), membership.clone());
 
         let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -122,7 +122,7 @@ impl TestHarness {
             10,
             upgrade_lock.clone(),
             genesis_leaf.clone(),
-            epoch_height,
+            epoch_length(epoch_height),
         );
 
         let vid_reconstruction_task = VidReconstructor::new();
@@ -144,12 +144,15 @@ impl TestHarness {
 
         let proposal_validator = ProposalValidator::new(
             membership.clone(),
-            epoch_height,
+            epoch_length(epoch_height),
             upgrade_lock.clone(),
             Some(&genesis_qc),
         );
-        let share_validator =
-            VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let share_validator = VidShareValidator::new(
+            membership.clone(),
+            epoch_length(epoch_height),
+            upgrade_lock.clone(),
+        );
 
         let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
             .expect("keypair derivation should succeed");
@@ -239,7 +242,7 @@ impl TestHarness {
             consensus.public_key(),
             consensus.last_decided_leaf(),
             consensus.cert1_at(ViewNumber::genesis()),
-            *consensus.epoch_height,
+            consensus.epoch_length.get(),
         );
         record_leader(&mut self.trace, consensus, &input);
         record_fallback_anchor(&mut self.trace, consensus);
@@ -396,7 +399,7 @@ impl TestHarness {
             consensus.public_key(),
             consensus.last_decided_leaf(),
             consensus.cert1_at(ViewNumber::genesis()),
-            *consensus.epoch_height,
+            consensus.epoch_length.get(),
         );
         self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);

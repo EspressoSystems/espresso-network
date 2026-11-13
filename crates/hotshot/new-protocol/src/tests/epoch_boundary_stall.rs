@@ -20,7 +20,6 @@ use hotshot_types::{
     simple_certificate::TimeoutEvidence,
     simple_vote::{HasEpoch, LockView},
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
     vote::HasViewNumber,
 };
 
@@ -28,7 +27,7 @@ use super::common::{
     assertions::{any, decides_view, is_proposal_certified, is_vote2_for_view},
     utils::{
         ConsensusHarness, TEST_DRB_RESULT, TestData, build_cert1, build_cert2,
-        build_timeout_cert3_with_lock,
+        build_timeout_cert3_with_lock, epoch_length,
     },
 };
 use crate::{
@@ -96,7 +95,10 @@ async fn node_before_the_boundary_block(
     let mut drb_epochs = BTreeSet::new();
     for v in &test_data.views[..=BOUNDARY] {
         let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
+        if epoch_length(EPOCH_HEIGHT)
+            .position(block)
+            .is_epoch_transition()
+        {
             drb_epochs.insert(v.epoch_number + 1);
         }
     }
@@ -315,7 +317,7 @@ async fn late_certificate1_at_the_boundary_is_committed_by_a_revote() {
         "with the block's own Cert1"
     );
     assert_eq!(epoch_change.cert2, cert2_12, "and the re-vote's Cert2");
-    assert!(epoch_change.well_formed(EPOCH_HEIGHT).is_ok());
+    assert!(epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)).is_ok());
 }
 
 /// The leader side: a leader of epoch 1 entering a view by timeout, locked on
@@ -361,7 +363,12 @@ async fn leader_requests_a_revote_for_an_uncommitted_boundary_block() {
     assert_eq!(request.revote.view, view(12));
     assert_eq!(request.revote.epoch, epoch(1));
     assert_eq!(request.revote.cert1, boundary.cert1);
-    assert!(request.revote.well_formed(EPOCH_HEIGHT).is_ok());
+    assert!(
+        request
+            .revote
+            .well_formed(epoch_length(EPOCH_HEIGHT))
+            .is_ok()
+    );
     let (leader_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], leader);
     assert!(request.signed_by(&leader_key));
     assert!(
@@ -575,7 +582,12 @@ async fn leader_requests_a_revote_in_the_view_after_the_boundary() {
     assert_eq!(request.revote.epoch, epoch(1));
     assert_eq!(request.revote.cert1, boundary.cert1);
     assert!(request.revote.timeout.is_none());
-    assert!(request.revote.well_formed(EPOCH_HEIGHT).is_ok());
+    assert!(
+        request
+            .revote
+            .well_formed(epoch_length(EPOCH_HEIGHT))
+            .is_ok()
+    );
 }
 
 /// A re-vote's `Certificate1` without a commit is grounds for another re-vote
@@ -611,7 +623,12 @@ async fn leader_requests_a_revote_in_the_view_after_a_revotes_certificate() {
         .expect("the leader sends a re-vote request");
     assert_eq!(request.revote.cert1, cert1_12);
     assert!(request.revote.timeout.is_none());
-    assert!(request.revote.well_formed(EPOCH_HEIGHT).is_ok());
+    assert!(
+        request
+            .revote
+            .well_formed(epoch_length(EPOCH_HEIGHT))
+            .is_ok()
+    );
 }
 
 /// A node votes1 on a re-vote request naming a re-vote's `Certificate1`, with
@@ -1076,7 +1093,7 @@ async fn a_first_block_skipping_views_without_a_timeout_is_malformed() {
     forked.view_number = view(21);
     forked.next_epoch_justify_qc = Some(cert2_20);
     assert!(matches!(
-        crate::proposal::well_formed(&forked, EPOCH_HEIGHT),
+        crate::proposal::well_formed(&forked, epoch_length(EPOCH_HEIGHT)),
         Err(crate::proposal::MalformedProposal::ViewChangeEvidenceMissing(v)) if v == view(21)
     ));
 }
@@ -1229,7 +1246,7 @@ async fn first_block_after_a_revote_is_proposed() {
     );
     assert_eq!(proposal.next_epoch_justify_qc, Some(cert2_11));
     assert!(proposal.view_change_evidence.is_some());
-    assert!(crate::proposal::well_formed(&proposal, EPOCH_HEIGHT).is_ok());
+    assert!(crate::proposal::well_formed(&proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
 }
 
 /// A fetch by a re-vote certificate's view is answered with the block it
@@ -1348,7 +1365,9 @@ async fn first_block_carrying_a_revotes_commit_decides_the_boundary_block() {
     proposal.proposal.data.next_epoch_justify_qc = Some(cert2_11);
     proposal.proposal.data.view_change_evidence = Some(tc);
     assert_eq!(proposal.proposal.data.justify_qc, boundary.cert1);
-    assert!(crate::proposal::well_formed(&proposal.proposal.data, EPOCH_HEIGHT).is_ok());
+    assert!(
+        crate::proposal::well_formed(&proposal.proposal.data, epoch_length(EPOCH_HEIGHT)).is_ok()
+    );
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
     let mut share = first.vid_share_for(&node_key);
     share.view_number = view(12);
@@ -1461,7 +1480,10 @@ async fn node_without_the_boundary_block(test_data: &TestData) -> ConsensusHarne
     let mut drb_epochs = BTreeSet::new();
     for v in &test_data.views[..=BOUNDARY] {
         let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
+        if epoch_length(EPOCH_HEIGHT)
+            .position(block)
+            .is_epoch_transition()
+        {
             drb_epochs.insert(v.epoch_number + 1);
         }
     }
@@ -1501,7 +1523,10 @@ async fn first_block_after_a_revote_drops_a_timeout_certificate_of_the_old_epoch
             .await;
     for v in &test_data.views[..BOUNDARY] {
         let block = BlockHeader::<TestTypes>::block_number(&v.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
+        if epoch_length(EPOCH_HEIGHT)
+            .position(block)
+            .is_epoch_transition()
+        {
             harness
                 .apply(ConsensusInput::DrbResult(
                     v.epoch_number + 1,
