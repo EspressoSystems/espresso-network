@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::primitives::{Address, U256};
-use anyhow::Context;
+use anyhow::{Context, bail};
 use derive_more::{Display, From, Into};
 use hotshot_contract_adapter::reward::{RewardAuthData, RewardClaimInput};
 use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
@@ -74,6 +74,35 @@ pub fn forgotten_accounts_include(tree: &RewardMerkleTreeV2, accounts: &[RewardA
     }
 
     false
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
+pub struct RewardMerkleTreeV2Data {
+    pub balances: Vec<(RewardAccountV2, RewardAmount)>,
+}
+
+impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
+    type Error = anyhow::Error;
+    // Required method
+    fn try_into(self) -> anyhow::Result<RewardMerkleTreeV2Data> {
+        let num_leaves = self.num_leaves();
+
+        let balances: Vec<_> = self
+            .iter()
+            .map(|(account, balance)| (*account, *balance))
+            .collect();
+
+        if balances.len() as u64 == num_leaves {
+            Ok(RewardMerkleTreeV2Data { balances })
+        } else {
+            bail!(
+                "RewardMerkleTreeV2 is incomplete, some accounts are missing. Balances length: \
+                 {}, num_leaves: {num_leaves}.",
+                balances.len(),
+            );
+        }
+    }
 }
 
 // New Type for `Address` in order to implement `CanonicalSerialize` and

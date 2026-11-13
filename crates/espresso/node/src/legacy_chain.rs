@@ -25,6 +25,7 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use espresso_types::{
     Certificate2, Header, SeqTypes,
+    catchup::Verified,
     traits::{PersistenceOptions, SequencerPersistence, StateCertPersistence},
 };
 use futures::FutureExt;
@@ -157,7 +158,9 @@ impl LegacyChain {
         // There are no peers to fetch the config or state certs from.
         persistence.save_config(&self.network_config).await?;
         for (epoch, cert) in &self.state_certs {
-            persistence.insert_state_cert(*epoch, cert.clone()).await?;
+            persistence
+                .insert_state_cert(*epoch, Verified::new_unchecked(cert.clone()))
+                .await?;
         }
 
         let genesis = self.genesis.clone();

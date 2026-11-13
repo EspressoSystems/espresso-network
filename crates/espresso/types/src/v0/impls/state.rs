@@ -39,6 +39,7 @@ use crate::{
     BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount,
     FeeInfo, FeeMerkleTree, Header, Leaf2, NsTableValidationError, PayloadByteLen, SeqTypes,
     UpgradeType,
+    catchup::{FeeAccountsAt, FrontierAt},
     traits::StateCatchup,
     v0::{
         impls::{StakeTableHash, distribute_block_reward},
@@ -1073,14 +1074,17 @@ impl ValidatedState {
                 ?parent_view,
                 "fetching block frontier from peers"
             );
-            peers
-                .remember_blocks_merkle_tree(
+            validated_state.block_merkle_tree = peers
+                .fetch_blocks_frontier(
                     instance,
-                    parent_height,
-                    parent_view,
-                    &mut validated_state.block_merkle_tree,
+                    &FrontierAt {
+                        height: parent_height,
+                        view: parent_view,
+                        tree: validated_state.block_merkle_tree.clone(),
+                    },
                 )
-                .await?;
+                .await?
+                .into_inner();
         }
 
         // Fetch missing fee state entries
@@ -1095,15 +1099,17 @@ impl ValidatedState {
             let missing_account_proofs = peers
                 .fetch_accounts(
                     instance,
-                    parent_height,
-                    parent_view,
-                    validated_state.fee_merkle_tree.commitment(),
-                    missing_accounts,
+                    &FeeAccountsAt {
+                        height: parent_height,
+                        view: parent_view,
+                        root: validated_state.fee_merkle_tree.commitment(),
+                        accounts: missing_accounts,
+                    },
                 )
                 .await?;
 
             // Remember the fee state entries
-            for proof in missing_account_proofs.iter() {
+            for proof in missing_account_proofs.inner() {
                 proof
                     .remember(&mut validated_state.fee_merkle_tree)
                     .expect("proof previously verified");
@@ -1228,7 +1234,10 @@ impl ValidatedState {
         let cf = match (state_cf.resolve(), header_cf.resolve()) {
             (Some(cf), _) => cf,
             (_, Some(cf)) if cf.commit() == state_cf.commit() => cf,
-            (_, Some(_)) | (None, None) => peers.fetch_chain_config(state_cf.commit()).await?,
+            (_, Some(_)) | (None, None) => peers
+                .fetch_chain_config(state_cf.commit())
+                .await?
+                .into_inner(),
         };
 
         Ok(cf)

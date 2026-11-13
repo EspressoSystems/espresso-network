@@ -45,6 +45,7 @@ use crate::{
     BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
     L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
     TimestampMillis,
+    catchup::{FrontierAt, Verified},
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
@@ -955,6 +956,7 @@ impl Header {
                     .as_ref()
                     .fetch_chain_config(validated_cf.commit())
                     .await
+                    .map(Verified::into_inner)
             },
         }
     }
@@ -1321,17 +1323,20 @@ impl BlockHeader<SeqTypes> for Header {
             // Ensure merkle tree has frontier
             if validated_state.need_to_fetch_blocks_mt_frontier() {
                 tracing::warn!(height, ?view, "fetching block frontier from peers");
-                instance_state
+                validated_state.block_merkle_tree = instance_state
                     .state_catchup
                     .as_ref()
-                    .remember_blocks_merkle_tree(
+                    .fetch_blocks_frontier(
                         instance_state,
-                        height,
-                        view,
-                        &mut validated_state.block_merkle_tree,
+                        &FrontierAt {
+                            height,
+                            view,
+                            tree: validated_state.block_merkle_tree.clone(),
+                        },
                     )
                     .await
-                    .context("remembering block proof")?;
+                    .context("remembering block proof")?
+                    .into_inner();
             }
 
             let epoch_height = instance_state

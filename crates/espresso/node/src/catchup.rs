@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, anyhow, bail, ensure};
+use anyhow::{Context, anyhow, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -15,15 +15,15 @@ use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
     ValidatedState,
+    catchup::{
+        CatchupRequest, FeeAccountsAt, FrontierAt, LeafAt, LeafResponse, RewardAccountsV1At,
+        RewardTreeV2At, StateCertFor, Verified, VerifyError,
+    },
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
-    v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
-        RewardMerkleTreeV1,
-    },
+    v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
-        RewardMerkleCommitmentV2, RewardMerkleTreeV2, forgotten_accounts_include,
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2, RewardMerkleTreeV2,
     },
 };
 use futures::{
@@ -31,23 +31,19 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
-use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     ValidatorConfig,
     data::ViewNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    message::UpgradeLock,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
     },
-    utils::verify_leaf_chain,
 };
 use http_client::{Request, error::ClientErr};
 use itertools::Itertools;
-use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
@@ -55,11 +51,8 @@ use tokio::time::{sleep, timeout};
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-use crate::api::{
-    BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data, context::ConsensusSource,
-};
+use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, context::ConsensusSource};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -139,6 +132,28 @@ pub struct StatePeers<ApiVer: StaticVersionType> {
 }
 
 impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
+    /// Try each peer in score order until one answers `req`, as `send` asks it, with a response
+    /// that verifies against `req`.
+    ///
+    /// A response rejected as [`VerifyError::Invalid`] counts against its peer, like a failed
+    /// request. One rejected as [`VerifyError::Unavailable`] is not the peer's fault: it is not
+    /// scored and the next peer is tried. If no peer verifies, the error is the `Unavailable`
+    /// verdict when there was one, else the last `Invalid` one, so that it says why.
+    async fn fetch_verified<R, Fut>(
+        &self,
+        retry: usize,
+        req: &R,
+        send: impl Fn(Client<ApiVer>) -> Fut,
+    ) -> anyhow::Result<Verified<R::Output>>
+    where
+        R: CatchupRequest,
+        Fut: TryFuture<Ok = R::Response, Error: Display>,
+    {
+        self.fetch_with(retry, send, |response| req.verify(response))
+            .await
+    }
+
+    /// Like [`Self::fetch_verified`], for a response there is nothing to verify against.
     async fn fetch<Fut>(
         &self,
         retry: usize,
@@ -146,6 +161,21 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     ) -> anyhow::Result<Fut::Ok>
     where
         Fut: TryFuture<Error: Display>,
+    {
+        self.fetch_with(retry, f, |response| async move { Ok(response) })
+            .await
+    }
+
+    async fn fetch_with<Fut, V, VFut, T>(
+        &self,
+        retry: usize,
+        f: impl Fn(Client<ApiVer>) -> Fut,
+        verify: V,
+    ) -> anyhow::Result<T>
+    where
+        Fut: TryFuture<Error: Display>,
+        V: Fn(Fut::Ok) -> VFut,
+        VFut: Future<Output = Result<T, VerifyError>>,
     {
         // Since we have generally have multiple peers we can catch up from, we want a fairly
         // aggressive timeout for requests: if a peer is not responding quickly, we're better off
@@ -163,6 +193,8 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // so we can update reliability scores at the end.
         let mut requests = HashMap::new();
         let mut res = Err(anyhow!("failed fetching from every peer"));
+        let mut unavailable = None;
+        let mut invalid = None;
 
         // Try each peer in order of reliability score, until we succeed. We clone out of
         // `self.scores` because it is small (contains only numeric IDs and scores), so this clone
@@ -173,13 +205,10 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
-            match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone()))).await {
-                Ok(Ok(t)) => {
-                    requests.insert(id, true);
-                    res = Ok(t);
-                    logs = Vec::new();
-                    break;
-                },
+            let response = match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone())))
+                .await
+            {
+                Ok(Ok(response)) => response,
                 Ok(Err(err)) => {
                     tracing::debug!(id, ?score, peer = %client.url, "error from peer: {err:#}");
                     logs.push(format!(
@@ -187,15 +216,54 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                         client.url
                     ));
                     requests.insert(id, false);
+                    continue;
                 },
                 Err(_) => {
-                    tracing::debug!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
+                    tracing::debug!(
+                        id, ?score, peer = %client.url, ?timeout_dur, "request timed out"
+                    );
                     logs.push(format!(
                         "Error from peer {} with id {id} and score {score:?}: request timed out",
                         client.url
                     ));
                     requests.insert(id, false);
+                    continue;
                 },
+            };
+            // Verification runs outside the per-peer timeout: rebuilding a reward tree waits on a
+            // process-wide permit, which is no fault of the peer.
+            match verify(response).await {
+                Ok(t) => {
+                    requests.insert(id, true);
+                    res = Ok(t);
+                    logs = Vec::new();
+                    break;
+                },
+                Err(VerifyError::Unavailable(epoch)) => {
+                    tracing::debug!(id, peer = %client.url, %epoch, "cannot verify response yet");
+                    logs.push(format!(
+                        "Cannot verify response from peer {} with id {id} yet: no stake table for \
+                         epoch {epoch}",
+                        client.url
+                    ));
+                    unavailable = Some(epoch);
+                },
+                Err(VerifyError::Invalid(err)) => {
+                    tracing::debug!(id, ?score, peer = %client.url, "invalid response: {err:#}");
+                    logs.push(format!(
+                        "Invalid response from peer {} with id {id} and score {score:?}: {err:#}",
+                        client.url
+                    ));
+                    requests.insert(id, false);
+                    invalid = Some(err);
+                },
+            }
+        }
+        if res.is_err() {
+            if let Some(epoch) = unavailable {
+                res = Err(VerifyError::Unavailable(epoch).into());
+            } else if let Some(err) = invalid {
+                res = Err(VerifyError::Invalid(err).into());
             }
         }
 
@@ -278,241 +346,151 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     }
 }
 
-/// Verify a legacy (pre-V6) leaf chain
-pub(crate) async fn verify_legacy_leaf_chain(
-    leaf_chain: Vec<Leaf2>,
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    height: u64,
-) -> anyhow::Result<Leaf2> {
-    let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-    verify_leaf_chain(leaf_chain, coordinator, height, &upgrade_lock)
-        .await
-        .with_context(|| format!("failed to verify leaf chain at height {height}"))
-}
-
 #[async_trait]
 impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
-    #[tracing::instrument(skip(self, _instance))]
+    #[tracing::instrument(
+        skip(self, _instance, req),
+        fields(
+            height = req.height,
+            view = ?req.view,
+            fee_merkle_tree_root = ?req.root,
+            accounts = ?req.accounts,
+        )
+    )]
     async fn try_fetch_accounts(
         &self,
         retry: usize,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: &[FeeAccount],
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        self.fetch(retry, |client| async move {
-            let tree = client
+        req: &FeeAccountsAt,
+    ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
+        self.fetch_verified(retry, req, |client| async move {
+            client
                 .inner
-                .post::<FeeMerkleTree>(&paths::catchup_accounts(height, view.u64()))
-                .body_binary(&accounts.to_vec())?
+                .post::<FeeMerkleTree>(&paths::catchup_accounts(req.height, req.view.u64()))
+                .body_binary(&req.accounts)?
                 .send()
-                .await?;
-
-            // Verify proofs.
-            let mut proofs = Vec::new();
-            for account in accounts {
-                let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
-                    .context(format!("response missing fee account {account}"))?;
-                proof.verify(&fee_merkle_tree_root).context(format!(
-                    "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
-                ))?;
-                proofs.push(proof);
-            }
-
-            anyhow::Ok(proofs)
+                .await
         })
         .await
     }
 
-    #[tracing::instrument(skip(self, _instance, mt))]
-    async fn try_remember_blocks_merkle_tree(
+    #[tracing::instrument(
+        skip(self, _instance, req),
+        fields(height = req.height, view = ?req.view)
+    )]
+    async fn try_fetch_blocks_frontier(
         &self,
         retry: usize,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        *mt = self
-            .fetch(retry, |client| {
-                let mut mt = mt.clone();
-                async move {
-                    let frontier = client
-                        .get::<BlocksFrontier>(&paths::catchup_blocks(height, view.u64()))
-                        .send()
-                        .await?;
-                    let elem = frontier
-                        .elem()
-                        .context("provided frontier is missing leaf element")?;
-                    mt.remember(mt.num_leaves() - 1, *elem, &frontier)
-                        .context("verifying block proof")?;
-                    anyhow::Ok(mt)
-                }
-            })
-            .await?;
-        Ok(())
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
+        self.fetch_verified(retry, req, |client| async move {
+            client
+                .get::<BlocksFrontier>(&paths::catchup_blocks(req.height, req.view.u64()))
+                .send()
+                .await
+        })
+        .await
     }
 
     async fn try_fetch_chain_config(
         &self,
         retry: usize,
         commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
-        self.fetch(retry, |client| async move {
-            let cf = client
+    ) -> anyhow::Result<Verified<ChainConfig>> {
+        self.fetch_verified(retry, &commitment, |client| async move {
+            client
                 .get::<ChainConfig>(&paths::catchup_chainconfig(commitment))
                 .send()
-                .await?;
-            ensure!(
-                cf.commit() == commitment,
-                "received chain config with mismatched commitment: expected {commitment}, got {}",
-                cf.commit()
-            );
-            Ok(cf)
+                .await
         })
         .await
     }
 
-    async fn try_fetch_leaf(
-        &self,
-        retry: usize,
-        coordinator: EpochMembershipCoordinator<SeqTypes>,
-        height: u64,
-    ) -> anyhow::Result<Leaf2> {
-        // Fetch the leaf chain. For new protocol heights this is a leaf range
-        // `[height..=cert2_height]`
-        // for legacy-protocol heights it's a 3-chain.
-        let leaf_chain = self
-            .fetch(retry, |client| async move {
-                let chain = client
-                    .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
-                    .send()
-                    .await?;
-                anyhow::Ok(chain)
-            })
-            .await
-            .with_context(|| format!("failed to fetch leaf chain at height {height}"))?;
-
-        let first = leaf_chain
-            .first()
-            .ok_or_else(|| anyhow!("empty leaf chain returned for height {height}"))?;
-
-        if first.block_header().version() >= NEW_PROTOCOL_VERSION {
-            let upgrade_lock =
-                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
-
-            // The chain terminates at the leaf the cert2 finalizes, so fetch that cert2 by its
-            // exact height
-            let cert2_height = leaf_chain
-                .last()
-                .ok_or_else(|| anyhow!("empty leaf chain returned for height {height}"))?
-                .height();
-            let cert2 = self
-                .fetch(retry, |client| async move {
-                    let cert2 = client
+    async fn try_fetch_leaf(&self, retry: usize, req: &LeafAt) -> anyhow::Result<Verified<Leaf2>> {
+        let height = req.height;
+        // The leaf chain and the cert2 that finalizes it come from the same peer, so that a peer
+        // whose pair does not verify is the one charged for it. For new protocol heights the chain
+        // is a leaf range `[height..=cert2_height]`, for legacy-protocol heights it's a 3-chain.
+        self.fetch_verified(retry, req, |client| async move {
+            let leaves = client
+                .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
+                .send()
+                .await
+                .with_context(|| format!("failed to fetch leaf chain at height {height}"))?;
+            let cert2 = match req.cert2_height(&leaves)? {
+                Some(cert2_height) => Some(
+                    client
                         .get::<Certificate2<SeqTypes>>(&paths::catchup_cert2(cert2_height))
                         .send()
-                        .await?;
-                    anyhow::Ok(cert2)
-                })
-                .await
-                .with_context(|| format!("failed to fetch cert2 for height {cert2_height}"))?;
-
-            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
-                .await
-                .with_context(|| {
-                    format!("failed to verify leaf chain with cert2 at height {height}")
-                })
-        } else {
-            verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await
-        }
+                        .await
+                        .with_context(|| {
+                            format!("failed to fetch cert2 for height {cert2_height}")
+                        })?,
+                ),
+                None => None,
+            };
+            anyhow::Ok(LeafResponse { leaves, cert2 })
+        })
+        .await
     }
 
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
-        let result = self
-            .fetch(retry, |client| async move {
-                // Try the catchup endpoint first which returns tree from consensuss decided state
-                // if not present, then fall back to
-                // the reward-state-v2 endpoint which returns from storage decided state
-                let tree_bytes = match client
-                    .inner
-                    .get::<Vec<u8>>(&paths::catchup_reward_merkle_tree_v2(height, *view))
-                    .send()
-                    .await
-                {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        tracing::info!(
-                            "catchup endpoint failed, falling back to reward-state-v2: {err:#}"
-                        );
-                        client
-                            .inner
-                            .get::<Vec<u8>>(&paths::reward_merkle_tree_v2(height))
-                            .send()
-                            .await?
-                    },
-                };
-
-                Ok::<Vec<u8>, anyhow::Error>(tree_bytes)
-            })
-            .await
-            .context("Fetching from peer failed")?;
-
-        let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&result)
-            .context("Failed to deserialize merkle tree from catchup")?;
-
-        let tree: PermittedRewardMerkleTreeV2 =
-            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances).await?;
-
-        ensure!(
-            tree.tree.commitment() == reward_merkle_tree_root,
-            "RewardMerkleTreeV2 from peer failed commitment check."
-        );
-        ensure!(!forgotten_accounts_include(&tree, &accounts));
-
-        Ok(tree)
+        req: &RewardTreeV2At,
+    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
+        self.fetch_verified(retry, req, |client| async move {
+            // Try the catchup endpoint first which returns tree from consensuss decided state
+            // if not present, then fall back to
+            // the reward-state-v2 endpoint which returns from storage decided state
+            match client
+                .inner
+                .get::<Vec<u8>>(&paths::catchup_reward_merkle_tree_v2(req.height, *req.view))
+                .send()
+                .await
+            {
+                Ok(bytes) => Ok(bytes),
+                Err(err) => {
+                    tracing::info!(
+                        "catchup endpoint failed, falling back to reward-state-v2: {err:#}"
+                    );
+                    client
+                        .inner
+                        .get::<Vec<u8>>(&paths::reward_merkle_tree_v2(req.height))
+                        .send()
+                        .await
+                },
+            }
+        })
+        .await
     }
 
-    #[tracing::instrument(skip(self, _instance))]
+    #[tracing::instrument(
+        skip(self, _instance, req),
+        fields(
+            height = req.height,
+            view = ?req.view,
+            reward_merkle_tree_root = ?req.root,
+            accounts = ?req.accounts,
+        )
+    )]
     async fn try_fetch_reward_accounts_v1(
         &self,
         retry: usize,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV1,
-        accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
-        self.fetch(retry, |client| async move {
-            let tree = client
+        req: &RewardAccountsV1At,
+    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
+        self.fetch_verified(retry, req, |client| async move {
+            client
                 .inner
-                .post::<RewardMerkleTreeV1>(&paths::catchup_reward_accounts(height, view.u64()))
-                .body_binary(&accounts.to_vec())?
+                .post::<RewardMerkleTreeV1>(&paths::catchup_reward_accounts(
+                    req.height,
+                    req.view.u64(),
+                ))
+                .body_binary(&req.accounts)?
                 .send()
-                .await?;
-
-            // Verify proofs.
-            let mut proofs = Vec::new();
-            for account in accounts {
-                let (proof, _) = RewardAccountProofV1::prove(&tree, (*account).into())
-                    .context(format!("response missing reward account {account}"))?;
-                proof.verify(&reward_merkle_tree_root).context(format!(
-                    "invalid proof for v1 reward account {account}, root: \
-                     {reward_merkle_tree_root} height {height} view {view}"
-                ))?;
-                proofs.push(proof);
-            }
-
-            anyhow::Ok(proofs)
+                .await
         })
         .await
     }
@@ -520,12 +498,12 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        self.fetch(retry, |client| async move {
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        self.fetch_verified(retry, req, |client| async move {
             client
                 .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&paths::catchup_state_cert(
-                    epoch,
+                    req.epoch.u64(),
                 ))
                 .send()
                 .await
@@ -810,175 +788,134 @@ impl<T> StateCatchup for SqlStateCatchup<T>
 where
     T: CatchupStorage + RewardMerkleTreeDataSource + Send + Sync,
 {
-    async fn try_fetch_leaf(
-        &self,
-        _retry: usize,
-        _coordinator: EpochMembershipCoordinator<SeqTypes>,
-        height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    async fn try_fetch_leaf(&self, _retry: usize, req: &LeafAt) -> anyhow::Result<Verified<Leaf2>> {
+        let height = req.height;
         // Leaves in our local DB were verified before they were stored, so we can return the leaf
         // at `height` directly without re-verifying.
         self.db
             .get_leaf(height)
             .await
+            .map(Verified::new_unchecked)
             .with_context(|| format!("failed to load leaf at height {height} from DB"))
     }
 
     // TODO: add a test for the account proof validation
     // issue # 2102 (https://github.com/EspressoSystems/espresso-network/issues/2102)
-    #[tracing::instrument(skip(self, _retry, instance))]
+    #[tracing::instrument(
+        skip(self, _retry, instance, req),
+        fields(
+            block_height = req.height,
+            view = ?req.view,
+            fee_merkle_tree_root = ?req.root,
+            accounts = ?req.accounts,
+        )
+    )]
     async fn try_fetch_accounts(
         &self,
         _retry: usize,
         instance: &NodeState,
-        block_height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: &[FeeAccount],
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        req: &FeeAccountsAt,
+    ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
         // Get the accounts. If the data pruner has deleted the leaf and header that `get_accounts`
         // reads, the snapshot can still be stored, so read it by the root we were given.
         let fee_merkle_tree_from_db = match self
             .db
-            .get_accounts(instance, block_height, view, accounts)
+            .get_accounts(instance, req.height, req.view, &req.accounts)
             .await
         {
             Ok((tree, _)) => tree,
             Err(err) => {
                 let tree = self
                     .db
-                    .get_accounts_at(block_height, fee_merkle_tree_root, accounts)
+                    .get_accounts_at(req.height, req.root, &req.accounts)
                     .await
                     .with_context(|| format!("failed to get fee accounts from DB: {err:#}"))?;
                 tracing::debug!("get_accounts failed, read the accounts by root instead: {err:#}");
                 tree
             },
         };
-
-        // Verify the accounts
-        let mut proofs = Vec::new();
-        for account in accounts {
-            let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree_from_db, (*account).into())
-                .context(format!("response missing account {account}"))?;
-            proof.verify(&fee_merkle_tree_root).context(format!(
-                "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
-            ))?;
-            proofs.push(proof);
-        }
-
-        Ok(proofs)
+        Ok(req.verify(fee_merkle_tree_from_db).await?)
     }
 
-    #[tracing::instrument(skip(self, _retry, instance, mt))]
-    async fn try_remember_blocks_merkle_tree(
+    #[tracing::instrument(
+        skip(self, _retry, instance, req),
+        fields(bh = req.height, view = ?req.view)
+    )]
+    async fn try_fetch_blocks_frontier(
         &self,
         _retry: usize,
         instance: &NodeState,
-        bh: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        if bh == 0 {
-            return Ok(());
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
+        // The tree before the first block is empty, so it has no frontier to add.
+        if req.height == 0 {
+            return Ok(Verified::new_unchecked(req.tree.clone()));
         }
 
         // As for accounts, read the snapshot by root if the header `get_frontier` reads is gone.
-        let proof = match self.db.get_frontier(instance, bh, view).await {
+        let proof = match self.db.get_frontier(instance, req.height, req.view).await {
             Ok(proof) => proof,
             Err(err) => {
                 let proof = self
                     .db
-                    .get_frontier_at(bh, mt.commitment())
+                    .get_frontier_at(req.height, req.tree.commitment())
                     .await
                     .with_context(|| format!("failed to get frontier from DB: {err:#}"))?;
                 tracing::debug!("get_frontier failed, read the frontier by root instead: {err:#}");
                 proof
             },
         };
-        match proof
-            .proof
-            .first()
-            .context(format!("empty proof for frontier at height {bh}"))?
-        {
-            MerkleNode::Leaf { pos, elem, .. } => mt
-                .remember(pos, elem, proof.clone())
-                .context("failed to remember proof"),
-            _ => bail!("invalid proof"),
-        }
+        Ok(req.verify(proof).await?)
     }
 
     async fn try_fetch_chain_config(
         &self,
         _retry: usize,
         commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
+    ) -> anyhow::Result<Verified<ChainConfig>> {
         let cf = self.db.get_chain_config(commitment).await?;
-
-        if cf.commit() != commitment {
-            panic!(
-                "Critical error: Mismatched chain config detected. Expected chain config: {:?}, \
-                 but got: {:?}.
-                This may indicate a compromised database",
-                commitment,
-                cf.commit()
-            )
-        }
-
-        Ok(cf)
+        Ok(commitment.verify(cf).await.unwrap_or_else(|err| {
+            panic!("Critical error: {err:#}. This may indicate a compromised database")
+        }))
     }
 
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
-        height: u64,
-        _view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
-        let tree: PermittedRewardMerkleTreeV2 = self.db.load_reward_merkle_tree_v2(height).await?;
-
-        ensure!(tree.tree.commitment() == reward_merkle_tree_root);
-        ensure!(!forgotten_accounts_include(&tree, &accounts));
-
-        Ok(tree)
+        req: &RewardTreeV2At,
+    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
+        let tree = self.db.load_reward_merkle_tree_v2(req.height).await?;
+        Ok(req.verify_tree(tree)?)
     }
 
-    #[tracing::instrument(skip(self, _retry, instance))]
+    #[tracing::instrument(
+        skip(self, _retry, instance, req),
+        fields(
+            block_height = req.height,
+            view = ?req.view,
+            reward_merkle_tree_root = ?req.root,
+            accounts = ?req.accounts,
+        )
+    )]
     async fn try_fetch_reward_accounts_v1(
         &self,
         _retry: usize,
         instance: &NodeState,
-        block_height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV1,
-        accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
-        // Get the accounts
+        req: &RewardAccountsV1At,
+    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
         let (reward_merkle_tree_from_db, _) = self
             .db
-            .get_reward_accounts_v1(instance, block_height, view, accounts)
+            .get_reward_accounts_v1(instance, req.height, req.view, &req.accounts)
             .await
             .with_context(|| "failed to get reward accounts from DB")?;
-        // Verify the accounts
-        let mut proofs = Vec::new();
-        for account in accounts {
-            let (proof, _) =
-                RewardAccountProofV1::prove(&reward_merkle_tree_from_db, (*account).into())
-                    .context(format!("response missing account {account}"))?;
-            proof.verify(&reward_merkle_tree_root).context(format!(
-                "invalid proof for v1 reward account {account}, root: {reward_merkle_tree_root}"
-            ))?;
-            proofs.push(proof);
-        }
-
-        Ok(proofs)
+        Ok(req.verify(reward_merkle_tree_from_db).await?)
     }
 
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
-        _epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        _req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         bail!("state cert catchup not supported for SqlStateCatchup");
     }
 
@@ -1031,9 +968,8 @@ impl StateCatchup for NullStateCatchup {
     async fn try_fetch_leaf(
         &self,
         _retry: usize,
-        _coordinator: EpochMembershipCoordinator<SeqTypes>,
-        _height: u64,
-    ) -> anyhow::Result<Leaf2> {
+        _req: &LeafAt,
+    ) -> anyhow::Result<Verified<Leaf2>> {
         bail!("state catchup is disabled")
     }
 
@@ -1041,22 +977,17 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _fee_merkle_tree_root: FeeMerkleCommitment,
-        _account: &[FeeAccount],
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        _req: &FeeAccountsAt,
+    ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
         bail!("state catchup is disabled");
     }
 
-    async fn try_remember_blocks_merkle_tree(
+    async fn try_fetch_blocks_frontier(
         &self,
         _retry: usize,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
+        _req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
         bail!("state catchup is disabled");
     }
 
@@ -1064,21 +995,20 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
-        self.chain_configs
+    ) -> anyhow::Result<Verified<ChainConfig>> {
+        let cf = self
+            .chain_configs
             .get(&commitment)
             .copied()
-            .context(format!("chain config {commitment} not available"))
+            .context(format!("chain config {commitment} not available"))?;
+        Ok(commitment.verify(cf).await?)
     }
 
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         _retry: usize,
-        _height: u64,
-        _view: ViewNumber,
-        _reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        _accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        _req: &RewardTreeV2At,
+    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
         bail!("state catchup is disabled");
     }
 
@@ -1086,19 +1016,16 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _fee_merkle_tree_root: RewardMerkleCommitmentV1,
-        _account: &[RewardAccountV1],
-    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        _req: &RewardAccountsV1At,
+    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
         bail!("state catchup is disabled");
     }
 
     async fn try_fetch_state_cert(
         &self,
         _retry: usize,
-        _epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        _req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         bail!("state catchup is disabled");
     }
 
@@ -1141,48 +1068,29 @@ impl<C> SingleAttemptCatchup<C> {
 
 #[async_trait]
 impl<C: StateCatchup> StateCatchup for SingleAttemptCatchup<C> {
-    async fn try_fetch_leaf(
-        &self,
-        retry: usize,
-        coordinator: EpochMembershipCoordinator<SeqTypes>,
-        height: u64,
-    ) -> anyhow::Result<Leaf2> {
-        self.inner
-            .try_fetch_leaf(self.retry + retry, coordinator, height)
-            .await
+    async fn try_fetch_leaf(&self, retry: usize, req: &LeafAt) -> anyhow::Result<Verified<Leaf2>> {
+        self.inner.try_fetch_leaf(self.retry + retry, req).await
     }
 
     async fn try_fetch_accounts(
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: &[FeeAccount],
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        req: &FeeAccountsAt,
+    ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
         self.inner
-            .try_fetch_accounts(
-                self.retry + retry,
-                instance,
-                height,
-                view,
-                fee_merkle_tree_root,
-                accounts,
-            )
+            .try_fetch_accounts(self.retry + retry, instance, req)
             .await
     }
 
-    async fn try_remember_blocks_merkle_tree(
+    async fn try_fetch_blocks_frontier(
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
         self.inner
-            .try_remember_blocks_merkle_tree(self.retry + retry, instance, height, view, mt)
+            .try_fetch_blocks_frontier(self.retry + retry, instance, req)
             .await
     }
 
@@ -1190,7 +1098,7 @@ impl<C: StateCatchup> StateCatchup for SingleAttemptCatchup<C> {
         &self,
         retry: usize,
         commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
+    ) -> anyhow::Result<Verified<ChainConfig>> {
         self.inner
             .try_fetch_chain_config(self.retry + retry, commitment)
             .await
@@ -1199,19 +1107,10 @@ impl<C: StateCatchup> StateCatchup for SingleAttemptCatchup<C> {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        req: &RewardTreeV2At,
+    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
         self.inner
-            .try_fetch_reward_merkle_tree_v2(
-                self.retry + retry,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts,
-            )
+            .try_fetch_reward_merkle_tree_v2(self.retry + retry, req)
             .await
     }
 
@@ -1219,30 +1118,20 @@ impl<C: StateCatchup> StateCatchup for SingleAttemptCatchup<C> {
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV1,
-        accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        req: &RewardAccountsV1At,
+    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
         self.inner
-            .try_fetch_reward_accounts_v1(
-                self.retry + retry,
-                instance,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts,
-            )
+            .try_fetch_reward_accounts_v1(self.retry + retry, instance, req)
             .await
     }
 
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
         self.inner
-            .try_fetch_state_cert(self.retry + retry, epoch)
+            .try_fetch_state_cert(self.retry + retry, req)
             .await
     }
 
@@ -1399,17 +1288,11 @@ macro_rules! clone {
 
 #[async_trait]
 impl StateCatchup for ParallelStateCatchup {
-    async fn try_fetch_leaf(
-        &self,
-        retry: usize,
-        coordinator: EpochMembershipCoordinator<SeqTypes>,
-        height: u64,
-    ) -> anyhow::Result<Leaf2> {
-        self.on_providers(clone! {(coordinator) move |provider| {
-            clone!{(coordinator) async move {
-                provider
-                    .try_fetch_leaf(retry, coordinator, height)
-                    .await
+    async fn try_fetch_leaf(&self, retry: usize, req: &LeafAt) -> anyhow::Result<Verified<Leaf2>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone!{(req) async move {
+                provider.try_fetch_leaf(retry, &req).await
             }}
         }})
         .await
@@ -1419,64 +1302,37 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: &[FeeAccount],
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        let accounts_vec = accounts.to_vec();
-        self.on_providers(clone! {(instance, accounts_vec) move |provider| {
-            clone! {(instance, accounts_vec) async move {
-                provider
-                    .try_fetch_accounts(
-                        retry,
-                        &instance,
-                        height,
-                        view,
-                        fee_merkle_tree_root,
-                        &accounts_vec,
-                    )
-                    .await
+        req: &FeeAccountsAt,
+    ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(instance, req) move |provider| {
+            clone! {(instance, req) async move {
+                provider.try_fetch_accounts(retry, &instance, &req).await
             }}
         }})
         .await
     }
 
-    async fn try_remember_blocks_merkle_tree(
+    async fn try_fetch_blocks_frontier(
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        *mt = self
-            .on_providers(clone! {(mt, instance) move |provider| {
-                let mut mt = mt.clone();
-                clone! {(instance) async move {
-                    provider
-                        .try_remember_blocks_merkle_tree(
-                            retry,
-                            &instance,
-                            height,
-                            view,
-                            &mut mt,
-                        )
-                        .await?;
-
-                    Ok(mt)
-                }}
-            }})
-            .await?;
-
-        Ok(())
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
+        let req = req.clone();
+        self.on_providers(clone! {(instance, req) move |provider| {
+            clone! {(instance, req) async move {
+                provider.try_fetch_blocks_frontier(retry, &instance, &req).await
+            }}
+        }})
+        .await
     }
 
     async fn try_fetch_chain_config(
         &self,
         retry: usize,
         commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
+    ) -> anyhow::Result<Verified<ChainConfig>> {
         self.on_providers(move |provider| async move {
             provider.try_fetch_chain_config(retry, commitment).await
         })
@@ -1486,22 +1342,12 @@ impl StateCatchup for ParallelStateCatchup {
     async fn try_fetch_reward_merkle_tree_v2(
         &self,
         retry: usize,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV2,
-        accounts: Arc<Vec<RewardAccountV2>>,
-    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
-        self.on_providers(clone! {(accounts) move |provider| {
-            clone! {(accounts) async move {
-                provider
-                    .try_fetch_reward_merkle_tree_v2(
-                        retry,
-                        height,
-                        view,
-                        reward_merkle_tree_root,
-                        accounts,
-                    )
-                    .await
+        req: &RewardTreeV2At,
+    ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone! {(req) async move {
+                provider.try_fetch_reward_merkle_tree_v2(retry, &req).await
             }}
         }})
         .await
@@ -1511,24 +1357,12 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         retry: usize,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV1,
-        accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
-        let accounts_vec = accounts.to_vec();
-        self.on_providers(clone! {(instance, accounts_vec) move |provider| {
-            clone! {(instance, accounts_vec) async move {
-                provider
-                    .try_fetch_reward_accounts_v1(
-                        retry,
-                        &instance,
-                        height,
-                        view,
-                        reward_merkle_tree_root,
-                        &accounts_vec,
-                    )
-                    .await
+        req: &RewardAccountsV1At,
+    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(instance, req) move |provider| {
+            clone! {(instance, req) async move {
+                provider.try_fetch_reward_accounts_v1(retry, &instance, &req).await
             }}
         }})
         .await
@@ -1537,11 +1371,14 @@ impl StateCatchup for ParallelStateCatchup {
     async fn try_fetch_state_cert(
         &self,
         retry: usize,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        self.on_providers(move |provider| async move {
-            provider.try_fetch_state_cert(retry, epoch).await
-        })
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone! {(req) async move {
+                provider.try_fetch_state_cert(retry, &req).await
+            }}
+        }})
         .await
     }
 
@@ -1564,29 +1401,22 @@ impl StateCatchup for ParallelStateCatchup {
     async fn fetch_accounts(
         &self,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: Vec<FeeAccount>,
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        self.on_providers(clone! {(instance, accounts) move |provider| {
-            clone! {(instance, accounts) async move {
-                provider
-                    .fetch_accounts(&instance, height, view, fee_merkle_tree_root, accounts)
-                    .await
+        req: &FeeAccountsAt,
+    ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(instance, req) move |provider| {
+            clone! {(instance, req) async move {
+                provider.fetch_accounts(&instance, &req).await
             }}
         }})
         .await
     }
 
-    async fn fetch_leaf(
-        &self,
-        coordinator: EpochMembershipCoordinator<SeqTypes>,
-        height: u64,
-    ) -> anyhow::Result<Leaf2> {
-        self.on_providers(clone! {(coordinator) move |provider| {
-            clone! {(coordinator) async move {
-                provider.fetch_leaf(coordinator, height).await
+    async fn fetch_leaf(&self, req: &LeafAt) -> anyhow::Result<Verified<Leaf2>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone! {(req) async move {
+                provider.fetch_leaf(&req).await
             }}
         }})
         .await
@@ -1595,7 +1425,7 @@ impl StateCatchup for ParallelStateCatchup {
     async fn fetch_chain_config(
         &self,
         commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
+    ) -> anyhow::Result<Verified<ChainConfig>> {
         self.on_providers(
             move |provider| async move { provider.fetch_chain_config(commitment).await },
         )
@@ -1605,22 +1435,12 @@ impl StateCatchup for ParallelStateCatchup {
     async fn fetch_reward_accounts_v1(
         &self,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitmentV1,
-        accounts: Vec<RewardAccountV1>,
-    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
-        self.on_providers(clone! {(instance, accounts) move |provider| {
-            clone! {(instance, accounts) async move {
-                provider
-                    .fetch_reward_accounts_v1(
-                        &instance,
-                        height,
-                        view,
-                        reward_merkle_tree_root,
-                        accounts,
-                    )
-                    .await
+        req: &RewardAccountsV1At,
+    ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(instance, req) move |provider| {
+            clone! {(instance, req) async move {
+                provider.fetch_reward_accounts_v1(&instance, &req).await
             }}
         }})
         .await
@@ -1628,32 +1448,29 @@ impl StateCatchup for ParallelStateCatchup {
 
     async fn fetch_state_cert(
         &self,
-        epoch: u64,
-    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
-        self.on_providers(move |provider| async move { provider.fetch_state_cert(epoch).await })
-            .await
+        req: &StateCertFor,
+    ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let req = req.clone();
+        self.on_providers(clone! {(req) move |provider| {
+            clone! {(req) async move {
+                provider.fetch_state_cert(&req).await
+            }}
+        }})
+        .await
     }
 
-    async fn remember_blocks_merkle_tree(
+    async fn fetch_blocks_frontier(
         &self,
         instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        *mt = self
-            .on_providers(clone! {(mt, instance) move |provider| {
-                let mut mt = mt.clone();
-                clone! {(instance) async move {
-                    provider
-                        .remember_blocks_merkle_tree(&instance, height, view, &mut mt)
-                        .await?;
-                    Ok(mt)
-                }}
-            }})
-            .await?;
-
-        Ok(())
+        req: &FrontierAt,
+    ) -> anyhow::Result<Verified<BlockMerkleTree>> {
+        let req = req.clone();
+        self.on_providers(clone! {(instance, req) move |provider| {
+            clone! {(instance, req) async move {
+                provider.fetch_blocks_frontier(&instance, &req).await
+            }}
+        }})
+        .await
     }
 
     fn is_local(&self) -> bool {
@@ -1818,8 +1635,10 @@ mod test {
     };
 
     use espresso_types::v0::mock::MockStateCatchup;
-    use hotshot_types::traits::metrics::NoMetrics;
+    use hotshot_types::{data::EpochNumber, message::UpgradeLock, traits::metrics::NoMetrics};
+    use light_client::testing::leaf_chain_with_upgrade;
     use test_utils::reserve_tcp_port;
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
     use crate::SequencerApiVersion;
@@ -1863,19 +1682,27 @@ mod test {
             Duration::from_secs(3),
             once.fetch_accounts(
                 &instance,
-                1,
-                ViewNumber::new(1),
-                fee_root,
-                vec![FeeAccount::default()],
+                &FeeAccountsAt {
+                    height: 1,
+                    view: ViewNumber::new(1),
+                    root: fee_root,
+                    accounts: vec![FeeAccount::default()],
+                },
             ),
         )
         .await
         .expect("fetching fee accounts should not retry");
         assert!(res.is_err());
-        let mut frontier = ValidatedState::default().block_merkle_tree;
         let res = timeout(
             Duration::from_secs(3),
-            once.remember_blocks_merkle_tree(&instance, 1, ViewNumber::new(1), &mut frontier),
+            once.fetch_blocks_frontier(
+                &instance,
+                &FrontierAt {
+                    height: 1,
+                    view: ViewNumber::new(1),
+                    tree: ValidatedState::default().block_merkle_tree,
+                },
+            ),
         )
         .await
         .expect("fetching the block frontier should not retry");
@@ -1964,6 +1791,169 @@ mod test {
         assert_eq!(peers.pop(), Some((1, bad_peer)));
     }
 
+    /// Two peers that are never contacted, with peer 0 ranked above peer 1.
+    async fn ranked_peers() -> StatePeers<SequencerApiVersion> {
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![
+                "http://peer0.invalid".parse().unwrap(),
+                "http://peer1.invalid".parse().unwrap(),
+            ],
+            BackoffParams::disabled(),
+            Duration::from_secs(1),
+            &NoMetrics,
+        );
+        {
+            let mut scores = peers.scores.write().await;
+            scores.change_priority(
+                &0,
+                PeerScore {
+                    requests: 10,
+                    failures: 0,
+                },
+            );
+            scores.change_priority(
+                &1,
+                PeerScore {
+                    requests: 10,
+                    failures: 5,
+                },
+            );
+        }
+        peers
+    }
+
+    async fn score(peers: &StatePeers<SequencerApiVersion>, id: usize) -> PeerScore {
+        *peers.scores.read().await.get(&id).unwrap().1
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn invalid_response_counts_against_its_peer_and_the_next_peer_answers() {
+        let peers = ranked_peers().await;
+
+        let answer = peers
+            .fetch_with(
+                0,
+                |client| async move { anyhow::Ok(client.url) },
+                |url: Url| async move {
+                    if url.host_str() == Some("peer0.invalid") {
+                        Err(VerifyError::Invalid(anyhow!("bad proof")))
+                    } else {
+                        Ok(url)
+                    }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(answer.host_str(), Some("peer1.invalid"));
+        let bad = score(&peers, 0).await;
+        assert_eq!((bad.requests, bad.failures), (11, 1));
+        let good = score(&peers, 1).await;
+        assert_eq!((good.requests, good.failures), (11, 5));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn when_every_response_is_invalid_the_error_says_why() {
+        let peers = ranked_peers().await;
+
+        let err = peers
+            .fetch_with(
+                0,
+                |client| async move { anyhow::Ok(client.url) },
+                |_: Url| async move { Err::<(), _>(VerifyError::Invalid(anyhow!("bad proof"))) },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("bad proof"), "{err:#}");
+    }
+
+    /// Leaves at heights 1 to 6, legacy up to 3 and new-protocol from 4.
+    async fn cutover_leaves() -> Vec<Leaf2> {
+        leaf_chain_with_upgrade(
+            1..=6,
+            4,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await
+        .into_iter()
+        .map(|leaf| leaf.leaf().clone())
+        .collect()
+    }
+
+    fn leaf_at(height: u64) -> LeafAt {
+        LeafAt {
+            height,
+            coordinator: NodeState::mock().coordinator,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_legacy_leaf_put_first_does_not_downgrade_a_new_protocol_height() {
+        let leaves = cutover_leaves().await;
+        let response = vec![leaves[2].clone(), leaves[3].clone(), leaves[4].clone()];
+
+        assert_eq!(leaf_at(4).cert2_height(&response).unwrap(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_height_stays_legacy_when_its_chain_crosses_the_cutover() {
+        let leaves = cutover_leaves().await;
+        let response = vec![leaves[2].clone(), leaves[3].clone(), leaves[4].clone()];
+
+        assert_eq!(leaf_at(3).cert2_height(&response).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_chain_without_the_requested_leaf_is_invalid() {
+        let leaves = cutover_leaves().await;
+
+        let err = leaf_at(9).cert2_height(&leaves).unwrap_err();
+
+        assert!(matches!(err, VerifyError::Invalid(_)), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_new_protocol_chain_without_its_cert2_is_invalid() {
+        let leaves = cutover_leaves().await;
+        let response = LeafResponse {
+            leaves: vec![leaves[3].clone(), leaves[4].clone()],
+            cert2: None,
+        };
+
+        let err = leaf_at(4).verify(response).await.unwrap_err();
+
+        assert!(matches!(err, VerifyError::Invalid(_)), "{err:#}");
+        assert!(format!("{err:#}").contains("missing its cert2"), "{err:#}");
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn unavailable_responses_count_against_no_peer() {
+        let peers = ranked_peers().await;
+        let epoch = EpochNumber::new(7);
+
+        let err = peers
+            .fetch_with(
+                0,
+                |client| async move { anyhow::Ok(client.url) },
+                |_: Url| async move { Err::<(), _>(VerifyError::Unavailable(epoch)) },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err.downcast_ref::<VerifyError>(),
+                Some(VerifyError::Unavailable(e)) if *e == epoch
+            ),
+            "{err:#}"
+        );
+        for id in [0, 1] {
+            let unchanged = score(&peers, id).await;
+            assert_eq!(unchanged.requests, 10, "peer {id}");
+        }
+    }
+
     /// Serves a chain config after `delay`; every other request fails.
     struct DelayedCatchup {
         local: bool,
@@ -1995,18 +1985,17 @@ mod test {
             &self,
             _retry: usize,
             _commitment: Commitment<ChainConfig>,
-        ) -> anyhow::Result<ChainConfig> {
+        ) -> anyhow::Result<Verified<ChainConfig>> {
             self.calls.fetch_add(1, AtomicOrdering::SeqCst);
             tokio::time::sleep(self.delay).await;
-            Ok(ChainConfig::default())
+            Ok(Verified::new_unchecked(ChainConfig::default()))
         }
 
         async fn try_fetch_leaf(
             &self,
             _retry: usize,
-            _coordinator: EpochMembershipCoordinator<SeqTypes>,
-            _height: u64,
-        ) -> anyhow::Result<Leaf2> {
+            _req: &LeafAt,
+        ) -> anyhow::Result<Verified<Leaf2>> {
             bail!("unsupported")
         }
 
@@ -2014,33 +2003,25 @@ mod test {
             &self,
             _retry: usize,
             _instance: &NodeState,
-            _height: u64,
-            _view: ViewNumber,
-            _fee_merkle_tree_root: FeeMerkleCommitment,
-            _account: &[FeeAccount],
-        ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            _req: &FeeAccountsAt,
+        ) -> anyhow::Result<Verified<Vec<FeeAccountProof>>> {
             bail!("unsupported")
         }
 
-        async fn try_remember_blocks_merkle_tree(
+        async fn try_fetch_blocks_frontier(
             &self,
             _retry: usize,
             _instance: &NodeState,
-            _height: u64,
-            _view: ViewNumber,
-            _mt: &mut BlockMerkleTree,
-        ) -> anyhow::Result<()> {
+            _req: &FrontierAt,
+        ) -> anyhow::Result<Verified<BlockMerkleTree>> {
             bail!("unsupported")
         }
 
         async fn try_fetch_reward_merkle_tree_v2(
             &self,
             _retry: usize,
-            _height: u64,
-            _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitmentV2,
-            _accounts: Arc<Vec<RewardAccountV2>>,
-        ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+            _req: &RewardTreeV2At,
+        ) -> anyhow::Result<Verified<PermittedRewardMerkleTreeV2>> {
             bail!("unsupported")
         }
 
@@ -2048,19 +2029,16 @@ mod test {
             &self,
             _retry: usize,
             _instance: &NodeState,
-            _height: u64,
-            _view: ViewNumber,
-            _reward_merkle_tree_root: RewardMerkleCommitmentV1,
-            _accounts: &[RewardAccountV1],
-        ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+            _req: &RewardAccountsV1At,
+        ) -> anyhow::Result<Verified<Vec<RewardAccountProofV1>>> {
             bail!("unsupported")
         }
 
         async fn try_fetch_state_cert(
             &self,
             _retry: usize,
-            _epoch: u64,
-        ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+            _req: &StateCertFor,
+        ) -> anyhow::Result<Verified<LightClientStateUpdateCertificateV2<SeqTypes>>> {
             bail!("unsupported")
         }
 
@@ -2118,7 +2096,13 @@ mod test {
         let remote = DelayedCatchup::provider(false, Duration::ZERO);
         let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
 
-        let err = format!("{:#}", catchup.fetch_state_cert(1).await.unwrap_err());
+        let req = StateCertFor {
+            epoch: EpochNumber::new(1),
+            stake_table: Default::default(),
+            epoch_height: 10,
+            upgrade_lock: UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION)),
+        };
+        let err = format!("{:#}", catchup.fetch_state_cert(&req).await.unwrap_err());
         assert_eq!(err.matches("unsupported").count(), 2, "{err}");
         assert!(err.contains("DelayedCatchup(local)"), "{err}");
         assert!(err.contains("DelayedCatchup(remote)"), "{err}");

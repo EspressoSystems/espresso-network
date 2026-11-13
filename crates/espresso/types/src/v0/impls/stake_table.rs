@@ -1937,7 +1937,8 @@ impl Fetcher {
                 .await
                 .inspect_err(|err| {
                     tracing::error!("failed to get chain_config from peers. err: {err:?}");
-                })?,
+                })?
+                .into_inner(),
         };
 
         Ok(cf)

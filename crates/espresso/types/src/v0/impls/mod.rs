@@ -10,6 +10,7 @@ mod l1;
 pub mod reward;
 mod stake_table;
 mod state;
+mod state_cert;
 mod transaction;
 
 pub use committee::{
@@ -26,3 +27,4 @@ pub use state::{
     BuilderValidationError, ProposalValidationError, StateValidationError, ValidatedState,
     get_l1_deposits,
 };
+pub(crate) use state_cert::validate_state_cert;

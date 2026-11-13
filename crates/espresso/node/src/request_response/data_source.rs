@@ -12,7 +12,7 @@ use espresso_types::{
     retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{RewardAccountV2, RewardMerkleTreeV2, RewardMerkleTreeV2Data},
 };
 use hotshot_query_service::{
     data_source::{
@@ -30,7 +30,7 @@ use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
 use crate::{
-    api::{BlocksFrontier, RewardMerkleTreeV2Data},
+    api::BlocksFrontier,
     catchup::{
         add_fee_accounts_to_state, add_v1_reward_accounts_to_state, add_v2_reward_accounts_to_state,
     },

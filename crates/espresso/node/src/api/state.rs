@@ -27,7 +27,7 @@ use espresso_types::{
     v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
-        RewardMerkleTreeV2,
+        RewardMerkleTreeV2, RewardMerkleTreeV2Data as InternalRewardTreeData,
     },
     v0_6::RewardClaimError,
 };
@@ -66,7 +66,7 @@ use serde_json;
 use tagged_base64::TaggedBase64;
 
 use super::{
-    RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
+    RewardMerkleTreeDataSource,
     data_source::{
         CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeKeysDataSource,
         NodeStateDataSource, PruningDataSource, RequestResponseDataSource, StakeTableDataSource,
@@ -762,7 +762,7 @@ where
                     .insert_state_cert(epoch, cert.clone())
                     .await?;
 
-                cert
+                cert.into_inner()
             },
         };
 
@@ -3750,9 +3750,7 @@ fn state_cert_error(err: StateCertFetchError) -> anyhow::Error {
         StateCertFetchError::EpochsNotStarted { .. }
         | StateCertFetchError::BeforeFirstEpoch { .. }
         | StateCertFetchError::RootNotDecided { .. } => not_found(err.to_string()),
-        StateCertFetchError::FetchError(_)
-        | StateCertFetchError::ValidationError(_)
-        | StateCertFetchError::Other(_) => err.into(),
+        StateCertFetchError::FetchError(_) | StateCertFetchError::Other(_) => err.into(),
     }
 }
 
@@ -6123,7 +6121,6 @@ mod tests {
 
     #[rstest::rstest]
     #[case::fetch(StateCertFetchError::FetchError(anyhow::anyhow!("timeout")))]
-    #[case::validation(StateCertFetchError::ValidationError(anyhow::anyhow!("bad")))]
     #[case::other(StateCertFetchError::Other(anyhow::anyhow!("catchup")))]
     fn state_cert_fetch_failure_is_internal(#[case] err: StateCertFetchError) {
         let err = state_cert_error(err);

@@ -86,9 +86,9 @@ impl<P: SequencerPersistence> RequestResponseProtocol<P> {
         response_validation_fn: F,
     ) -> std::result::Result<O, RequestError>
     where
-        F: Fn(&Request, Response) -> Fut + Send + Sync + 'static + Clone,
-        Fut: Future<Output = anyhow::Result<O>> + Send + Sync + 'static,
-        O: Send + Sync + 'static + Clone,
+        F: Fn(&Request, Response) -> Fut + Send + Sync + Clone,
+        Fut: Future<Output = anyhow::Result<O>> + Send,
+        O: Send,
     {
         // Request from the inner protocol
         self.inner

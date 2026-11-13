@@ -15,7 +15,9 @@ use espresso_types::{
         REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
         RewardAccountV1, RewardMerkleTreeV1,
     },
-    v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2},
+    v0_4::{
+        PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleTreeV2, RewardMerkleTreeV2Data,
+    },
     v0_6::RewardAccountQueryDataV2,
 };
 use futures::future::Future;
@@ -63,7 +65,6 @@ use crate::{
     SeqTypes,
     api::{
         ApiState, BlocksFrontier, LightClientProvider, RewardMerkleTreeDataSource,
-        RewardMerkleTreeV2Data,
         data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
         options::{self, Query, get_public_env_vars, init_query_data_source},
         state::NodeApiStateImpl,
@@ -2404,6 +2405,7 @@ mod tests {
     use espresso_types::{
         BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
         FeeAccount, FeeAmount, FeeMerkleTree, NodeState,
+        catchup::{FeeAccountsAt, FrontierAt},
         v0::traits::StateCatchup,
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
@@ -2578,26 +2580,53 @@ mod tests {
         let catchup = SqlStateCatchup::new(storage, BackoffParams::disabled());
 
         let proofs = catchup
-            .try_fetch_accounts(0, &instance, height, view, fee_root, &[account, absent])
+            .try_fetch_accounts(
+                0,
+                &instance,
+                &FeeAccountsAt {
+                    height,
+                    view,
+                    root: fee_root,
+                    accounts: vec![account, absent],
+                },
+            )
             .await
             .unwrap();
         let balances = proofs
+            .inner()
             .iter()
             .map(|proof| proof.verify(&fee_root).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(balances, [U256::from(100), U256::ZERO]);
 
-        let mut block_tree_from_root = BlockMerkleTree::from_commitment(block_tree.commitment());
-        catchup
-            .try_remember_blocks_merkle_tree(0, &instance, height, view, &mut block_tree_from_root)
+        let block_tree_from_root = catchup
+            .try_fetch_blocks_frontier(
+                0,
+                &instance,
+                &FrontierAt {
+                    height,
+                    view,
+                    tree: BlockMerkleTree::from_commitment(block_tree.commitment()),
+                },
+            )
             .await
-            .unwrap();
+            .unwrap()
+            .into_inner();
         assert!(block_tree_from_root.lookup(height - 1).expect_ok().is_ok());
 
         // A root the snapshot does not have is rejected, not trusted.
         let wrong_root = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT).commitment();
         catchup
-            .try_fetch_accounts(0, &instance, height, view, wrong_root, &[account])
+            .try_fetch_accounts(
+                0,
+                &instance,
+                &FeeAccountsAt {
+                    height,
+                    view,
+                    root: wrong_root,
+                    accounts: vec![account],
+                },
+            )
             .await
             .unwrap_err();
     }

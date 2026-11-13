@@ -6,7 +6,7 @@ use hotshot_types::{
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
-    utils::{epoch_from_block_number, is_last_block},
+    utils::{LeafChainError, certifying_stake_table, epoch_from_block_number, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 
@@ -30,53 +30,22 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
     cert2: Certificate2<T>,
-) -> anyhow::Result<Leaf2<T>> {
+) -> Result<Leaf2<T>, LeafChainError> {
     leaf_chain.sort_by_key(|l| l.view_number());
     leaf_chain.reverse();
 
-    ensure!(!leaf_chain.is_empty(), "empty leaf chain");
-    let newest = &leaf_chain[0];
+    let Some(newest) = leaf_chain.first() else {
+        return Err(anyhow!("empty leaf chain").into());
+    };
+    let epoch_height = *coordinator.epoch_height();
 
-    ensure!(
-        cert2.view_number() > ViewNumber::genesis(),
-        "cert2 must not be the genesis view"
-    );
-    // Verify cert2 against the leaf chain before spawning a catchup request for its stake table.
-    ensure!(
-        cert2.data.leaf_commit == newest.commit(),
-        "cert2 does not match the newest leaf in the chain"
-    );
-    ensure!(
-        cert2.data.block_number == newest.height(),
-        "cert2 block number does not match the newest leaf"
-    );
-    // A re-vote certifies an epoch's last block again at a later view, so its
-    // Cert2 is after the block's own view. No other block is voted on again.
-    ensure!(
-        cert2.view_number() >= newest.view_number(),
-        "cert2 view is before the newest leaf's"
-    );
-    ensure!(
-        cert2.view_number() == newest.view_number()
-            || is_last_block(newest.height(), *coordinator.epoch_height()),
-        "cert2 view is after the newest leaf's, which is not the last block of its epoch"
-    );
-    let epoch = EpochNumber::new(epoch_from_block_number(
-        cert2.data.block_number,
-        *coordinator.epoch_height(),
-    ));
-    ensure!(
-        cert2.data.epoch == epoch,
-        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
-        cert2.data.epoch,
-        cert2.data.block_number
-    );
-
-    let membership = coordinator
-        .stake_table_for_epoch(Some(epoch))
-        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+    // Check cert2 against the leaf chain before spawning a catchup request for its stake table.
+    let epoch = cert2_epoch(&cert2, newest, epoch_height)?;
+    let membership = certifying_stake_table(coordinator, epoch)?;
     let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
-    cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+    cert2
+        .is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)
+        .map_err(anyhow::Error::from)?;
 
     if newest.height() == expected_height {
         return Ok(newest.clone());
@@ -95,45 +64,93 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
             );
             continue;
         }
-        ensure!(
-            current.parent_commitment() == leaf.commit(),
-            "current leaf parent commitment does not match parent leaf"
-        );
-        ensure!(
-            leaf.height().checked_add(1) == Some(current.height()),
-            "leaf heights do not chain"
-        );
-        let qc_epoch = EpochNumber::new(epoch_from_block_number(
-            leaf.height(),
-            *coordinator.epoch_height(),
-        ));
-        ensure!(
-            justify_qc.data().epoch == Some(qc_epoch),
-            "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
-            justify_qc.data().epoch,
-            leaf.height()
-        );
-        if let Some(block_number) = justify_qc.data().block_number {
-            ensure!(
-                block_number == leaf.height(),
-                "justify QC claims block number {block_number} but certifies the leaf at height {}",
-                leaf.height()
-            );
-        }
-        let membership = coordinator
-            .stake_table_for_epoch(Some(qc_epoch))
-            .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
+        let qc_epoch = justify_qc_epoch(current, leaf, epoch_height)?;
+        let membership = certifying_stake_table(coordinator, qc_epoch)?;
         let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
-        justify_qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+        justify_qc
+            .is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)
+            .map_err(anyhow::Error::from)?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }
         current = leaf;
     }
 
-    Err(anyhow!(
-        "expected height was not found in the cert2-finalized chain"
-    ))
+    Err(anyhow!("expected height was not found in the cert2-finalized chain").into())
+}
+
+/// The epoch whose stake table verifies `cert2`, if `cert2` is the certificate of `newest`.
+fn cert2_epoch<T: NodeType>(
+    cert2: &Certificate2<T>,
+    newest: &Leaf2<T>,
+    epoch_height: u64,
+) -> anyhow::Result<EpochNumber> {
+    ensure!(
+        cert2.view_number() > ViewNumber::genesis(),
+        "cert2 must not be the genesis view"
+    );
+    ensure!(
+        cert2.data.leaf_commit == newest.commit(),
+        "cert2 does not match the newest leaf in the chain"
+    );
+    ensure!(
+        cert2.data.block_number == newest.height(),
+        "cert2 block number does not match the newest leaf"
+    );
+    // A re-vote certifies an epoch's last block again at a later view, so its
+    // Cert2 is after the block's own view. No other block is voted on again.
+    ensure!(
+        cert2.view_number() >= newest.view_number(),
+        "cert2 view is before the newest leaf's"
+    );
+    ensure!(
+        cert2.view_number() == newest.view_number() || is_last_block(newest.height(), epoch_height),
+        "cert2 view is after the newest leaf's, which is not the last block of its epoch"
+    );
+    let epoch = EpochNumber::new(epoch_from_block_number(
+        cert2.data.block_number,
+        epoch_height,
+    ));
+    ensure!(
+        cert2.data.epoch == epoch,
+        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
+        cert2.data.epoch,
+        cert2.data.block_number
+    );
+    Ok(epoch)
+}
+
+/// The epoch whose stake table verifies the justify QC of `child`, if that QC certifies `parent`
+/// as the block before `child`.
+fn justify_qc_epoch<T: NodeType>(
+    child: &Leaf2<T>,
+    parent: &Leaf2<T>,
+    epoch_height: u64,
+) -> anyhow::Result<EpochNumber> {
+    let justify_qc = child.justify_qc();
+    ensure!(
+        child.parent_commitment() == parent.commit(),
+        "current leaf parent commitment does not match parent leaf"
+    );
+    ensure!(
+        parent.height().checked_add(1) == Some(child.height()),
+        "leaf heights do not chain"
+    );
+    let qc_epoch = EpochNumber::new(epoch_from_block_number(parent.height(), epoch_height));
+    ensure!(
+        justify_qc.data().epoch == Some(qc_epoch),
+        "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
+        justify_qc.data().epoch,
+        parent.height()
+    );
+    if let Some(block_number) = justify_qc.data().block_number {
+        ensure!(
+            block_number == parent.height(),
+            "justify QC claims block number {block_number} but certifies the leaf at height {}",
+            parent.height()
+        );
+    }
+    Ok(qc_epoch)
 }
 
 #[cfg(test)]
@@ -459,7 +476,7 @@ mod test {
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("no stake table available"),
+            matches!(err, LeafChainError::StakeTableUnavailable(_)),
             "{err:#}"
         );
     }
@@ -608,7 +625,7 @@ mod test {
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("no stake table available"),
+            matches!(err, LeafChainError::StakeTableUnavailable(_)),
             "{err:#}"
         );
     }
