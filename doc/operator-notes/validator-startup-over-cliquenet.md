@@ -12,8 +12,6 @@ by its post-start catchup, over request-response, after about one view timeout.
   `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the flags
   `--catchup-backoff-*` and `--catchup-{base,max}-retry-delay`; with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a
   seed request makes one attempt.
-- A validator does not start when it cannot read the validators active on L1. Previously the failure was logged and
-  the node started without them as peers or responders.
 - `--state-peers` is optional for validators.
 - `/v1/node/all-validators/{epoch_number}/{offset}/{limit}` is empty for epochs a seed skipped.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
