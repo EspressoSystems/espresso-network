@@ -5,7 +5,7 @@
     epoch_height: <a class="primitive" href="https://doc.rust-lang.org/1.100.0/std/primitive.u64.html">u64</a>,
     upgrade_lock: &amp;<a class="struct" href="../../hotshot_types/message/struct.UpgradeLock.html" title="struct hotshot_types::message::UpgradeLock">UpgradeLock</a>&lt;T&gt;,
     memberships: &amp;<a class="struct" href="../../hotshot_types/epoch_membership/struct.EpochMembershipCoordinator.html" title="struct hotshot_types::epoch_membership::EpochMembershipCoordinator">EpochMembershipCoordinator</a>&lt;T&gt;,
-) -&gt; <a class="type" href="../../hotshot_utils/anytrace/type.Result.html" title="type hotshot_utils::anytrace::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.100.0/std/primitive.unit.html">()</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Check that a timeout certificate has the form its view requires, names that
+) -&gt; Result&lt;<a class="primitive" href="https://doc.rust-lang.org/1.100.0/std/primitive.unit.html">()</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Check that a timeout certificate has the form its view requires, names that
 view in its data, and carries a quorum’s signatures.</p>
 <p><code>TimeoutEvidence::is_valid_cert</code> checks the same, except that it skips the
 signatures at the genesis view. Every timeout certificate is formed from
