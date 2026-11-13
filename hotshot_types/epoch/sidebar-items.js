@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ROOT_DISTANCE","TRANSITION_DISTANCE"],"enum":["DrbSource","EpochArithmeticError","StakeTableSource"],"fn":["require_epoch"],"struct":["EpochLength","EpochPosition","EpochSchedule","EpochWindow"]};
