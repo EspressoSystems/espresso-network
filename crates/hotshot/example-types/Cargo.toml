@@ -25,7 +25,6 @@ hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 sha3 = "^0.10"

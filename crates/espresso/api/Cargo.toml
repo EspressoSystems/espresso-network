@@ -56,3 +56,6 @@ tonic-rest-build = { workspace = true }
 prost-types = { workspace = true }
 serde_urlencoded = { workspace = true }
 tonic-rest-build = { workspace = true }
+
+[lints]
+workspace = true
