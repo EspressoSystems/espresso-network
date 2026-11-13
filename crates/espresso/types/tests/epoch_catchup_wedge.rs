@@ -557,30 +557,26 @@ async fn catchup_skips_seed_when_adjacent_ok() {
     assert!(calls.lock().is_empty());
 }
 
-/// A seed error ends the attempt: no walk, so storage is never read.
+/// A seed error is followed by the walk from the held pair.
 #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
-async fn seed_error_ends_catchup() {
+async fn seed_error_is_followed_by_walk_ok() {
     let (store, coordinator) = setup();
     let (seed, calls, _) = recording_seed(|_| Err(anyhow::anyhow!("no peer answered")));
     coordinator.set_catchup_seed(seed);
-    let target = EpochNumber::new(TARGET_EPOCH);
 
-    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
-
-    assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        store.calls(),
-        0,
-        "a failed seed must not fall back to a walk"
+    assert!(
+        coordinator
+            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .is_err()
     );
-    // The claim is released: the next request starts a new attempt.
-    let again = wait_until(RECOVERY_BUDGET, || {
-        let _ = coordinator.stake_table_for_epoch(Some(target));
-        calls.lock().len() >= 2
-    })
-    .await;
-    assert!(again, "the failed seed was not retried");
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await);
+    assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
+    assert_eq!(
+        store.first_loaded_epoch(),
+        Some(WALK_EPOCH),
+        "the walk began at the held pair"
+    );
 }
 
 /// Catchups for different targets seed one after the other.
