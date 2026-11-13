@@ -13,8 +13,6 @@ the LC contract by its post-start catchup, over request-response, after about on
   `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the flags
   `--catchup-backoff-*` and `--catchup-{base,max}-retry-delay`; with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a
   seed request makes one attempt.
-- A validator does not start when it cannot read the validators active on L1. Previously the failure was logged and
-  the node started without them as peers or responders.
 - `--state-peers` is optional for validators. When set, the peers serve each seed request over HTTP
   (`/v1/catchup/{height}/leafchain`, `/v1/light-client/header/{root}/{height}`) `--http-catchup-delay` after each attempt
   starts; a validator whose cliquenet peers do not answer `HeaderProof` yet can set it. Both routes exist in earlier
