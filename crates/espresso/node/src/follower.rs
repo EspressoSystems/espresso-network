@@ -8,7 +8,7 @@
 //! default to the very upstreams it verifies. Pin the genesis wherever the upstreams are not
 //! trusted on first start.
 
-use std::{cmp::max, collections::HashMap, ops::Range, sync::Arc, time::Duration};
+use std::{cmp::max, collections::HashMap, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient, LightClientMetrics,
@@ -54,7 +54,10 @@ use hotshot_types::{
 };
 use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
-use tokio::{sync::watch, time::sleep};
+use tokio::{
+    sync::watch,
+    time::{Instant, sleep, timeout_at},
+};
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -67,8 +70,9 @@ use crate::{
     },
     apply_genesis_overrides,
     context::TaskList,
-    init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    init_node_state,
+    lc_contract_seed::LcContractSeed,
+    load_or_fetch_network_config,
     state_signature::StateSignatureMemStorage,
 };
 
@@ -267,14 +271,12 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    let current_epoch = bootstrap_epoch_window(
-        &coordinator,
-        epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
-    )
-    .await
-    .context("startup stake-table catchup failed")?;
-    tracing::info!(%current_epoch, "startup catchup complete");
+    // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
+    if !params.upstreams.is_empty()
+        && let Some(seed) = LcContractSeed::new(&node_state.chain_config, &*metrics)
+    {
+        seed.install(&coordinator);
+    }
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
         #[cfg(any(test, feature = "testing"))]
@@ -330,6 +332,7 @@ where
         next,
     };
     let mut tasks = TaskList::default();
+    follower.catch_up_at_startup().await;
     tasks.spawn("light client follower", follower.run());
 
     Ok(FollowerHandle {
@@ -626,10 +629,7 @@ impl<P: SequencerPersistence> Follower<P> {
             .block_height()
             .await
             .context("fetching the chain height")?;
-        let from = max(
-            self.next,
-            tip.saturating_sub(self.options.max_blocks_per_poll),
-        );
+        let from = self.ingest_start(tip);
         if from >= tip {
             return Ok(());
         }
@@ -640,9 +640,10 @@ impl<P: SequencerPersistence> Follower<P> {
                 tip,
                 "skipping ahead; the query service backfills the gap above its pruned height"
             );
-            self.catch_up_skipped_epochs(self.next..from).await?;
             self.next = from;
         }
+        let deadline = Instant::now() + self.bootstrap_epoch_catchup_timeout;
+        self.require_stake_table(from, deadline).await?;
         for block in self.source.fetch_range(from, tip).await? {
             let height = block.leaf.height();
             ensure!(
@@ -656,6 +657,14 @@ impl<P: SequencerPersistence> Follower<P> {
             self.next = height + 1;
         }
         Ok(())
+    }
+
+    /// The height a poll against chain height `tip` ingests from.
+    fn ingest_start(&self, tip: u64) -> u64 {
+        max(
+            self.next,
+            tip.saturating_sub(self.options.max_blocks_per_poll),
+        )
     }
 
     async fn follow(&self, block: VerifiedBlock) -> anyhow::Result<()> {
@@ -735,38 +744,55 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// Skipping an epoch root skips the stake table it derives, which later roots build on. DRBs
-    /// the skipped transition blocks carried are left to the coordinator, which fetches them on
-    /// demand.
-    async fn catch_up_skipped_epochs(&self, skipped: Range<u64>) -> anyhow::Result<()> {
-        if skipped.is_empty() {
+    /// Requests the stake tables and the DRB the first poll needs, within one catchup timeout. A
+    /// failure is logged and the first poll retries it. When the upstream height read fails, this
+    /// targets the stored height, which can differ from where the first poll starts.
+    async fn catch_up_at_startup(&self) {
+        let deadline = Instant::now() + self.bootstrap_epoch_catchup_timeout;
+        let Some(from) = self.start_height(deadline).await else {
+            tracing::warn!("no chain height known; the first poll requests the stake tables");
+            return;
+        };
+        if let Err(err) = self.require_stake_table(from, deadline).await {
+            tracing::warn!(from, "startup stake table catchup failed: {err:#}");
+        }
+        // Background, so endpoints that need this epoch's DRB find it soon.
+        let epoch = epoch_from_block_number(from, self.epoch_height);
+        let _ = self
+            .coordinator
+            .membership_for_epoch(Some(EpochNumber::new(epoch)));
+    }
+
+    /// The height the first poll ingests from: the upstreams' when they answer by `deadline`, else
+    /// the stored one, `None` for an empty database.
+    async fn start_height(&self, deadline: Instant) -> Option<u64> {
+        match timeout_at(deadline, self.source.block_height()).await {
+            Ok(Ok(tip)) => return Some(self.ingest_start(tip)),
+            Ok(Err(err)) => tracing::warn!("cannot read the chain height: {err:#}"),
+            Err(_) => tracing::warn!("reading the chain height timed out"),
+        }
+        (self.next > 0).then_some(self.next)
+    }
+
+    /// Holds the stake tables that following from `height` needs, waiting until `deadline`. Far
+    /// behind, the coordinator seeds. A failure or timeout is not an error while the table is
+    /// held: the DRB step after the install can fail or run long, and a follower supplies DRB
+    /// results itself from the next transition block on.
+    async fn require_stake_table(&self, height: u64, deadline: Instant) -> anyhow::Result<()> {
+        let needed = needed_stake_table_epoch(height, self.epoch_height);
+        if needed <= self.coordinator.membership().first_epoch() + 1 {
             return Ok(());
         }
-        let first_epoch = self.coordinator.membership().first_epoch();
-        let first = max(
-            epoch_from_block_number(skipped.start, self.epoch_height),
-            first_epoch.u64(),
+        let outcome =
+            match timeout_at(deadline, self.coordinator.wait_for_stake_table(needed)).await {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(err)) => format!("failed: {err}"),
+                Err(_) => "timed out".to_string(),
+            };
+        ensure!(
+            self.has_stake_table(needed),
+            "the catchup to the stake table of epoch {needed} {outcome}"
         );
-        let last = epoch_from_block_number(skipped.end - 1, self.epoch_height);
-        let missing = (first..=last).any(|epoch| {
-            skipped.contains(&root_block_in_epoch(epoch, self.epoch_height))
-                && !self.has_stake_table(EpochNumber::new(epoch + 2))
-        });
-        if !missing {
-            return Ok(());
-        }
-        tracing::warn!(
-            ?skipped,
-            "skipped epoch roots whose stake tables are missing; catching up from peers"
-        );
-        let current_epoch = bootstrap_epoch_window(
-            &self.coordinator,
-            self.epoch_height,
-            self.bootstrap_epoch_catchup_timeout,
-        )
-        .await
-        .context("stake-table catchup after skipping ahead")?;
-        tracing::info!(%current_epoch, "stake-table catchup complete");
         Ok(())
     }
 
@@ -803,6 +829,14 @@ impl<P: SequencerPersistence> Follower<P> {
             ),
         }
     }
+}
+
+/// The newest stake table following from `height` needs: the next epoch's and, once the epoch's
+/// root block lies below `height`, the one after.
+fn needed_stake_table_epoch(height: u64, epoch_height: u64) -> EpochNumber {
+    let epoch = epoch_from_block_number(height, epoch_height);
+    let root_skipped = root_block_in_epoch(epoch, epoch_height) < height;
+    EpochNumber::new(epoch + 1 + u64::from(root_skipped))
 }
 
 #[async_trait]
@@ -882,4 +916,31 @@ async fn connect_light_client(
         LightClient::from_genesis_with_options(db, client, genesis, options.light_client.clone())
             .with_metrics(metrics),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    const EPOCH_HEIGHT: u64 = 100;
+
+    #[rstest]
+    // Epoch 1 spans blocks 1..=100 and its root block is 95.
+    #[case::genesis(0, 2)]
+    #[case::first_epoch_root(95, 2)]
+    #[case::first_epoch_after_root(96, 3)]
+    // Epoch 2 spans blocks 101..=200 and its root block is 195.
+    #[case::before_root(194, 3)]
+    #[case::root(195, 3)]
+    #[case::after_root(196, 4)]
+    #[case::last_block_of_epoch(200, 4)]
+    #[case::first_block_of_next_epoch(201, 4)]
+    fn needed_epoch_at_height(#[case] height: u64, #[case] expected: u64) {
+        assert_eq!(
+            needed_stake_table_epoch(height, EPOCH_HEIGHT),
+            EpochNumber::new(expected)
+        );
+    }
 }

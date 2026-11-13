@@ -3,7 +3,6 @@ mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
-mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -713,9 +712,9 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, so that the follower walk,
-/// the seed's installs and the startup dial do not load that scan onto their first read.
-/// Untimed: an unreachable L1 panics after `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, so that the seed's
+/// installs, the follower's polls and the startup dial do not load that scan onto their first
+/// read. Untimed: an unreachable L1 panics after `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,

@@ -50,7 +50,11 @@ responders; responders are the table keys and these keys that the network holds 
 optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
-without one the catchup walks only. The follower has no seed and walks at startup (`bootstrap_epoch_window`).
+without one the catchup walks only. The follower installs the same seed, fetching through its catchup provider:
+`--state-peers`, or the upstreams when unset. It asks the coordinator for the one table it needs before ingesting:
+that of the next epoch, or of the one after once the epoch root is passed, at startup and at each poll. A failed
+or timed out request logs a warning and the next poll retries it. A follower has no request-response: its state peers
+answer at once.
 
 A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
 one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
