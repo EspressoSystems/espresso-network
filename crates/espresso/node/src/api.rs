@@ -6045,6 +6045,7 @@ mod test {
                     .as_ref()
                     .expect("the network deploys contracts"),
                 &lc_contract_header,
+                &lc_contract_header,
             )
             .await?;
 
