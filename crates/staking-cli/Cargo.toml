@@ -14,7 +14,6 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-clap-serde = { workspace = true }
 clap-serde-derive = { workspace = true }
 derive_more = { workspace = true }
 directories = { workspace = true }
@@ -35,8 +34,6 @@ prometheus-parse = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 reqwest = { workspace = true }
-rstest = { workspace = true }
-rstest_reuse = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -56,6 +53,8 @@ warp = { workspace = true, optional = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
