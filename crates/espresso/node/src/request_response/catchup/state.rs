@@ -197,21 +197,11 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                 let Response::Accounts(fee_merkle_tree) = response else {
                     return Err(anyhow::anyhow!("expected accounts response"));
                 };
-
-                // Verify the merkle proofs
-                let mut proofs = Vec::new();
-                for account in accounts_clone {
-                    let (proof, _) = FeeAccountProof::prove(&fee_merkle_tree, account.into())
-                        .with_context(|| format!("response was missing account {account}"))?;
-                    proof.verify(&fee_merkle_tree_root).with_context(|| {
-                        format!(
-                            "invalid proof for fee account {account}, root: {fee_merkle_tree_root}"
-                        )
-                    })?;
-                    proofs.push(proof);
-                }
-
-                Ok(proofs)
+                FeeAccountProof::verify_snapshot(
+                    &fee_merkle_tree,
+                    &accounts_clone,
+                    &fee_merkle_tree_root,
+                )
             }
         };
 
@@ -460,23 +450,11 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                 let Response::RewardAccountsV1(reward_merkle_tree) = response else {
                     return Err(anyhow::anyhow!("expected v1 reward accounts response"));
                 };
-
-                // Verify the merkle proofs
-                let mut proofs = Vec::new();
-                for account in accounts_clone {
-                    let (proof, _) =
-                        RewardAccountProofV1::prove(&reward_merkle_tree, account.into())
-                            .with_context(|| format!("response was missing account {account}"))?;
-                    proof.verify(&reward_merkle_tree_root).with_context(|| {
-                        format!(
-                            "invalid proof for v1 reward account {account}, root: \
-                             {reward_merkle_tree_root}"
-                        )
-                    })?;
-                    proofs.push(proof);
-                }
-
-                Ok(proofs)
+                RewardAccountProofV1::verify_snapshot(
+                    &reward_merkle_tree,
+                    &accounts_clone,
+                    &reward_merkle_tree_root,
+                )
             }
         };
 

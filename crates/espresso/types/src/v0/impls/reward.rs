@@ -556,6 +556,27 @@ impl RewardAccountProofV1 {
         }
     }
 
+    /// Prove each of `accounts` out of `snapshot`, a partial tree from an untrusted peer, and
+    /// verify every proof against `root`. Fails if the snapshot lacks an account or any proof does
+    /// not verify.
+    pub fn verify_snapshot(
+        snapshot: &RewardMerkleTreeV1,
+        accounts: &[RewardAccountV1],
+        root: &RewardMerkleCommitmentV1,
+    ) -> anyhow::Result<Vec<Self>> {
+        accounts
+            .iter()
+            .map(|account| {
+                let (proof, _) = Self::prove(snapshot, account.0)
+                    .with_context(|| format!("response missing v1 reward account {account}"))?;
+                proof.verify(root).with_context(|| {
+                    format!("invalid proof for v1 reward account {account}, root: {root}")
+                })?;
+                Ok(proof)
+            })
+            .collect()
+    }
+
     pub fn remember(&self, tree: &mut RewardMerkleTreeV1) -> anyhow::Result<()> {
         match &self.proof {
             RewardMerkleProofV1::Presence(proof) => {
