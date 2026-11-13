@@ -48,8 +48,8 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Header, Leaf2, PubKey, SeqTypes,
+    AuthenticatedValidatorMap, BlockMerkleCommitment, BlockMerkleTree, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Header, LcContractFinalizedState, Leaf2, PubKey, SeqTypes,
     v0::impls::StakeTableHash,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
@@ -303,6 +303,28 @@ pub trait StateCatchup: Send + Sync {
     fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
         None
     }
+
+    /// The block Merkle root of the header at `lc_contract_state.height`, accepted by
+    /// `LcContractFinalizedState::verify_header`. One attempt. Default: unsupported error.
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        _retry: usize,
+        _lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        anyhow::bail!("{} does not serve LC contract seed requests", self.name())
+    }
+
+    /// The header at `height`, proven against `root`, the block Merkle root of the header at
+    /// `root_height`. One attempt. Default: unsupported error.
+    async fn try_fetch_proven_header(
+        &self,
+        _retry: usize,
+        _root_height: u64,
+        _root: BlockMerkleCommitment,
+        _height: u64,
+    ) -> anyhow::Result<Header> {
+        anyhow::bail!("{} does not serve LC contract seed requests", self.name())
+    }
 }
 
 #[async_trait]
@@ -486,6 +508,28 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 
     fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
         (**self).with_local_timeout(local_timeout)
+    }
+
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        (**self)
+            .try_fetch_lc_contract_block_merkle_root(retry, lc_contract_state)
+            .await
+    }
+
+    async fn try_fetch_proven_header(
+        &self,
+        retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        (**self)
+            .try_fetch_proven_header(retry, root_height, root, height)
+            .await
     }
 }
 

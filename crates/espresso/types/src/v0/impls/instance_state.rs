@@ -604,7 +604,10 @@ impl Upgrade {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod mock {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use anyhow::Context;
     use async_trait::async_trait;
@@ -616,35 +619,30 @@ pub mod mock {
 
     use super::*;
     use crate::{
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-        retain_accounts,
+        BackoffParams, BlockMerkleCommitment, BlockMerkleTree, FeeAccount, FeeAccountProof,
+        FeeMerkleCommitment, LcContractFinalizedState, Leaf2, retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
     };
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct MockStateCatchup {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
         delay: std::time::Duration,
-    }
-
-    impl Default for MockStateCatchup {
-        fn default() -> Self {
-            Self {
-                backoff: Default::default(),
-                state: Default::default(),
-                delay: std::time::Duration::ZERO,
-            }
-        }
+        /// Headers served to the seed requests, by height.
+        headers: BTreeMap<u64, Header>,
+        /// Calls of each seed request that fail before the first success.
+        failing_seed_calls: usize,
+        /// Calls made to `try_fetch_proven_header`.
+        proven_header_calls: Arc<AtomicUsize>,
     }
 
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
         fn from_iter<I: IntoIterator<Item = (ViewNumber, Arc<ValidatedState>)>>(iter: I) -> Self {
             Self {
-                backoff: Default::default(),
                 state: iter.into_iter().collect(),
-                delay: std::time::Duration::ZERO,
+                ..Default::default()
             }
         }
     }
@@ -653,6 +651,27 @@ pub mod mock {
         pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
             self.delay = delay;
             self
+        }
+
+        /// Serves the two seed requests from `headers`, keyed by height; the root answer is the
+        /// block Merkle root of the header at `lc_contract_state.height`.
+        pub fn with_headers(mut self, headers: impl IntoIterator<Item = Header>) -> Self {
+            self.headers = headers
+                .into_iter()
+                .map(|header| (header.height(), header))
+                .collect();
+            self
+        }
+
+        /// Fails the first `calls` calls of `try_fetch_proven_header`.
+        pub fn with_failing_seed_calls(mut self, calls: usize) -> Self {
+            self.failing_seed_calls = calls;
+            self
+        }
+
+        /// Calls made to `try_fetch_proven_header` so far.
+        pub fn proven_header_calls(&self) -> usize {
+            self.proven_header_calls.load(Ordering::SeqCst)
         }
     }
 
@@ -777,6 +796,33 @@ pub mod mock {
 
         fn is_local(&self) -> bool {
             true
+        }
+
+        async fn try_fetch_lc_contract_block_merkle_root(
+            &self,
+            _retry: usize,
+            lc_contract_state: &LcContractFinalizedState,
+        ) -> anyhow::Result<BlockMerkleCommitment> {
+            let header = self
+                .headers
+                .get(&lc_contract_state.height)
+                .context("no header at the LC contract height")?;
+            lc_contract_state.verify_header(header)
+        }
+
+        async fn try_fetch_proven_header(
+            &self,
+            _retry: usize,
+            _root_height: u64,
+            _root: BlockMerkleCommitment,
+            height: u64,
+        ) -> anyhow::Result<Header> {
+            let call = self.proven_header_calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::ensure!(call >= self.failing_seed_calls, "seed call {call} fails");
+            self.headers
+                .get(&height)
+                .cloned()
+                .with_context(|| format!("no header at height {height}"))
         }
     }
 }

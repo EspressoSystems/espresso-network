@@ -6,9 +6,9 @@ Validators no longer walk epochs at startup. A validator behind the stored epoch
 by its post-start catchup, over request-response, after about one view timeout.
 
 - Nodes with SQL storage serve the new `HeaderProof` request over request-response; peers on older releases log
-  `Received invalid message` for it until they upgrade, and filesystem-storage nodes do not answer it. Each peer
-  request of a seed attempt has a 30 s bound; if no peer answers within it the seed errors, a warning is logged and the
-  catchup walks epochs from the held start as before.
+  `Received invalid message` for it until they upgrade, and filesystem-storage nodes do not answer it. A seed
+  request makes up to 5 attempts of 6 s each, with backoff; if no peer answers, the seed errors, a warning is logged
+  and the catchup walks epochs from the held start as before.
 - A validator does not start when it cannot read the validators active on L1. Previously the failure was logged and
   the node started without them as peers or responders.
 - `--state-peers` is optional for validators.

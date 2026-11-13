@@ -1,16 +1,10 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
-use std::{
-    fmt::Display,
-    future::Future,
-    sync::{Arc, OnceLock, Weak},
-    time::Duration,
-};
+use std::sync::Arc;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::Context;
 use espresso_types::{
-    BlockMerkleCommitment, ChainConfig, Header, LcContractFinalizedState, SeqTypes,
-    traits::SequencerPersistence,
+    BackoffParams, ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::StateCatchup,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use hotshot_types::{
@@ -19,16 +13,11 @@ use hotshot_types::{
     traits::metrics::{Counter, Metrics},
 };
 
-use crate::request_response::{
-    RequestResponseProtocol,
-    request::{Request, Response},
-};
-
 /// Most requests of one seed in flight; peers answer 4 requests per key at a time.
 const MAX_CONCURRENT_REQUESTS: usize = 3;
 
-/// Bound on each peer request of a seed: with no answering peer the seed errors within it.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Retries of one seed request after its first attempt.
+const SEED_REQUEST_RETRIES: u32 = 4;
 
 /// The LC-contract seed of the catchup, behind `CatchupSeedFn`; steps in
 /// `doc/agents/architecture.md`.
@@ -37,20 +26,15 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// from a header proven against the block Merkle root of a header at `F` that `verify_header`
 /// accepted. Proven heights are below `F`, installed epochs above `start`, and every table has a
 /// block reward.
-#[derive(Clone)]
-pub struct LcContractSeed<P: SequencerPersistence> {
-    /// Set by `bind_requests` once consensus exists; weak, as `SequencerContext` owns the protocol.
-    requests: Arc<OnceLock<Weak<RequestResponseProtocol<P>>>>,
+pub struct LcContractSeed {
     /// Seed attempts that installed a window.
     seeded: Arc<dyn Counter>,
 }
 
-impl<P: SequencerPersistence> LcContractSeed<P> {
-    /// A seed without a request-response protocol, `None` when `chain_config` names no stake
-    /// table contract to read the LC contract from.
+impl LcContractSeed {
+    /// `None` when `chain_config` names no stake table contract to read the LC contract from.
     pub fn new(chain_config: &ChainConfig, metrics: &dyn Metrics) -> Option<Self> {
         chain_config.stake_table_contract.map(|_| Self {
-            requests: Arc::default(),
             seeded: metrics
                 .subgroup("catchup".into())
                 .create_counter("lc_contract_seeds".into(), None)
@@ -58,15 +42,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         })
     }
 
-    /// Binds the request-response protocol, which exists only after consensus is constructed.
-    pub fn bind_requests(&self, requests: &Arc<RequestResponseProtocol<P>>) {
-        self.requests
-            .set(Arc::downgrade(requests))
-            .expect("the request-response protocol is bound once");
-    }
-
-    /// Sets the catchup hook of `coordinator` to this seed. An attempt before `bind_requests`
-    /// returns an error, which the catchup follows with the walk.
+    /// Sets the catchup hook of `coordinator` to this seed.
     pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
         let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
@@ -76,8 +52,7 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
-    /// when not needed, the last installed epoch when seeded. The L1 read, the
-    /// peer requests and each install are bounded.
+    /// when not needed, the last installed epoch when seeded.
     async fn run(
         &self,
         target: EpochNumber,
@@ -85,26 +60,23 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<EpochNumber> {
         let started = tokio::time::Instant::now();
-        let lc = coordinator
-            .membership()
-            .fetcher()
-            .lc_contract_finalized_state()
-            .await?;
+        let fetcher = coordinator.membership().fetcher();
+        let lc_contract_state = fetcher.lc_contract_finalized_state().await?;
         let epoch_height = *coordinator.epoch_height();
-        let seed_epoch = lc.seed_epoch(epoch_height);
+        let seed_epoch = lc_contract_state.seed_epoch(epoch_height);
         let log = |outcome: &str| {
             tracing::info!(
                 target: "announce::catchup",
                 %target,
                 held_start = %start,
-                lc_contract_height = lc.height,
+                lc_contract_height = lc_contract_state.height,
                 %seed_epoch,
                 outcome,
                 duration_ms = started.elapsed().as_millis() as u64,
                 "lc contract seed"
             );
         };
-        let Some(window) = lc.seed_window(
+        let Some(window) = lc_contract_state.seed_window(
             epoch_height,
             coordinator.membership().first_epoch(),
             start,
@@ -115,9 +87,13 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         };
 
         let heights = window.root_heights(epoch_height).collect();
-        let (preceding, roots) = self
-            .fetch_headers(&lc, window.preceding_root, heights)
-            .await?;
+        let (preceding, roots) = fetch_headers(
+            fetcher.peers(),
+            &lc_contract_state,
+            window.preceding_root,
+            heights,
+        )
+        .await?;
         coordinator
             .membership()
             .install_epoch_roots(preceding, roots, &coordinator)
@@ -127,89 +103,136 @@ impl<P: SequencerPersistence> LcContractSeed<P> {
         log("seeded");
         Ok(*window.epochs.end())
     }
-
-    /// The block Merkle root of the header at `F`, accepted by `lc.verify_header`, then the headers
-    /// it proves: the preceding root (the block time source of the lowest installed reward) and
-    /// `proven_heights`, ascending. A rejected answer is skipped and the request keeps waiting, up
-    /// to `REQUEST_TIMEOUT` for each request.
-    async fn fetch_headers(
-        &self,
-        lc: &LcContractFinalizedState,
-        preceding_height: Option<u64>,
-        proven_heights: Vec<u64>,
-    ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
-        let protocol = self
-            .requests
-            .get()
-            .and_then(Weak::upgrade)
-            .context("the request-response protocol is not available")?;
-        let checked_lc = lc.clone();
-        let root: BlockMerkleCommitment = within_request_timeout(
-            format!("the LC contract header at height {}", lc.height),
-            protocol.request_indefinitely(
-                Request::Leaf(lc.height),
-                move |_: &Request, response: Response| {
-                    let lc = checked_lc.clone();
-                    async move {
-                        let Response::Leaf(leaves) = response else {
-                            bail!("expected leaf response");
-                        };
-                        let header = leaves.first().context("empty leaf chain")?.block_header();
-                        lc.verify_header(header)
-                    }
-                    .map(|result| {
-                        result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
-                    })
-                },
-            ),
-        )
-        .await?;
-
-        let heights = preceding_height.into_iter().chain(proven_heights);
-        let mut headers: Vec<Header> = stream::iter(heights)
-            .map(|height| {
-                let protocol = Arc::clone(&protocol);
-                async move {
-                    within_request_timeout(
-                        format!("the header proof at height {height}"),
-                        protocol.request_indefinitely(
-                            Request::HeaderProof {
-                                root: lc.height,
-                                height,
-                            },
-                            move |_: &Request, response: Response| {
-                                async move {
-                                    let Response::HeaderProof(proof) = response else {
-                                        bail!("expected header proof response");
-                                    };
-                                    proof.verify_at_height(root, height)
-                                }
-                                .map(|result| {
-                                    result.inspect_err(|err| {
-                                        tracing::debug!("header proof rejected: {err:#}")
-                                    })
-                                })
-                            },
-                        ),
-                    )
-                    .await
-                }
-            })
-            .buffered(MAX_CONCURRENT_REQUESTS)
-            .try_collect()
-            .await?;
-        let preceding = preceding_height.map(|_| headers.remove(0));
-        Ok((preceding, headers))
-    }
 }
 
-/// Awaits `request` for at most `REQUEST_TIMEOUT`; the timeout error names `what`.
-async fn within_request_timeout<T, E: Into<anyhow::Error>>(
-    what: impl Display,
-    request: impl Future<Output = Result<T, E>>,
-) -> anyhow::Result<T> {
-    tokio::time::timeout(REQUEST_TIMEOUT, request)
+/// The preceding root (the block time source of the lowest installed reward) split off, and the
+/// headers at `proven_heights`, ascending, proven against the root of the header at `F`.
+async fn fetch_headers(
+    peers: &dyn StateCatchup,
+    lc_contract_state: &LcContractFinalizedState,
+    preceding_height: Option<u64>,
+    proven_heights: Vec<u64>,
+) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
+    // Not `peers.backoff()`: disabled on `ParallelStateCatchup`, unreachable on request-response.
+    let backoff = BackoffParams::default();
+    let root = backoff
+        .retry_if(
+            SEED_REQUEST_RETRIES,
+            |_| true,
+            || peers.try_fetch_lc_contract_block_merkle_root(0, lc_contract_state),
+        )
         .await
-        .map_err(|_| anyhow!("{what} not received within {REQUEST_TIMEOUT:?}"))?
-        .map_err(Into::into)
+        .with_context(|| {
+            format!(
+                "fetching the LC contract header at height {}",
+                lc_contract_state.height
+            )
+        })?;
+    let heights = preceding_height.into_iter().chain(proven_heights);
+    let mut headers: Vec<Header> = stream::iter(heights)
+        .map(|height| {
+            backoff
+                .retry_if(
+                    SEED_REQUEST_RETRIES,
+                    |_| true,
+                    move || {
+                        peers.try_fetch_proven_header(0, lc_contract_state.height, root, height)
+                    },
+                )
+                .map(move |result| {
+                    result.with_context(|| format!("fetching the header proof at height {height}"))
+                })
+        })
+        .buffered(MAX_CONCURRENT_REQUESTS)
+        .try_collect()
+        .await?;
+    let preceding = preceding_height.map(|_| headers.remove(0));
+    Ok((preceding, headers))
+}
+
+#[cfg(test)]
+mod tests {
+    use espresso_types::v0::mock::MockStateCatchup;
+    use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
+    use light_client::testing::TestClient;
+
+    use super::*;
+
+    const EPOCH_HEIGHT: u64 = 10;
+
+    /// The mock serving the headers of `heights` and of `F = 62`, and the contract state at `F`.
+    async fn mock_with_headers(heights: &[usize]) -> (MockStateCatchup, LcContractFinalizedState) {
+        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+        let mut headers = Vec::new();
+        for height in heights.iter().copied().chain([62]) {
+            headers.push(client.leaf(height).await.leaf().block_header().clone());
+        }
+        let lc_contract_state = LcContractFinalizedState {
+            height: 62,
+            block_comm_root: headers
+                .last()
+                .unwrap()
+                .get_light_client_state(ViewNumber::new(0))
+                .unwrap()
+                .block_comm_root,
+        };
+        (
+            MockStateCatchup::default().with_headers(headers),
+            lc_contract_state,
+        )
+    }
+
+    /// The preceding root is split off and the roots come back in the order asked.
+    #[tokio::test(start_paused = true)]
+    async fn fetch_headers_ok() {
+        let (peers, lc_contract_state) = mock_with_headers(&[5, 15, 25, 35, 45, 55]).await;
+
+        let (preceding, roots) = fetch_headers(
+            &peers,
+            &lc_contract_state,
+            Some(5),
+            vec![15, 25, 35, 45, 55],
+        )
+        .await
+        .unwrap();
+
+        let heights: Vec<_> = roots.iter().map(Header::height).collect();
+        assert_eq!(heights, [15, 25, 35, 45, 55]);
+        assert_eq!(preceding.map(|root| root.height()), Some(5));
+    }
+
+    /// A request that fails twice succeeds on its third attempt.
+    #[tokio::test(start_paused = true)]
+    async fn fetch_headers_retries_a_failed_request_ok() {
+        let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
+        let peers = peers.with_failing_seed_calls(2);
+
+        let (preceding, roots) = fetch_headers(&peers, &lc_contract_state, None, vec![15])
+            .await
+            .unwrap();
+
+        assert!(preceding.is_none());
+        assert_eq!(roots.len(), 1);
+        assert_eq!(peers.proven_header_calls(), 3);
+    }
+
+    /// A request that always fails errors after `SEED_REQUEST_RETRIES + 1` calls.
+    #[tokio::test(start_paused = true)]
+    async fn fetch_headers_attempts_are_bounded_fails() {
+        let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
+        let peers = peers.with_failing_seed_calls(usize::MAX);
+
+        let err = fetch_headers(&peers, &lc_contract_state, None, vec![15])
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("the header proof at height 15"),
+            "{err:#}"
+        );
+        assert_eq!(
+            peers.proven_header_calls(),
+            SEED_REQUEST_RETRIES as usize + 1
+        );
+    }
 }

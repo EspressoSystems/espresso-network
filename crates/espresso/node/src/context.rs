@@ -92,9 +92,10 @@ pub struct SequencerContext<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
 
-    /// The request-response protocol; owns it for the catchup seed, which holds it weakly.
+    /// The request-response protocol
     #[derivative(Debug = "ignore")]
-    pub request_response_protocol: Arc<RequestResponseProtocol<P>>,
+    #[allow(dead_code)]
+    pub request_response_protocol: RequestResponseProtocol<P>,
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
@@ -132,7 +133,6 @@ where
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
-        lc_contract_seed: Option<LcContractSeed<P>>,
         persistence: Arc<P>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
@@ -179,7 +179,7 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         // Before the anchor `apply_epoch` in `connect_startup_peers`, which can start a catchup.
-        if let Some(seed) = lc_contract_seed.clone() {
+        if let Some(seed) = LcContractSeed::new(&instance_state.chain_config, metrics) {
             seed.install(&membership_coordinator);
         }
 
@@ -296,7 +296,7 @@ where
         };
 
         // Create the request-response protocol
-        let request_response_protocol = Arc::new(RequestResponseProtocol::new(
+        let request_response_protocol = RequestResponseProtocol::new(
             request_response_config,
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
@@ -315,17 +315,12 @@ where
             },
             validator_config.public_key,
             validator_config.private_key.clone(),
-        ));
+        );
 
         // Add the request-response protocol to the list of providers for state catchup. Since the interior is mutable,
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
-        state_catchup.add_provider(Arc::new(RequestResponseProtocol::clone(
-            &request_response_protocol,
-        )));
-        if let Some(seed) = &lc_contract_seed {
-            seed.bind_requests(&request_response_protocol);
-        }
+        state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
 
         // Create the external event handler
         let mut tasks = TaskList::default();
@@ -367,7 +362,7 @@ where
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: Arc<RequestResponseProtocol<P>>,
+        request_response_protocol: RequestResponseProtocol<P>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,

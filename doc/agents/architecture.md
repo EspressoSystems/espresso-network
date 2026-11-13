@@ -58,17 +58,18 @@ seed at a time:
    runs when `target > start + 1` and `E* > start + 1`, with `start` the top of the held pair. The window ends at
    `top = min(E*+1, target)`: only roots below `F` are provable, so never above `E*+1`. The DRB of a target at or
    below `E*+1` needs `ST(target-1)` and `ST(target-2)`, which are installed or held.
-2. Fetches the header at `F` over request-response and accepts it iff its height is `F` and its `block_comm_root`
-   matches.
+2. Fetches the header at `F` through the catchup provider (`Fetcher::peers()`, request-response) and accepts it iff
+   its height is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
-   the preceding root where the reward of the lowest table reads its block time. The L1 read, each peer request (30 s)
-   and each install are bounded.
+   the preceding root where the reward of the lowest table reads its block time. Each request is up to 5 attempts of
+   one provider bound each (6 s on request-response) with backoff between them. The L1 read and each install are
+   bounded.
 4. Installs `ST(max(top-4, start+1, 3)) ..= ST(top)`, each with a block reward computed from the proven roots, each
    root bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from `top` up
    to the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
 
-An error from the seed (no answering peer, a timeout, the protocol not yet bound) is logged and the walk runs from the
-held start; installed tables are present and skipped.
+An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held
+start; installed tables are present and skipped.
 
 ## Consensus upgrades
 
