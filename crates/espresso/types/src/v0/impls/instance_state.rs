@@ -360,7 +360,11 @@ impl NodeState {
         );
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            &storage,
+        );
         Self::new(
             0,
             chain_config,
@@ -392,7 +396,11 @@ impl NodeState {
             EpochNumber::genesis(),
         );
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            &storage,
+        );
 
         Self::new(
             0,
@@ -424,7 +432,11 @@ impl NodeState {
         );
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            &storage,
+        );
         Self::new(
             0,
             ChainConfig::default(),
@@ -520,7 +532,11 @@ impl Default for NodeState {
             EpochNumber::genesis(),
         );
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            &storage,
+        );
 
         Self::new(
             1u64,

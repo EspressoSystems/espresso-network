@@ -24,6 +24,7 @@ use hotshot_types::{
         ViewNumber, vid_commitment,
         vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece, vid_total_weight},
     },
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::{Proposal as SignedProposal, UpgradeLock},
@@ -738,6 +739,12 @@ impl TestData {
 /// The stake table capacity a harness's consensus commits to stake tables with.
 pub const STAKE_TABLE_CAPACITY: usize = 10;
 
+/// Tests pass an epoch height of 0 for a chain that never changes epoch. An epoch that never ends
+/// has the same geometry: no root, no transition, no last block.
+pub fn epoch_length_or_single_epoch(epoch_height: u64) -> EpochLength {
+    EpochLength::new(epoch_height).unwrap_or(EpochLength::new(u64::MAX).unwrap())
+}
+
 pub fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key);
@@ -924,8 +931,11 @@ fn mock_membership_core(
         external_events_rx,
     );
 
-    let coordinator =
-        EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default());
+    let coordinator = EpochMembershipCoordinator::new(
+        membership,
+        epoch_length_or_single_epoch(epoch_height),
+        &TestStorage::default(),
+    );
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator

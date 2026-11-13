@@ -445,7 +445,7 @@ async fn reference_new_protocol_messages(
             epoch_height,
             1.into(),
         ),
-        epoch_height,
+        hotshot_types::epoch::EpochLength::new(epoch_height).unwrap(),
         &storage,
     );
 

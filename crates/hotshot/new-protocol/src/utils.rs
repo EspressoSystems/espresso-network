@@ -206,7 +206,7 @@ mod test {
         membership.add_quorum_committee(EpochNumber::new(2), peers2.clone());
         EpochMembershipCoordinator::new(
             membership,
-            EPOCH_HEIGHT,
+            hotshot_types::epoch::EpochLength::new(EPOCH_HEIGHT).unwrap(),
             &TestStorage::<TestTypes>::default(),
         )
     }

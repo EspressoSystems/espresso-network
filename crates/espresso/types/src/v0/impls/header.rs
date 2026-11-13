@@ -1979,8 +1979,11 @@ mod test_headers {
             100,
             EpochNumber::genesis(),
         );
-        genesis_state.coordinator =
-            EpochMembershipCoordinator::new(membership, 100, &TestStorage::default());
+        genesis_state.coordinator = EpochMembershipCoordinator::new(
+            membership,
+            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            &TestStorage::default(),
+        );
 
         let genesis = GenesisForTest::default().await;
 

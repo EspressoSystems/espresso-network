@@ -23,6 +23,7 @@ use crate::{
         DRB_PROGRESS_LOAD_TIMEOUT, DrbDifficultySelectorFn, DrbInput, DrbResult, Heartbeat,
         compute_drb_result,
     },
+    epoch::EpochLength,
     traits::{
         block_contents::BlockHeader,
         election::{GenesisStakeTables, Membership, MembershipSnapshot},
@@ -64,7 +65,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     catchup_map: Attempts,
     stake_table_map: Attempts,
     drb_computations: DrbComputations,
-    epoch_height: BlockNumber,
+    epoch_length: EpochLength,
     catchup_timeout: Duration,
     store_drb_progress_fn: StoreDrbProgressFn,
     load_drb_progress_fn: LoadDrbProgressFn,
@@ -79,7 +80,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             catchup_map: self.catchup_map.clone(),
             stake_table_map: self.stake_table_map.clone(),
             drb_computations: Arc::clone(&self.drb_computations),
-            epoch_height: self.epoch_height,
+            epoch_length: self.epoch_length,
             catchup_timeout: self.catchup_timeout,
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
@@ -90,10 +91,9 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
 }
 
 impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
-    pub fn new<M, S, B>(membership: M, epoch_height: B, storage: &S) -> Self
+    pub fn new<M, S>(membership: M, epoch_length: EpochLength, storage: &S) -> Self
     where
         M: Into<Arc<TYPES::Membership>>,
-        B: Into<BlockNumber>,
         S: Storage<TYPES>,
     {
         Self {
@@ -101,7 +101,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             catchup_map: Attempts::default(),
             stake_table_map: Attempts::default(),
             drb_computations: Arc::default(),
-            epoch_height: epoch_height.into(),
+            epoch_length,
             catchup_timeout: DEFAULT_CATCHUP_TIMEOUT,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
@@ -110,8 +110,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
     }
 
+    pub fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
+    }
+
+    /// The epoch length as a raw block count, for callers not yet on [`EpochLength`].
     pub fn epoch_height(&self) -> BlockNumber {
-        self.epoch_height
+        BlockNumber::new(self.epoch_length.get())
     }
 
     /// Override the bound on a single catchup step. Mostly for tests.

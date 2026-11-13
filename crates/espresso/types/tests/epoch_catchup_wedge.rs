@@ -247,7 +247,7 @@ fn setup_with(
 
     let coordinator = EpochMembershipCoordinator::new(
         committees,
-        EPOCH_HEIGHT,
+        hotshot_types::epoch::EpochLength::new(EPOCH_HEIGHT).unwrap(),
         &TestStorage::<SeqTypes>::default(),
     )
     .with_catchup_timeout(catchup_timeout);

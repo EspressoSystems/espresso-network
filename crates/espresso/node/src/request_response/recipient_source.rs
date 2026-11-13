@@ -111,7 +111,11 @@ mod tests {
             EPOCH_HEIGHT,
             EpochNumber::new(FIRST_EPOCH),
         );
-        EpochMembershipCoordinator::new(committees, EPOCH_HEIGHT, &TestStorage::default())
+        EpochMembershipCoordinator::new(
+            committees,
+            hotshot_types::epoch::EpochLength::new(EPOCH_HEIGHT).unwrap(),
+            &TestStorage::default(),
+        )
     }
 
     /// A node started on an empty database has consensus at the genesis epoch, below the first
