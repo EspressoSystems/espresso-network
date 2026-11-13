@@ -11,6 +11,8 @@ the LC contract by its post-start catchup, over request-response, after about on
   a 30 s bound; if no peer answers within it the seed errors, a warning is logged and the catchup walks epochs from
   the held start as before. State peers are eligible `--http-catchup-delay` after a seed fetch starts, or at once when
   request-response is not available.
+- A validator does not start when it cannot read the validators active on L1. Previously the failure was logged and
+  the node started without them as peers or responders.
 - `--state-peers` is optional for validators. When set, it serves the seed over HTTP (`/availability`,
   `/light-client`) after `--http-catchup-delay`; a validator whose cliquenet peers do not answer `HeaderProof` yet can
   set it.

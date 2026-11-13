@@ -192,7 +192,7 @@ where
             version,
             pub_key,
         )
-        .await;
+        .await?;
         let network_sender = coordinator_network.sender().clone();
 
         // Restore the persisted lock so the new protocol resumes with the lock
@@ -614,24 +614,20 @@ fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
         .unwrap_or(upgrade_lock.upgrade().base)
 }
 
-/// Bound on the dial of the L1 finalized validators at startup.
-const STARTUP_DIAL_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Applies the stored anchor's epoch to `network` and dials the active validators at the L1
 /// finalized block that it does not hold. Returns the keys of all of them with connect info,
 /// without `own_key`.
 ///
-/// Held keys keep the connect info of the held tables, which may be older than L1's. The dial runs
-/// once, bounded by `STARTUP_DIAL_TIMEOUT`; a failure leaves no extra peers until restart. The
-/// first `apply_epoch` for a higher epoch with a table drops the dialed peers outside that epoch's
-/// window.
+/// Held keys keep the connect info of the held tables, which may be older than L1's. A dial error
+/// fails startup. The first `apply_epoch` for a higher epoch with a table drops the dialed peers
+/// outside that epoch's window.
 async fn connect_startup_peers(
     network: &mut Cliquenet<SeqTypes>,
     membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
     initializer: &HotShotInitializer<SeqTypes>,
     version: Version,
     own_key: PubKey,
-) -> Vec<PubKey> {
+) -> anyhow::Result<Vec<PubKey>> {
     // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
     let anchor_epoch = initializer
         .anchor_leaf()
@@ -643,17 +639,19 @@ async fn connect_startup_peers(
 
     let started = Instant::now();
     let held = network.sender().peer_keys();
-    let dial = async {
+    let l1_finalized_peers = {
         let l1_block = initializer
             .instance_state()
             .l1_client
             .finalized_number_within_wait()
-            .await?;
+            .await
+            .context("dialing the validators active on L1")?;
         let validators = membership_coordinator
             .membership()
             .fetcher()
             .validator_set_at(l1_block, version)
-            .await?;
+            .await
+            .context("dialing the validators active on L1")?;
         let (l1_active_keys, targets) = startup_dial_targets(
             &own_key,
             validators.active_validators().values().map(|validator| {
@@ -669,16 +667,11 @@ async fn connect_startup_peers(
             .into_iter()
             .map(|(key, (x25519_key, addr))| (key, (x25519_key.into(), addr)))
             .collect();
-        network.add_peers(Role::Active, targets)?;
-        anyhow::Ok(l1_active_keys)
+        network
+            .add_peers(Role::Active, targets)
+            .context("dialing the validators active on L1")?;
+        l1_active_keys
     };
-    let l1_finalized_peers = tokio::time::timeout(STARTUP_DIAL_TIMEOUT, dial)
-        .await
-        .unwrap_or_else(|_| Err(anyhow::anyhow!("exceeded {STARTUP_DIAL_TIMEOUT:?}")))
-        .unwrap_or_else(|err| {
-            tracing::warn!(%err, "failed to dial the L1 finalized validators");
-            Vec::new()
-        });
     info!(
         target: "announce::catchup",
         %anchor_epoch,
@@ -686,7 +679,7 @@ async fn connect_startup_peers(
         duration_ms = started.elapsed().as_millis() as u64,
         "startup peers"
     );
-    l1_finalized_peers
+    Ok(l1_finalized_peers)
 }
 
 /// A validator key with its x25519 key and address.

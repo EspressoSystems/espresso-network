@@ -43,7 +43,7 @@ StakeTable contract for peer discovery.
 ## Validator startup
 
 `SequencerContext::init` applies the stored anchor's epoch to cliquenet and dials the active validators at the L1
-finalized block (`Fetcher::validator_set_at`), bounded to 60 s. Their keys, dialed or already held, are extra
+finalized block (`Fetcher::validator_set_at`); an error fails startup. Their keys, dialed or already held, are extra
 request-response responders; responders are the table keys and these keys that the network holds at request time.
 `state_peers` is optional for validators.
 
