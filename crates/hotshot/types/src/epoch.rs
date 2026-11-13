@@ -22,10 +22,8 @@ const TRANSITION_DISTANCE: u64 = 3;
 pub struct EpochLength(NonZeroU64);
 
 impl EpochLength {
-    pub fn new(blocks: u64) -> Result<Self, EpochArithmeticError> {
-        NonZeroU64::new(blocks)
-            .map(Self)
-            .ok_or(EpochArithmeticError::ZeroLength)
+    pub const fn new(blocks: NonZeroU64) -> Self {
+        Self(blocks)
     }
 
     pub fn get(self) -> u64 {
@@ -107,6 +105,12 @@ impl EpochLength {
 
     fn holds_root(self) -> bool {
         self.get() > ROOT_DISTANCE
+    }
+}
+
+impl From<NonZeroU64> for EpochLength {
+    fn from(blocks: NonZeroU64) -> Self {
+        Self::new(blocks)
     }
 }
 
@@ -331,8 +335,6 @@ impl EpochNumber {
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum EpochArithmeticError {
-    #[error("epoch length must be nonzero")]
-    ZeroLength,
     #[error("epoch zero has no mathematical epoch geometry")]
     ZeroEpoch,
     #[error("epoch arithmetic exceeds u64")]
@@ -367,9 +369,13 @@ mod tests {
         BlockNumber::new(value)
     }
 
+    fn epoch_length(blocks: u64) -> EpochLength {
+        EpochLength::new(NonZeroU64::new(blocks).expect("test epoch lengths are positive"))
+    }
+
     #[test]
     fn boundary_positions_and_genesis() {
-        let length = EpochLength::new(10).unwrap();
+        let length = epoch_length(10);
         let cases = [
             // height, epoch, first, root, transition, last
             (0, 1, true, false, false, false),
@@ -404,7 +410,7 @@ mod tests {
 
     #[test]
     fn seeds_and_dynamic_sources_are_distinct_from_inside_positions() {
-        let length = EpochLength::new(10).unwrap();
+        let length = epoch_length(10);
         let schedule = EpochSchedule::new(length, epoch(7)).unwrap();
         assert_eq!(schedule.length(), length);
         assert_eq!(schedule.first_epoch(), epoch(7));
@@ -448,9 +454,8 @@ mod tests {
 
     #[test]
     fn short_lengths_hold_no_root_or_transition() {
-        assert_eq!(EpochLength::new(0), Err(EpochArithmeticError::ZeroLength));
         for blocks in 1..=ROOT_DISTANCE {
-            let length = EpochLength::new(blocks).unwrap();
+            let length = epoch_length(blocks);
             let too_short = EpochArithmeticError::TooShort { length: blocks };
             assert_eq!(length.epoch_of(height(blocks)), epoch(1));
             assert_eq!(length.epoch_of(height(blocks + 1)), epoch(2));
@@ -471,7 +476,7 @@ mod tests {
     #[test]
     fn predicates_nest_and_agree_with_boundary_heights() {
         for blocks in 1..=20 {
-            let length = EpochLength::new(blocks).unwrap();
+            let length = epoch_length(blocks);
             for h in 0..=blocks * 3 {
                 let position = length.position(height(h));
                 let implies = |inner: bool, outer: bool| !inner || outer;
@@ -505,7 +510,7 @@ mod tests {
 
     #[test]
     fn zero_epoch_and_checked_overflow_are_not_genesis() {
-        let length = EpochLength::new(10).unwrap();
+        let length = epoch_length(10);
         assert_eq!(
             length.first_block(epoch(0)),
             Err(EpochArithmeticError::ZeroEpoch)
@@ -583,7 +588,7 @@ mod tests {
     #[test]
     fn maximum_height_position_is_total() {
         for blocks in [1, 2, 3, 5, 6, 10, u64::MAX - 1, u64::MAX] {
-            let length = EpochLength::new(blocks).unwrap();
+            let length = epoch_length(blocks);
             let position = length.position(height(u64::MAX));
             assert_eq!(
                 *position.epoch() as u128,
@@ -600,7 +605,7 @@ mod tests {
 
     #[test]
     fn peer_window_clips_only_at_activation() {
-        let schedule = EpochSchedule::new(EpochLength::new(10).unwrap(), epoch(7)).unwrap();
+        let schedule = EpochSchedule::new(epoch_length(10), epoch(7)).unwrap();
         let first = schedule.peer_window(epoch(7)).unwrap();
         assert_eq!((first.first(), first.last()), (epoch(7), epoch(8)));
         assert!(!first.contains(epoch(6)));
@@ -625,7 +630,7 @@ mod tests {
         // LightClientV2.sol's epochFromBlockNumber/isEpochRoot/isGtEpochRoot;
         // V3 inherits this geometry. Values avoid Solidity's checked h+5 overflow domain.
         // `after_root` is isGtEpochRoot, which has no Rust caller and so no method here.
-        let length = EpochLength::new(10).unwrap();
+        let length = epoch_length(10);
         for (h, e, root, after_root) in [
             (0, 1, false, false),
             (1, 1, false, false),
@@ -643,7 +648,7 @@ mod tests {
             assert_eq!(position.is_root(), root);
             assert_eq!(position.is_at_or_after_root(), root || after_root);
         }
-        let length = EpochLength::new(6).unwrap();
+        let length = epoch_length(6);
         assert!(length.position(height(1)).is_root());
         assert!(length.position(height(3)).is_transition_block());
     }
@@ -651,7 +656,7 @@ mod tests {
     quickcheck::quickcheck! {
         fn mapping_and_boundaries_agree_with_wide_arithmetic(h: u64, nonzero_length: u64) -> bool {
             let blocks = nonzero_length.max(1);
-            let length = EpochLength::new(blocks).unwrap();
+            let length = epoch_length(blocks);
             let expected = if h == 0 { 1 } else { (h as u128).div_ceil(blocks as u128) };
             let epoch = length.epoch_of(height(h));
             if *epoch as u128 != expected || length.position(height(h)).epoch() != epoch {
