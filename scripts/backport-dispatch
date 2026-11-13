@@ -9,17 +9,34 @@ fi
 pr_number="$1"
 target_branch="$2"
 
+# Whoever can label a PR sets the target, so allow a plain branch name only, never a git option.
+if [[ ! "${target_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+  echo "invalid target branch: ${target_branch}" >&2
+  exit 1
+fi
+
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
 : "${GH_TOKEN:?GH_TOKEN is not set}"
 
-meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit \
-  -q '{state,title,sha:.mergeCommit.oid}')
+meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit,commits \
+  -q '{state,title,sha:.mergeCommit.oid,commits:(.commits | length)}')
 if [[ "$(jq -r '.state' <<<"${meta}")" != "MERGED" ]]; then
   echo "PR #${pr_number} is not merged; refusing to backport" >&2
   exit 1
 fi
 title=$(jq -r '.title' <<<"${meta}")
 sha=$(jq -r '.sha' <<<"${meta}")
+commits=$(jq -r '.commits' <<<"${meta}")
+
+# The cherry-pick below takes only the merge commit, which holds the whole change only after a
+# squash merge. GitHub titles a squash commit "<PR title> (#<number>)".
+subject=$(git log -1 --format=%s "${sha}")
+if git rev-parse -q --verify "${sha}^2" >/dev/null ||
+  [[ "${commits}" -gt 1 && "${subject}" != *"(#${pr_number})" ]]; then
+  echo "PR #${pr_number} was not squash-merged, so ${sha} does not hold the whole change;" \
+    "backport it by hand" >&2
+  exit 1
+fi
 
 echo "backporting PR #${pr_number} (${sha}) to ${target_branch}"
 
