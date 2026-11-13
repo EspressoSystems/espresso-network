@@ -31,11 +31,13 @@ use async_lock::Mutex as AsyncMutex;
 use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+#[cfg(feature = "node")]
+use futures::FutureExt;
 use futures::future::BoxFuture;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
-    StakeTableV3,
+    LightClientStateSol, LightClientV3, StakeTableV3,
 };
 use hotshot_contract_adapter::{
     sol_types::StakeTableV3::{
@@ -45,6 +47,8 @@ use hotshot_contract_adapter::{
     },
     stake_table::StakeTableSolError,
 };
+#[cfg(feature = "node")]
+use hotshot_types::light_client::LightClientState;
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
@@ -65,7 +69,13 @@ use tracing::Instrument;
 use vbs::version::Version;
 
 #[cfg(feature = "node")]
+use super::BackoffParams;
+#[cfg(feature = "node")]
 use super::L1Client;
+#[cfg(feature = "node")]
+use super::LcContractFinalizedState;
+#[cfg(feature = "node")]
+use super::l1::L1_FINALIZED_WAIT;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
@@ -1234,6 +1244,7 @@ impl Fetcher {
             chain_config: Arc::new(AsyncMutex::new(chain_config)),
             update_task: StakeTableUpdateTask(AsyncMutex::new(None)).into(),
             initial_supply: Arc::new(AsyncRwLock::new(None)),
+            lc_contract_address: Arc::default(),
         }
     }
 
@@ -1920,6 +1931,58 @@ impl Fetcher {
         }
     }
 
+    /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
+    /// contract reads are each bounded by `L1_FINALIZED_WAIT`; each call is retried, with a timeout.
+    #[cfg(feature = "node")]
+    pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
+        let chain_config = *self.chain_config.lock().await;
+        let Some(stake_table_contract) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+        let block = self.l1_client.finalized_number_within_wait().await?;
+        let request_timeout = self.l1_client.options().l1_request_timeout;
+        let backoff = BackoffParams::default();
+        let read = backoff.retry(self, move |this, _| {
+            let this = *this;
+            async move {
+                let provider = this.l1_client.provider.clone();
+                let lc_contract = *this
+                    .lc_contract_address
+                    .get_or_try_init(|| async {
+                        tokio::time::timeout(
+                            request_timeout,
+                            StakeTableV3::new(stake_table_contract, provider.clone())
+                                .lightClient()
+                                .call(),
+                        )
+                        .await
+                        .context("reading the LC contract address timed out")?
+                        .context("failed to read the LC contract address")
+                    })
+                    .await?;
+                tokio::time::timeout(
+                    request_timeout,
+                    LightClientV3::new(lc_contract, provider)
+                        .finalizedState()
+                        .block(BlockId::number(block))
+                        .call(),
+                )
+                .await
+                .context("reading finalizedState timed out")?
+                .context("failed to read finalizedState")
+            }
+            .boxed()
+        });
+        let state = tokio::time::timeout(L1_FINALIZED_WAIT, read)
+            .await
+            .context("reading the LC contract exceeded the L1 wait")??;
+        let state = LightClientState::from(LightClientStateSol::from(state));
+        Ok(LcContractFinalizedState {
+            height: state.block_height,
+            block_comm_root: state.block_comm_root,
+        })
+    }
+
     /// Retrieve and verify `ChainConfig`
     // TODO move to appropriate object (Header?)
     pub(crate) async fn get_chain_config(&self, header: &Header) -> anyhow::Result<ChainConfig> {
@@ -2322,14 +2385,23 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use alloy::{
+        node_bindings::Anvil,
         primitives::{Address, Bytes},
+        providers::{ProviderBuilder, ext::AnvilApi},
         rpc::types::Log,
     };
+    use espresso_contract_deployer::{
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
+    };
     use hotshot_contract_adapter::{
-        sol_types::{G1PointSol, G2PointSol},
+        sol_types::{G1PointSol, G2PointSol, LightClientMock, LightClientStateSol},
         stake_table::{StakeTableContractVersion, sign_address_bls},
     };
-    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
+    use hotshot_types::{
+        light_client::{CircuitField, StateKeyPair},
+        signature_key::BLSKeyPair,
+    };
     use pretty_assertions::assert_matches;
     use rstest::rstest;
     use versions::{
@@ -2353,6 +2425,74 @@ mod tests {
             x: U256::ZERO,
             y: U256::ZERO,
         }
+    }
+
+    /// The finalized LC contract state is read through the stake table contract.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn lc_contract_finalized_state_reads_the_contract() -> anyhow::Result<()> {
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "1"]).spawn();
+        let wallet = anvil.wallet().unwrap();
+        let deployer_address = wallet.default_signer().address();
+        let provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_http(anvil.endpoint_url());
+        let (genesis_state, genesis_stake) =
+            light_client_genesis_from_stake_table(&Default::default(), 10)?;
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(100)
+            .epoch_start_block(1)
+            .multisig_pauser(deployer_address)
+            .exit_escrow_period(U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS))
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(100000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(deployer_address)
+            .ops_timelock_proposers(vec![deployer_address])
+            .ops_timelock_executors(vec![deployer_address])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(deployer_address)
+            .safe_exit_timelock_proposers(vec![deployer_address])
+            .safe_exit_timelock_executors(vec![deployer_address])
+            .build()?;
+        args.deploy_to_stake_table_v3(&mut contracts).await?;
+
+        let lc_contract = contracts.address(Contract::LightClientProxy).unwrap();
+        let finalized = LightClientStateSol {
+            viewNum: 3,
+            blockHeight: 42,
+            blockCommRoot: U256::from(7),
+        };
+        LightClientMock::new(lc_contract, &provider)
+            .setFinalizedState(finalized.clone().into())
+            .send()
+            .await?
+            .watch()
+            .await?;
+
+        let l1_client = L1ClientOptions::default().connect(vec![anvil.endpoint_url()])?;
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
+            l1_client.clone(),
+            ChainConfig {
+                stake_table_contract: contracts.address(Contract::StakeTableProxy),
+                ..Default::default()
+            },
+        );
+        l1_client.anvil_mine(Some(5), None).await?;
+
+        let state = fetcher.lc_contract_finalized_state().await?;
+
+        assert_eq!(state.height, 42);
+        assert_eq!(state.block_comm_root, CircuitField::from(7u64));
+        Ok(())
     }
 
     /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
