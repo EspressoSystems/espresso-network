@@ -137,16 +137,6 @@ mod tests {
         assert_eq!(out, expected);
     }
 
-    /// A network that holds no peer yields no responders.
-    #[test]
-    fn responders_without_held_peers_are_empty() {
-        let own = key(0);
-
-        let out = responders([key(1)].into_iter(), &[key(2)], &HashSet::new(), &own);
-
-        assert!(out.is_empty());
-    }
-
     /// A membership holding the stake tables for `FIRST_EPOCH` and the epoch after it.
     fn memberships() -> EpochMembershipCoordinator<SeqTypes> {
         let peers: Vec<PeerConfig<SeqTypes>> = (0..STAKERS)

@@ -813,10 +813,18 @@ pub mod mock {
         async fn try_fetch_proven_header(
             &self,
             _retry: usize,
-            _root_height: u64,
-            _root: BlockMerkleCommitment,
+            root_height: u64,
+            root: BlockMerkleCommitment,
             height: u64,
         ) -> anyhow::Result<Header> {
+            let root_header = self
+                .headers
+                .get(&root_height)
+                .with_context(|| format!("no header at root height {root_height}"))?;
+            anyhow::ensure!(
+                root == root_header.block_merkle_tree_root(),
+                "root is not the block Merkle root of the header at height {root_height}"
+            );
             let call = self.proven_header_calls.fetch_add(1, Ordering::SeqCst);
             anyhow::ensure!(call >= self.failing_seed_calls, "seed call {call} fails");
             self.headers

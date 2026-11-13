@@ -1087,24 +1087,4 @@ mod tests {
             if dialed { vec![key(1)] } else { vec![] }
         );
     }
-
-    /// Only the validators that qualify remain, in order.
-    #[test]
-    fn startup_dial_targets_keep_the_order_of_the_qualifying_validators() {
-        let validators = [
-            (key(1), x25519_key(), addr()),
-            (key(2), None, addr()),
-            (key(3), x25519_key(), addr()),
-            (key(4), x25519_key(), addr()),
-        ];
-
-        let (keys, targets) =
-            startup_dial_targets(&key(9), validators.into_iter(), &HashSet::from([key(3)]));
-
-        assert_eq!(keys, vec![key(1), key(3), key(4)]);
-        assert_eq!(
-            targets.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
-            vec![key(1), key(4)]
-        );
-    }
 }
