@@ -679,7 +679,8 @@ where
     info!("Stake reloaded");
 
     let persistence = Arc::new(persistence);
-    let epoch_length = hotshot_types::epoch::EpochLength::new(epoch_height)
+    let epoch_length = std::num::NonZeroU64::new(epoch_height)
+        .map(hotshot_types::epoch::EpochLength::new)
         .context("genesis needs a positive epoch_height")?;
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_length, &persistence);
 
@@ -1587,7 +1588,9 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
-                hotshot_types::epoch::EpochLength::new(config.epoch_height).unwrap(),
+                std::num::NonZeroU64::new(config.epoch_height)
+                    .unwrap()
+                    .into(),
                 &persistence.clone(),
             );
 

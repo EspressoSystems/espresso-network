@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -756,13 +757,17 @@ pub const STAKE_TABLE_CAPACITY: usize = 10;
 
 /// An [`EpochLength`] from a height the test knows is positive.
 pub fn epoch_length(epoch_height: u64) -> EpochLength {
-    EpochLength::new(epoch_height).expect("test epoch heights are positive")
+    NonZeroU64::new(epoch_height)
+        .expect("test epoch heights are positive")
+        .into()
 }
 
 /// Tests pass an epoch height of 0 for a chain that never changes epoch. An epoch that never ends
 /// has the same geometry: no root, no transition, no last block.
 pub fn epoch_length_or_single_epoch(epoch_height: u64) -> EpochLength {
-    EpochLength::new(epoch_height).unwrap_or(EpochLength::new(u64::MAX).unwrap())
+    NonZeroU64::new(epoch_height)
+        .unwrap_or(NonZeroU64::MAX)
+        .into()
 }
 
 pub fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {

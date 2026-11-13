@@ -363,7 +363,7 @@ impl NodeState {
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(
             membership,
-            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            std::num::NonZeroU64::new(100).unwrap().into(),
             &storage,
         );
         Self::new(
@@ -400,7 +400,7 @@ impl NodeState {
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(
             membership,
-            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            std::num::NonZeroU64::new(100).unwrap().into(),
             &storage,
         );
 
@@ -437,7 +437,7 @@ impl NodeState {
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(
             membership,
-            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            std::num::NonZeroU64::new(100).unwrap().into(),
             &storage,
         );
         Self::new(
@@ -538,7 +538,7 @@ impl Default for NodeState {
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(
             membership,
-            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            std::num::NonZeroU64::new(100).unwrap().into(),
             &storage,
         );
 

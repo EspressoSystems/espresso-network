@@ -114,7 +114,7 @@ mod tests {
         .expect("genesis without duplicate keys");
         EpochMembershipCoordinator::new(
             committees,
-            hotshot_types::epoch::EpochLength::new(EPOCH_HEIGHT).unwrap(),
+            std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap().into(),
             &TestStorage::default(),
         )
     }

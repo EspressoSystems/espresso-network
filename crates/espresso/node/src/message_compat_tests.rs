@@ -446,7 +446,7 @@ async fn reference_new_protocol_messages(
             1.into(),
         )
         .expect("genesis without duplicate keys"),
-        hotshot_types::epoch::EpochLength::new(epoch_height).unwrap(),
+        std::num::NonZeroU64::new(epoch_height).unwrap().into(),
         &storage,
     );
 

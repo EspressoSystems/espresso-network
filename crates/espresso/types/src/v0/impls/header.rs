@@ -1982,7 +1982,7 @@ mod test_headers {
         .expect("genesis without duplicate keys");
         genesis_state.coordinator = EpochMembershipCoordinator::new(
             membership,
-            hotshot_types::epoch::EpochLength::new(100).unwrap(),
+            std::num::NonZeroU64::new(100).unwrap().into(),
             &TestStorage::default(),
         );
 

@@ -202,7 +202,7 @@ mod test {
         membership.add_quorum_committee(EpochNumber::new(2), peers2.clone());
         EpochMembershipCoordinator::new(
             membership,
-            hotshot_types::epoch::EpochLength::new(EPOCH_HEIGHT).unwrap(),
+            std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap().into(),
             &TestStorage::<TestTypes>::default(),
         )
     }

@@ -8,6 +8,7 @@
 
 use std::{
     hash::{Hash, Hasher},
+    num::NonZeroU64,
     ops::Deref,
     sync::Arc,
 };
@@ -344,9 +345,7 @@ pub fn bincode_opts() -> BincodeOpts {
 /// Returns an epoch number given a block number and an epoch height
 #[must_use]
 pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
-    EpochLength::new(epoch_height)
-        .map(|length| *length.epoch_of(BlockNumber::new(block_number)))
-        .unwrap_or(0)
+    epoch_length(epoch_height).map_or(0, |length| *length.epoch_of(BlockNumber::new(block_number)))
 }
 
 /// Returns the block number of the epoch root in the given epoch
@@ -358,8 +357,8 @@ pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
 /// short to hold one, or its boundary exceeds `u64`.
 #[must_use]
 pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
-    EpochLength::new(epoch_height)
-        .and_then(|length| length.root_inside(EpochNumber::new(epoch)))
+    epoch_length(epoch_height)
+        .and_then(|length| length.root_inside(EpochNumber::new(epoch)).ok())
         .map_or(0, |height| *height)
 }
 
@@ -370,8 +369,8 @@ pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
 /// Returns 0 when the epoch has no transition block, as for [`root_block_in_epoch`].
 #[must_use]
 pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
-    EpochLength::new(epoch_height)
-        .and_then(|length| length.transition_leaving(EpochNumber::new(epoch)))
+    epoch_length(epoch_height)
+        .and_then(|length| length.transition_leaving(EpochNumber::new(epoch)).ok())
         .map_or(0, |height| *height)
 }
 
@@ -384,7 +383,7 @@ pub fn option_epoch_from_block_number(
     epoch_height: u64,
 ) -> Option<EpochNumber> {
     with_epoch
-        .then(|| EpochLength::new(epoch_height).ok())
+        .then(|| epoch_length(epoch_height))
         .flatten()
         .map(|length| length.epoch_of(BlockNumber::new(block_number)))
 }
@@ -444,9 +443,12 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
 
 /// `None` when epochs are disabled (`epoch_height == 0`).
 fn epoch_position(block_number: u64, epoch_height: u64) -> Option<EpochPosition> {
-    EpochLength::new(epoch_height)
-        .ok()
-        .map(|length| length.position(BlockNumber::new(block_number)))
+    epoch_length(epoch_height).map(|length| length.position(BlockNumber::new(block_number)))
+}
+
+/// `None` when epochs are disabled (`epoch_height == 0`).
+fn epoch_length(epoch_height: u64) -> Option<EpochLength> {
+    NonZeroU64::new(epoch_height).map(EpochLength::new)
 }
 
 #[cfg(test)]
