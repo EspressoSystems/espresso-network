@@ -271,15 +271,10 @@ where
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    // The seed reads from the upstreams (`--peers`), not from `--state-peers`. A replay node has
-    // none (`legacy_chain::replay_params`) and walks.
+    // The seed fetches through the catchup provider: `--state-peers`, else the upstreams. A replay
+    // node has no upstreams (`legacy_chain::replay_params`) and walks.
     if !params.upstreams.is_empty()
-        && let Some(seed) = LcContractSeed::<P>::new(
-            &node_state.chain_config,
-            params.upstreams.clone(),
-            Duration::ZERO,
-            &*metrics,
-        )
+        && let Some(seed) = LcContractSeed::new(&node_state.chain_config, &*metrics)
     {
         seed.install(&coordinator);
     }

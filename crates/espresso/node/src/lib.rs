@@ -37,7 +37,6 @@ use espresso_types::{
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::Fetcher,
 };
-use lc_contract_seed::LcContractSeed;
 
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
@@ -306,12 +305,6 @@ where
     );
 
     let catchup_params = network_params.catchup;
-    let lc_contract_seed = LcContractSeed::new(
-        &genesis.chain_config,
-        catchup_params.state_peers.clone(),
-        catchup_params.http_delay,
-        &*metrics,
-    );
 
     let loaded_network_config = load_or_fetch_network_config(
         &persistence,
@@ -432,7 +425,6 @@ where
         anchor_view,
         storage,
         state_catchup_providers,
-        lc_contract_seed,
         persistence,
         cliquenet,
         Some(network_params.state_relay_server_url),
@@ -1687,7 +1679,6 @@ pub mod testing {
                 anchor_view,
                 storage,
                 catchup_providers,
-                LcContractSeed::new(&chain_config, vec![], Duration::ZERO, metrics),
                 persistence,
                 coordinator_network,
                 self.state_relay_url.clone(),

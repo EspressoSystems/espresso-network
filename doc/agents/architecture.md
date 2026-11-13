@@ -48,9 +48,9 @@ request-response responders; responders are the table keys and these keys that t
 `state_peers` is optional for validators.
 
 The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
-without one the catchup walks only. The follower installs the same seed with its upstreams as the only source,
-and asks the coordinator for the stake tables of the epoch it is about to ingest, at startup and at each poll. A
-failed or timed out request logs a warning and the next poll retries it.
+without one the catchup walks only. The follower installs the same seed, fetching through its catchup provider:
+`--state-peers`, or the upstreams when unset. It asks the coordinator for the stake tables of the epoch it is about
+to ingest, at startup and at each poll. A failed or timed out request logs a warning and the next poll retries it.
 
 A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
 one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
@@ -60,23 +60,24 @@ seed at a time:
    runs when `target > start + 1` and `E* > start + 1`, with `start` the top of the held pair. The window ends at
    `top = min(E*+1, target)`: only roots below `F` are provable, so never above `E*+1`. The DRB of a target at or
    below `E*+1` needs `ST(target-1)` and `ST(target-2)`, which are installed or held.
-2. Fetches the header at `F` (sources: step 5) and accepts it iff its height is `F` and its `block_comm_root`
-   matches.
+2. Fetches the header at `F` through the catchup provider (`Fetcher::peers()`, request-response) and accepts it iff
+   its height is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
-   the preceding root where the reward of the lowest table reads its block time. The L1 read, each peer request (30 s)
-   and each install are bounded.
+   the preceding root where the reward of the lowest table reads its block time. Each request is up to 5 attempts of
+   one provider bound each (6 s on request-response) with backoff between them. The L1 read and each install are
+   bounded.
 4. Installs `ST(max(top-4, start+1, 3)) ..= ST(top)`, each with a block reward computed from the proven roots, each
    root bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from `top` up
    to the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
-5. Requests go over request-response. With `--state-peers`, they also go over HTTP, eligible `--http-catchup-delay`
-   after the fetch starts (one delay for the whole fetch), at once when the protocol is not available. The state peers
-   are asked in order; a peer that fails or answers wrongly moves to the back for the rest of the process. When both
-   sides fail, the error carries both reasons. The delay is at most a third of the 30 s request bound, and the timeout
-   error of a request carries the last state peer error.
-   A follower has no request-response: its upstreams answer at once.
+5. State peers (`--state-peers`) are the second source of each request, through `ParallelStateCatchup`: asked
+   `--http-catchup-delay` after the request starts, at once when request-response is not registered. The root header
+   is read from `/v1/catchup/{F}/leafchain`, a proof from `/v1/light-client/header/{F}/{height}`; both are verified
+   before they are accepted. Peers are asked in `PeerScore` order, each under `--catchup-base-timeout`; the first
+   verified answer of either source wins.
+   A follower has no request-response: its state peers answer at once.
 
-An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
-tables are present and skipped.
+An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held
+start; installed tables are present and skipped.
 
 ## Consensus upgrades
 

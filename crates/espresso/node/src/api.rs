@@ -3550,9 +3550,10 @@ mod test {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
+        BackoffParams, FeeAmount, Header, L1ClientOptions, LcContractFinalizedState, NamespaceId,
+        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, TEST_UPGRADE, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
@@ -4196,6 +4197,100 @@ mod test {
             .verify_at_height(root_header.block_merkle_tree_root(), HEIGHT)
             .unwrap();
         assert_eq!(header.height(), HEIGHT);
+    }
+
+    /// State peers answer the two LC contract seed requests over HTTP past a dead first peer, and
+    /// reject a root the contract does not commit to.
+    #[apply(sql_data_sources)]
+    async fn test_state_peers_serve_lc_contract_seed_requests<D>(_d: PhantomData<D>)
+    where
+        D: TestableSqlDataSource,
+    {
+        const NUM_NODES: usize = 5;
+        const ROOT: u64 = 5;
+        const HEIGHT: u64 = 3;
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let dead_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let dbs = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
+        let persistence: [_; NUM_NODES] = dbs
+            .iter()
+            .map(<D as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(D::options(&dbs[0], Options::with_port(port)))
+            .persistences(persistence)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let mut decided = network.server.event_stream().filter_map(|event| {
+            future::ready(match event {
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
+                _ => None,
+            })
+        });
+        tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = decided.next().await.unwrap();
+                if leaf.height() >= ROOT + 2 {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("network did not decide enough blocks");
+        drop(decided);
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        let root_header: Header = client
+            .get(&format!("availability/header/{ROOT}"))
+            .send()
+            .await
+            .unwrap();
+        let other_header: Header = client
+            .get(&format!("availability/header/{HEIGHT}"))
+            .send()
+            .await
+            .unwrap();
+        let lc_contract_state = |header: &Header| LcContractFinalizedState {
+            height: ROOT,
+            block_comm_root: header
+                .get_light_client_state(ViewNumber::new(0))
+                .unwrap()
+                .block_comm_root,
+        };
+
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![
+                format!("http://127.0.0.1:{dead_port}").parse().unwrap(),
+                format!("http://localhost:{port}").parse().unwrap(),
+            ],
+            BackoffParams::default(),
+            Duration::from_secs(5),
+            &NoMetrics,
+        );
+
+        let root = peers
+            .try_fetch_lc_contract_block_merkle_root(0, &lc_contract_state(&root_header))
+            .await
+            .unwrap();
+        assert_eq!(root, root_header.block_merkle_tree_root());
+        let header = peers
+            .try_fetch_proven_header(0, ROOT, root, HEIGHT)
+            .await
+            .unwrap();
+        assert_eq!(header, other_header);
+
+        peers
+            .try_fetch_lc_contract_block_merkle_root(0, &lc_contract_state(&other_header))
+            .await
+            .unwrap_err();
+        peers
+            .try_fetch_proven_header(0, ROOT, other_header.block_merkle_tree_root(), HEIGHT)
+            .await
+            .unwrap_err();
     }
 
     /// A query node with a gap must fill it from a peer over the path production runs: the

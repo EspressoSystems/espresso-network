@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, SeqTypes,
+    BackoffParams, BlockMerkleCommitment, BlockMerkleTree, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Header, LcContractFinalizedState, Leaf2, NodeState, SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
@@ -13,6 +13,7 @@ use espresso_types::{
         forgotten_accounts_include,
     },
 };
+use futures::FutureExt;
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
@@ -174,6 +175,68 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
     fn name(&self) -> String {
         "request-response".to_string()
+    }
+
+    /// `Request::Leaf(height)` under `request_batch_interval * 3`; an answer `verify_header`
+    /// rejects is skipped and the request keeps waiting.
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        _retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        let timeout_duration = self.config.request_batch_interval * 3;
+        let checked_state = lc_contract_state.clone();
+        let request = self.request_indefinitely(
+            Request::Leaf(lc_contract_state.height),
+            move |_: &Request, response: Response| {
+                let lc_contract_state = checked_state.clone();
+                async move {
+                    let Response::Leaf(leaves) = response else {
+                        bail!("expected leaf response");
+                    };
+                    let header = leaves.first().context("empty leaf chain")?.block_header();
+                    lc_contract_state.verify_header(header)
+                }
+                .map(|result| {
+                    result.inspect_err(|err| tracing::debug!("seed header rejected: {err:#}"))
+                })
+            },
+        );
+        Ok(timeout(timeout_duration, request)
+            .await
+            .with_context(|| "timed out while fetching the LC contract header")??)
+    }
+
+    /// `Request::HeaderProof { root: root_height, height }` under `request_batch_interval * 3`; an
+    /// answer `verify_at_height` rejects is skipped.
+    async fn try_fetch_proven_header(
+        &self,
+        _retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        let timeout_duration = self.config.request_batch_interval * 3;
+        let request = self.request_indefinitely(
+            Request::HeaderProof {
+                root: root_height,
+                height,
+            },
+            move |_: &Request, response: Response| {
+                async move {
+                    let Response::HeaderProof(proof) = response else {
+                        bail!("expected header proof response");
+                    };
+                    proof.verify_at_height(root, height)
+                }
+                .map(|result| {
+                    result.inspect_err(|err| tracing::debug!("header proof rejected: {err:#}"))
+                })
+            },
+        );
+        Ok(timeout(timeout_duration, request)
+            .await
+            .with_context(|| "timed out while fetching the header proof")??)
     }
 
     async fn fetch_accounts(
