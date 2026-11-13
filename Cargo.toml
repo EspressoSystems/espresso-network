@@ -296,7 +296,7 @@ primitive-types = "0.13"
 priority-queue = "2"
 process-metrics = { path = "crates/process-metrics" }
 procfs = "0.18"
-prometheus = { version = "0.13", default-features = false }
+prometheus = { version = "0.14", default-features = false }
 prometheus-parse = "0.2.5"
 proptest = "1"
 prost = "0.14"
