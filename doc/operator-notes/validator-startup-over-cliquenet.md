@@ -7,8 +7,8 @@ by its post-start catchup, over request-response, after about one view timeout.
 
 - Nodes with SQL storage serve the new `HeaderProof` request over request-response; peers on older releases log
   `Received invalid message` for it until they upgrade, and filesystem-storage nodes do not answer it. Each peer
-  request of a seed attempt has a 30 s bound; if no peer answers within it the attempt fails and is retried on the next
-  catchup trigger.
+  request of a seed attempt has a 30 s bound; if no peer answers within it the seed errors, a warning is logged and the
+  catchup walks epochs from the held start as before.
 - `--state-peers` is optional for validators.
 - `/v1/node/all-validators/{epoch_number}/{offset}/{limit}` is empty for epochs a seed skipped.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
