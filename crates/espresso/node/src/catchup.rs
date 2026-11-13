@@ -534,6 +534,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    // Verified inside `fetch`: a rejected answer scores the peer and the next peer is asked.
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         retry: usize,
