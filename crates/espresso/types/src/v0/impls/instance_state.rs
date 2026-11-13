@@ -606,7 +606,10 @@ impl Upgrade {
 pub mod mock {
     use std::{
         collections::HashMap,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            Mutex as StdMutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use anyhow::Context;
@@ -636,6 +639,8 @@ pub mod mock {
         failing_seed_calls: usize,
         /// Calls made to `try_fetch_proven_header`.
         proven_header_calls: Arc<AtomicUsize>,
+        /// The `retry` argument of each call to `try_fetch_proven_header`, in call order.
+        proven_header_retries: Arc<StdMutex<Vec<usize>>>,
     }
 
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
@@ -672,6 +677,11 @@ pub mod mock {
         /// Calls made to `try_fetch_proven_header` so far.
         pub fn proven_header_calls(&self) -> usize {
             self.proven_header_calls.load(Ordering::SeqCst)
+        }
+
+        /// The `retry` argument of each call to `try_fetch_proven_header` so far, in call order.
+        pub fn proven_header_retries(&self) -> Vec<usize> {
+            self.proven_header_retries.lock().unwrap().clone()
         }
     }
 
@@ -812,11 +822,12 @@ pub mod mock {
 
         async fn try_fetch_proven_header(
             &self,
-            _retry: usize,
+            retry: usize,
             root_height: u64,
             root: BlockMerkleCommitment,
             height: u64,
         ) -> anyhow::Result<Header> {
+            self.proven_header_retries.lock().unwrap().push(retry);
             let root_header = self
                 .headers
                 .get(&root_height)

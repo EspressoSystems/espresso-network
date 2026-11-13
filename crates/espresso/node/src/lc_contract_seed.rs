@@ -1,6 +1,12 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use anyhow::Context;
 use espresso_types::{
@@ -113,20 +119,21 @@ async fn fetch_headers(
     preceding_height: Option<u64>,
     proven_heights: Vec<u64>,
 ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
-    let root =
-        retry_request(|| peers.try_fetch_lc_contract_block_merkle_root(0, lc_contract_state))
-            .await
-            .with_context(|| {
-                format!(
-                    "fetching the LC contract header at height {}",
-                    lc_contract_state.height
-                )
-            })?;
+    let root = retry_request(|retry| {
+        peers.try_fetch_lc_contract_block_merkle_root(retry, lc_contract_state)
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "fetching the LC contract header at height {}",
+            lc_contract_state.height
+        )
+    })?;
     let heights = preceding_height.into_iter().chain(proven_heights);
     let mut headers: Vec<Header> = stream::iter(heights)
         .map(|height| {
-            retry_request(move || {
-                peers.try_fetch_proven_header(0, lc_contract_state.height, root, height)
+            retry_request(move |retry| {
+                peers.try_fetch_proven_header(retry, lc_contract_state.height, root, height)
             })
             .map(move |result| {
                 result.with_context(|| format!("fetching the header proof at height {height}"))
@@ -139,14 +146,19 @@ async fn fetch_headers(
     Ok((preceding, headers))
 }
 
-/// `request` with up to `SEED_REQUEST_RETRIES` retries.
-async fn retry_request<T, Fut>(request: impl Fn() -> Fut) -> anyhow::Result<T>
+/// `request` with up to `SEED_REQUEST_RETRIES` retries; attempt `n` (0-based) is called with `n`.
+async fn retry_request<T, Fut>(request: impl Fn(usize) -> Fut) -> anyhow::Result<T>
 where
     Fut: Future<Output = anyhow::Result<T>>,
 {
+    let attempts = AtomicUsize::new(0);
     // Not `peers.backoff()`: disabled on `ParallelStateCatchup`, unreachable on request-response.
     BackoffParams::default()
-        .retry_if(SEED_REQUEST_RETRIES, |_| true, request)
+        .retry_if(
+            SEED_REQUEST_RETRIES,
+            |_| true,
+            || request(attempts.fetch_add(1, Ordering::SeqCst)),
+        )
         .await
 }
 
@@ -225,5 +237,7 @@ mod tests {
             );
         }
         assert_eq!(peers.proven_header_calls(), expected_calls);
+        let attempts: Vec<usize> = (0..expected_calls).collect();
+        assert_eq!(peers.proven_header_retries(), attempts);
     }
 }

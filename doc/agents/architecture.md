@@ -62,10 +62,11 @@ seed at a time:
    its height is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
    the preceding root where the reward of the lowest table reads its block time. Each request is up to 5 attempts of
-   one provider bound each (6 s on request-response) with backoff between them. The backoff is
-   `BackoffParams::default()`: it reads the environment variables `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and
-   `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the flags `--catchup-backoff-*` and
-   `--catchup-{base,max}-retry-delay`. With `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a request makes one attempt.
+   one provider bound each (6 s on request-response) with backoff between them; the attempt number is passed to the
+   provider as `retry`. The backoff is `BackoffParams::default()`: it reads the environment variables
+   `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the flags
+   `--catchup-backoff-*` and `--catchup-{base,max}-retry-delay`. With `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a
+   request makes one attempt.
    The L1 read and each install are bounded.
 4. Installs the tables of the `seed_window`, each with a block reward computed from the proven roots, each root
    bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from the top of
