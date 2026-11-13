@@ -1825,6 +1825,7 @@ impl ConsensusHarness {
             return self.apply_recorded(input, outbox);
         }
         let before = outbox.len();
+        let earlier = self.trace.before(&self.consensus, &input);
         self.consensus.apply(input.clone(), outbox);
         // A request for another epoch's result is re-emitted on every input.
         let released = outbox
@@ -1833,7 +1834,8 @@ impl ConsensusHarness {
             .any(|o| !matches!(o, ConsensusOutput::RequestDrbResult(_)));
         if released {
             record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
-            self.trace.record(&input, outbox.iter().skip(before));
+            self.trace
+                .record(&self.consensus, earlier, &input, outbox.iter().skip(before));
         }
     }
 

@@ -81,6 +81,7 @@ def conjuncts (h : History) : Obligation → List (String × Bool)
       ("current", decide (NotBehindB cfg h r.cert.data.epoch)),
       ("notTimedOut", !decide (TimedOutB h r.view)),
       ("notVoted", decide (∀ vote ∈ vote1sSent h, vote.data.epoch = r.cert.data.epoch → vote.view ≠ r.view)),
+      ("notCommitted", decide (∀ c2 ∈ cert2sHeld h, c2.data ≠ r.cert.data.toVote2)),
       ("inView", decide (viewOf cfg h = r.view)) ]
   | .vote2 c =>
     [ ("holds.cert1", decide (c ∈ cert1sHeld cfg h)),
@@ -104,7 +105,8 @@ def conjuncts (h : History) : Obligation → List (String × Bool)
         ∨ ∃ b ∈ proposalsHeld cfg h, Commits c b ∧ AboveFloorB cfg h b.viewNumber)) ]
   | .propose e v =>
     [ ("justified", decide ((∃ p ∈ proposalCandidates cfg h v, p.epoch = e ∧ ProposalJustifiedB cfg leader node h p)
-        ∨ ∃ r ∈ revoteCandidates cfg h v, r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node h r)),
+        ∨ ∃ r ∈ revoteCandidates cfg h v, r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node h r
+            ∧ ∀ c2 ∈ cert2sHeld h, c2.data ≠ r.cert.data.toVote2)),
       ("notProposed", decide ((∀ p ∈ proposalsSent h, p.viewNumber = v → p.epoch ≠ e)
         ∧ ∀ r ∈ revotesSent h, r.view = v → r.cert.data.epoch ≠ e)),
       ("notTimedOut", !decide (TimedOutB h v)),
@@ -161,8 +163,8 @@ def timerAnswered (h : History) (n : Nat) (v : ViewNumber) : Bool :=
 
 /-- The ways a timer ends, in the order the report lists them. -/
 def timerEndings : List String :=
-  ["answered in its step", "held back in its step", "answered in a later step", "overtaken",
-    "open at the end"]
+  ["answered in its step", "held back in its step", "outside the committee",
+    "answered in a later step", "overtaken", "open at the end"]
 
 /--
 How the timer for `v`, taken in step `n` of `h`, ended: at the first step from
@@ -170,7 +172,9 @@ How the timer for `v`, taken in step `n` of `h`, ended: at the first step from
 the node held back for storage in step `n` (`held`) answers the timer there, as
 the check reads it (`timerFaults`), whenever it is released.
 -/
-def timerEnding (h : History) (held : List HeldAt) (n : Nat) (v : ViewNumber) : String :=
+def timerEnding (member : EpochNumber → Bool) (h : History) (held : List HeldAt) (n : Nat)
+    (v : ViewNumber) : String :=
+  if !member (epochOfHistory cfg (h.take n)) then "outside the committee" else
   let settles (j : Nat) :=
     timerAnswered cfg node (h.take (j + 1)) n v || decide (v < viewOf cfg (h.take (j + 1)))
   match (List.range' n (h.length - n)).find? settles with
@@ -187,8 +191,8 @@ Add what one trace, read step by step, exercised.
 Read as the check reads it: a step taken with the next (`joined`) is part of
 that one, so what the node owes is counted only after the last of them.
 -/
-def Coverage.add (cov : Coverage) (h : History) (joined : List Nat) (held : List HeldAt) :
-    Coverage := Id.run do
+def Coverage.add (cov : Coverage) (h : History) (joined : List Nat) (held : List HeldAt)
+    (member : EpochNumber → Bool) : Coverage := Id.run do
   let mut cov := cov
   for st in h do
     cov := { cov with inputs := bump cov.inputs (jsonKind (toJson st.input)) }
@@ -196,7 +200,7 @@ def Coverage.add (cov : Coverage) (h : History) (joined : List Nat) (held : List
       cov := { cov with outputs := bump cov.outputs (outputKind o) }
   for n in List.range h.length do
     if let some v := timerView cfg (h.take (n + 1)) n then
-      cov := { cov with timers := bump cov.timers (timerEnding cfg node h held n v) }
+      cov := { cov with timers := bump cov.timers (timerEnding cfg node member h held n v) }
   let mut before : List (Obligation × List (String × Bool)) := []
   for n in (List.range h.length).filter (!joined.contains ·) do
     let g := h.take (n + 1)
@@ -240,7 +244,7 @@ def allConjuncts : List (String × List String) :=
   [ ("vote1", ["received", "wellFormed", "validated", "parent", "safe", "opens", "current",
       "notTimedOut", "notVoted", "inView"]),
     ("vote1Again", ["received", "wellFormed", "safe", "payload", "current", "notTimedOut",
-      "notVoted", "inView"]),
+      "notVoted", "notCommitted", "inView"]),
     ("vote2", ["holds.cert1", "holds.block", "holds.payload", "current", "notVoted", "notCommitted",
       "notPast", "afterAnchor", "notDecidedPast"]),
     ("decide", ["holds.cert2", "holds.block", "holds.cert1", "notDecided", "afterFloor"]),

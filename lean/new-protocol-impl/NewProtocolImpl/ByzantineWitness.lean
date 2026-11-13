@@ -1781,7 +1781,7 @@ theorem d_late (hB : B = true) (n : Nat) (hn : 25 ≤ n) (o : Obligation)
   | propose e v =>
     rintro ⟨hj, -⟩
     have he1 := (d_honest hf).2
-    rcases hj with ⟨p, hp, -, hpe⟩ | ⟨r, hr, -, hre⟩
+    rcases hj with ⟨p, hp, -, hpe⟩ | ⟨r, hr, -, hre, -⟩
     · exact (leader_some hp.leads).2 rfl (hpe.trans he1)
     · exact (leader_some hr.leads).2 rfl (hre.trans he1)
 

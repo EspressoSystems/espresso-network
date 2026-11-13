@@ -304,9 +304,9 @@ is well formed and safe, and the certificate is one it may vote on again
 (`CertJustified`).
 
 A request is justified as soon as the leader can lock on the block, whether or not
-its `Cert2` is on its way. It is owed from then (`Owed`), so an implementation
-may wait for the `Cert2` up to `δ` (`Prompt`), and propose the next epoch's first
-block instead if it arrives. Waiting longer is not allowed: asking for a timeout
+its `Cert2` is on its way. It is owed from then, until the leader holds a `Cert2`
+over the block (`Owed`), so an implementation may wait for the `Cert2` up to `δ`
+(`Prompt`), and propose the next epoch's first block instead if it arrives. Waiting longer is not allowed: asking for a timeout
 first admits a liveness attack at the boundary.
 -/
 structure RevoteJustified (h : History) (r : RevoteRequest) : Prop where
@@ -481,6 +481,15 @@ structure OwedVote1Again (h : History) (r : RevoteRequest) : Prop where
   /-- The node has not voted1 for the epoch and view. -/
   notVoted : ∀ vote : Vote1, h.Sent (.vote1 vote) → vote.data.epoch = r.cert.data.epoch → vote.view ≠ r.view
 
+  /--
+  The node holds no `Cert2` over the block.
+
+  A block with a `Cert2` is committed, at whatever view the certificate formed,
+  and voting on it again adds nothing. The node that holds the `Cert2` sends it
+  on with the epoch change.
+  -/
+  notCommitted : ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2
+
   /-- The node is in the view. -/
   inView : h.InView cfg r.view
 
@@ -568,7 +577,8 @@ def Owed (h : History) : Obligation → Prop
   | .decide c => OwedDecide cfg h c
   | .propose e v =>
       ((∃ p, ProposalJustified cfg leader node h p ∧ p.viewNumber = v ∧ p.epoch = e)
-        ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e)
+        ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e
+            ∧ ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2)
       ∧ ¬ ProposedIn h e v ∧ ¬ h.TimedOut v ∧ h.InView cfg v
 
 /-! ## For the epochs a node is honest in -/

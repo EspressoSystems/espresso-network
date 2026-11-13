@@ -544,6 +544,17 @@ theorem hasCert2 {n : Nat} {x : Cert2} (hc : (H k n).HasCert2 x) : ∃ u, x = C2
     have := classes k
     exact ⟨u, rfl, by omega⟩
 
+/-- A node holds no `Cert2` over block `u` before the block's arrives. -/
+theorem no_cert2_over {n u : Nat} (hn : n ≤ at0 (c2At k) 11 u) {c2 : Cert2}
+    (hc : (H k n).HasCert2 c2) : c2.data ≠ (certOf (blk u)).data.toVote2 := by
+  intro hd
+  obtain ⟨x, rfl, hlt⟩ := hasCert2 hc
+  have h1 : (⟨x + 1⟩ : BlockNumber) = ⟨u + 1⟩ :=
+    (cert_number x).symm.trans ((congrArg Vote2Data.blockNumber hd).trans (cert_number u))
+  have := number_inj h1
+  obtain rfl : x = u := by omega
+  omega
+
 theorem hasCert2_of {n : Nat} (u : Nat) (h : at0 (c2At k) 11 u < n) : (H k n).HasCert2 (C2 u) :=
   Or.inl (recv_c2 u h)
 
@@ -1235,7 +1246,14 @@ theorem revotes (u : Nat) : ∃ j, j ≤ at0 4 10 u ∧ Output.send (.revote (R 
   have hf := at0_facts 4 10 u
   refine Classical.byContradiction fun hneg => settled a (at0 4 10 u) (.propose ⟨u + 1⟩ ⟨bv u + 1⟩)
     ⟨Or.inr ⟨R u, ⟨rfl, ⟨?_, Or.inl ⟨rfl, ?_⟩, ?_⟩, Liveness.buildable_of_lockable ?lk, fun _ => ?lk,
-      (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl, cert_epoch u⟩, ?_, fun ht => ?_, ?_⟩
+      (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl, cert_epoch u,
+      -- `a` gets each block's `Cert2` only at the next step.
+      fun c2 hc => no_cert2_over (by
+        rw [show c2At a = 5 by simp [c2At, show Early a from Or.inl rfl]]
+        rcases Nat.eq_zero_or_pos u with h0 | h1
+        · rw [(at0_facts 4 10 u).1 h0, (at0_facts 5 11 u).1 h0]; omega
+        · rw [(at0_facts 4 10 u).2 h1, (at0_facts 5 11 u).2 h1]; omega) hc⟩,
+    ?_, fun ht => ?_, ?_⟩
   · show (certOf (blk u)).view < ⟨bv u + 1⟩; rw [cert_view]; show bv u < bv u + 1; omega
   · show (certOf (blk u)).view + 1 = ⟨bv u + 1⟩; rw [cert_view]; rfl
   · show IsLastBlock (certOf (blk u)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
@@ -1380,7 +1398,10 @@ theorem votes1R (k : PubKey) (hl : lag k 0 = 0) (hE : ¬ Early k) : ∃ j, j ≤
   refine Classical.byContradiction fun hneg => settled k 5 (.vote1Again (R 0))
     ⟨⟨a, hrec, rfl⟩, ⟨?_, Or.inl ⟨rfl, ?_⟩, ?_⟩, (fun _ h => by cases h),
       ⟨blk 0, hasProposal_of 0 (by simp [at0]), ⟨Nat.le_refl _, rfl⟩, payload_of 0 hl (by simp [at0])⟩,
-      notBehind (by rw [hew]; exact Nat.le_refl _), fun ht => ?_, fun vote hs _ hvv => ?_, ?_⟩
+      notBehind (by rw [hew]; exact Nat.le_refl _), fun ht => ?_, fun vote hs _ hvv => ?_,
+      -- `b` and `c` get the block's `Cert2` only later.
+      fun c2 hc => no_cert2_over (by
+        rw [show c2At k = 10 by simp [c2At, hE], (at0_facts 10 11 0).1 rfl]; omega) hc, ?_⟩
   · show (certOf (blk 0)).view < ⟨2⟩; rw [cert_view]; show (1 : Nat) < 2; omega
   · show (certOf (blk 0)).view + 1 = ⟨2⟩; rw [cert_view]; rfl
   · show IsLastBlock (certOf (blk 0)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)

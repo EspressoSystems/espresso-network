@@ -381,7 +381,7 @@ theorem fresh_of_owed {h : History} {o : Obligation} (ho : Owed cfg leader node 
     exact ⟨⟨inView_iff_viewOf.mp hin, ht⟩, fun v hv =>
       (Classical.em _).elim (fun he => Or.inr (honce v (mem_vote1sSent.mp hv) he)) Or.inl⟩
   | vote1Again r =>
-    obtain ⟨-, -, -, -, -, ht, honce, hin⟩ := ho
+    obtain ⟨-, -, -, -, -, ht, honce, -, hin⟩ := ho
     simp only [fresh, List.all_eq_true, bne_iff_ne, ne_eq, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq,
       Bool.not_eq_true', decide_eq_false_iff_not, timedOutB_iff]
     exact ⟨⟨inView_iff_viewOf.mp hin, ht⟩, fun v hv =>
@@ -488,7 +488,7 @@ theorem not_owed_after_act {out : List Output} {o : Obligation}
         viewNumber_of_mem_candidates hmem, (of_decide_eq_true hd).1⟩)
     | none =>
       rw [List.find?_eq_none] at hf
-      rcases (owedB_iff.mpr ho).1 with ⟨q, hq, he, hj⟩ | ⟨r, hr, he, hj⟩
+      rcases (owedB_iff.mpr ho).1 with ⟨q, hq, he, hj⟩ | ⟨r, hr, he, hj, -⟩
       · exact hf q hq (decide_eq_true ⟨he, hj⟩)
       cases hf2 : (revoteCandidates cfg (pre ++ [Step.mk i out]) v).find?
           (fun r => decide (r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node (pre ++ [Step.mk i out]) r)) with
@@ -689,7 +689,7 @@ theorem mem_candidates {h h0 : History} (he : SameInputs h h0) {o : Obligation}
     have hv0 : viewOf cfg h0 = v := viewOf_of_inView ((he.inView _).mp hin)
     refine Or.inr (Or.inr (Or.inr (Or.inr ⟨e, ?_, by rw [hv0]⟩)))
     simp only [proposeEpochs, List.mem_eraseDups, List.mem_append, List.mem_map, hv0]
-    rcases hj with ⟨p, hp, hpv, hpe⟩ | ⟨r, hr, hrv, hre⟩
+    rcases hj with ⟨p, hp, hpv, hpe⟩ | ⟨r, hr, hrv, hre, -⟩
     · obtain ⟨q, hq, hqe, -⟩ := proposalCandidates_complete ((he.proposalJustified p).mp hp)
       rw [hpv] at hq
       exact Or.inl ⟨q, hq, hqe.trans hpe⟩
@@ -779,7 +779,7 @@ theorem step_ok (hvt : ValidityTruthful (pre ++ [Step.mk i []])) :
         exact ⟨⟨p.viewNumber, (sameInputs_step.viewGround _).mp hin.1, Nat.le_refl _⟩,
           Or.inl ⟨s, p, vid, (sameInputs_step.received _).mp hr, hl, ⟨rfl, rfl⟩,
             (sameInputs_step.notBehind _).mp hnb⟩⟩
-      · obtain ⟨⟨s, hr, hl⟩, -, -, -, hnb, -, -, hin⟩ := ho
+      · obtain ⟨⟨s, hr, hl⟩, -, -, -, hnb, -, -, -, hin⟩ := ho
         exact ⟨⟨r.view, (sameInputs_step.viewGround _).mp hin.1, Nat.le_refl _⟩,
           Or.inr ⟨s, r, (sameInputs_step.received _).mp hr, hl, ⟨rfl, rfl⟩,
             (sameInputs_step.notBehind _).mp hnb⟩⟩

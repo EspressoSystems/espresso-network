@@ -959,30 +959,7 @@ impl<T: NodeType> Consensus<T> {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, payload_commitment));
                 self.blocks.insert((view, payload_commitment), payload);
-                // Retry the votable children whose vote1 is gated on this
-                // parent's reconstruction. More than `view + 1` can be
-                // waiting: while a view's payload was missing, every later
-                // proposal extends it, and of those only the ones later than
-                // the timeout bar can still be voted. Latest first, stopping
-                // at the one we vote for: a vote at an earlier child adds
-                // nothing and costs its vote2, which the later vote1 skips.
-                let children: BTreeSet<ViewNumber> = self
-                    .proposals
-                    .range(view.max(self.timeout_view) + 1..)
-                    .filter(|p| p.justify_qc.view_number() == view)
-                    .map(|p| p.view_number)
-                    .collect();
-                for child in children.into_iter().rev() {
-                    self.maybe_vote_1(child, outbox);
-                    if self
-                        .voted_1_views
-                        .range(ViewEpoch::at_view(child))
-                        .next()
-                        .is_some()
-                    {
-                        break;
-                    }
-                }
+                self.vote_1_on_children(view, outbox);
                 self.retry_later_certificates(view, outbox);
                 Protocol::Continue
             },
@@ -1683,7 +1660,38 @@ impl<T: NodeType> Consensus<T> {
 
         self.request_block_and_header_if_next_leader(&proposal, outbox);
 
+        // A proposal extending this one may have arrived first.
+        self.vote_1_on_children(view, outbox);
+
         Protocol::Continue
+    }
+
+    /// Retry the vote1 of the proposals that extend the block at `view`, which
+    /// its proposal or payload arriving may have unblocked.
+    ///
+    /// More than `view + 1` can be waiting: while a view's block was missing,
+    /// every later proposal extends it, and of those only the ones later than
+    /// the timeout bar can still be voted. Latest first, stopping at the one
+    /// we vote for: a vote at an earlier child adds nothing and costs its
+    /// vote2, which the later vote1 skips.
+    fn vote_1_on_children(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let children: BTreeSet<ViewNumber> = self
+            .proposals
+            .range(view.max(self.timeout_view) + 1..)
+            .filter(|p| p.justify_qc.view_number() == view)
+            .map(|p| p.view_number)
+            .collect();
+        for child in children.into_iter().rev() {
+            self.maybe_vote_1(child, outbox);
+            if self
+                .voted_1_views
+                .range(ViewEpoch::at_view(child))
+                .next()
+                .is_some()
+            {
+                break;
+            }
+        }
     }
 
     /// Take in a proposal this node did not receive live together with its
@@ -2781,6 +2789,9 @@ impl<T: NodeType> Consensus<T> {
             );
         }
 
+        // The next epoch's first block may have arrived before its parent.
+        self.vote_1_on_children(block_view, outbox);
+
         Protocol::Continue
     }
 
@@ -2792,7 +2803,7 @@ impl<T: NodeType> Consensus<T> {
 
         let certificate_rule = self.upgrade_lock.certificate_rule(view);
 
-        let view_change_evidence = self
+        let mut view_change_evidence = self
             .timeout_certs
             .get(&view)
             .filter(|tc| !(certificate_rule && tc.epoch() < Some(self.current_epoch)))
@@ -2880,6 +2891,18 @@ impl<T: NodeType> Consensus<T> {
         };
         if self.proposed_at(view, proposal_epoch) {
             return;
+        }
+        // A timeout certificate of an earlier epoch is no evidence for this
+        // block, also while this node has not left that epoch itself. A block
+        // right after its parent's view needs none. One that skips views does,
+        // and is refused below until it has one of its own epoch.
+        if certificate_rule
+            && justify_qc.view_number() + 1 == view
+            && view_change_evidence
+                .as_ref()
+                .is_some_and(|tc| tc.epoch() < Some(proposal_epoch))
+        {
+            view_change_evidence = None;
         }
         if certificate_rule {
             // Voters refuse a proposal of an epoch earlier than their own, and

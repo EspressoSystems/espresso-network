@@ -23,9 +23,9 @@ step is a step of its own, marked as taken with the next (`joined`): what it giv
 rise to, the node acts on in the next.
 
 Two things the steps alone would hide are checked on the dropped inputs
-themselves. An action the node takes at one has to be the release of an action
-held back for the write the input confirms, or to have waited for the DRB result
-the input is (`droppedActionFaults`). An action held back and still owed at the
+themselves. An action the node owed and acts on only at one has to be the release
+of an action held back for the write the input confirms, or to have waited for
+the DRB result or the built block the input is (`droppedActionFaults`). An action held back and still owed at the
 end has to be waiting for a write storage did not confirm (`unreleasedIn`).
 
 What a node owes after a step is decided over the obligations its history could
@@ -219,25 +219,29 @@ def timerSettled (g : History) (n : Nat) (v : ViewNumber) : Bool :=
 /--
 `NewProtocol.Prompt.timers`, read off the steps of a recorded run: every timer the
 node takes, it answers in the same step, holds its timeout vote back for storage
-there, in whatever epoch, or by then has grounds for a later view.
+there, in whatever epoch, or by then has grounds for a later view. A node outside
+the committee of the epoch it is in at the timer (`member`) has no vote to cast.
 -/
-def TimersAnswered (h : History) (held : List HeldAt) : Prop :=
+def TimersAnswered (member : EpochNumber → Bool) (h : History) (held : List HeldAt) : Prop :=
   ∀ n, n < h.length → ∀ v, History.TimerAt cfg (h.take (n + 1)) n v →
     History.TimerAnswered cfg node (h.take (n + 1)) n v
       ∨ (∃ u, History.ViewGround cfg (h.take (n + 1)) u ∧ v < u)
-      ∨ ∃ x, x ∈ held ∧ x.kind = .timeout ∧ x.view = v ∧ x.step = n
+      ∨ (∃ x, x ∈ held ∧ x.kind = .timeout ∧ x.view = v ∧ x.step = n)
+      ∨ member (epochOfHistory cfg (h.take n)) = false
 
 /-- Whether `held` has a timeout vote for view `v` held back in step `n`. -/
 def timeoutHeld (held : List HeldAt) (v : ViewNumber) (n : Nat) : Bool :=
   held.any fun x => x.kind == .timeout && x.view == v && x.step == n
 
 /-- Each timer the node took and did not settle in its step, with the step. -/
-def timerFaults (h : History) (held : List HeldAt) :
+def timerFaults (member : EpochNumber → Bool) (h : History) (held : List HeldAt) :
     List (Nat × ViewNumber) :=
   (List.range h.length).filterMap fun n =>
     match timerView cfg (h.take (n + 1)) n with
     | some v =>
-      if timerSettled cfg node (h.take (n + 1)) n v || timeoutHeld held v n then none
+      if timerSettled cfg node (h.take (n + 1)) n v || timeoutHeld held v n
+          || !member (epochOfHistory cfg (h.take n))
+      then none
       else some (n, v)
     | none => none
 
@@ -293,22 +297,24 @@ def actionOf : Output → Option (HeldKind × ViewNumber × EpochNumber × Optio
   | _ => none
 
 /--
-Each action the node took, or decided on and held back, at a dropped input that
-it had no reason to act at, with the step the input joins: one that neither
-releases an action held back for a write the input confirms, nor waited for the
-DRB result the input is, nor is the proposal of the block the input says is
-built. An action taken names its block. One held back does
-not, so it has to be one the node asked that DRB result for (`requests`). A
-timeout vote answers a timer, which is a step, and is not looked at when held
-back.
+Each action the node owed already and took, or decided on and held back, only at
+a dropped input that explains no wait, with the step the input joins. `owed line
+kind v e` is whether the node owed the action by the lines before `line`.
 
-The specification saw nothing between a step and a dropped input after it, so
-what the node does at the dropped input it owed after the step already. Acting
-only then is a wait for an input the specification does not ask for, unless
-storage or the DRB explains it.
+The specification saw nothing between a step and a dropped input after it, so an
+action the node owed after the step and acts on only at the dropped input waited
+for an input the specification does not ask for. Three things explain such a
+wait: the input confirms a write the action was held back for, it is the DRB
+result the action waits for, or it says the block the proposal is of is built. An
+action taken names its block. One held back does not, so it has to be one the
+node asked that DRB result for (`requests`).
+
+An action the node did not owe, it may take whenever it likes: a proposal in a
+view it has left, say. A timeout vote answers a timer, which is a step.
 -/
-def droppedActionFaults (held : List HeldAt) (dropped : List DroppedAt)
-    (requests : List (DrbRequest × Nat × Nat)) : List (Nat × HeldKind × ViewNumber × Dropped) :=
+def droppedActionFaults (owed : Nat → HeldKind → ViewNumber → EpochNumber → Bool)
+    (held : List HeldAt) (dropped : List DroppedAt) (requests : List (DrbRequest × Nat × Nat)) :
+    List (Nat × HeldKind × ViewNumber × Dropped) :=
   dropped.flatMap fun d =>
     let taken := (d.output.filterMap (actionOf node)).filterMap fun (kind, v, e, b) =>
       let released := held.any fun x =>
@@ -320,7 +326,7 @@ def droppedActionFaults (held : List HeldAt) (dropped : List DroppedAt)
         | .drbResult drb => waitsForDrb cfg kind e b drb
         | .blockBuilt u => kind == .proposal && u == v
         | _ => false
-      if released || awaited then none else some (d.step, kind, v, d.kind)
+      if released || awaited || !owed d.line kind v e then none else some (d.step, kind, v, d.kind)
     let decided := (held.filter fun x => x.line == d.line && x.kind != .timeout).filterMap fun x =>
       let awaited : Bool := match d.kind with
         | .drbResult drb => requests.any fun (r, _, line) =>
@@ -328,7 +334,8 @@ def droppedActionFaults (held : List HeldAt) (dropped : List DroppedAt)
               && waitsForDrb cfg x.kind x.epoch r.block drb
         | .blockBuilt u => x.kind == .proposal && u == x.view
         | _ => false
-      if awaited then none else some (d.step, x.kind, x.view, d.kind)
+      if awaited || !owed d.line x.kind x.view x.epoch then none
+      else some (d.step, x.kind, x.view, d.kind)
     taken ++ decided
 
 /--
@@ -466,17 +473,20 @@ theorem timerSettled_of {g : History} {n : Nat} {v : ViewNumber}
 it answered in that step, held the answer back for storage, or had grounds past
 its view by then.
 -/
-theorem checkTimers_sound {h : History} {held : List HeldAt}
-    (hp : timerFaults cfg node h held = []) : TimersAnswered cfg node h held := by
+theorem checkTimers_sound {member : EpochNumber → Bool} {h : History} {held : List HeldAt}
+    (hp : timerFaults cfg node member h held = []) : TimersAnswered cfg node member h held := by
   intro n hn v ht
   have hnone := List.filterMap_eq_nil_iff.mp hp n (List.mem_range.mpr hn)
   simp only [timerView_eq_some.mpr ht] at hnone
   cases hs : timerSettled cfg node (h.take (n + 1)) n v
   · cases hc : timeoutHeld held v n
-    · simp only [hs, hc, Bool.or_false, Bool.false_eq_true, ite_false, reduceCtorEq] at hnone
+    · cases hm : member (epochOfHistory cfg (h.take n))
+      · exact Or.inr (Or.inr (Or.inr rfl))
+      · simp only [hs, hc, hm, Bool.or_false, Bool.not_true, Bool.false_eq_true, ite_false,
+          reduceCtorEq] at hnone
     · simp only [timeoutHeld, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at hc
       obtain ⟨x, hmem, ⟨hw, hu⟩, hk⟩ := hc
-      exact Or.inr (Or.inr ⟨x, hmem, hw, hu, hk⟩)
+      exact Or.inr (Or.inr (Or.inl ⟨x, hmem, hw, hu, hk⟩))
   · rcases timerSettled_of hs with ha | hg
     · exact Or.inl ha
     · exact Or.inr (Or.inl hg)

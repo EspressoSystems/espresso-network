@@ -19,7 +19,8 @@ its history obeys every rule of `NewProtocol.ProtocolHistory`, for the leaders t
 trace names, and its node acts on what it owes, and answers its timers, in the
 step it owes them in (`NewProtocolDiff.StepPrompt`, `NewProtocolDiff.TimersAnswered`),
 for a node honest in every epoch, for which `NewProtocol.OwedIn` is
-`NewProtocol.Owed`, and a member of every committee. `NewProtocolDiff.checkProtocol_sound`,
+`NewProtocol.Owed`. A node outside an epoch's committee, by the committees the
+trace names, owes no timeout vote there. `NewProtocolDiff.checkProtocol_sound`,
 `NewProtocolDiff.checkSteps_sound` and `NewProtocolDiff.checkTimers_sound` are
 what make a pass mean that. A step fault an input outside the model excuses
 (`waitExcuse`) is reported and does not fail the trace, so a pass with an excuse
@@ -129,6 +130,16 @@ where
       else none
 
 /--
+Whether the node owed the action of `kind` for view `v` in epoch `e` by the lines
+of `events` before `line`: what a dropped input on that line finds owed.
+-/
+def owedBefore (cfg : Config) (leader : EpochNumber → ViewNumber → Option PubKey) (node : PubKey)
+    (events : List Event) (line : Nat) (kind : HeldKind) (v : ViewNumber) (e : EpochNumber) : Bool :=
+  let h := historyOf (events.take line)
+  (NewProtocolImpl.candidates cfg h).any fun o =>
+    o.heldAs == some (kind, v, e) && decide (Owed cfg leader node h o)
+
+/--
 Each obligation the node did not act on in a step it owed it after, once, in
 words, with what excuses it, if anything does: when it arose, and when the node
 acted on it or stopped owing it, if it did.
@@ -193,19 +204,22 @@ def checkOne (coverage : Option (IO.Ref Coverage)) (path : System.FilePath) :
       | none =>
       let cfg := said.configFor h
       let node : PubKey := ⟨said.node⟩
+      let member := memberIn (readCommittees text) node
       if let some cov := coverage then
         -- Counted outside the reference, which the other traces' tasks wait on.
         let mine := ({} : Coverage).add cfg leader node h (joinedSteps events) (heldBack events)
+          member
         cov.modify (·.merge mine)
       let ann := annotate events
       let owed := owedAfter cfg leader node h
       let late := stepLateness cfg node ann h owed
-        ++ (timerFaults cfg node h ann.held).map (fun (n, v) =>
+        ++ (timerFaults cfg node member h ann.held).map (fun (n, v) =>
           (s!"timeout vote for view {v.toNat} owed for the timer in step {n}", none))
         ++ (unreleasedIn owed h.length ann.held ann.dropped).map (fun (k, o) =>
           (s!"{describeObligation o} held back in step {k} and never released, though storage \
             confirmed what it waited for", none))
-        ++ (droppedActionFaults cfg node ann.held ann.dropped ann.drbRequests).map fun (k, kind, v, d) =>
+        ++ (droppedActionFaults cfg node (owedBefore cfg leader node events) ann.held ann.dropped
+            ann.drbRequests).map fun (k, kind, v, d) =>
           (s!"{repr kind} for view {v.toNat} only on {repr d}, after step {k}", none)
       let unexcused := late.filterMap fun (what, excuse) => if excuse.isNone then some what else none
       if !unexcused.isEmpty then return .late unexcused

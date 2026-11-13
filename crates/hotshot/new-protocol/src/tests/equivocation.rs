@@ -265,8 +265,8 @@ async fn refused_rival_has_none_of_its_certificates_recorded() {
     let trace = harness.recorded();
     assert_eq!(
         trace_steps(&trace, "proposal"),
-        4,
-        "setup: both proposals arrived, and each was paired"
+        2,
+        "setup: both proposals were paired"
     );
     assert_eq!(trace_steps(&trace, "timeoutCertificate"), 0);
 }

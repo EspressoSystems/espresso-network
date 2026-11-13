@@ -736,12 +736,18 @@ theorem revotes (u : Nat) : ∃ j, j ≤ 8 * u + 4 ∧ Output.send (.revote (R u
   refine Classical.byContradiction fun hneg => settled a (8 * u + 4) (.propose ⟨u + 1⟩ ⟨u + 2⟩)
     ⟨Or.inr ⟨R u, ⟨rfl, ⟨?_, Or.inl ⟨rfl, ?_⟩, ?_⟩, Liveness.buildable_of_lockable hlk, fun _ => hlk,
       (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl,
-      cert_epoch u⟩, ?_, not_timedOut, ?_⟩
+      cert_epoch u, fun c2 hc hd => ?_⟩, ?_, not_timedOut, ?_⟩
   · show (certOf (blk u)).view < ⟨u + 2⟩; rw [cert_view]; show u + 1 < u + 2; omega
   · show (certOf (blk u)).view + 1 = ⟨u + 2⟩; rw [cert_view]; rfl
   · show IsLastBlock (certOf (blk u)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
   · rw [show (R u).cert.data.epoch = ⟨u + 1⟩ from cert_epoch u]; show eAt (8 * u + 5) ≤ u + 1; omega
   · exact ⟨_, (inView _).1, by show u + 2 ≤ vAt (8 * u + 5); omega⟩
+  · -- The block's `Cert2` arrives only at the next step.
+    obtain ⟨x, rfl, hlt⟩ := hasCert2 hc
+    have h1 : (⟨x + 1⟩ : EpochNumber) = ⟨u + 1⟩ :=
+      (cert_epoch x).symm.trans ((congrArg Vote2Data.epoch hd).trans (cert_epoch u))
+    have : x + 1 = u + 1 := congrArg EpochNumber.toNat h1
+    omega
   · rintro (⟨p, hs, hpv, hpe⟩ | ⟨r, hs, hrv, hre⟩)
     · obtain ⟨j, hj, hjp⟩ := sent_iff.mp hs
       obtain ⟨-, x, rfl, -⟩ := sent_proposal hv hjp

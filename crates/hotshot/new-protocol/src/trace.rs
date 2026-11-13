@@ -16,9 +16,12 @@
 //! A certificate that arrives inside another message and that consensus keeps
 //! is recorded as received on its own, just before that message. Consensus
 //! takes both at once, so the message's step has all the outputs, and the
-//! certificate's step is marked as taken with it. A proposal not yet paired
-//! with our share, and a fetched block, are recorded as a `proposal` without a
-//! share: what the node then holds is the proposal alone. Light-client
+//! certificate's step is marked as taken with it. A proposal consensus pairs
+//! with our share is recorded once, as the pair, whichever of the two arrives
+//! first. One that arrives before the share is parked until then, and
+//! consensus does not hold it: if a certificate adopts it first, it is
+//! recorded as a `proposal` without a share. A fetched block is recorded as a `proposal`
+//! without a share too: what the node then holds is the proposal alone. Light-client
 //! certification has no counterpart either: an epoch root's state certificate
 //! is left out, and only the `Cert1` it arrives with is recorded. The step of
 //! a proposal carrying one the node did not hold says so, since a leader
@@ -141,6 +144,11 @@ pub struct Recorder {
     lines: Vec<String>,
     /// Whether the identity line has been written; see [`Recorder::preamble`].
     identified: bool,
+    /// The epochs whose committee has been written, and whether the node
+    /// knew it then.
+    committees: BTreeMap<EpochNumber, bool>,
+    /// Who sent each proposal consensus parked, by the proposal's commitment.
+    parked: HashMap<String, String>,
     /// The numbers of the blocks consensus built a header for, by view. A view
     /// can have more than one, on different parents.
     headers: BTreeMap<ViewNumber, BTreeSet<u64>>,
@@ -212,6 +220,8 @@ impl Recorder {
             identified: path.is_none(),
             path,
             lines: Vec::new(),
+            committees: BTreeMap::new(),
+            parked: HashMap::new(),
             headers: BTreeMap::new(),
             led: BTreeMap::new(),
             steps: 0,
@@ -525,6 +535,39 @@ impl Recorder {
             self.before_certificate_rule.set(true);
         }
 
+        // A parked proposal consensus adopts on a certificate's word, which it
+        // holds from here on, is received just before the input that brought
+        // the certificate, and before a proposal that input pairs. One the input
+        // itself delivers is the input.
+        let delivered = match input {
+            ConsensusInput::Proposal(_, message) | ConsensusInput::FetchedProposal(message) => {
+                Some(proposal_commitment(&message.proposal.data))
+            },
+            ConsensusInput::EpochChange(change) => Some(proposal_commitment(&change.proposal)),
+            _ => None,
+        };
+        for output in &outputs {
+            if let ConsensusOutput::ProposalCertified(proposal) = output
+                && Some(proposal_commitment(proposal)) != delivered
+            {
+                // Sent by whoever sent it when it was parked. One this
+                // recorder did not see arrive names the leader of its view.
+                let sender = self
+                    .parked
+                    .get(&ident(&proposal_commitment(proposal)))
+                    .or_else(|| {
+                        self.led
+                            .get(&(proposal.epoch, proposal.view_number))
+                            .filter(|named| *named != "unknown")
+                    })
+                    .map_or(NO_SENDER, String::as_str);
+                steps.push((
+                    bare_proposal_json(sender, self.proposal_json(proposal)),
+                    Vec::new(),
+                ));
+            }
+        }
+
         // The model takes a proposal already paired with our share, and pairs
         // nothing itself. Rather than reassemble the pair here — where a bug
         // would look like a fault — take it from the output that reports
@@ -595,9 +638,57 @@ impl Recorder {
             }
         }
 
+        // The committee of each epoch the node is in or enters, for a checker
+        // to tell where the node has a vote to cast. A node that cannot
+        // resolve the committee of its own epoch casts no vote there, so that
+        // epoch is written with no members until it can.
+        let own = consensus.current_epoch();
+        for epoch in [own, own + 1] {
+            let written = self.committees.get(&epoch).copied();
+            if written == Some(true) {
+                continue;
+            }
+            let members = consensus.committee(epoch);
+            if members.is_none() && (epoch != own || written.is_some()) {
+                continue;
+            }
+            self.committees.insert(epoch, members.is_some());
+            let members: Vec<String> = members.iter().flatten().map(ident).collect();
+            self.lines
+                .push(format!("# committee {epoch} {}", members.join(" ")));
+        }
+
         // The input first: a block decided in the same step is written with the
-        // timeout evidence of the proposal this input carries.
-        let taken = self.input_json(input);
+        // timeout evidence of the proposal this input carries. A proposal
+        // that arrives before this node's share of it is parked: consensus
+        // does not hold it until the share pairs with it or a certificate
+        // adopts it, so it is written then and not here. One that pairs with
+        // a share that arrived first is the paired step already written.
+        let live = match input {
+            ConsensusInput::Proposal(sender, message) => {
+                let commit = proposal_commitment(&message.proposal.data);
+                let held = consensus
+                    .proposals()
+                    .contains(message.proposal.data.view_number, commit);
+                if !held {
+                    self.parked.insert(ident(&commit), ident(sender));
+                }
+                let paired = outputs.iter().any(|output| {
+                    matches!(
+                        output,
+                        ConsensusOutput::ProposalPaired { proposal, .. }
+                            if proposal_commitment(&proposal.data) == commit
+                    )
+                });
+                !held || paired
+            },
+            _ => false,
+        };
+        let taken = if live {
+            Err(other_json("Proposal"))
+        } else {
+            self.input_json(input)
+        };
         let emitted: Vec<String> = outputs
             .iter()
             .copied()

@@ -27,7 +27,7 @@ use super::common::{
 };
 use crate::{
     cert_verifier::ValidCert,
-    consensus::{ConsensusInput, ConsensusOutput},
+    consensus::{ConsensusInput, ConsensusOutput, recorded::HeldKind},
     coordinator::GcScope,
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
     leader_trace::LeaderEvent,
@@ -1371,6 +1371,41 @@ async fn test_vote1_waits_for_parent_payload() {
     assert!(
         any(harness.outputs(), |o| is_vote1_for_view(o, child)),
         "vote1 should fire once the parent's payload is held"
+    );
+}
+
+/// A proposal that arrives after one extending it unblocks the vote1 on the
+/// later one at once. Nothing else for the later view may arrive to retry it.
+#[tokio::test]
+async fn test_vote1_on_child_when_its_parent_proposal_arrives_later() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (parent, child) = (&test_data.views[0], &test_data.views[1]);
+
+    harness.apply(parent.block_reconstructed_input()).await;
+    harness
+        .apply_pair(child.proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 2)),
+        "setup: no vote1 on the child without its parent"
+    );
+
+    // Applied by hand: the harness would answer the storage requests, and a
+    // confirmation is an input that retries votes too.
+    let (proposal, share) = parent.proposal_input_consensus(&node_key);
+    let mut outbox = Outbox::new();
+    harness.consensus.apply(proposal, &mut outbox);
+    harness.consensus.apply(share, &mut outbox);
+    assert!(
+        harness
+            .consensus
+            .held_back()
+            .iter()
+            .any(|held| held.kind == HeldKind::Vote1 && held.key.0 == child.view_number),
+        "the node decides on the child's vote1 when the parent's proposal arrives"
     );
 }
 

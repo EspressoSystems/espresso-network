@@ -6,6 +6,7 @@ public import NewProtocolDiff.PromptCheck
 public import NewProtocolDiff.Check
 public import NewProtocolDiff.ProtocolCheck
 public import NewProtocolDiff.Coverage
+public import NewProtocolDiff.Header
 public meta import NewProtocolSpec.Interface
 public meta import NewProtocolDiff.Json
 public meta import NewProtocolDiff.Trace
@@ -14,6 +15,7 @@ public meta import NewProtocolDiff.PromptCheck
 public meta import NewProtocolDiff.Check
 public meta import NewProtocolDiff.ProtocolCheck
 public meta import NewProtocolDiff.Coverage
+public meta import NewProtocolDiff.Header
 
 /-!
 # Checks on the harness itself
@@ -344,12 +346,28 @@ private def timerStep (outs : List Output) : Event := .consensus (.timeout ⟨1�
 private def timeoutVote : Output := .send (.timeoutVote ⟨⟨⟨0⟩, lk⟩, ⟨1⟩, me⟩)
 
 /-- The timers a run did not answer in their step, given the actions it held back. -/
-private def unanswered (es : List Event) (held : List HeldAt := []) : List String :=
-  (timerFaults cfg me (historyOf es) held).map fun (n, v) =>
+private def unanswered (es : List Event) (held : List HeldAt := [])
+    (member : EpochNumber → Bool := fun _ => true) : List String :=
+  (timerFaults cfg me member (historyOf es) held).map fun (n, v) =>
     s!"timeout vote for view {v.toNat} in step {n}"
 
 /-- info: [] -/
 #guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]])
+
+-- A node outside the committee of its epoch has no timeout vote to cast.
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep []]) [] (fun _ => false)
+
+#guard memberIn [(⟨1⟩, [⟨7⟩, ⟨8⟩])] ⟨7⟩ ⟨1⟩
+#guard !memberIn [(⟨1⟩, [⟨7⟩, ⟨8⟩])] ⟨9⟩ ⟨1⟩
+-- An epoch the trace names no committee for is read as one the node is in.
+#guard memberIn [(⟨1⟩, [⟨7⟩, ⟨8⟩])] ⟨9⟩ ⟨2⟩
+-- An epoch written with no members is one whose committee the node could not resolve.
+#guard !memberIn [(⟨1⟩, [])] ⟨7⟩ ⟨1⟩
+-- The last line for an epoch counts.
+#guard memberIn [(⟨1⟩, []), (⟨1⟩, [⟨7⟩])] ⟨7⟩ ⟨1⟩
+#guard (readCommittees "# committee 3 \n# committee 4 5 6\n").map (·.1) == [⟨3⟩, ⟨4⟩]
+#guard (readCommittees "# committee 3 \n").map (·.2.length) == [0]
 
 /-- info: ["timeout vote for view 1 in step 3"] -/
 #guard_msgs in #eval unanswered (opening ++ [timerStep []])
@@ -416,6 +434,7 @@ private def timeoutFault (es : List Event) : Option Nat :=
 private def covered (es : List Event) : String :=
   let h := historyOf es
   let cov := Coverage.add cfg (fun _ _ => some me) me {} h (joinedSteps es) (heldBack es)
+    (fun _ => true)
   s!"owed {cov.owed.getD "vote1" 0}, ended by notVoted {cov.ended.getD ("vote1", "notVoted") 0}, \
     blocked by validated {cov.soleFalse.getD ("vote1", "validated") 0}"
 
@@ -433,10 +452,12 @@ private def covered (es : List Event) : String :=
     voteStep [], .consensus (.blockValidated ⟨9⟩ ⟨9⟩) [vote ⟨3⟩] ]
 
 -- A timer whose vote the node holds back in its step ends there, whenever the vote is released.
-#guard timerEnding cfg me (historyOf (opening ++ [timerStep [], voteStep [timeoutVote]])) [] 3 ⟨1⟩
+#guard timerEnding cfg me (fun _ => true) (historyOf (opening ++ [timerStep [], voteStep [timeoutVote]])) [] 3 ⟨1⟩
   == "answered in a later step"
-#guard timerEnding cfg me (historyOf (opening ++ [timerStep [], voteStep [timeoutVote]]))
+#guard timerEnding cfg me (fun _ => true) (historyOf (opening ++ [timerStep [], voteStep [timeoutVote]]))
   [hold .timeout 1 0 3] 3 ⟨1⟩ == "held back in its step"
+#guard timerEnding cfg me (fun _ => false) (historyOf (opening ++ [timerStep []])) [] 3 ⟨1⟩
+  == "outside the committee"
 
 /-! ## What a trace says beyond its steps
 
@@ -475,8 +496,9 @@ private def annotated : List Event :=
 /-! An action at a dropped input releases one held back for a write the input confirms, or waited for a DRB result. -/
 
 /-- The actions a trace's node took at dropped inputs with no reason to take them there. -/
-private def strays (es : List Event) : List (Nat × HeldKind) :=
-  (droppedActionFaults cfg me (heldBack es) (droppedInputs es) (drbRequests es)).map fun (k, kind, _, _) => (k, kind)
+private def strays (es : List Event) (owed : Bool := true) : List (Nat × HeldKind) :=
+  (droppedActionFaults cfg me (fun _ _ _ _ => owed) (heldBack es) (droppedInputs es)
+    (drbRequests es)).map fun (k, kind, _, _) => (k, kind)
 
 /-- A step that holds the vote1 of view 1 back for the vote action. -/
 private def holding : Event :=
@@ -496,6 +518,10 @@ private def holding : Event :=
 -- The vote is first held back at an input it does not wait for.
 #guard strays [voteStep [], .dropped (.other "VidShare") []
     { held := [⟨.vote1, ⟨1⟩, ⟨0⟩, [.action ⟨1⟩ .vote]⟩] }] == [(0, .vote1)]
+-- An action the node did not owe, it may take at any input.
+#guard strays [holding, .dropped (.stored (.share ⟨1⟩)) [vote ⟨3⟩]] (owed := false) == []
+#guard strays [voteStep [], .dropped (.other "VidShare") []
+    { held := [⟨.vote1, ⟨1⟩, ⟨0⟩, [.action ⟨1⟩ .vote]⟩] }] (owed := false) == []
 -- A timeout vote held back there answers a timer.
 #guard strays [voteStep [], .dropped (.other "VidShare") [] { held := [⟨.timeout, ⟨1⟩, ⟨0⟩, []⟩] }] == []
 -- What a dropped input draws that no node owes is no action.

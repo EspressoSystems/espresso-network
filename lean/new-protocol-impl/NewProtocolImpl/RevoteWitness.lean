@@ -408,6 +408,20 @@ theorem hasCert2 {n : Nat} {x : Cert2} (hc : (H k n).HasCert2 x) :
     · exact Or.inl ⟨u, rfl, by omega⟩
     · exact Or.inr ⟨u, rfl, by omega⟩
 
+/-- No node holds a `Cert2` over block `u`, its own or a re-vote's, before the first arrives. -/
+theorem no_cert2_over {n u : Nat} (hn : n ≤ 15 * u + 7) {c2 : Cert2} (hc : (H k n).HasCert2 c2) :
+    c2.data ≠ (certOf (blk u)).data.toVote2 := by
+  intro hd
+  have key : ∀ x, (certOf (blk x)).data.toVote2 = (certOf (blk u)).data.toVote2 → x = u :=
+    fun x h => by
+      have h1 : (⟨x + 1⟩ : BlockNumber) = ⟨u + 1⟩ :=
+        (cert_number x).symm.trans ((congrArg Vote2Data.blockNumber h).trans (cert_number u))
+      have := number_inj h1
+      omega
+  rcases hasCert2 hc with ⟨x, rfl, hlt⟩ | ⟨x, rfl, hlt⟩
+  · obtain rfl := key x hd; omega
+  · obtain rfl := key x hd; omega
+
 theorem hasC2_of {n : Nat} (u : Nat) (h : 15 * u + 7 < n) : (H k n).HasCert2 (C2 u) :=
   Or.inl (recv_at u 7 (by omega) h)
 
@@ -1024,7 +1038,7 @@ theorem revotes (u : Nat) : ∃ j, j < 15 * u + 5 ∧ Output.send (.revote (R u)
     settled a (15 * u + 4) (.propose (certOf (blk u)).data.epoch ⟨3 * u + 2⟩) ⟨?_, ?_, ?_, ?_⟩
   · refine Or.inr ⟨R u, ⟨rfl, ⟨?_, Or.inl ⟨rfl, ?_⟩, blk_last u⟩, Liveness.buildable_of_lockable ?lk, fun _ => ?lk,
       (fun _ h => by cases h), notBehind ?_, ?_⟩,
-      rfl, rfl⟩
+      rfl, rfl, fun c2 hc => no_cert2_over (by omega) hc⟩
     · show (certOf (blk u)).view < ⟨3 * u + 2⟩; rw [cert_view]; show 3 * u + 1 < 3 * u + 2; omega
     · show (certOf (blk u)).view + 1 = ⟨3 * u + 2⟩; rw [cert_view]; rfl
     · exact lockable_iff.mpr (Or.inr (Or.inl ⟨u, rfl, Or.inl ⟨lag_a u, by omega⟩⟩))
@@ -1057,7 +1071,7 @@ theorem revotes2 (u : Nat) : ∃ j, j ≤ 15 * u + 6 ∧ Output.send (.revote (R
     settled a (15 * u + 6) (.propose (CR u).data.epoch ⟨3 * u + 3⟩) ⟨?_, ?_, ?_, ?_⟩
   · refine Or.inr ⟨R2 u, ⟨rfl, ⟨?_, Or.inl ⟨rfl, rfl⟩, blk_last u⟩, Liveness.buildable_of_lockable ?lk, fun _ => ?lk,
       (fun _ h => by cases h), notBehind ?_, ?_⟩,
-      rfl, rfl⟩
+      rfl, rfl, fun c2 hc => no_cert2_over (by omega) hc⟩
     · show 3 * u + 2 < 3 * u + 3; omega
     · exact lockable_iff.mpr (Or.inr (Or.inr ⟨u, rfl, lag_a u, by omega⟩))
     · show eAt (15 * u + 7) ≤ (CR u).data.epoch.toNat
@@ -1248,7 +1262,7 @@ theorem votes1R (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u 
   refine Classical.byContradiction fun hneg => settled k (15 * u + 5) (.vote1Again (R u))
     ⟨⟨a, recv_at u 5 (by omega) (by omega), rfl⟩, ⟨?_, Or.inl ⟨rfl, ?_⟩, blk_last u⟩, (fun _ h => by cases h),
       ⟨blk u, hasProposal_of u (by omega), ⟨Nat.le_refl _, rfl⟩, payload_of u hl (by omega)⟩, notBehind ?_,
-      fun ht => ?_, fun vote hs _ hvv => ?_, ?_⟩
+      fun ht => ?_, fun vote hs _ hvv => ?_, fun c2 hc => no_cert2_over (by omega) hc, ?_⟩
   · show (certOf (blk u)).view < ⟨3 * u + 2⟩; rw [cert_view]; show 3 * u + 1 < 3 * u + 2; omega
   · show (certOf (blk u)).view + 1 = ⟨3 * u + 2⟩; rw [cert_view]; rfl
   · show eAt (15 * u + 6) ≤ (certOf (blk u)).data.epoch.toNat

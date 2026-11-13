@@ -221,7 +221,7 @@ async fn run_under_the_certificate_rule_without_a_restart_has_neither_note() {
     let trace = trace_of_a_proposal(TIMEOUT_EPOCH_VERSION).await;
     assert_eq!(
         trace_steps(&trace, "proposal"),
-        2,
+        1,
         "setup: the run was recorded"
     );
     assert!(!trace.lines().any(|l| l == BEFORE_CERTIFICATE_RULE));
@@ -397,4 +397,123 @@ async fn timeout_vote_held_back_is_written_at_every_timer() {
             [json!([{ "action": { "v": 1, "kind": "timeout" } }])]
         );
     }
+}
+
+/// A proposal that arrives before the node's share of it is parked, and
+/// consensus does not hold it. It is written as a dropped input, and as a
+/// step only once the share pairs with it.
+#[tokio::test]
+async fn parked_proposal_is_a_step_only_once_paired() {
+    let (mut harness, _dir) = recorded_node(TIMEOUT_EPOCH_VERSION).await;
+    let test_data = TestData::new_with_epoch_height(1, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (proposal, share) = test_data.views[0].proposal_input_consensus(&node_key);
+
+    harness.apply(proposal).await;
+    assert!(
+        harness
+            .consensus
+            .proposals()
+            .at(ViewNumber::new(1))
+            .next()
+            .is_none(),
+        "setup: the node does not hold the proposal without its share"
+    );
+    harness.apply(share).await;
+
+    let trace = harness.recorded();
+    let events = events(&trace);
+    let parked = events
+        .iter()
+        .position(|e| e["dropped"]["kind"]["other"]["name"] == "Proposal")
+        .expect("the parked proposal is a dropped input");
+    let paired = events
+        .iter()
+        .position(|e| e["consensus"]["input"]["proposal"]["share"].is_object())
+        .expect("the paired proposal is a step");
+    assert!(parked < paired);
+    assert_eq!(trace_steps(&trace, "proposal"), 1);
+}
+
+/// A parked proposal adopted on the parent certificate of a proposal the same
+/// input pairs is a step before the paired one, which is the step the
+/// outputs are written with.
+#[tokio::test]
+async fn adopted_parent_is_a_step_before_the_proposal_pairing_adopts_it_on() {
+    let (mut harness, _dir) = recorded_node(TIMEOUT_EPOCH_VERSION).await;
+    let test_data = TestData::new_with_epoch_height(2, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (parent, _) = test_data.views[0].proposal_input_consensus(&node_key);
+    let (child, share) = test_data.views[1].proposal_input_consensus(&node_key);
+
+    harness.apply(parent).await;
+    harness.apply(share).await;
+    harness.apply(child).await;
+    assert!(
+        harness
+            .consensus
+            .proposals()
+            .at(ViewNumber::new(1))
+            .next()
+            .is_some(),
+        "setup: the parked parent is adopted"
+    );
+
+    let trace = harness.recorded();
+    let events = events(&trace);
+    let view_of = |e: &Value| e["consensus"]["input"]["proposal"]["p"]["viewNumber"].clone();
+    let adopted = events
+        .iter()
+        .position(|e| view_of(e) == 1)
+        .expect("the adopted parent is a step");
+    let paired = events
+        .iter()
+        .position(|e| view_of(e) == 2)
+        .expect("the paired child is a step");
+    assert!(adopted < paired);
+}
+
+/// A proposal consensus pairs with the node's share is one step, also when
+/// the share arrives first.
+#[tokio::test]
+async fn paired_proposal_is_one_step_when_the_share_arrives_first() {
+    let (mut harness, _dir) = recorded_node(TIMEOUT_EPOCH_VERSION).await;
+    let test_data = TestData::new_with_epoch_height(1, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (proposal, share) = test_data.views[0].proposal_input_consensus(&node_key);
+
+    harness.apply(share).await;
+    harness.apply(proposal).await;
+    assert!(
+        harness
+            .consensus
+            .proposals()
+            .live(ViewNumber::new(1))
+            .is_some(),
+        "setup: the node took the proposal"
+    );
+
+    let trace = harness.recorded();
+    assert_eq!(trace_steps(&trace, "proposal"), 1);
+    let events = events(&trace);
+    assert!(
+        events
+            .iter()
+            .any(|e| e["consensus"]["input"]["proposal"]["share"].is_object())
+    );
+}
+
+/// The committee of the node's epoch is written, for a checker to tell
+/// whether the node has a vote to cast there.
+#[tokio::test]
+async fn committee_of_the_nodes_epoch_is_written() {
+    let trace = trace_of_a_proposal(TIMEOUT_EPOCH_VERSION).await;
+    let node = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let committee = trace
+        .lines()
+        .find_map(|l| l.strip_prefix("# committee 1 "))
+        .expect("the committee of epoch 1 is written");
+    let members: Vec<&str> = committee.split(' ').collect();
+    assert_eq!(members.len(), 10);
+    assert!(members.contains(&format!("\"{node}\"").as_str()));
 }

@@ -5,7 +5,10 @@
 
 use std::collections::BTreeSet;
 
-use hotshot_types::{data::EpochNumber, traits::node_implementation::NodeType};
+use hotshot_types::{
+    data::EpochNumber,
+    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
+};
 
 use super::Consensus;
 use crate::{
@@ -59,6 +62,20 @@ impl<T: NodeType> HeldBack<T> {
 }
 
 impl<T: NodeType> Consensus<T> {
+    /// The members of the committee of `epoch`, if this node knows it.
+    pub(crate) fn committee(&self, epoch: EpochNumber) -> Option<Vec<T::SignatureKey>> {
+        let membership = self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+            .ok()?;
+        Some(
+            membership
+                .stake_table()
+                .map(|peer| peer.stake_table_entry.public_key())
+                .collect(),
+        )
+    }
+
     /// The vote1s, vote2s, proposals, re-vote requests and timeout votes this
     /// node holds back, each with the writes storage has yet to confirm
     /// before it is released.
