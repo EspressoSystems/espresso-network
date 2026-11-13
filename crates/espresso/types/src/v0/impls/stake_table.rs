@@ -1248,6 +1248,11 @@ impl Fetcher {
         }
     }
 
+    /// The catchup provider the stake table catchup fetches from.
+    pub fn peers(&self) -> &dyn StateCatchup {
+        &*self.peers
+    }
+
     #[cfg(feature = "node")]
     pub async fn spawn_update_loop(&self) {
         let mut update_task = self.update_task.0.lock().await;
