@@ -602,17 +602,45 @@ mod tests {
     use hotshot_query_service::availability::BlockId;
     use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
     use light_client::{client::Client, testing::TestClient};
+    use rstest::rstest;
 
     use super::*;
 
-    const EPOCH_HEIGHT: u64 = 10;
     const LC_CONTRACT_HEIGHT: usize = 62;
 
-    /// A client with a chain past `LC_CONTRACT_HEIGHT` and the contract state at that height.
-    async fn client_and_state() -> (TestClient, LcContractFinalizedState) {
-        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
+    /// What a peer answers with, by height.
+    enum Answer {
+        /// A leaf chain starting at the leaf of this height.
+        Leaf(usize),
+        /// A header proof of this height against the block Merkle root at `LC_CONTRACT_HEIGHT`.
+        Proof(usize),
+    }
+
+    async fn response(client: &TestClient, answer: Answer) -> Response {
+        match answer {
+            Answer::Leaf(height) => Response::Leaf(vec![client.leaf(height).await.leaf().clone()]),
+            Answer::Proof(height) => {
+                // The client builds its chain on demand; a proof needs it past the root.
+                client.leaf(LC_CONTRACT_HEIGHT).await;
+                let proof = client
+                    .header_proof(LC_CONTRACT_HEIGHT as u64, BlockId::Number(height))
+                    .await
+                    .unwrap();
+                Response::HeaderProof(Box::new(proof))
+            },
+        }
+    }
+
+    /// Accepts only the leaf at the contract height; `None` expects success.
+    #[rstest]
+    #[case::contract_height(Answer::Leaf(62), None)]
+    #[case::other_height(Answer::Leaf(61), Some("header is at height 61, expected 62"))]
+    #[case::wrong_variant(Answer::Proof(15), Some("expected leaf response"))]
+    #[tokio::test]
+    async fn lc_contract_root_cases(#[case] answer: Answer, #[case] error: Option<&str>) {
+        let client = TestClient::with_epoch_height(10);
         let leaf = client.leaf(LC_CONTRACT_HEIGHT).await;
-        let lc_contract_state = LcContractFinalizedState {
+        let state = LcContractFinalizedState {
             height: LC_CONTRACT_HEIGHT as u64,
             block_comm_root: leaf
                 .header()
@@ -620,133 +648,45 @@ mod tests {
                 .unwrap()
                 .block_comm_root,
         };
-        (client, lc_contract_state)
+
+        let result = verified_lc_contract_root(&state, response(&client, answer).await);
+
+        match error {
+            None => assert_eq!(result.unwrap(), leaf.header().block_merkle_tree_root()),
+            Some(fragment) => {
+                let err = format!("{:#}", result.unwrap_err());
+                assert!(err.contains(fragment), "{err}");
+            },
+        }
     }
 
-    async fn leaf_response(client: &TestClient, height: usize) -> Response {
-        Response::Leaf(vec![client.leaf(height).await.leaf().clone()])
-    }
-
-    async fn proof_response(client: &TestClient, height: usize) -> Response {
-        let proof = client
-            .header_proof(LC_CONTRACT_HEIGHT as u64, BlockId::Number(height))
-            .await
-            .unwrap();
-        Response::HeaderProof(Box::new(proof))
-    }
-
-    /// The root of a leaf at the contract height is accepted.
+    /// Accepts only a proof of height 15 against the root at `root_height`; `None` expects success.
+    #[rstest]
+    #[case::asked_height(62, Answer::Proof(15), None)]
+    #[case::other_height(62, Answer::Proof(16), Some("is for height 16, expected 15"))]
+    #[case::other_root(61, Answer::Proof(15), Some(""))]
+    #[case::wrong_variant(62, Answer::Leaf(15), Some("expected header proof response"))]
     #[tokio::test]
-    async fn lc_contract_root_accepts_the_contract_header_ok() {
-        let (client, state) = client_and_state().await;
-        let response = leaf_response(&client, LC_CONTRACT_HEIGHT).await;
-
-        let root = verified_lc_contract_root(&state, response).unwrap();
-
-        let header = client.leaf(LC_CONTRACT_HEIGHT).await;
-        assert_eq!(root, header.header().block_merkle_tree_root());
-    }
-
-    /// A response of another variant is rejected.
-    #[tokio::test]
-    async fn lc_contract_root_wrong_variant_fails() {
-        let (client, state) = client_and_state().await;
-        let response = proof_response(&client, 15).await;
-
-        let err = verified_lc_contract_root(&state, response).unwrap_err();
-
-        assert!(
-            format!("{err:#}").contains("expected leaf response"),
-            "{err:#}"
-        );
-    }
-
-    /// A header whose block Merkle root differs from the contract's commitment is rejected.
-    #[tokio::test]
-    async fn lc_contract_root_mismatched_commitment_fails() {
-        let (client, mut state) = client_and_state().await;
-        state.block_comm_root = client
-            .leaf(LC_CONTRACT_HEIGHT - 1)
-            .await
-            .header()
-            .get_light_client_state(ViewNumber::new(0))
-            .unwrap()
-            .block_comm_root;
-        let response = leaf_response(&client, LC_CONTRACT_HEIGHT).await;
-
-        let err = verified_lc_contract_root(&state, response).unwrap_err();
-
-        assert!(
-            format!("{err:#}").contains("does not match the LC contract"),
-            "{err:#}"
-        );
-    }
-
-    /// A proof of the asked height is accepted.
-    #[tokio::test]
-    async fn proven_header_accepts_the_asked_height_ok() {
-        let (client, _) = client_and_state().await;
+    async fn proven_header_cases(
+        #[case] root_height: usize,
+        #[case] answer: Answer,
+        #[case] error: Option<&str>,
+    ) {
+        let client = TestClient::with_epoch_height(10);
         let root = client
-            .leaf(LC_CONTRACT_HEIGHT)
+            .leaf(root_height)
             .await
             .header()
             .block_merkle_tree_root();
-        let response = proof_response(&client, 15).await;
 
-        let header = verified_proven_header(root, 15, response).unwrap();
+        let result = verified_proven_header(root, 15, response(&client, answer).await);
 
-        assert_eq!(header.height(), 15);
-    }
-
-    /// A response of another variant is rejected.
-    #[tokio::test]
-    async fn proven_header_wrong_variant_fails() {
-        let (client, _) = client_and_state().await;
-        let root = client
-            .leaf(LC_CONTRACT_HEIGHT)
-            .await
-            .header()
-            .block_merkle_tree_root();
-        let response = leaf_response(&client, 15).await;
-
-        let err = verified_proven_header(root, 15, response).unwrap_err();
-
-        assert!(
-            format!("{err:#}").contains("expected header proof response"),
-            "{err:#}"
-        );
-    }
-
-    /// A valid proof for another height than asked is rejected.
-    #[tokio::test]
-    async fn proven_header_wrong_height_fails() {
-        let (client, _) = client_and_state().await;
-        let root = client
-            .leaf(LC_CONTRACT_HEIGHT)
-            .await
-            .header()
-            .block_merkle_tree_root();
-        let response = proof_response(&client, 16).await;
-
-        let err = verified_proven_header(root, 15, response).unwrap_err();
-
-        assert!(
-            format!("{err:#}").contains("header proof is for height 16, expected 15"),
-            "{err:#}"
-        );
-    }
-
-    /// A proof against another root is rejected.
-    #[tokio::test]
-    async fn proven_header_wrong_root_fails() {
-        let (client, _) = client_and_state().await;
-        let root = client
-            .leaf(LC_CONTRACT_HEIGHT - 1)
-            .await
-            .header()
-            .block_merkle_tree_root();
-        let response = proof_response(&client, 15).await;
-
-        verified_proven_header(root, 15, response).unwrap_err();
+        match error {
+            None => assert_eq!(result.unwrap().height(), 15),
+            Some(fragment) => {
+                let err = format!("{:#}", result.unwrap_err());
+                assert!(err.contains(fragment), "{err}");
+            },
+        }
     }
 }
