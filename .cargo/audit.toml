@@ -14,4 +14,7 @@ ignore = [
     # Latest alloy (2.5.0) still requires k256/elliptic-curve 0.13.
     # https://github.com/alloy-rs/alloy/issues/4445
     "RUSTSEC-2026-0387",
+    # libsqlite3-sys 0.30.1 (bundled SQLite) pinned by sqlx 0.8.6; the fix (>=0.39.0) needs a sqlx
+    # release. https://github.com/transact-rs/sqlx/pull/4394
+    "RUSTSEC-2026-0459",
 ]
