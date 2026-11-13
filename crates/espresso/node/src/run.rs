@@ -71,9 +71,10 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // Build telemetry before logging so its layer attaches to the global
     // subscriber. The registry is still `None` here (the API setup runs later);
     // the metrics push is attached then via `attach_metrics_push`.
+    let telemetry_key = opt.key_set.clone().staking_key();
     let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
-        match (opt.key_set.clone().try_into(), telemetry_endpoint.as_ref()) {
-            (Ok(KeySet { staking, .. }), Some(endpoint)) => match telemetry::init(
+        match (telemetry_key, telemetry_endpoint.as_ref()) {
+            (Ok(staking), Some(endpoint)) => match telemetry::init(
                 &opt.telemetry,
                 &staking,
                 opt.identity.node_name.as_deref(),
@@ -469,6 +470,43 @@ mod test {
         genesis::{L1Finalized, StakeTableConfig},
         persistence::fs,
     };
+
+    #[tokio::test]
+    async fn validator_startup_requires_persistent_network_key() {
+        let mut opt = Options::parse_from([
+            "sequencer",
+            "--mnemonic",
+            "test test test test test test test test test test test junk",
+        ]);
+        let keys = KeySet::try_from(opt.key_set.clone()).unwrap();
+        opt.key_set = crate::keyset::KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: None,
+            private_staking_key: Some(keys.staking.to_tagged_base64().unwrap()),
+            private_state_key: Some(keys.state.to_tagged_base64().unwrap()),
+            private_x25519_key: None,
+        };
+        let genesis = Genesis::from_file(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../data/genesis/demo-ff.toml"),
+        )
+        .unwrap();
+        let modules = Modules::default();
+        let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
+        let tmp = TempDir::new().unwrap();
+        let error = init_with_storage(
+            genesis,
+            modules,
+            opt,
+            fs::Options::new(tmp.path().into()),
+            public_node_config,
+        )
+        .await
+        .err()
+        .expect("validator startup must reject a missing network key");
+        assert!(error.to_string().contains("missing persistent x25519 key"));
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_startup_before_orchestrator() {

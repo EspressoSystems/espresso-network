@@ -452,9 +452,7 @@ where
 /// This node's own validator config, which `status/keys` reports.
 ///
 /// The x25519 key is the cliquenet identity the node runs with, however it was configured
-/// (mnemonic, key file or explicit key), so it is always recorded. When no key is configured,
-/// `KeySet` generates a random one at startup, so the reported key is only stable across
-/// restarts if the operator configured it.
+/// (mnemonic, key file or explicit key), so it is always recorded and stable across restarts.
 ///
 /// `p2p_addr` is the address peers dial, so it is only the configured advertise address. The
 /// bind address is not recorded: its default is `0.0.0.0`, which nobody can dial, and on real
