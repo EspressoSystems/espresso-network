@@ -495,6 +495,8 @@ pub enum StakeTableError {
     BlsKeyAlreadyUsed(String),
     #[error("Insufficient stake to undelegate")]
     InsufficientStake,
+    #[error("Delegation to validator {0:#x} would overflow")]
+    StakeOverflow(Address),
     #[error("Event authentication failed: {0}")]
     AuthenticationFailed(String),
     #[error("No validators met the minimum criteria (non-zero stake and at least one delegator)")]
