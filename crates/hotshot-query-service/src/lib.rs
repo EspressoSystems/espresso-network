@@ -295,6 +295,7 @@ mod resolvable;
 pub mod sqlite_options;
 pub mod status;
 pub mod task;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod types;
 

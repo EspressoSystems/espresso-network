@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Fail if a test-only crate is a normal dependency of a package that ships a binary.
+#
+# cargo-udeps (.github/workflows/unused-deps.yml) runs with --all-targets, so a normal
+# dependency that only tests use counts as used there; this check covers that gap.
+set -euo pipefail
+
+# espresso-dev-node is left out: it is built on the node's `testing` feature on purpose.
+shipped=(
+    deployment-info
+    espresso-contract-deployer
+    espresso-deploy
+    espresso-node
+    hotshot-state-prover
+    light-client-query-service
+    node-metrics
+    query-watchdog
+    staking-cli
+)
+
+test_only=(
+    hotshot-example-types
+    test-server
+    test-utils
+)
+
+status=0
+for pkg in "${shipped[@]}"; do
+    graph=$(cargo tree --locked -p "$pkg" -e normal --prefix none)
+    for crate in "${test_only[@]}"; do
+        if grep -q "^$crate " <<<"$graph"; then
+            echo "error: test-only crate $crate is a normal dependency of $pkg" >&2
+            echo "       see: cargo tree -p $pkg -e normal -i $crate" >&2
+            status=1
+        fi
+    done
+done
+exit "$status"

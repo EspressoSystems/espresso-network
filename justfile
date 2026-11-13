@@ -296,6 +296,10 @@ check-features-ci *args:
         --exclude vid \
         {{args}}
 
+# check that no test-only crate is a normal dependency of a package that ships a binary
+check-production-deps:
+    scripts/check-production-deps
+
 # requires the succinct toolchain (`sp1up`, https://docs.succinct.xyz/docs/sp1/getting-started/install)
 # check that the zkVM client crates compile for the SP1 target
 check-sp1-target:

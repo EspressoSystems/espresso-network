@@ -69,6 +69,15 @@ jobs:
           cargo clippy --workspace --features testing --all-targets --keep-going -- -D warnings
           cargo clippy -p slow-tests --features sqlite --all-targets --keep-going -- -D warnings
 
+  production-deps:
+    name: production deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check that no test-only crate ships in a production binary
+        run: scripts/check-production-deps
+
   python:
     name: python
     runs-on: ubuntu-latest

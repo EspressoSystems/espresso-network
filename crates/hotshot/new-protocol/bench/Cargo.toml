@@ -20,7 +20,7 @@ cliquenet = { workspace = true }
 committable = { workspace = true }
 csv = { workspace = true }
 hotshot-example-types = { workspace = true }
-hotshot-new-protocol = { workspace = true }
+hotshot-new-protocol = { workspace = true, features = ["testing"] }
 hotshot-types = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
