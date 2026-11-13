@@ -13,6 +13,7 @@ use derivative::Derivative;
 use espresso_types::{
     NodeState, PubKey, Transaction, ValidatedState,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
+    v0_3::StakeTableError,
 };
 use futures::{
     future::join_all,
@@ -632,32 +633,41 @@ async fn connect_startup_peers(
         tracing::warn!(%anchor_epoch, %err, "coordinator apply_epoch failed at startup");
     }
 
+    let instance_state = initializer.instance_state();
+    if instance_state.chain_config.stake_table_contract.is_none() {
+        return Ok(Vec::new());
+    }
+
     let started = Instant::now();
     let held = network.sender().peer_keys();
     let l1_finalized_peers = {
-        let l1_block = initializer
-            .instance_state()
+        let l1_block = instance_state
             .l1_client
             .finalized_number_within_wait()
             .await
             .context("dialing the validators active on L1")?;
-        let validators = membership_coordinator
+        let validators = match membership_coordinator
             .membership()
             .fetcher()
             .validator_set_at(l1_block, version)
             .await
-            .context("dialing the validators active on L1")?;
-        let (l1_active_keys, targets) = startup_dial_targets(
-            &own_key,
-            validators.active_validators().values().map(|validator| {
-                (
-                    *validator.stake_table_key(),
-                    validator.x25519_key,
-                    validator.p2p_addr.clone(),
-                )
-            }),
-            &held,
-        );
+        {
+            Ok(set) => set
+                .active_validators()
+                .values()
+                .map(|validator| {
+                    (
+                        *validator.stake_table_key(),
+                        validator.x25519_key,
+                        validator.p2p_addr.clone(),
+                    )
+                })
+                .collect(),
+            Err(err) if is_no_valid_validators(&err) => Vec::new(),
+            Err(err) => return Err(err.context("dialing the validators active on L1")),
+        };
+        let (l1_active_keys, targets) =
+            startup_dial_targets(&own_key, validators.into_iter(), &held);
         let targets = targets
             .into_iter()
             .map(|(key, (x25519_key, addr))| (key, (x25519_key.into(), addr)))
@@ -675,6 +685,14 @@ async fn connect_startup_peers(
         "startup peers"
     );
     Ok(l1_finalized_peers)
+}
+
+/// Whether `err` is the stake table having no valid validator, which leaves nothing to dial.
+fn is_no_valid_validators(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<StakeTableError>(),
+        Some(StakeTableError::NoValidValidators)
+    )
 }
 
 /// A validator key with its x25519 key and address.
@@ -1048,6 +1066,22 @@ mod tests {
 
     fn addr() -> Option<NetAddr> {
         Some("127.0.0.1:9000".parse().unwrap())
+    }
+
+    /// Only the typed no-validators error, with or without added context, leaves nothing to dial.
+    #[rstest]
+    #[case::no_validators(anyhow::Error::new(StakeTableError::NoValidValidators), true)]
+    #[case::no_validators_with_context(
+        anyhow::Error::new(StakeTableError::NoValidValidators).context("construct"),
+        true
+    )]
+    #[case::other_stake_table_error(
+        anyhow::Error::new(StakeTableError::BlsKeyAlreadyUsed("k".into())),
+        false
+    )]
+    #[case::unrelated(anyhow::anyhow!("failed to fetch stake table events"), false)]
+    fn is_no_valid_validators_cases(#[case] err: anyhow::Error, #[case] expected: bool) {
+        assert_eq!(is_no_valid_validators(&err), expected);
     }
 
     /// A validator is listed when it has an x25519 key and an address and is not the node itself, and
