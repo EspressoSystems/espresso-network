@@ -11,7 +11,10 @@ by its post-start catchup, over request-response, after about one view timeout.
   and the catchup walks epochs from the held start as before.
 - A validator does not start when it cannot read the validators active on L1. Previously the failure was logged and
   the node started without them as peers or responders.
-- `--state-peers` is optional for validators.
+- Espresso's own nodes upgrade first and serve the seed over HTTP as state peers.
+- `--state-peers` is optional for validators. When set, the peers serve each seed request over HTTP
+  (`/v1/catchup/{height}/leafchain`, `/v1/light-client/header/{root}/{height}`) `--http-catchup-delay` after the request
+  starts; a validator whose cliquenet peers do not answer `HeaderProof` yet can set it.
 - `/v1/node/all-validators/{epoch_number}/{offset}/{limit}` is empty for epochs a seed skipped.
 - `--bootstrap-epoch-catchup-timeout` is ignored for validators.
 - Followers are unchanged: they still walk epochs at startup.

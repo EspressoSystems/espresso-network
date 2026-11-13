@@ -67,6 +67,11 @@ seed at a time:
 4. Installs `ST(max(top-4, start+1, 3)) ..= ST(top)`, each with a block reward computed from the proven roots, each
    root bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from `top` up
    to the target (nothing for a target at or below `E*+1`); `drb_ready` supplies the target's DRB.
+5. State peers (`--state-peers`) are the second source of each request, through `ParallelStateCatchup`: asked
+   `--http-catchup-delay` after the request starts, at once when request-response is not registered. The root header
+   is read from `/v1/catchup/{F}/leafchain`, a proof from `/v1/light-client/header/{F}/{height}`; both are verified
+   before they are accepted. Peers are asked in `PeerScore` order, each under `--catchup-base-timeout`; the first
+   verified answer of either source wins.
 
 An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held
 start; installed tables are present and skipped.
