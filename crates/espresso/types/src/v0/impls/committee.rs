@@ -2004,8 +2004,8 @@ mod tests {
         );
         let hydrated = committees.snapshot(epoch).unwrap();
         assert!(Arc::ptr_eq(
-            &hydrated.inner.randomized.as_ref().unwrap(),
-            &concurrent.inner.randomized.as_ref().unwrap()
+            hydrated.inner.randomized.as_ref().unwrap(),
+            concurrent.inner.randomized.as_ref().unwrap()
         ));
         assert_eq!(
             hydrated.inner.randomized.as_ref().unwrap().drb_result(),
