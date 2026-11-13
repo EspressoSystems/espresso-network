@@ -7148,6 +7148,9 @@ mod test {
         Height { height: u64, network_epoch: u64 },
         /// The newest block the network decided.
         NetworkTip,
+        /// Finalized at `height` with the commitment of the header at `height - 1`, which no
+        /// header at `height` matches: every seed attempt fails and the validator walks.
+        MismatchedCommitment { height: u64, network_epoch: u64 },
     }
 
     /// A validator that starts with the LC contract finalized at `lc_contract_height` while the
@@ -7197,7 +7200,8 @@ mod test {
 
         let mut events = network.server.event_stream();
         let network_epoch = match lc_contract {
-            LcContractAt::Height { network_epoch, .. } => network_epoch,
+            LcContractAt::Height { network_epoch, .. }
+            | LcContractAt::MismatchedCommitment { network_epoch, .. } => network_epoch,
             LcContractAt::NetworkTip => TIP_NETWORK_EPOCH,
         };
         wait_for_epochs(&mut events, EPOCH_HEIGHT, network_epoch).await;
@@ -7205,12 +7209,21 @@ mod test {
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         let header: Header = match lc_contract {
-            LcContractAt::Height { height, .. } => client
+            LcContractAt::Height { height, .. }
+            | LcContractAt::MismatchedCommitment { height, .. } => client
                 .get(&format!("availability/header/{height}"))
                 .send()
                 .await
                 .unwrap(),
             LcContractAt::NetworkTip => network.server.decided_leaf().await.block_header().clone(),
+        };
+        let commitment_header: Header = match lc_contract {
+            LcContractAt::MismatchedCommitment { height, .. } => client
+                .get(&format!("availability/header/{}", height - 1))
+                .send()
+                .await
+                .unwrap(),
+            LcContractAt::Height { .. } | LcContractAt::NetworkTip => header.clone(),
         };
         let lc_contract_height = header.height();
         network
@@ -7221,6 +7234,7 @@ mod test {
                     .as_ref()
                     .expect("the network deploys contracts"),
                 &header,
+                &commitment_header,
             )
             .await
             .unwrap();
@@ -7277,10 +7291,15 @@ mod test {
         .expect("the joined node did not decide with the network");
 
         let export = metrics.export().unwrap();
-        assert!(
-            metric_value(&export, "catchup_lc_contract_seeds") >= Some(1.0),
-            "no seed ran:\n{export}"
-        );
+        let seeds = metric_value(&export, "catchup_lc_contract_seeds");
+        match lc_contract {
+            LcContractAt::MismatchedCommitment { .. } => {
+                assert_eq!(seeds, Some(0.0), "a seed succeeded:\n{export}")
+            },
+            LcContractAt::Height { .. } | LcContractAt::NetworkTip => {
+                assert!(seeds >= Some(1.0), "no seed ran:\n{export}")
+            },
+        }
 
         let coordinator = node.node_state().coordinator;
         // A fresh node's whole window has rewards; a stale one holds older epochs it already had.
@@ -7381,6 +7400,23 @@ mod test {
     ) {
         validator_joins_over_cliquenet::<D>(
             LcContractAt::Height {
+                height: 62,
+                network_epoch: 7,
+            },
+            false,
+        )
+        .await;
+    }
+
+    /// The LC contract commits to another header than the one at its height, so every seed attempt
+    /// fails. Stored anchor in epoch 2, the network in epoch 7: the restart walks to the current
+    /// epoch, 5 epochs, above the 2 that trigger a seed.
+    #[apply(sql_data_sources)]
+    async fn test_new_protocol_validator_walks_when_the_seed_fails<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        validator_joins_over_cliquenet::<D>(
+            LcContractAt::MismatchedCommitment {
                 height: 62,
                 network_epoch: 7,
             },

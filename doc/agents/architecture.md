@@ -66,12 +66,13 @@ seed at a time:
    height is `F` and its `block_comm_root` matches.
 3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
    the preceding root where the reward of the lowest table reads its block time. Each request is up to 5 attempts
-   with backoff between them. An attempt is bounded by one provider's timeout (6 s on request-response) when there are
-   no state peers; with state peers it lasts until every provider answered or failed, bounded per state peer by
-   `--http-catchup-delay` plus `--catchup-base-timeout`. The backoff is `BackoffParams::default()`: it reads the
-   environment variables `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the
-   flags `--catchup-backoff-*` and `--catchup-{base,max}-retry-delay`. With `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set
-   a request makes one attempt. The L1 read and each install are bounded.
+   with backoff between them; the attempt number `n` (from 0) is passed to the provider as `retry`. Without state
+   peers an attempt is the request-response bound of 6 s. With state peers it lasts until every provider answered or
+   failed: at most `--http-catchup-delay`, then `n + 1` times `--catchup-base-timeout` for each state peer, asked one
+   after another. The backoff is `BackoffParams::default()`: it reads the environment variables
+   `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the flags
+   `--catchup-backoff-*` and `--catchup-{base,max}-retry-delay`. With `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a
+   request makes one attempt. The L1 read and each install are bounded.
 4. Installs the tables of the `seed_window`, each with a block reward computed from the proven roots, each root
    bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from the top of
    the window up to the target; `drb_ready` supplies the target's DRB.
@@ -80,7 +81,7 @@ The catchup provider is a `ParallelStateCatchup` over request-response and, with
 State peers are asked `--http-catchup-delay` after each attempt of a request starts, at once when request-response is
 not registered. The root header is read from `/v1/catchup/{F}/leafchain`, a proof from
 `/v1/light-client/header/{F}/{height}`; both are verified before they are accepted. Peers are asked in `PeerScore`
-order, each under `--catchup-base-timeout`; the first verified answer of either source wins.
+order, one after another; the first verified answer of either source wins.
 
 An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
 tables are present and skipped.

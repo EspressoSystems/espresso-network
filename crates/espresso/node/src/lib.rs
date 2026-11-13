@@ -1404,12 +1404,14 @@ pub mod testing {
         }
 
         /// Sets the mock LC contract's `finalizedState` to `header`'s height and `block_comm_root`,
-        /// as a prover would after proving it; `viewNum` keeps its value. `contracts` are those the
-        /// network deployed.
+        /// as a prover would after proving it; `viewNum` keeps its value. `commitment_header`
+        /// supplies the `block_comm_root`: `header` for a valid state, another header for one no
+        /// header at that height matches. `contracts` are those the network deployed.
         pub async fn set_lc_contract_finalized_state(
             &self,
             contracts: &Contracts,
             header: &Header,
+            commitment_header: &Header,
         ) -> anyhow::Result<()> {
             let address = contracts
                 .address(Contract::LightClientProxy)
@@ -1421,8 +1423,12 @@ pub mod testing {
             let current = LightClientStateSol::from(lc.finalizedState().call().await?);
             let proven =
                 LightClientStateSol::from(header.get_light_client_state(ViewNumber::new(0))?);
+            let committed = LightClientStateSol::from(
+                commitment_header.get_light_client_state(ViewNumber::new(0))?,
+            );
             let state = LightClientStateSol {
                 viewNum: current.viewNum,
+                blockCommRoot: committed.blockCommRoot,
                 ..proven
             };
             lc.setFinalizedState(state.into())
