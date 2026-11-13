@@ -4172,17 +4172,26 @@ mod tests {
     }
 
     /// Requests epoch 25 with a seed hook that records `(target, start)` and fails. Returns the
-    /// recorded calls and the storage loads made by the catchup up to the hook.
+    /// recorded calls and the storage loads made by the catchup before the hook ran.
     async fn catchup_seed_calls(setup: &StalledInstall) -> (Vec<(u64, u64)>, usize) {
         let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let hook_calls = Arc::clone(&calls);
+        let loads_before = setup.load_stake_calls.load(Ordering::SeqCst);
+        let loads_at_hook = Arc::new(AtomicUsize::new(0));
+        let (hook_loads, hook_total) = (
+            Arc::clone(&loads_at_hook),
+            Arc::clone(&setup.load_stake_calls),
+        );
         setup
             .coordinator
             .set_catchup_seed(Arc::new(move |target, start, _coordinator| {
+                hook_loads.store(
+                    hook_total.load(Ordering::SeqCst) - loads_before,
+                    Ordering::SeqCst,
+                );
                 hook_calls.lock().push((*target, *start));
                 Box::pin(async { Err(anyhow::anyhow!("no seed in this test")) })
             }));
-        let loads_before = setup.load_stake_calls.load(Ordering::SeqCst);
 
         let _ = setup
             .coordinator
@@ -4195,8 +4204,7 @@ mod tests {
         .await
         .expect("the catchup did not call the seed hook within 10 s");
 
-        let loads = setup.load_stake_calls.load(Ordering::SeqCst) - loads_before;
-        (calls.lock().clone(), loads)
+        (calls.lock().clone(), loads_at_hook.load(Ordering::SeqCst))
     }
 
     /// After a batch that completed on retry, the next catchup finds the held pair and calls the
