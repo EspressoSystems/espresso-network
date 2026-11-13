@@ -5021,7 +5021,7 @@ dependencies = [
  "prometheus",
  "rand 0.8.6",
  "refinery",
- "refinery-core",
+ "refinery-core 0.10.1",
  "rstest",
  "rstest_reuse",
  "serde",
@@ -8173,7 +8173,7 @@ version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ba5d693abf62492c37268512ff35b77655d2e957ca53dab85bf993fe9172d15"
 dependencies = [
- "refinery-core",
+ "refinery-core 0.8.16",
  "refinery-macros",
 ]
 
@@ -8199,6 +8199,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "refinery-core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07f0a6b2d031aec7903f7ce81c723bbe7d3d8667441012b2a4388af0f3a70ef3"
+dependencies = [
+ "cfg-if",
+ "log",
+ "regex",
+ "siphasher",
+ "thiserror 2.0.18",
+ "time",
+ "url",
+ "walkdir",
+]
+
+[[package]]
 name = "refinery-macros"
 version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8207,7 +8223,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "refinery-core",
+ "refinery-core 0.8.16",
  "regex",
  "syn 2.0.118",
 ]
