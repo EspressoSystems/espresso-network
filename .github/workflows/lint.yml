@@ -82,7 +82,7 @@ jobs:
       # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
       # here: both need a tool installed, and nextest-ci has lint violations that belong in
       # their own change.
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.14"
 
@@ -97,7 +97,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.14"
 
@@ -121,7 +121,7 @@ jobs:
           fetch-depth: 0
           filter: blob:none
       # Pinned by commit: a third-party action's tag can be moved.
-      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
         with:
           # Keep in step with the `buf` the nix dev shell provides, so `buf format` agrees
           # locally and in CI.
