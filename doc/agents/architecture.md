@@ -44,7 +44,8 @@ StakeTable contract for peer discovery.
 
 `SequencerContext::init` applies the stored anchor's epoch to cliquenet (an error is logged) and dials the active
 validators at the L1 finalized block (`Fetcher::validator_set_at`); an error reading the L1 finalized block or the
-validators, or dialing them, fails startup. Their keys, dialed or already held, are extra request-response
+validators, or dialing them, fails startup; without a stake table contract, or with no validator registered, there is
+nothing to dial and startup continues. Their keys, dialed or already held, are extra request-response
 responders; responders are the table keys and these keys that the network holds at request time. `state_peers` is
 optional for validators.
 
