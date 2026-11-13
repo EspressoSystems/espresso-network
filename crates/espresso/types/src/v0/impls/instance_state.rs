@@ -632,7 +632,7 @@ pub mod mock {
         delay: std::time::Duration,
         /// Headers served to the seed requests, by height.
         headers: BTreeMap<u64, Header>,
-        /// Calls of each seed request that fail before the first success.
+        /// Calls of `try_fetch_proven_header` that fail before the first success.
         failing_seed_calls: usize,
         /// Calls made to `try_fetch_proven_header`.
         proven_header_calls: Arc<AtomicUsize>,
@@ -663,7 +663,7 @@ pub mod mock {
             self
         }
 
-        /// Fails the first `calls` calls of `try_fetch_proven_header`.
+        /// Fails the first `calls` calls of `try_fetch_proven_header`; the root request never fails.
         pub fn with_failing_seed_calls(mut self, calls: usize) -> Self {
             self.failing_seed_calls = calls;
             self
