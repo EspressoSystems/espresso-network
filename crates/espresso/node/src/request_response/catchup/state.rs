@@ -246,7 +246,9 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         let height = req.height;
         tracing::info!("Fetching leaf for height: {height}");
 
-        let cert2_wait = self.config.request_batch_interval * 3;
+        // Shorter than the timeout of `try_fetch_leaf`, so that one attempt has time to give up on
+        // a chain and request another.
+        let cert2_wait = self.config.request_batch_interval;
         let leaf = loop {
             let chain = self
                 .request_leaf_chain(req)
