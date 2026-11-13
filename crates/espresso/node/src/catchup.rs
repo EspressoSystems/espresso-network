@@ -149,7 +149,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         R: CatchupRequest,
         Fut: TryFuture<Ok = R::Response, Error: Display>,
     {
-        self.fetch_with(retry, send, |response| req.verify(response))
+        self.fetch_with(retry, 1, send, |response| req.verify(response))
             .await
     }
 
@@ -162,13 +162,14 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     where
         Fut: TryFuture<Error: Display>,
     {
-        self.fetch_with(retry, f, |response| async move { Ok(response) })
+        self.fetch_with(retry, 1, f, |response| async move { Ok(response) })
             .await
     }
 
     async fn fetch_with<Fut, V, VFut, T>(
         &self,
         retry: usize,
+        round_trips: u32,
         f: impl Fn(Client<ApiVer>) -> Fut,
         verify: V,
     ) -> anyhow::Result<T>
@@ -187,7 +188,11 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // 2s), which is reasonable for an HTTP request. If that fails with all of our peers, we
         // increase the timeout by the base amount for each successive retry, until we eventually
         // succeed. The base timeout is configurable via ESPRESSO_NODE_CATCHUP_BASE_TIMEOUT.
-        let timeout_dur = self.base_timeout * (retry as u32 + 1);
+        //
+        // The timeout covers all of `f`, so an `f` that makes `round_trips` requests to its peer
+        // gets that many timeouts. Otherwise a peer that answers each request in time is charged
+        // for the sum.
+        let timeout_dur = self.base_timeout * (retry as u32 + 1) * round_trips;
 
         // Keep track of which peers we make requests to and which succeed (`true`) or fail (`false`),
         // so we can update reliability scores at the end.
@@ -412,7 +417,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         // The leaf chain and the cert2 that finalizes it come from the same peer, so that a peer
         // whose pair does not verify is the one charged for it. For new protocol heights the chain
         // is a leaf range `[height..=cert2_height]`, for legacy-protocol heights it's a 3-chain.
-        self.fetch_verified(retry, req, |client| async move {
+        let send = |client: Client<ApiVer>| async move {
             let leaves = client
                 .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
                 .send()
@@ -431,8 +436,9 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 None => None,
             };
             anyhow::Ok(LeafResponse { leaves, cert2 })
-        })
-        .await
+        };
+        self.fetch_with(retry, 2, send, |response| req.verify(response))
+            .await
     }
 
     async fn try_fetch_reward_merkle_tree_v2(
@@ -1833,6 +1839,7 @@ mod test {
         let answer = peers
             .fetch_with(
                 0,
+                1,
                 |client| async move { anyhow::Ok(client.url) },
                 |url: Url| async move {
                     if url.host_str() == Some("peer0.invalid") {
@@ -1852,6 +1859,29 @@ mod test {
         assert_eq!((good.requests, good.failures), (11, 5));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_fetch_of_two_round_trips_gets_two_timeouts() {
+        let peers = ranked_peers().await;
+        let slower_than_one_timeout = peers.base_timeout * 3 / 2;
+
+        let answer = peers
+            .fetch_with(
+                0,
+                2,
+                |client| async move {
+                    sleep(slower_than_one_timeout).await;
+                    anyhow::Ok(client.url)
+                },
+                |url: Url| async move { Ok(url) },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(answer.host_str(), Some("peer0.invalid"));
+        let peer = score(&peers, 0).await;
+        assert_eq!((peer.requests, peer.failures), (11, 0));
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn when_every_response_is_invalid_the_error_says_why() {
         let peers = ranked_peers().await;
@@ -1859,6 +1889,7 @@ mod test {
         let err = peers
             .fetch_with(
                 0,
+                1,
                 |client| async move { anyhow::Ok(client.url) },
                 |_: Url| async move { Err::<(), _>(VerifyError::Invalid(anyhow!("bad proof"))) },
             )
@@ -1935,6 +1966,7 @@ mod test {
         let err = peers
             .fetch_with(
                 0,
+                1,
                 |client| async move { anyhow::Ok(client.url) },
                 |_: Url| async move { Err::<(), _>(VerifyError::Unavailable(epoch)) },
             )
