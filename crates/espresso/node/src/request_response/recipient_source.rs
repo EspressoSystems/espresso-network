@@ -25,9 +25,9 @@ pub struct RecipientSource<P: SequencerPersistence> {
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
     pub public_key: PubKey,
-    /// Keys of the validators active at the L1 finalized block at startup that the network did not
-    /// hold; responders are these and the keys of the consensus-epoch table that the network holds
-    /// at request time, deduplicated, without self.
+    /// Keys of the validators active at the L1 finalized block at startup, held or not; responders
+    /// are these and the keys of the consensus-epoch table that the network holds at request time,
+    /// deduplicated, without self.
     pub l1_finalized_peers: Vec<PubKey>,
     /// The network, for the keys it holds at request time.
     pub network: Sender<SeqTypes>,
