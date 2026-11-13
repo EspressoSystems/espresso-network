@@ -31,7 +31,9 @@ use hotshot_types::{
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        Certificate1, NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+    },
     simple_vote::{
         NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
     },
@@ -311,6 +313,13 @@ impl Quorum for AlwaysTrueQuorum {
         Ok(())
     }
 
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn epoch_height(&self) -> u64 {
         self.epoch_height
     }
@@ -336,6 +345,13 @@ impl Quorum for AlwaysFalseQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
     ) -> Result<()> {
         bail!("always false quorum");
     }
@@ -390,6 +406,13 @@ impl Quorum for VersionCheckQuorum {
         Ok(())
     }
 
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn epoch_height(&self) -> u64 {
         self.epoch_height
     }
@@ -421,6 +444,13 @@ impl Quorum for EpochChangeQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_cert1_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate1<SeqTypes>,
     ) -> Result<()> {
         Ok(())
     }
@@ -459,6 +489,7 @@ struct InnerTestClient {
     missing_leaves: HashSet<usize>,
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
+    forged_range_qcs: HashSet<usize>,
     invalid_payloads: HashSet<usize>,
     quorum: Vec<(PrivKey, AuthenticatedValidator<PubKey>)>,
     #[derivative(Default(value = "3"))]
@@ -484,6 +515,18 @@ struct InnerTestClient {
 }
 
 impl InnerTestClient {
+    /// The leaf the range endpoints return for `height`.
+    async fn range_leaf(&mut self, height: usize, epoch_height: u64) -> LeafQueryData<SeqTypes> {
+        let source = *self.swapped_leaves.get(&height).unwrap_or(&height);
+        let leaf = self.leaf(source, epoch_height, None).await;
+        if !self.forged_range_qcs.contains(&height) {
+            return leaf;
+        }
+        let mut qc = leaf.qc().clone();
+        qc.view_number += 1;
+        LeafQueryData::new(leaf.leaf().clone(), qc).unwrap()
+    }
+
     fn version_at(&self, height: u64) -> Version {
         match self.upgrade {
             Some((h, target)) if height >= h => target,
@@ -805,6 +848,11 @@ impl TestClient {
         self.inner.lock().await.corrupt_next_epoch_qc = true;
     }
 
+    /// Return the leaf at `height` from the range endpoints with a QC from the wrong view.
+    pub async fn forge_range_qc(&self, height: usize) {
+        self.inner.lock().await.forged_range_qcs.insert(height);
+    }
+
     /// Upgrade leaves at `height` and above to `target`. Must be set before those leaves are
     /// generated.
     pub async fn set_upgrade(&self, height: u64, target: Version) {
@@ -1088,9 +1136,8 @@ impl Client for TestClient {
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         let mut leaves = Vec::new();
         let mut inner = self.inner.lock().await;
-        for h in start_height..end_height {
-            let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
-            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+        for height in start_height..end_height {
+            leaves.push(inner.range_leaf(height, self.epoch_height).await);
         }
         Ok(leaves)
     }
@@ -1106,11 +1153,7 @@ impl Client for TestClient {
             "leaf ranges endpoint not supported"
         );
         for height in ranges.iter().flat_map(|range| range.clone()) {
-            let height = *inner
-                .swapped_leaves
-                .get(&(height as usize))
-                .unwrap_or(&(height as usize));
-            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+            leaves.push(inner.range_leaf(height as usize, self.epoch_height).await);
         }
         Ok(leaves)
     }
