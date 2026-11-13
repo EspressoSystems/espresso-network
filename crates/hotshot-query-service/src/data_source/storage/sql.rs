@@ -344,6 +344,9 @@ impl Config {
     }
 }
 
+/// The pause between two transactions of [`SqlStorage::delete_aggregates`].
+const AGGREGATE_DELETE_PAUSE: Duration = Duration::from_millis(250);
+
 /// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
 #[derive(Clone, Debug)]
 pub struct SqlStorage {
@@ -688,15 +691,47 @@ impl SqlStorage {
     /// For a node without an aggregator, which keeps no totals, to drop the ones an earlier run
     /// left. The rows left at any point are the totals of every height from genesis up to some
     /// height, so an aggregator started later resumes from them.
+    ///
+    /// It pauses between transactions, so that the write lock, which consensus shares on SQLite,
+    /// is free most of the time.
     pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<u64> {
         let heights = heights.max(1);
         let mut total = 0;
+        let mut batches = 0u64;
         loop {
-            let deleted = self.delete_newest_aggregates(heights).await?;
+            let deleted = self.delete_newest_aggregates_with_retry(heights).await?;
             if deleted == 0 {
                 return Ok(total);
             }
             total += deleted;
+            batches += 1;
+            if batches.is_multiple_of(100) {
+                tracing::info!(
+                    target: "announce",
+                    rows = total,
+                    batches,
+                    "deleting transaction and payload totals"
+                );
+            }
+            sleep(AGGREGATE_DELETE_PAUSE).await;
+        }
+    }
+
+    /// [`Self::delete_newest_aggregates`], retried with backoff, so that one failed transaction
+    /// does not end a deletion that takes hours.
+    async fn delete_newest_aggregates_with_retry(&self, heights: u64) -> anyhow::Result<u64> {
+        let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
+        loop {
+            match self.delete_newest_aggregates(heights).await {
+                Ok(deleted) => return Ok(deleted),
+                Err(err) => match backoff.next() {
+                    Some(delay) => {
+                        tracing::warn!(%err, "retrying deleting transaction and payload totals");
+                        sleep(delay).await;
+                    },
+                    None => return Err(err),
+                },
+            }
         }
     }
 
