@@ -601,8 +601,9 @@ mod test {
         assert_eq!(transition_block_for_epoch(0, 10), 0);
     }
 
-    /// An epoch shorter than six blocks has no root. The helpers used to alias one onto another
-    /// block (the last block at length 5) or underflow; `LightClientV2.sol` rejects such lengths.
+    /// An epoch of five blocks or fewer has no root, so no transition either. The helpers used
+    /// to alias one onto another block (the last block at length 5) or underflow;
+    /// `LightClientV2.sol` rejects such lengths.
     #[test]
     fn epoch_adapters_invent_no_positions_in_short_epochs() {
         for blocks in 1..=5 {
@@ -611,31 +612,14 @@ mod test {
                 assert!(!is_epoch_root(h, blocks));
                 assert!(!is_ge_epoch_root(h, blocks));
                 assert!(!is_gt_epoch_root(h, blocks));
-                let left = (blocks - h % blocks) % blocks;
-                let positive = h > 0;
-                assert_eq!(
-                    is_transition_block(h, blocks),
-                    positive && blocks > 3 && left == 3
-                );
-                assert_eq!(
-                    is_epoch_transition(h, blocks),
-                    positive && blocks > 3 && left <= 3
-                );
-                assert_eq!(
-                    is_first_transition_block(h, blocks),
-                    positive && blocks > 2 && left == 2
-                );
-                assert_eq!(
-                    is_middle_transition_block(h, blocks),
-                    positive && ((blocks > 1 && left == 1) || (blocks > 2 && left == 2))
-                );
+                assert!(!is_transition_block(h, blocks));
+                assert!(!is_first_transition_block(h, blocks));
+                assert!(!is_middle_transition_block(h, blocks));
+                assert!(!is_epoch_transition(h, blocks));
             }
             for epoch in 1..=3 {
                 assert_eq!(root_block_in_epoch(epoch, blocks), 0);
-                assert_eq!(
-                    transition_block_for_epoch(epoch, blocks),
-                    if blocks > 3 { epoch * blocks - 3 } else { 0 }
-                );
+                assert_eq!(transition_block_for_epoch(epoch, blocks), 0);
             }
         }
     }

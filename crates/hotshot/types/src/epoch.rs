@@ -10,7 +10,14 @@ use thiserror::Error;
 
 use crate::data::{BlockNumber, EpochNumber};
 
-/// A mathematical epoch length. Production root geometry may require a larger minimum.
+/// Blocks from an epoch's root to its last block.
+const ROOT_DISTANCE: u64 = 5;
+
+/// Blocks from an epoch's transition block to its last block.
+const TRANSITION_DISTANCE: u64 = 3;
+
+/// A mathematical epoch length. A length of [`ROOT_DISTANCE`] blocks or fewer still assigns
+/// heights to epochs, but holds no root and therefore no transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EpochLength(NonZeroU64);
 
@@ -57,7 +64,7 @@ impl EpochLength {
 
     /// The root inside `epoch`, which derives the stake table two epochs later.
     pub fn root_inside(self, epoch: EpochNumber) -> Result<BlockNumber, EpochArithmeticError> {
-        self.block_before_boundary(epoch, 5)
+        self.block_before_boundary(epoch, ROOT_DISTANCE)
     }
 
     /// The transition leaving `epoch`, which carries the next epoch's DRB.
@@ -65,7 +72,7 @@ impl EpochLength {
         self,
         epoch: EpochNumber,
     ) -> Result<BlockNumber, EpochArithmeticError> {
-        self.block_before_boundary(epoch, 3)
+        self.block_before_boundary(epoch, TRANSITION_DISTANCE)
     }
 
     pub fn boundary_at_or_before(self, height: BlockNumber) -> BlockNumber {
@@ -90,11 +97,20 @@ impl EpochLength {
         distance: u64,
     ) -> Result<BlockNumber, EpochArithmeticError> {
         require_epoch(epoch)?;
-        if self.get() <= distance {
-            return Err(EpochArithmeticError::NoPosition { distance });
-        }
+        self.require_root()?;
         // The boundary must itself exist; subtracting an offset must not hide its overflow.
         Ok(BlockNumber::new(*self.last_block(epoch)? - distance))
+    }
+
+    fn require_root(self) -> Result<(), EpochArithmeticError> {
+        if !self.holds_root() {
+            return Err(EpochArithmeticError::TooShort { length: self.get() });
+        }
+        Ok(())
+    }
+
+    fn holds_root(self) -> bool {
+        self.get() > ROOT_DISTANCE
     }
 }
 
@@ -124,29 +140,31 @@ impl EpochPosition {
     }
 
     pub fn is_root(self) -> bool {
-        self.is_before_boundary(5)
+        self.is_before_boundary(ROOT_DISTANCE)
     }
 
     pub fn is_transition_block(self) -> bool {
-        self.is_before_boundary(3)
+        self.is_before_boundary(TRANSITION_DISTANCE)
     }
 
     /// The first block after the transition block, matching the legacy predicate's naming.
     pub fn is_first_transition_block(self) -> bool {
-        self.is_before_boundary(2)
+        self.is_before_boundary(TRANSITION_DISTANCE - 1)
     }
 
+    /// Strictly between the transition block and the epoch's last block.
     pub fn is_middle_transition_block(self) -> bool {
-        self.is_before_boundary(1) || self.is_before_boundary(2)
+        self.blocks_to_boundary()
+            .is_some_and(|left| 0 < left && left < TRANSITION_DISTANCE)
     }
 
     /// Includes the transition block and the epoch's last block.
     pub fn is_epoch_transition(self) -> bool {
-        self.is_within_boundary(3)
+        self.is_within_boundary(TRANSITION_DISTANCE)
     }
 
     pub fn is_at_or_after_root(self) -> bool {
-        self.is_within_boundary(5)
+        self.is_within_boundary(ROOT_DISTANCE)
     }
 
     pub fn is_after_root(self) -> bool {
@@ -154,24 +172,23 @@ impl EpochPosition {
     }
 
     fn is_before_boundary(self, distance: u64) -> bool {
-        self.length.get() > distance && self.blocks_to_boundary() == Some(distance)
+        self.blocks_to_boundary() == Some(distance)
     }
 
     fn is_within_boundary(self, distance: u64) -> bool {
-        self.length.get() > distance
-            && self
-                .blocks_to_boundary()
-                .is_some_and(|left| left <= distance)
+        self.blocks_to_boundary()
+            .is_some_and(|left| left <= distance)
     }
 
-    /// Blocks left until this epoch's last block. `None` at genesis, which precedes every
-    /// boundary position.
+    /// Blocks left until this epoch's last block. `None` where no root or transition position
+    /// exists: at genesis, and in an epoch too short to hold a root.
     fn blocks_to_boundary(self) -> Option<u64> {
-        (self.offset > 0).then(|| self.length.get() - self.offset)
+        (self.length.holds_root() && self.offset > 0).then(|| self.length.get() - self.offset)
     }
 }
 
 /// The activation epoch is explicit: mathematical epoch assignment alone never enables epochs.
+/// The length always holds a root, so every dynamic epoch has a source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EpochSchedule {
     length: EpochLength,
@@ -183,6 +200,7 @@ impl EpochSchedule {
         length: EpochLength,
         first_epoch: EpochNumber,
     ) -> Result<Self, EpochArithmeticError> {
+        length.require_root()?;
         require_epoch(first_epoch)?;
         Ok(Self {
             length,
@@ -338,8 +356,8 @@ pub enum EpochArithmeticError {
     ZeroEpoch,
     #[error("epoch arithmetic exceeds u64")]
     Overflow,
-    #[error("epoch length must exceed boundary offset {distance}")]
-    NoPosition { distance: u64 },
+    #[error("epoch length {length} must exceed {min} to hold a root", min = ROOT_DISTANCE)]
+    TooShort { length: u64 },
     #[error("epoch {epoch} precedes first activation epoch {first_epoch}")]
     BeforeActivation {
         epoch: EpochNumber,
@@ -454,32 +472,69 @@ mod tests {
     }
 
     #[test]
-    fn small_lengths_do_not_invent_positions_in_prior_epochs() {
+    fn short_lengths_hold_no_root_or_transition() {
         assert_eq!(EpochLength::new(0), Err(EpochArithmeticError::ZeroLength));
-        for h in 1..=5 {
-            let length = EpochLength::new(h).unwrap();
-            assert_eq!(length.epoch_of(height(h)), epoch(1));
-            assert_eq!(length.epoch_of(height(h + 1)), epoch(2));
-            assert_eq!(
-                length.root_inside(epoch(2)),
-                Err(EpochArithmeticError::NoPosition { distance: 5 })
-            );
-            assert!(!length.position(height(h)).is_root());
-            if h <= 3 {
-                assert_eq!(
-                    length.transition_leaving(epoch(2)),
-                    Err(EpochArithmeticError::NoPosition { distance: 3 })
-                );
-                assert!(!length.position(height(h)).is_transition_block());
-            } else {
-                assert_eq!(length.transition_leaving(epoch(2)), Ok(height(2 * h - 3)));
+        for blocks in 1..=ROOT_DISTANCE {
+            let length = EpochLength::new(blocks).unwrap();
+            let too_short = EpochArithmeticError::TooShort { length: blocks };
+            assert_eq!(length.epoch_of(height(blocks)), epoch(1));
+            assert_eq!(length.epoch_of(height(blocks + 1)), epoch(2));
+            assert_eq!(length.root_inside(epoch(2)), Err(too_short));
+            assert_eq!(length.transition_leaving(epoch(2)), Err(too_short));
+            assert_eq!(EpochSchedule::new(length, epoch(1)), Err(too_short));
+            for h in 0..=blocks * 3 {
+                let position = length.position(height(h));
+                assert_eq!(position.is_last(), h > 0 && h % blocks == 0);
+                assert!(!position.is_root());
+                assert!(!position.is_at_or_after_root());
+                assert!(!position.is_after_root());
+                assert!(!position.is_transition_block());
+                assert!(!position.is_first_transition_block());
+                assert!(!position.is_middle_transition_block());
+                assert!(!position.is_epoch_transition());
             }
-            let schedule = EpochSchedule::new(length, epoch(1)).unwrap();
-            assert_eq!(
-                schedule.table_source(epoch(2)),
-                Ok(StakeTableSource::GenesisSeed)
-            );
-            assert!(schedule.table_source(epoch(3)).is_err());
+        }
+    }
+
+    #[test]
+    fn predicates_nest_and_agree_with_boundary_heights() {
+        for blocks in 1..=20 {
+            let length = EpochLength::new(blocks).unwrap();
+            for h in 0..=blocks * 3 {
+                let position = length.position(height(h));
+                let implies = |inner: bool, outer: bool| !inner || outer;
+                assert!(implies(
+                    position.is_first_transition_block(),
+                    position.is_middle_transition_block()
+                ));
+                assert!(implies(
+                    position.is_middle_transition_block() || position.is_transition_block(),
+                    position.is_epoch_transition()
+                ));
+                assert!(implies(
+                    position.is_epoch_transition(),
+                    position.is_after_root()
+                ));
+                assert_eq!(
+                    position.is_at_or_after_root(),
+                    position.is_root() || position.is_after_root()
+                );
+                assert!(!(position.is_root() && position.is_after_root()));
+                assert_eq!(
+                    position.is_last(),
+                    length
+                        .last_block(position.epoch())
+                        .is_ok_and(|last| h > 0 && *last == h)
+                );
+                assert_eq!(
+                    position.is_root(),
+                    length.root_inside(position.epoch()) == Ok(height(h))
+                );
+                assert_eq!(
+                    position.is_transition_block(),
+                    length.transition_leaving(position.epoch()) == Ok(height(h))
+                );
+            }
         }
     }
 
@@ -570,11 +625,12 @@ mod tests {
                 (u64::MAX as u128).div_ceil(blocks as u128)
             );
             let remaining = (blocks - u64::MAX % blocks) % blocks;
-            assert_eq!(position.is_root(), blocks > 5 && remaining == 5);
-            assert_eq!(position.is_transition_block(), blocks > 3 && remaining == 3);
+            let holds_root = blocks > ROOT_DISTANCE;
+            assert_eq!(position.is_root(), holds_root && remaining == 5);
+            assert_eq!(position.is_transition_block(), holds_root && remaining == 3);
             assert_eq!(position.is_last(), remaining == 0);
-            assert_eq!(position.is_at_or_after_root(), blocks > 5 && remaining <= 5);
-            assert_eq!(position.is_after_root(), blocks > 5 && remaining < 5);
+            assert_eq!(position.is_at_or_after_root(), holds_root && remaining <= 5);
+            assert_eq!(position.is_after_root(), holds_root && remaining < 5);
         }
     }
 
