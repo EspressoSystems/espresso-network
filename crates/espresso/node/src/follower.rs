@@ -56,7 +56,7 @@ use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
 use tokio::{
     sync::watch,
-    time::{Instant, sleep, timeout, timeout_at},
+    time::{Instant, sleep, timeout_at},
 };
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
@@ -642,12 +642,8 @@ impl<P: SequencerPersistence> Follower<P> {
             );
             self.next = from;
         }
-        timeout(
-            self.bootstrap_epoch_catchup_timeout,
-            self.require_stake_table(from),
-        )
-        .await
-        .context("the stake table catchup timed out")??;
+        let deadline = Instant::now() + self.bootstrap_epoch_catchup_timeout;
+        self.require_stake_table(from, deadline).await?;
         for block in self.source.fetch_range(from, tip).await? {
             let height = block.leaf.height();
             ensure!(
@@ -749,17 +745,16 @@ impl<P: SequencerPersistence> Follower<P> {
     }
 
     /// Requests the stake tables and the DRB the first poll needs, within one catchup timeout. A
-    /// failure is logged and the first poll retries it.
+    /// failure is logged and the first poll retries it. When the upstream height read fails, this
+    /// targets the stored height, which can differ from where the first poll starts.
     async fn catch_up_at_startup(&self) {
         let deadline = Instant::now() + self.bootstrap_epoch_catchup_timeout;
         let Some(from) = self.start_height(deadline).await else {
             tracing::warn!("no chain height known; the first poll requests the stake tables");
             return;
         };
-        match timeout_at(deadline, self.require_stake_table(from)).await {
-            Ok(Ok(())) => {},
-            Ok(Err(err)) => tracing::warn!(from, "startup stake table catchup failed: {err:#}"),
-            Err(_) => tracing::warn!(from, "startup stake table catchup timed out"),
+        if let Err(err) = self.require_stake_table(from, deadline).await {
+            tracing::warn!(from, "startup stake table catchup failed: {err:#}");
         }
         // Background, so endpoints that need this epoch's DRB find it soon.
         let epoch = epoch_from_block_number(from, self.epoch_height);
@@ -779,20 +774,25 @@ impl<P: SequencerPersistence> Follower<P> {
         (self.next > 0).then_some(self.next)
     }
 
-    /// Holds the stake tables that following from `height` needs. Far behind, the coordinator
-    /// seeds. A failed catchup is not an error while the table is held: its DRB step can fail for
-    /// a follower, which supplies DRB results itself from the next transition block on.
-    async fn require_stake_table(&self, height: u64) -> anyhow::Result<()> {
+    /// Holds the stake tables that following from `height` needs, waiting until `deadline`. Far
+    /// behind, the coordinator seeds. A failure or timeout is not an error while the table is
+    /// held: the DRB step after the install can fail or run long, and a follower supplies DRB
+    /// results itself from the next transition block on.
+    async fn require_stake_table(&self, height: u64, deadline: Instant) -> anyhow::Result<()> {
         let needed = needed_stake_table_epoch(height, self.epoch_height);
         if needed <= self.coordinator.membership().first_epoch() + 1 {
             return Ok(());
         }
-        if let Err(err) = self.coordinator.wait_for_stake_table(needed).await {
-            ensure!(
-                self.has_stake_table(needed),
-                "catching up to the stake table of epoch {needed}: {err}"
-            );
-        }
+        let outcome =
+            match timeout_at(deadline, self.coordinator.wait_for_stake_table(needed)).await {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(err)) => format!("failed: {err}"),
+                Err(_) => "timed out".to_string(),
+            };
+        ensure!(
+            self.has_stake_table(needed),
+            "the catchup to the stake table of epoch {needed} {outcome}"
+        );
         Ok(())
     }
 

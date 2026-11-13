@@ -6082,6 +6082,18 @@ mod test {
         )
         .await?;
 
+        let init_export = reqwest::get(format!(
+            "http://localhost:{follower_port}/v1/status/metrics"
+        ))
+        .await?
+        .text()
+        .await?;
+        // `start_follower` returns after init, so the seed ran at init, not in a later poll.
+        assert!(
+            metric_value(&init_export, "consensus_catchup_lc_contract_seeds") >= Some(1.0),
+            "{init_export}"
+        );
+
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
         let tip = network.server.decided_leaf().await.height();
         assert_follows_to(&follower, &follower_client, tip).await?;
@@ -6092,11 +6104,6 @@ mod test {
         .await?
         .text()
         .await?;
-        // The follower cannot ingest without the table the first poll needs, so init seeded it.
-        assert!(
-            metric_value(&export, "consensus_catchup_lc_contract_seeds") >= Some(1.0),
-            "{export}"
-        );
         assert!(
             metric_value(&export, "light_client_follower_block_height") > Some(tip as f64),
             "{export}"
