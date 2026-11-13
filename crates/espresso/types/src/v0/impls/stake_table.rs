@@ -31,6 +31,8 @@ use async_lock::Mutex as AsyncMutex;
 use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+#[cfg(feature = "node")]
+use futures::FutureExt;
 use futures::future::BoxFuture;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
@@ -66,6 +68,8 @@ use tokio::time::sleep;
 use tracing::Instrument;
 use vbs::version::Version;
 
+#[cfg(feature = "node")]
+use super::BackoffParams;
 #[cfg(feature = "node")]
 use super::L1Client;
 #[cfg(feature = "node")]
@@ -1939,7 +1943,7 @@ impl Fetcher {
     }
 
     /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
-    /// contract reads (address and state, together) are each bounded by `L1_FINALIZED_WAIT`.
+    /// contract reads are each bounded by `L1_FINALIZED_WAIT`; each call is retried, with a timeout.
     #[cfg(feature = "node")]
     pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
         let chain_config = *self.chain_config.lock().await;
@@ -1947,27 +1951,42 @@ impl Fetcher {
             bail!("No stake table contract address found in Chain config");
         };
         let block = self.l1_client.finalized_number_within_wait().await?;
-        let state = tokio::time::timeout(L1_FINALIZED_WAIT, async {
-            let provider = self.l1_client.provider.clone();
-            let lc_contract = *self
-                .lc_contract_address
-                .get_or_try_init(|| async {
-                    StakeTableV3::new(stake_table_contract, provider.clone())
-                        .lightClient()
-                        .call()
+        let request_timeout = self.l1_client.options().l1_request_timeout;
+        let backoff = BackoffParams::default();
+        let read = backoff.retry(self, move |this, _| {
+            let this = *this;
+            async move {
+                let provider = this.l1_client.provider.clone();
+                let lc_contract = *this
+                    .lc_contract_address
+                    .get_or_try_init(|| async {
+                        tokio::time::timeout(
+                            request_timeout,
+                            StakeTableV3::new(stake_table_contract, provider.clone())
+                                .lightClient()
+                                .call(),
+                        )
                         .await
+                        .context("reading the LC contract address timed out")?
                         .context("failed to read the LC contract address")
-                })
-                .await?;
-            LightClientV3::new(lc_contract, provider)
-                .finalizedState()
-                .block(BlockId::number(block))
-                .call()
+                    })
+                    .await?;
+                tokio::time::timeout(
+                    request_timeout,
+                    LightClientV3::new(lc_contract, provider)
+                        .finalizedState()
+                        .block(BlockId::number(block))
+                        .call(),
+                )
                 .await
+                .context("reading finalizedState timed out")?
                 .context("failed to read finalizedState")
-        })
-        .await
-        .context("reading the LC contract exceeded the L1 wait")??;
+            }
+            .boxed()
+        });
+        let state = tokio::time::timeout(L1_FINALIZED_WAIT, read)
+            .await
+            .context("reading the LC contract exceeded the L1 wait")??;
         let state = LightClientState::from(LightClientStateSol::from(state));
         Ok(LcContractFinalizedState {
             height: state.block_height,
