@@ -48,6 +48,7 @@ use hotshot_types::{
 use http_client::{Request, error::ClientErr};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
+use light_client::consensus::header::HeaderProof;
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
@@ -529,6 +530,41 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 ))
                 .send()
                 .await
+        })
+        .await
+    }
+
+    // Verified inside `fetch`: a rejected answer scores the peer and the next peer is asked.
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        let height = lc_contract_state.height;
+        self.fetch(retry, |client| async move {
+            let leaf_chain = client
+                .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
+                .send()
+                .await?;
+            let first = leaf_chain.first().context("empty leaf chain")?;
+            lc_contract_state.verify_header(first.block_header())
+        })
+        .await
+    }
+
+    async fn try_fetch_proven_header(
+        &self,
+        retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        self.fetch(retry, |client| async move {
+            let proof = client
+                .get::<HeaderProof>(&paths::lc_header_by_height(root_height, height))
+                .send()
+                .await?;
+            proof.verify_at_height(root, height)
         })
         .await
     }

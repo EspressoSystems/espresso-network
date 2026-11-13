@@ -3550,9 +3550,10 @@ mod test {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
+        BackoffParams, FeeAmount, Header, L1ClientOptions, LcContractFinalizedState, NamespaceId,
+        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, TEST_UPGRADE, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
@@ -4124,6 +4125,70 @@ mod test {
         .await;
     }
 
+    /// A five-node network with node 0's SQL API on `port`, and the databases that stop with it.
+    struct SqlNetwork<D: TestableSqlDataSource> {
+        network: TestNetwork<D::Options, 5>,
+        port: u16,
+        client: Client<ClientErr, SequencerApiVersion>,
+        _dbs: Vec<<D as TestableSequencerDataSource>::Storage>,
+    }
+
+    impl<D: TestableSqlDataSource> SqlNetwork<D> {
+        /// Starts the network and waits until it has decided past block `root + 1`.
+        async fn decided_past(root: u64) -> Self {
+            let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let dbs = join_all((0..5).map(|_| D::create_storage())).await;
+            let persistence: [_; 5] = dbs
+                .iter()
+                .map(<D as TestableSequencerDataSource>::persistence_options)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
+            let config = TestNetworkConfigBuilder::<5, _, _>::with_num_nodes()
+                .api_config(D::options(&dbs[0], Options::with_port(port)))
+                .persistences(persistence)
+                .network_config(TestConfigBuilder::default().build())
+                .build();
+            let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+            let mut decided = network.server.event_stream().filter_map(|event| {
+                future::ready(match event {
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => {
+                        Some(leaf_infos[0].leaf.clone())
+                    },
+                    _ => None,
+                })
+            });
+            tokio::time::timeout(Duration::from_secs(120), async {
+                loop {
+                    let leaf = decided.next().await.unwrap();
+                    if leaf.height() >= root + 2 {
+                        return;
+                    }
+                }
+            })
+            .await
+            .expect("network did not decide enough blocks");
+            drop(decided);
+            let client = Client::new(format!("http://localhost:{port}").parse().unwrap());
+            Self {
+                network,
+                port,
+                client,
+                _dbs: dbs,
+            }
+        }
+
+        /// The header at `height` from node 0's availability API.
+        async fn header(&self, height: u64) -> Header {
+            self.client
+                .get(&format!("availability/header/{height}"))
+                .send()
+                .await
+                .unwrap()
+        }
+    }
+
     /// The SQL node answers `Request::HeaderProof` over request-response with a proof that
     /// verifies against the block Merkle root of the requested snapshot.
     #[apply(sql_data_sources)]
@@ -4131,52 +4196,14 @@ mod test {
     where
         D: TestableSqlDataSource,
     {
-        const NUM_NODES: usize = 5;
         const ROOT: u64 = 5;
         const HEIGHT: u64 = 3;
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let dbs = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
-        let persistence: [_; NUM_NODES] = dbs
-            .iter()
-            .map(<D as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(D::options(&dbs[0], Options::with_port(port)))
-            .persistences(persistence)
-            .network_config(TestConfigBuilder::default().build())
-            .build();
-        let network = TestNetwork::new(config, TEST_UPGRADE).await;
-
-        let mut decided = network.server.event_stream().filter_map(|event| {
-            future::ready(match event {
-                CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
-                _ => None,
-            })
-        });
-        tokio::time::timeout(Duration::from_secs(120), async {
-            loop {
-                let leaf = decided.next().await.unwrap();
-                if leaf.height() >= ROOT + 2 {
-                    return;
-                }
-            }
-        })
-        .await
-        .expect("network did not decide enough blocks");
-        drop(decided);
-        let client: Client<ClientErr, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{port}").parse().unwrap());
-        let root_header: Header = client
-            .get(&format!("availability/header/{ROOT}"))
-            .send()
-            .await
-            .unwrap();
+        let sql = SqlNetwork::<D>::decided_past(ROOT).await;
+        let root_header = sql.header(ROOT).await;
 
         let response = tokio::time::timeout(
             Duration::from_secs(60),
-            network.peers[0]
+            sql.network.peers[0]
                 .request_response_protocol
                 .request_indefinitely(
                     Request::HeaderProof {
@@ -4196,6 +4223,67 @@ mod test {
             .verify_at_height(root_header.block_merkle_tree_root(), HEIGHT)
             .unwrap();
         assert_eq!(header.height(), HEIGHT);
+    }
+
+    /// State peers answer the two LC contract seed requests over HTTP, move on from an
+    /// unreachable first peer, and reject a root the contract does not commit to.
+    #[apply(sql_data_sources)]
+    async fn test_state_peers_serve_lc_contract_seed_requests<D>(_d: PhantomData<D>)
+    where
+        D: TestableSqlDataSource,
+    {
+        const ROOT: u64 = 5;
+        const HEIGHT: u64 = 3;
+        let sql = SqlNetwork::<D>::decided_past(ROOT).await;
+        let root_header = sql.header(ROOT).await;
+        let other_header = sql.header(HEIGHT).await;
+        let lc_contract_state = |header: &Header| LcContractFinalizedState {
+            height: ROOT,
+            block_comm_root: header
+                .get_light_client_state(ViewNumber::new(0))
+                .unwrap()
+                .block_comm_root,
+        };
+
+        let dead_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let dead_url: Url = format!("http://127.0.0.1:{dead_port}").parse().unwrap();
+        let metrics = PrometheusMetrics::default();
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![
+                dead_url.clone(),
+                format!("http://localhost:{}", sql.port).parse().unwrap(),
+            ],
+            BackoffParams::default(),
+            Duration::from_secs(5),
+            &metrics,
+        );
+
+        let root = peers
+            .try_fetch_lc_contract_block_merkle_root(0, &lc_contract_state(&root_header))
+            .await
+            .unwrap();
+        assert_eq!(root, root_header.block_merkle_tree_root());
+        let header = peers
+            .try_fetch_proven_header(0, ROOT, root, HEIGHT)
+            .await
+            .unwrap();
+        assert_eq!(header, other_header);
+        let export = metrics.export().unwrap();
+        let failures = format!("catchup_request_failures{{peer=\"{dead_url}\"}}");
+        assert_eq!(
+            metric_value(&export, &failures),
+            Some(1.0),
+            "the unreachable peer was not tried first:\n{export}"
+        );
+
+        peers
+            .try_fetch_lc_contract_block_merkle_root(0, &lc_contract_state(&other_header))
+            .await
+            .unwrap_err();
+        peers
+            .try_fetch_proven_header(0, ROOT, other_header.block_merkle_tree_root(), HEIGHT)
+            .await
+            .unwrap_err();
     }
 
     /// A query node with a gap must fill it from a peer over the path production runs: the
