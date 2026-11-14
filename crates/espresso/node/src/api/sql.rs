@@ -73,7 +73,9 @@ use crate::{
     context::TaskList,
     persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
     request_response::data_source::Storage as RequestResponseStorage,
-    state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
+    state::{
+        EmptyStateStart, compute_state_update, reward_proof_boundary, update_state_storage_loop,
+    },
     util::BoundedJoinSet,
 };
 
@@ -730,13 +732,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 let epoch_height = node_state
                     .epoch_height
                     .context("epoch_height not set in node state")?;
+                let Some(boundary) = reward_proof_boundary(finalized_hotshot_height, epoch_height)
+                else {
+                    return Ok(());
+                };
+                tree_height = boundary;
                 if !is_last_block(finalized_hotshot_height, epoch_height) {
-                    tree_height = epoch_from_block_number(finalized_hotshot_height, epoch_height)
-                        .saturating_sub(1)
-                        * epoch_height;
-                    if tree_height == 0 {
-                        return Ok(());
-                    }
                     // A loop replaying history below the boundary may not have its leaf yet, and a
                     // failed read would fail the whole state update.
                     if height < tree_height {
@@ -2791,6 +2792,87 @@ mod tests {
             storage.load_proof(5, account.clone(), 0).await.unwrap(),
             v4_proof,
         );
+    }
+
+    /// When the L1-finalized height lies inside an epoch, `persist_reward_proofs` stores proofs
+    /// from the reward tree at the newest epoch boundary below it, at that boundary: not from or at
+    /// the boundary one epoch lower, and not at the finalized height. In tests the finalized height
+    /// is the height passed in.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_persist_reward_proofs_inside_epoch_uses_boundary_below() {
+        use espresso_types::v0_3::RewardAmount;
+        use tokio::time::{Duration, Instant, sleep};
+
+        use super::{RewardAccountQueryDataV2, RewardAccountV2};
+
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let epoch_height = 10u64;
+        let boundary = 2 * epoch_height;
+        let lower_boundary = boundary - epoch_height;
+        let finalized = boundary + 5;
+        let account = RewardAccountV2(Address::repeat_byte(1));
+
+        let leaves = leaf_chain(0..=finalized, EPOCH_REWARD_VERSION).await;
+        let mut tx = storage.write().await.unwrap();
+        for leaf in &leaves {
+            tx.insert_leaf(leaf).await.unwrap();
+        }
+        Transaction::commit(tx).await.unwrap();
+
+        // The account's balance differs between the two trees, so a proof shows its tree.
+        for (height, balance) in [(lower_boundary, 1u64), (boundary, 2)] {
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            tree.update(account, RewardAmount(U256::from(balance)))
+                .unwrap();
+            storage.save_reward_tree_v2(height, &tree).await.unwrap();
+        }
+        assert!(
+            !storage.proof_exists(boundary).await,
+            "setup: no proofs at {boundary} yet"
+        );
+
+        let node_state = NodeState::mock().with_epoch_height(epoch_height);
+        storage
+            .persist_reward_proofs(&node_state, finalized, EPOCH_REWARD_VERSION)
+            .await
+            .unwrap();
+
+        // A spawned task writes the proofs, so they can land after the call returns.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !storage.proof_exists(boundary).await {
+            assert!(
+                Instant::now() < deadline,
+                "no proofs at the boundary {boundary} below the finalized height {finalized}"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+        let proof = storage
+            .load_proof(
+                boundary,
+                bincode::serialize(&account).unwrap(),
+                epoch_height,
+            )
+            .await
+            .unwrap();
+        let proof: RewardAccountQueryDataV2 = bincode::deserialize(&proof).unwrap();
+        assert_eq!(
+            proof.balance,
+            U256::from(2),
+            "the proofs at {boundary} come from the tree at {boundary}"
+        );
+        for height in [lower_boundary, finalized] {
+            assert!(
+                !storage.proof_exists(height).await,
+                "proofs stored at {height}, finalized height {finalized}"
+            );
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
