@@ -296,6 +296,10 @@ check-features-ci *args:
         --exclude vid \
         {{args}}
 
+# check that no workspace default member has a test-only crate as a normal dependency
+check-production-deps:
+    scripts/check-production-deps
+
 # requires the succinct toolchain (`sp1up`, https://docs.succinct.xyz/docs/sp1/getting-started/install)
 # check that the zkVM client crates compile for the SP1 target
 check-sp1-target:
