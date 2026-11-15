@@ -66,7 +66,7 @@ just demo-native                      # local network via process-compose
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
   `BlockId::finalized()`.
 - **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds
-  `ValidatorMap`. Selection rules: `doc/agents/architecture.md`.
+  `RegisteredValidatorMap`. Selection rules: `doc/agents/architecture.md`.
 - **Catchup** (`crates/espresso/node/src/catchup.rs`): `SqlStateCatchup` (local DB), `StatePeers` (HTTP, reliability
   scored), `ParallelStateCatchup` (races all providers, first success wins; `StatePeers` is a fallback provider started
   after `ESPRESSO_NODE_HTTP_CATCHUP_DELAY` when a request-response provider is present). Fetches fee/reward proofs,
@@ -76,7 +76,8 @@ just demo-native                      # local network via process-compose
 
 - `espresso-node`: main node binary, API, persistence
 - `espresso-types`: domain types (Header, Payload, Transaction, ValidatedState)
-- `hotshot`: BFT consensus implementation
+- `hotshot-new-protocol`: the consensus protocol
+- `hotshot-types`: consensus types, votes, certificates, membership
 - `hotshot-query-service`: query APIs for blocks/availability
 - `hotshot-state-prover`: ZK proof generation for light client updates
 - `hotshot-contract-adapter`: Rust <-> Solidity type bridge
@@ -100,8 +101,8 @@ Test layers:
 - Integration (`cargo nextest run -p tests`): full system E2E in `tests/`
 - Slow (`just test-slow`): in `slow-tests/`
 
-When a `reference` test fails after a type change: if intentional, regenerate `/data/` reference files and commitment
-constants. If unintentional, revert.
+When a `reference` test fails after a type change: if intentional, regenerate the `data/v*/` reference files and
+commitment constants. If unintentional, revert.
 
 ## Storage
 

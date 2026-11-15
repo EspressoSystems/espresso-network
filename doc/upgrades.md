@@ -49,18 +49,8 @@ upgrade hash:
   different proposals of the same version upgrade, ensuring nodes vote and execute the correct one. It consists of a
   sequence of 32 bytes.
 
-These are defined in [Versions implementation](../types/src/v0/mod.rs) for the Type (`SequencerVersions` in our case).
-
-```rust
-impl Versions for SequencerVersions {
-	type Base = StaticVersion<0, 1>;
-	type Upgrade = StaticVersion<0, 2>;
-	const UPGRADE_HASH: [u8; 32] = [
-		1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
-	],
-	..
-}
-```
+The base and upgrade versions are `base_version` and `upgrade_version` in the genesis TOML. `Upgrade { base, target }`
+and `Upgrade::hash()` are in `crates/versions/src/lib.rs`.
 
 Hotshot provides two modes for upgrades: view-based and time-based.
 
