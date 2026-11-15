@@ -10,7 +10,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 - `doc/agents/refinery-migrations.md` - before writing a SQL migration that touches existing rows
 - `doc/agents/solidity.md` - before touching `contracts/`
 - `API.md` - the v1 and v2 APIs, and how to add a v2 endpoint
-- `doc/agents/architecture.md` - transaction and block flow, L1 reads, stake table, consensus upgrades
+- `doc/agents/architecture.md` - transaction and block flow, L1 reads, stake table
 - `doc/agents/protocol-versions.md` - what each version changed, and what a network runs
 - `doc/agents/live-chains.md` - querying mainnet or decaf over the query-service API
 - `doc/agents/rewards.md` - reward accumulation and the L1 claim path
@@ -44,9 +44,3 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 - When work is ready, suggest an updated PR description capturing the final changeset.
 - Tell the reviewer where to focus.
 - Link the regression test or `reference` test when touching serializable types.
-
-## Key files
-
-- `justfile` - build/test/deploy commands
-- `data/genesis/*.toml` - genesis configs, including the protocol version each network runs
-- `data/v*/` - reference serialization test vectors

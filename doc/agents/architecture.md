@@ -30,9 +30,9 @@ Reads **finalized L1 blocks** only, to avoid reorgs.
 `StakeTableEvent` (`crates/espresso/types/src/v0/v0_3/stake_table.rs`) is the full set of `StakeTable` contract
 events that affect consensus membership, including the V2/V3 event variants.
 
-A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`
-drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake.
-Effective from the next epoch boundary.
+A fetcher polls finalized L1 blocks, validates signatures, builds a `RegisteredValidatorMap`;
+`select_active_validator_set()` drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to
+`MAX_VALIDATORS` by descending stake. Effective from the next epoch boundary.
 
 ## Fast finality
 
@@ -43,10 +43,3 @@ StakeTable contract for peer discovery.
 ## Consensus upgrades
 
 Mechanism and configuration: `doc/upgrades.md`.
-
-1. `UpgradeProposal` broadcast several views before the upgrade
-2. Validators vote; enough votes form an `UpgradeCertificate`
-3. Certificate attached to subsequent `QuorumProposal`s until the network upgrades
-
-Configured in the genesis TOML, view-based (`start_proposing_view`, `stop_proposing_view`, `start_voting_view`,
-`stop_voting_view`) or time-based (same fields as Unix timestamps).
