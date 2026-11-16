@@ -80,6 +80,9 @@ const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
 /// Responders block on the outbound channel while holding request-response admission permits.
 const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 
+/// The failure timeout used by production consensus and default test nodes.
+pub const DEFAULT_CONSENSUS_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
@@ -140,6 +143,7 @@ where
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
+        consensus_timeout: Duration,
         block_sizes: BTreeMap<Version, u64>,
         leader_trace_dir: Option<PathBuf>,
     ) -> anyhow::Result<Self>
@@ -232,7 +236,7 @@ where
             .private_key(validator_config.private_key.clone())
             .state_private_key(validator_config.state_private_key.clone())
             .stake_table_capacity(stake_table_capacity)
-            .timeout_duration(Duration::from_secs(10))
+            .timeout_duration(consensus_timeout)
             .empty_block_delay(empty_block_delay)
             .block_sizes(block_sizes)
             .storage(Arc::clone(&persistence))

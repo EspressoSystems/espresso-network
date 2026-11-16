@@ -46,12 +46,12 @@ use test_utils::reserve_tcp_port;
 use tokio::time::timeout;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-/// How long a leader waits for a block before proposing an empty one.
+/// How long a leader delays building a block when its transaction pool is empty.
 ///
 /// These tests submit no transactions, so this is their seconds per block. Set
 /// per test rather than on `TestConfigBuilder`, whose default the
 /// `espresso-dev-node` binary also runs on.
-const BUILDER_TIMEOUT: Duration = Duration::from_millis(250);
+const EMPTY_BLOCK_DELAY: Duration = Duration::from_millis(250);
 
 const V6: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
@@ -237,7 +237,7 @@ async fn test_stake_table_full_set_replacement() -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
+        .empty_block_delay(EMPTY_BLOCK_DELAY)
         .epoch_start_block(0)
         .build();
 
@@ -331,7 +331,7 @@ async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
+        .empty_block_delay(EMPTY_BLOCK_DELAY)
         .epoch_start_block(0)
         .build();
 
@@ -417,7 +417,7 @@ async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
+        .empty_block_delay(EMPTY_BLOCK_DELAY)
         .epoch_start_block(0)
         .build();
 
@@ -573,7 +573,7 @@ async fn fresh_node_joins() -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
+        .empty_block_delay(EMPTY_BLOCK_DELAY)
         .epoch_start_block(0)
         .build();
 
@@ -672,7 +672,7 @@ async fn rotate_validator(rotation: Rotation) -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
+        .empty_block_delay(EMPTY_BLOCK_DELAY)
         .epoch_start_block(0)
         .build();
 

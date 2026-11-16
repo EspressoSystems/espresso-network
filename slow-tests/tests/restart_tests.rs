@@ -31,7 +31,7 @@ use espresso_node::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
     },
-    context::SequencerContext,
+    context::{DEFAULT_CONSENSUS_TIMEOUT, SequencerContext},
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
     options::{Modules, Options, PublicNodeConfig},
@@ -70,7 +70,6 @@ use tokio::{
     task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
-use vec1::vec1;
 use versions::NEW_PROTOCOL_VERSION;
 
 /// Bound on each per-node recovery wait after a restart.
@@ -458,11 +457,9 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 return Ok(());
             };
             let node_id = context.node_id();
-            let next_view_timeout = context.network_config().config.next_view_timeout;
             // Enough time for every node to propose with every view timing out.
-            let timeout_duration = self.progress_timeout_factor
-                * Duration::from_millis(next_view_timeout)
-                * (self.num_nodes as u32);
+            let timeout_duration =
+                self.progress_timeout_factor * DEFAULT_CONSENSUS_TIMEOUT * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -631,7 +628,6 @@ struct TestNetwork {
     da_nodes: Vec<TestNode<SqlDataSource>>,
     regular_nodes: Vec<TestNode<SqlDataSource>>,
     tmp: TempDir,
-    builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
     anvil: AnvilFillProvider,
@@ -720,12 +716,7 @@ impl TestNetwork {
             .unwrap();
 
         let orchestrator_port = reserve_tcp_port().unwrap();
-        let builder_port = reserve_tcp_port().unwrap();
-        let orchestrator_task = Some(start_orchestrator(
-            orchestrator_port,
-            &node_params,
-            builder_port,
-        ));
+        let orchestrator_task = Some(start_orchestrator(orchestrator_port, &node_params));
 
         let anvil_port = reserve_tcp_port().unwrap();
         let anvil = Anvil::new()
@@ -770,7 +761,6 @@ impl TestNetwork {
             )
             .await,
             tmp,
-            builder_port,
             orchestrator_task,
             anvil,
         };
@@ -1273,14 +1263,7 @@ impl TestNetwork {
     }
 }
 
-fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> JoinHandle<()> {
-    // We don't run a builder in these tests, so use a very short timeout before nodes decide to
-    // build an empty block on their own.
-    let builder_timeout = Duration::from_millis(100);
-    // These tests frequently have nodes down and views failing, so we use a fairly short view
-    // timeout.
-    let view_timeout = Duration::from_secs(2);
-
+fn start_orchestrator(port: u16, nodes: &[NodeParams]) -> JoinHandle<()> {
     let num_nodes = nodes.len();
     let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
@@ -1290,9 +1273,6 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
     config.config.da_staked_committee_size = num_nodes;
     config.config.known_nodes_with_stake = vec![];
     config.config.known_da_nodes = vec![];
-    config.config.next_view_timeout = view_timeout.as_millis() as u64;
-    config.config.builder_timeout = builder_timeout;
-    config.config.builder_urls = vec1![format!("http://localhost:{builder_port}").parse().unwrap()];
 
     let bind = format!("http://0.0.0.0:{port}").parse().unwrap();
     spawn(async move {

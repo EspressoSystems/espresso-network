@@ -437,6 +437,7 @@ where
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
+        context::DEFAULT_CONSENSUS_TIMEOUT,
         block_sizes,
         leader_trace_dir,
     )
@@ -904,6 +905,8 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
         coordinator_addrs: Vec<NetAddr>,
         contracts: Option<Contracts>,
+        empty_block_delay: Duration,
+        consensus_timeout: Duration,
     }
 
     /// Picks the key sets at `indices` out of the full deterministic sequence,
@@ -1131,15 +1134,16 @@ pub mod testing {
             self
         }
 
-        pub fn builder_timeout(mut self, timeout: Duration) -> Self {
-            self.config.builder_timeout = timeout;
+        /// Delay empty block production in the new protocol's block builder.
+        pub fn empty_block_delay(mut self, delay: Duration) -> Self {
+            self.empty_block_delay = delay;
             self
         }
 
-        /// Override the base next-view (failure) timeout. Raise it when using a large
-        /// [`Self::builder_timeout`] so a slow-but-healthy view isn't mistaken for a failed one.
-        pub fn next_view_timeout(mut self, timeout: Duration) -> Self {
-            self.config.next_view_timeout = timeout.as_millis() as u64;
+        /// Set the new protocol's consensus failure timeout. Keep it above
+        /// [`Self::empty_block_delay`] for views that should succeed without transactions.
+        pub fn consensus_timeout(mut self, timeout: Duration) -> Self {
+            self.consensus_timeout = timeout;
             self
         }
 
@@ -1169,6 +1173,8 @@ pub mod testing {
                 anvil_provider: self.anvil_provider,
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
+                empty_block_delay: self.empty_block_delay,
+                consensus_timeout: self.consensus_timeout,
                 genesis_chain_config: None,
             }
         }
@@ -1284,6 +1290,8 @@ pub mod testing {
                 upgrades: Default::default(),
                 coordinator_addrs,
                 contracts: None,
+                empty_block_delay: Duration::from_millis(500),
+                consensus_timeout: context::DEFAULT_CONSENSUS_TIMEOUT,
             }
         }
     }
@@ -1303,6 +1311,8 @@ pub mod testing {
         coordinator_addrs: Vec<NetAddr>,
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if any.
         contracts: Option<Contracts>,
+        empty_block_delay: Duration,
+        consensus_timeout: Duration,
         /// See [`Self::set_genesis_chain_config`].
         genesis_chain_config: Option<ChainConfig>,
     }
@@ -1658,7 +1668,8 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
-                Duration::from_millis(500),
+                self.empty_block_delay,
+                self.consensus_timeout,
                 BTreeMap::from([(upgrade.base, max_block_size)]),
                 None,
             )
@@ -1953,6 +1964,70 @@ mod test {
         tracing::info!("Submitted transaction to handle: {txn:?}");
 
         wait_for_decide_on_handle(&mut events, &txn).await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_empty_block_delay_controls_proposals() {
+        let delay = Duration::from_millis(1500);
+        let config = TestConfigBuilder::<1>::default()
+            .empty_block_delay(delay)
+            .build();
+        let mut nodes = config.init_nodes(TEST_UPGRADE).await;
+        let node = &mut nodes[0];
+        let mut events = node.event_stream();
+        node.start_consensus().await;
+
+        // Measure consecutive proposals so startup and L1 initialization do not count as
+        // time spent waiting for an empty block.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut previous = None;
+            while let Some(event) = events.next().await {
+                if let hotshot_types::new_protocol::CoordinatorEvent::QuorumProposal {
+                    proposal,
+                    ..
+                } = event
+                {
+                    let view = proposal.data.view_number;
+                    if let Some((previous_view, started)) = previous {
+                        if view == previous_view {
+                            continue;
+                        }
+                        assert!(
+                            tokio::time::Instant::now() - started >= delay,
+                            "empty block proposed before its delay"
+                        );
+                        return;
+                    }
+                    previous = Some((view, tokio::time::Instant::now()));
+                }
+            }
+            panic!("consensus event stream ended before two proposals");
+        })
+        .await
+        .expect("leader should keep proposing after each empty-block delay");
+        node.shut_down().await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_consensus_timeout_advances_stalled_views() {
+        let config = TestConfigBuilder::<1>::default()
+            .empty_block_delay(Duration::from_secs(30))
+            .consensus_timeout(Duration::from_millis(100))
+            .build();
+        let mut nodes = config.init_nodes(TEST_UPGRADE).await;
+        let node = &mut nodes[0];
+        let handle = node.consensus_handle();
+        node.start_consensus().await;
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while *handle.current_view().await < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a stalled view should time out before the default ten seconds");
+        assert_eq!(node.decided_leaf().await.block_header().height(), 0);
+        node.shut_down().await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
