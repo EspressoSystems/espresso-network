@@ -12,7 +12,6 @@ workflows:
     '.github/workflows/backport.yml':
         - 'actions/checkout@v7'
         - 'dtolnay/rust-toolchain@master'
-        - 'korthout/backport-action@v4'
         - 'swatinem/rust-cache@v2'
         - 'taiki-e/install-action@v2'
     '.github/workflows/benchmark-build.yaml':
@@ -295,11 +294,6 @@ dependencies:
         commit: 'sha1-b549046febe0fe86f8cb4f93c24e284433f9ab58'
         owner_id: 10247
         repo_id: 244608449
-    'korthout/backport-action@v4':
-        ref: 'v4'
-        commit: 'sha1-8560fb503c275d433c56f05a2f64850093baa9f7'
-        owner_id: 3511026
-        repo_id: 312027768
     'leanprover/lean-action@v1':
         ref: 'v1'
         commit: 'sha1-fe408643ea7367d8c0404a8be3975bb145f5fb64'
