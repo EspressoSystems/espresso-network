@@ -194,7 +194,7 @@ async fn view_divergence_between_cohorts_recovers() {
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
     let epoch_membership = membership
-        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .membership_for_epoch(EpochNumber::genesis())
         .unwrap();
     let ahead: Vec<_> = [1, 2]
         .map(|view| {
