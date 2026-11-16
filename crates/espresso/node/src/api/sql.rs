@@ -2872,4 +2872,152 @@ mod tests {
             }
         }
     }
+
+    /// A node started with `--prune` deletes the totals an earlier run left.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_deletes_old_totals() {
+        use std::time::Duration;
+
+        use tokio::time::{sleep, timeout};
+
+        let node = start_node_on_old_totals(true).await;
+        timeout(Duration::from_secs(60), async {
+            while !aggregate_rows(&node.storage).await.is_empty() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the pruned node did not delete the old totals");
+    }
+
+    /// A node without `--prune` keeps the totals an earlier run left, as its aggregator resumes
+    /// from them.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_unpruned_node_keeps_old_totals() {
+        use std::time::Duration;
+
+        use http_client::{Client, error::ClientErr};
+        use tokio::time::{sleep, timeout};
+        use vbs::version::StaticVersion;
+
+        let node = start_node_on_old_totals(false).await;
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{}", node.port).parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        timeout(Duration::from_secs(120), async {
+            while client
+                .get::<u64>("status/block-height")
+                .send()
+                .await
+                .unwrap()
+                < 2
+            {
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await
+        .expect("network did not reach block height 2");
+
+        // The aggregator may have added totals above the old ones.
+        let old = aggregate_rows(&node.storage)
+            .await
+            .into_iter()
+            .filter(|&(height, ..)| height < OLD_TOTALS_HEIGHTS)
+            .collect::<Vec<_>>();
+        assert_eq!(old, old_totals());
+    }
+
+    /// [`old_totals`] has totals at heights 0 to `OLD_TOTALS_HEIGHTS - 1`.
+    const OLD_TOTALS_HEIGHTS: i64 = 5;
+
+    /// The totals an earlier run left, as (height, namespace, transactions, bytes): namespace -1
+    /// for all namespaces together, and namespace 7 from height 2 on. The test network has far
+    /// fewer transactions, so an aggregator that counted again from genesis would not write
+    /// these rows back.
+    fn old_totals() -> Vec<(i64, i64, i64, i64)> {
+        (0..OLD_TOTALS_HEIGHTS)
+            .flat_map(|height| {
+                let namespaces = if height < 2 { vec![-1] } else { vec![-1, 7] };
+                namespaces
+                    .into_iter()
+                    .map(move |ns| (height, ns, 1000 * (height + 1), 100_000 * (height + 1)))
+            })
+            .collect()
+    }
+
+    /// Node 0 of a test network, serving the query API on a database it found [`old_totals`] in.
+    struct OldTotalsNode {
+        // Declared first, so that the network stops before the database goes.
+        _network: crate::api::test_helpers::TestNetwork<crate::persistence::no_storage::Options, 5>,
+        storage: SqlStorage,
+        port: u16,
+        _db: TmpDb,
+    }
+
+    /// Write [`old_totals`] into a fresh database, then start a test network whose node 0 serves
+    /// the query API on it, with or without `--prune`.
+    async fn start_node_on_old_totals(prune: bool) -> OldTotalsNode {
+        use espresso_types::TEST_UPGRADE;
+        use test_utils::reserve_tcp_port;
+
+        use crate::{
+            api::{
+                Options as ApiOptions,
+                options::Query,
+                test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            },
+            testing::TestConfigBuilder,
+        };
+
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&tmp_options(&db)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        for (height, namespace, num_transactions, payload_size) in old_totals() {
+            super::super::qs::query(
+                "INSERT INTO aggregate (height, namespace, num_transactions, payload_size)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(height)
+            .bind(namespace)
+            .bind(num_transactions)
+            .bind(payload_size)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(aggregate_rows(&storage).await, old_totals());
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let mut db_opt = tmp_options(&db);
+        db_opt.prune = prune;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(ApiOptions::with_port(port).query_sql(Query::default(), db_opt))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        OldTotalsNode {
+            _network: network,
+            storage,
+            port,
+            _db: db,
+        }
+    }
+
+    /// Every row of the totals as (height, namespace, transactions, bytes), in key order.
+    async fn aggregate_rows(storage: &SqlStorage) -> Vec<(i64, i64, i64, i64)> {
+        let mut tx = storage.read().await.unwrap();
+        query_as(
+            "SELECT height, namespace, num_transactions, payload_size FROM aggregate
+              ORDER BY height, namespace",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+    }
 }
