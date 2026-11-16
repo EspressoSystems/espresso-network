@@ -1825,7 +1825,7 @@ where
         epoch: u64,
     ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
         let ds = &*self.data_source;
-        ds.get_stake_table(Some(hotshot_types::data::EpochNumber::new(epoch)))
+        ds.get_stake_table(hotshot_types::data::EpochNumber::new(epoch))
             .await
     }
 
@@ -1839,7 +1839,7 @@ where
         epoch: u64,
     ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
         let ds = &*self.data_source;
-        ds.get_da_stake_table(Some(hotshot_types::data::EpochNumber::new(epoch)))
+        ds.get_da_stake_table(hotshot_types::data::EpochNumber::new(epoch))
             .await
     }
 

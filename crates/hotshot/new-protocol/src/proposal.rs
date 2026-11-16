@@ -599,10 +599,7 @@ impl<T: NodeType> Validator<T> {
     }
 
     async fn membership(&self, epoch: EpochNumber) -> Result<EpochMembership<T>> {
-        match self
-            .membership_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.membership_coordinator.membership_for_epoch(epoch) {
             Ok(m) => Ok(m),
             Err(_) => self
                 .membership_coordinator

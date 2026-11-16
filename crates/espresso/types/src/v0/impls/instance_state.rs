@@ -357,7 +357,8 @@ impl NodeState {
             Fetcher::mock(),
             0,
             EpochNumber::genesis(),
-        );
+        )
+        .expect("genesis without duplicate keys");
 
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -390,7 +391,8 @@ impl NodeState {
             Fetcher::mock(),
             0,
             EpochNumber::genesis(),
-        );
+        )
+        .expect("genesis without duplicate keys");
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
@@ -421,7 +423,8 @@ impl NodeState {
             Fetcher::mock(),
             0,
             EpochNumber::genesis(),
-        );
+        )
+        .expect("genesis without duplicate keys");
 
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -518,7 +521,8 @@ impl Default for NodeState {
             Fetcher::mock(),
             0,
             EpochNumber::genesis(),
-        );
+        )
+        .expect("genesis without duplicate keys");
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
