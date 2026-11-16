@@ -672,7 +672,7 @@ where
         fetcher,
         epoch_height,
         first_epoch,
-    );
+    )?;
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
     info!("Stake reloaded");
@@ -1613,7 +1613,7 @@ pub mod testing {
                     config.epoch_start_block,
                     config.epoch_height,
                 )),
-            );
+            )?;
             membership.reload_stake(50).await;
 
             let membership = Arc::new(membership);
