@@ -136,7 +136,7 @@ async fn one_missed_payload_stalls_certification() {
     let timeout_cert_2 = {
         let membership = mock_membership();
         let epoch_membership = membership
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("genesis membership");
         build_timeout_cert_signed_by(ViewNumber::new(2), epoch, &epoch_membership, &honest)
     };
@@ -426,7 +426,7 @@ async fn fetched_payload_restores_certification() {
     let timeout_cert_2 = {
         let membership = mock_membership();
         let epoch_membership = membership
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("genesis membership");
         build_timeout_cert_signed_by(ViewNumber::new(2), epoch, &epoch_membership, &honest)
     };
@@ -569,7 +569,7 @@ async fn missing_certificate_still_requests_the_payload() {
     let timeout_cert_2 = {
         let membership = mock_membership();
         let epoch_membership = membership
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("genesis membership");
         build_timeout_cert_signed_by(ViewNumber::new(2), epoch, &epoch_membership, &honest)
     };

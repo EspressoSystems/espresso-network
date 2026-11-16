@@ -318,7 +318,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         shares: &[AvidmGf2Share],
         common: AvidmGf2Common,
         membership: &EpochMembership<TYPES>,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let payload_byte_len = common.payload_byte_len();
@@ -336,7 +336,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             shares,
             payload_commitment: commit,
             epoch: data_epoch,
-            target_epoch,
+            target_epoch: Some(target_epoch),
             payload_byte_len,
             common,
         })
@@ -351,7 +351,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
@@ -480,7 +480,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     pub fn disperse_params(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
-        target_epoch: Option<EpochNumber>,
+        target_epoch: EpochNumber,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<AvidmGf2DisperseParams<TYPES>> {
         let target_mem = membership.stake_table_for_epoch(target_epoch)?;
