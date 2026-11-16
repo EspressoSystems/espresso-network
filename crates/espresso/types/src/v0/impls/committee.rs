@@ -4213,7 +4213,7 @@ mod tests {
 
         let _ = setup
             .coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(25)));
+            .stake_table_for_epoch(EpochNumber::new(25));
         tokio::time::timeout(Duration::from_secs(10), async {
             while calls.lock().is_empty() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
