@@ -44,7 +44,7 @@ use super::{
 };
 use crate::{
     Header, Leaf2, PubKey, SeqTypes,
-    traits::{MembershipPersistence, StakeTuple, StateCatchup},
+    traits::{MembershipPersistence, StateCatchup},
     v0_3::{ASSUMED_BLOCK_TIME_SECONDS, AuthenticatedValidator, Fetcher, RewardAmount},
 };
 
@@ -569,51 +569,66 @@ impl EpochCommittees {
         }
     }
 
+    /// Read what `components` asks for and the resident snapshot lacks.
+    ///
+    /// Only a failed stake table read is an error. A DRB or root that fails to
+    /// read is reported in `failed` next to everything that did load, so the
+    /// caller can still install the table.
     async fn read_epoch_components(
         &self,
         persistence: &dyn MembershipPersistence,
         epoch: EpochNumber,
         components: EpochComponents,
-    ) -> Result<(Option<StakeTuple>, Option<DrbResult>, Option<Header>), EpochCommitteesError> {
+    ) -> Result<PersistedComponents, EpochCommitteesError> {
         let resident = self.snapshot(epoch);
-        let stake = if resident.is_none() {
-            persistence
+        let committee = match &resident {
+            // Carried forward so that an eviction during the reads below
+            // cannot make hydration report a stored epoch as absent.
+            Some(snapshot) => Some(snapshot.inner.committee.clone()),
+            None => persistence
                 .load_stake(epoch)
                 .await
                 .map_err(|source| EpochCommitteesError::StakeTableStorage { epoch, source })?
-        } else {
-            None
+                .map(|(validators, reward, hash)| {
+                    Arc::new(EpochCommittee::new(validators, reward, hash, None))
+                }),
         };
-        if resident.is_none() && stake.is_none() {
-            return Ok((None, None, None));
+        let mut loaded = PersistedComponents {
+            committee,
+            ..Default::default()
+        };
+        if loaded.committee.is_none() {
+            return Ok(loaded);
         }
-        let drb = if matches!(
+        if matches!(
             components,
             EpochComponents::Leader | EpochComponents::AllPersisted
         ) && !resident.as_ref().is_some_and(|s| s.has_drb())
         {
-            persistence
-                .load_drb_result(epoch)
-                .await
-                .map_err(|source| EpochCommitteesError::DrbStorage { epoch, source })?
-        } else {
-            None
-        };
-        let header = if matches!(
+            match persistence.load_drb_result(epoch).await {
+                Ok(drb) => loaded.drb = drb,
+                Err(source) => {
+                    loaded.failed = Some(EpochCommitteesError::DrbStorage { epoch, source })
+                },
+            }
+        }
+        if matches!(
             components,
             EpochComponents::SourceRoot | EpochComponents::AllPersisted
         ) && !resident
             .as_ref()
             .is_some_and(|s| s.inner.committee.header.is_some())
         {
-            persistence
-                .load_epoch_root(epoch)
-                .await
-                .map_err(|source| EpochCommitteesError::EpochRootStorage { epoch, source })?
-        } else {
-            None
-        };
-        Ok::<_, EpochCommitteesError>((stake, drb, header))
+            match persistence.load_epoch_root(epoch).await {
+                Ok(header) => loaded.header = header,
+                Err(source) => {
+                    loaded
+                        .failed
+                        .get_or_insert(EpochCommitteesError::EpochRootStorage { epoch, source });
+                },
+            }
+        }
+        Ok(loaded)
     }
 
     fn resident_components_present(&self, epoch: EpochNumber, components: EpochComponents) -> bool {
@@ -822,7 +837,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             self.read_epoch_components(&*persistence, epoch, components),
         )
         .await;
-        let (stake, drb, header) = match read {
+        let loaded = match read {
             Ok(result) => result?,
             Err(_) if self.resident_components_present(epoch, components) => {
                 return Ok(StakeTableAvailability::Present);
@@ -830,13 +845,14 @@ impl Membership<SeqTypes> for EpochCommittees {
             Err(_) => return Err(EpochCommitteesError::StorageReadTimeout(epoch)),
         };
         drop(persistence);
-        let committee = stake.map(|(validators, reward, hash)| {
-            Arc::new(EpochCommittee::new(validators, reward, hash, None))
-        });
-        Ok(self
-            .inner
-            .write()
-            .hydrate_epoch(epoch, committee, drb, header))
+        let availability =
+            self.inner
+                .write()
+                .hydrate_epoch(epoch, loaded.committee, loaded.drb, loaded.header);
+        match loaded.failed {
+            Some(err) => Err(err),
+            None => Ok(availability),
+        }
     }
 
     fn genesis_stake_tables(&self) -> GenesisStakeTables<SeqTypes> {
@@ -1278,6 +1294,17 @@ pub enum EpochCommitteesError {
 
     #[error("reward calculation error: {0}")]
     Reward(#[source] anyhow::Error),
+}
+
+/// What one storage pass produced for an epoch.
+#[derive(Default)]
+struct PersistedComponents {
+    /// The stake table: resident when the pass began, else as stored.
+    committee: Option<Arc<EpochCommittee>>,
+    drb: Option<DrbResult>,
+    header: Option<Header>,
+    /// The first of the DRB and root reads to fail.
+    failed: Option<EpochCommitteesError>,
 }
 
 impl Inner {
@@ -2035,6 +2062,62 @@ mod tests {
             "the storage failure should have been logged, not returned: {err}"
         );
         assert!(coordinator.snapshot(epoch).is_some());
+    }
+
+    // A root that fails to read must not discard the stake table and DRB read
+    // in the same pass: the caller would fetch from peers a table that is in
+    // storage.
+    #[tokio::test]
+    async fn failed_root_read_still_installs_table_and_drb() {
+        let control = Arc::new(ReadControl {
+            fail_root: AtomicBool::new(true),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control).await;
+        let epoch = EpochNumber::new(7);
+        assert!(matches!(
+            committees
+                .load_epoch(epoch, EpochComponents::AllPersisted)
+                .await,
+            Err(EpochCommitteesError::EpochRootStorage { .. })
+        ));
+        let restored = committees.snapshot(epoch).unwrap();
+        assert!(restored.has_drb());
+        assert!(restored.inner.committee.header.is_none());
+        assert!(committees.load_stake_table(epoch).await);
+    }
+
+    // An epoch resident when a load begins is not read from storage. If it is
+    // evicted before the load installs its result, the load must not answer
+    // `Absent`: catchup would fetch from peers a table that is in storage.
+    #[tokio::test]
+    async fn eviction_during_load_does_not_report_stored_epoch_absent() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let control = Arc::new(ReadControl {
+            drb_gate: Some(gate.clone()),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let epoch = EpochNumber::new(7);
+        committees
+            .load_epoch(epoch, EpochComponents::StakeTable)
+            .await
+            .unwrap();
+        let load = tokio::spawn({
+            let committees = committees.clone();
+            async move { committees.load_epoch(epoch, EpochComponents::Leader).await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), control.drb_started.notified())
+            .await
+            .unwrap();
+        committees.inner.write().snapshots.remove(&epoch);
+        gate.notify_one();
+
+        assert_eq!(
+            load.await.unwrap().unwrap(),
+            StakeTableAvailability::Present
+        );
+        assert!(committees.snapshot(epoch).unwrap().has_drb());
     }
 
     #[tokio::test]

@@ -336,6 +336,8 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// Hydrate missing persisted components without replacing richer resident
     /// state. Absence is distinct from storage failure or timeout. A present
     /// table does not imply that the other requested components were stored.
+    /// An error does not imply that nothing was hydrated: components read
+    /// before the failing one may have been installed.
     fn load_epoch(
         &self,
         epoch: EpochNumber,
