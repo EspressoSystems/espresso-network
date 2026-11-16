@@ -209,7 +209,13 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::max, collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+    use std::{
+        cmp::max,
+        collections::{BTreeMap, BTreeSet},
+        marker::PhantomData,
+        sync::Arc,
+        time::Duration,
+    };
 
     use alloy::{
         network::EthereumWallet,
@@ -2791,6 +2797,33 @@ mod tests {
         );
         assert_eq!(None, iter.next());
 
+        Ok(())
+    }
+
+    /// Epochs with only a DRB result or an epoch root are not listed; those with a stake table are.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stored_stake_epochs<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        assert!(storage.stored_stake_epochs().await?.is_empty());
+
+        let validator = AuthenticatedValidator::mock();
+        let mut stake = IndexMap::new();
+        stake.insert(validator.account, validator);
+
+        storage
+            .store_drb_result(EpochNumber::new(1), [1; 32])
+            .await?;
+        for epoch in [7, 3, 5] {
+            storage
+                .store_stake(EpochNumber::new(epoch), stake.clone(), None, None)
+                .await?;
+        }
+
+        let expected: BTreeSet<_> = [3, 5, 7].into_iter().map(EpochNumber::new).collect();
+        assert_eq!(storage.stored_stake_epochs().await?, expected);
         Ok(())
     }
 

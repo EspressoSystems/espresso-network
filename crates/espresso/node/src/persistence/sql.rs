@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    sync::Arc,
+    time::Instant,
+};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
@@ -1862,6 +1867,19 @@ impl MembershipPersistence for Persistence {
                 Ok((stake_table, reward, stake_table_hash))
             })
             .transpose()
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let mut tx = self.db.read().await?;
+        let epochs =
+            query_as::<(i64,)>("SELECT epoch FROM epoch_drb_and_root WHERE stake IS NOT NULL")
+                .fetch_all(tx.as_mut())
+                .await
+                .context("listing epochs with a stake table")?;
+        Ok(epochs
+            .into_iter()
+            .map(|(epoch,)| EpochNumber::new(epoch as u64))
+            .collect())
     }
 
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {

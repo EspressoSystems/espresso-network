@@ -1690,9 +1690,12 @@ fn end_process_on_hash_mismatch(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+    use std::{
+        collections::BTreeSet,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
     };
 
     use committable::Committable;
@@ -1762,6 +1765,10 @@ mod tests {
             _limit: u64,
         ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
             Ok(None)
+        }
+
+        async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+            Ok(BTreeSet::new())
         }
 
         async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
@@ -2821,6 +2828,10 @@ mod tests {
             Ok(Some(self.stakes.clone()))
         }
 
+        async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+            Ok(BTreeSet::new())
+        }
+
         async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
             Ok(None)
         }
@@ -3761,6 +3772,10 @@ mod tests {
             _limit: u64,
         ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
             Ok(None)
+        }
+
+        async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+            Ok(BTreeSet::new())
         }
 
         async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {

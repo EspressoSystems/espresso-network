@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
@@ -1585,6 +1585,16 @@ impl MembershipPersistence for Persistence {
             )
         })?;
         Ok(Some(stake))
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let inner = self.inner.read().await;
+        let path = inner.stake_table_dir_path();
+        // The directory is created by the first `store_stake`.
+        if !path.exists() {
+            return Ok(BTreeSet::new());
+        }
+        Ok(epoch_files(path)?.map(|(epoch, _)| epoch).collect())
     }
 
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
