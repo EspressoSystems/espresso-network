@@ -818,6 +818,70 @@ impl EpochCommittees {
         Ok(())
     }
 
+    /// Derives the table of the epoch `root` defines and writes it to storage, without putting it
+    /// in memory or touching the chain config. `previous_root` is the root one epoch below `root`
+    /// (read by the dynamic block reward) and `next_root` the root one epoch above it, whose
+    /// `next_stake_table_hash` decides the table's hash. A table that differs from the decided
+    /// hash is not stored.
+    ///
+    /// A table held in memory for the same epoch has the same content, so the live path's later
+    /// store of it is harmless.
+    #[cfg(feature = "node")]
+    pub async fn store_derived_stake_table(
+        &self,
+        root: &Header,
+        previous_root: Option<&Header>,
+        next_root: &Header,
+    ) -> Result<StakeTableStoreOutcome, EpochCommitteesError> {
+        let epoch_height = *self.epoch_height;
+        let epoch = EpochNumber::new(epoch_from_block_number(root.height(), epoch_height) + 2);
+        if !is_epoch_root(root.height(), epoch_height) {
+            return Err(EpochCommitteesError::NoRootBlock(root.height().into()));
+        }
+        if next_root.height() != root.height() + epoch_height {
+            return Err(EpochCommitteesError::Message(format!(
+                "the next epoch root is at height {}, expected {}",
+                next_root.height(),
+                root.height() + epoch_height
+            )));
+        }
+
+        let derived = self
+            .derive_stake_table(epoch, root, None, PreviousRoot::Seed(previous_root))
+            .await?;
+        if let (Some(decided), Some(derived_hash)) =
+            (next_root.next_stake_table_hash(), derived.stake_table_hash)
+            && decided != derived_hash
+        {
+            return Ok(StakeTableStoreOutcome::HashMismatch {
+                decided,
+                derived: derived_hash,
+            });
+        }
+
+        let persistence = self.fetcher.persistence.lock().await;
+        persistence
+            .store_epoch_root(epoch, root.clone())
+            .await
+            .map_err(EpochCommitteesError::Storage)?;
+        persistence
+            .store_all_validators(epoch, derived.all_validators)
+            .await
+            .map_err(EpochCommitteesError::Storage)?;
+        // Last: the epoch counts as stored once its stake table is, so an interrupted store is
+        // repeated.
+        persistence
+            .store_stake(
+                epoch,
+                derived.validators,
+                derived.block_reward,
+                derived.stake_table_hash,
+            )
+            .await
+            .map_err(EpochCommitteesError::Storage)?;
+        Ok(StakeTableStoreOutcome::Stored)
+    }
+
     #[cfg(feature = "node")]
     pub async fn reload_stake(&mut self, limit: u64) {
         match self.fetcher.fetch_fixed_block_reward().await {
@@ -1323,6 +1387,19 @@ impl Membership<SeqTypes> for EpochCommittees {
             inner.snapshots.insert(epoch, new_snapshot);
         }
     }
+}
+
+/// What `EpochCommittees::store_derived_stake_table` did.
+#[cfg(feature = "node")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StakeTableStoreOutcome {
+    /// The table was written to storage.
+    Stored,
+    /// The derived table's hash differs from the decided one; nothing was written.
+    HashMismatch {
+        decided: StakeTableHash,
+        derived: StakeTableHash,
+    },
 }
 
 #[derive(Error, Debug)]
@@ -3747,6 +3824,17 @@ mod tests {
     /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
     /// counts its calls and finds nothing, and `store_stake` counts its entries, then waits while
     /// `stall_store_stake` is set, fails while `fail_store_stake` is set, else records its epoch.
+    /// A write to storage that `StalledStakeStore` completed.
+    #[derive(Clone, Debug, PartialEq)]
+    enum StoredWrite {
+        EpochRoot(u64),
+        AllValidators(
+            u64,
+            IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+        ),
+        Stake(u64, Option<RewardAmount>, Option<StakeTableHash>),
+    }
+
     #[derive(Debug)]
     struct StalledStakeStore {
         events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
@@ -3754,6 +3842,7 @@ mod tests {
         stall_store_stake: Arc<AtomicBool>,
         fail_store_stake: Arc<AtomicBool>,
         store_stake_entries: Arc<AtomicUsize>,
+        writes: Arc<parking_lot::Mutex<Vec<StoredWrite>>>,
         stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
     }
 
@@ -3788,9 +3877,10 @@ mod tests {
 
         async fn store_epoch_root(
             &self,
-            _epoch: EpochNumber,
+            epoch: EpochNumber,
             _block_header: Header,
         ) -> anyhow::Result<()> {
+            self.writes.lock().push(StoredWrite::EpochRoot(*epoch));
             Ok(())
         }
 
@@ -3798,8 +3888,8 @@ mod tests {
             &self,
             epoch: EpochNumber,
             _stake: AuthenticatedValidatorMap,
-            _block_reward: Option<RewardAmount>,
-            _stake_table_hash: Option<StakeTableHash>,
+            block_reward: Option<RewardAmount>,
+            stake_table_hash: Option<StakeTableHash>,
         ) -> anyhow::Result<()> {
             self.store_stake_entries.fetch_add(1, Ordering::SeqCst);
             while self.stall_store_stake.load(Ordering::SeqCst) {
@@ -3810,6 +3900,9 @@ mod tests {
                 "injected store_stake failure"
             );
             self.stored_epochs.lock().push(*epoch);
+            self.writes
+                .lock()
+                .push(StoredWrite::Stake(*epoch, block_reward, stake_table_hash));
             Ok(())
         }
 
@@ -3841,9 +3934,12 @@ mod tests {
 
         async fn store_all_validators(
             &self,
-            _epoch: EpochNumber,
-            _all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+            epoch: EpochNumber,
+            all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
         ) -> anyhow::Result<()> {
+            self.writes
+                .lock()
+                .push(StoredWrite::AllValidators(*epoch, all_validators));
             Ok(())
         }
 
@@ -3942,6 +4038,24 @@ mod tests {
         store_stake_entries: Arc<AtomicUsize>,
         /// Epochs `store_stake` completed for, in order.
         stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
+        /// Every write storage completed, in order.
+        writes: Arc<parking_lot::Mutex<Vec<StoredWrite>>>,
+    }
+
+    /// The epoch root at `height` of the [`StalledInstall`] setup: it names the stake table
+    /// contract and an L1 block, so its table is derived from the store's events.
+    async fn events_root(height: u64) -> Header {
+        let mut root = timed_root(height).await;
+        *root.l1_finalized_mut() = Some(crate::L1BlockInfo::default());
+        let Header::V4(fields) = &mut root else {
+            unreachable!("timed_root builds V4 headers");
+        };
+        fields.chain_config = crate::ChainConfig {
+            stake_table_contract: Some(Address::ZERO),
+            ..Default::default()
+        }
+        .into();
+        root
     }
 
     /// The [`StalledInstall`] setup, with `catchup_timeout` on the coordinator.
@@ -3951,6 +4065,7 @@ mod tests {
         let fail_store_stake = Arc::<AtomicBool>::default();
         let store_stake_entries = Arc::<AtomicUsize>::default();
         let stored_epochs = Arc::<parking_lot::Mutex<Vec<u64>>>::default();
+        let writes = Arc::<parking_lot::Mutex<Vec<StoredWrite>>>::default();
         let validator = super::super::stake_table::testing::TestValidator::random();
         let events = vec![
             (
@@ -3977,6 +4092,7 @@ mod tests {
                 fail_store_stake: Arc::clone(&fail_store_stake),
                 store_stake_entries: Arc::clone(&store_stake_entries),
                 stored_epochs: Arc::clone(&stored_epochs),
+                writes: Arc::clone(&writes),
             })),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
@@ -3994,16 +4110,7 @@ mod tests {
             &hotshot_example_types::storage_types::TestStorage::default(),
         )
         .with_catchup_timeout(catchup_timeout);
-        let mut root = timed_root(100 * 19 - 5).await;
-        *root.l1_finalized_mut() = Some(crate::L1BlockInfo::default());
-        let Header::V4(fields) = &mut root else {
-            unreachable!("timed_root builds V4 headers");
-        };
-        fields.chain_config = crate::ChainConfig {
-            stake_table_contract: Some(Address::ZERO),
-            ..Default::default()
-        }
-        .into();
+        let root = events_root(100 * 19 - 5).await;
         let preceding = timed_root(100 * 18 - 5).await;
         StalledInstall {
             committees,
@@ -4015,6 +4122,7 @@ mod tests {
             fail_store_stake,
             store_stake_entries,
             stored_epochs,
+            writes,
         }
     }
 
@@ -4090,6 +4198,160 @@ mod tests {
         setup.fail_store_stake.store(false, Ordering::SeqCst);
         install_setup_root(&setup).await.unwrap();
         assert_eq!(*setup.stored_epochs.lock(), vec![20]);
+    }
+
+    /// The [`StalledInstall`] setup with `store_stake` free. Its `root` defines epoch 21.
+    async fn derive_setup() -> StalledInstall {
+        let setup = stalled_install_setup(Duration::from_secs(60)).await;
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+        setup
+    }
+
+    /// The stake table hash that `setup.root` derives for epoch 21.
+    async fn derived_hash(setup: &StalledInstall) -> StakeTableHash {
+        let set = setup
+            .committees
+            .fetcher()
+            .fetch(EpochNumber::new(21), &setup.root)
+            .await
+            .unwrap();
+        set.stake_table_hash.expect("derived tables have a hash")
+    }
+
+    /// A table is written to storage and not put in memory; a next root without a hash is not a
+    /// mismatch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_stores_but_installs_nothing() {
+        let setup = derive_setup().await;
+        let next_root = timed_root(100 * 20 - 5).await;
+
+        let outcome = setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, StakeTableStoreOutcome::Stored);
+        let hash = derived_hash(&setup).await;
+        let writes = setup.writes.lock().clone();
+        assert!(
+            matches!(
+                writes.as_slice(),
+                [
+                    StoredWrite::EpochRoot(21),
+                    StoredWrite::AllValidators(21, _),
+                    StoredWrite::Stake(21, Some(_), Some(stored_hash)),
+                ] if *stored_hash == hash
+            ),
+            "{writes:?}"
+        );
+        let inner = setup.committees.inner.read();
+        assert!(inner.epoch_committee(EpochNumber::new(21)).is_none());
+        assert!(!inner.all_validators.contains_key(&EpochNumber::new(21)));
+    }
+
+    /// A next root deciding the derived hash lets the table be stored.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_stores_on_matching_hash() {
+        let setup = derive_setup().await;
+        let next_root = header_deciding(100 * 20 - 5, derived_hash(&setup).await).await;
+
+        let outcome = setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, StakeTableStoreOutcome::Stored);
+        assert_eq!(setup.writes.lock().len(), 3);
+    }
+
+    /// A next root deciding another hash stores nothing and does not end the process.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_skips_on_hash_mismatch() {
+        let setup = derive_setup().await;
+        let next_root = header_deciding(100 * 20 - 5, other_hash()).await;
+
+        let outcome = setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            StakeTableStoreOutcome::HashMismatch {
+                decided: other_hash(),
+                derived: derived_hash(&setup).await,
+            }
+        );
+        assert!(setup.writes.lock().is_empty());
+    }
+
+    /// Inputs that are not consecutive epoch roots, or lack the root the reward reads, are
+    /// errors and write nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_rejects_bad_inputs() {
+        let setup = derive_setup().await;
+        let next_root = timed_root(100 * 20 - 5).await;
+        let not_a_root = timed_root(100 * 19 - 4).await;
+        let skipped_next_root = timed_root(100 * 21 - 5).await;
+
+        let committees = &setup.committees;
+        let previous = Some(&setup.preceding);
+        let errors = [
+            committees
+                .store_derived_stake_table(&not_a_root, previous, &next_root)
+                .await,
+            committees
+                .store_derived_stake_table(&setup.root, previous, &skipped_next_root)
+                .await,
+            committees
+                .store_derived_stake_table(&setup.root, None, &next_root)
+                .await,
+        ];
+
+        assert!(matches!(
+            errors[0],
+            Err(EpochCommitteesError::NoRootBlock(_))
+        ));
+        assert!(matches!(errors[1], Err(EpochCommitteesError::Message(_))));
+        assert!(matches!(errors[2], Err(EpochCommitteesError::Reward(_))));
+        assert!(setup.writes.lock().is_empty());
+    }
+
+    /// The table stored for epoch 21 equals the one the live installs store for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_equals_the_installed_table() {
+        let setup = derive_setup().await;
+        let next_root = events_root(100 * 20 - 5).await;
+        setup
+            .committees
+            .install_epoch_roots(
+                Some(setup.preceding.clone()),
+                vec![setup.root.clone(), next_root.clone()],
+                &setup.coordinator,
+            )
+            .await
+            .unwrap();
+        let live = setup.writes.lock().clone();
+
+        setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        let writes = setup.writes.lock().clone();
+        let backfilled = &writes[live.len()..];
+        for kind in [
+            |write: &&StoredWrite| matches!(write, StoredWrite::Stake(21, ..)),
+            |write: &&StoredWrite| matches!(write, StoredWrite::AllValidators(21, _)),
+        ] {
+            let live_write = live.iter().find(kind).expect("live path stored epoch 21");
+            let backfilled_write = backfilled.iter().find(kind).unwrap();
+            assert_eq!(live_write, backfilled_write);
+        }
     }
 
     /// Epoch 21 is held without a block reward, and `root` is installed by the walk while its
