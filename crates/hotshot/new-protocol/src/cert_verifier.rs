@@ -289,7 +289,7 @@ impl<T: NodeType> Verifiable<T> for ReVoteMessage<T, Unchecked> {
         }
         revote.well_formed(epoch_height).wrap()?;
         let leader = memberships
-            .membership_for_epoch(Some(revote.epoch))
+            .membership_for_epoch(revote.epoch)
             .wrap()?
             .leader(revote.view)?;
         ensure! {
@@ -335,7 +335,7 @@ pub(crate) fn verify_timeout3<T: NodeType>(
         "timeout certificate lock is not well formed"
     }
     let epoch = LockView::of(cert).epoch;
-    let membership = memberships.membership_for_epoch(Some(epoch)).wrap()?;
+    let membership = memberships.membership_for_epoch(epoch).wrap()?;
     let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
     verify_signatures(cert, &entries, membership.success_threshold(), upgrade_lock)
 }
@@ -416,7 +416,7 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
             return None;
         }
 
-        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+        let Ok(membership) = self.membership.membership_for_epoch(epoch) else {
             self.pending_membership
                 .entry(key)
                 .or_default()
@@ -425,7 +425,7 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
         };
         let missing = cert
             .epochs()
-            .find(|epoch| self.membership.membership_for_epoch(Some(*epoch)).is_err());
+            .find(|epoch| self.membership.membership_for_epoch(*epoch).is_err());
         if let Some(missing) = missing {
             self.pending_membership
                 .entry(key)
@@ -645,13 +645,13 @@ where
             return None;
         }
 
-        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+        let Ok(membership) = self.membership.membership_for_epoch(epoch) else {
             self.pending.insert(sender, cert);
             return Some(epoch);
         };
         let missing = cert
             .epochs()
-            .find(|epoch| self.membership.membership_for_epoch(Some(*epoch)).is_err());
+            .find(|epoch| self.membership.membership_for_epoch(*epoch).is_err());
         if let Some(missing) = missing {
             self.pending.insert(sender, cert);
             return Some(missing);
@@ -941,7 +941,7 @@ mod tests {
 
     fn valid_tc(view: u64) -> TimeoutCertificate2<TestTypes> {
         let epoch = EpochNumber::genesis();
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         match build_timeout_cert(
             ViewNumber::new(view),
@@ -974,7 +974,7 @@ mod tests {
 
     fn junk_tc3(view: ViewNumber, epoch: EpochNumber) -> TimeoutCertificate3<TestTypes> {
         // Signed by a quorum, but over another view than the one it is for.
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let mut cert = build_timeout_cert3_with_lock(view + 1, epoch, None, &membership);
         cert.view_number = view;
         cert
@@ -994,7 +994,7 @@ mod tests {
         let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         let cert = |epoch: u64, block: u64| {
             let epoch = EpochNumber::new(epoch);
-            let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+            let membership = coordinator.membership_for_epoch(epoch).unwrap();
             let leaf = committable::RawCommitmentBuilder::new("leaf")
                 .u64(block)
                 .finalize();
@@ -1017,8 +1017,8 @@ mod tests {
         for e in [lock_epoch, epoch] {
             known.membership().register_epoch(e, TEST_DRB_RESULT);
         }
-        let lock_membership = known.membership_for_epoch(Some(lock_epoch)).unwrap();
-        let membership = known.membership_for_epoch(Some(epoch)).unwrap();
+        let lock_membership = known.membership_for_epoch(lock_epoch).unwrap();
+        let membership = known.membership_for_epoch(epoch).unwrap();
         let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         let leaf = committable::RawCommitmentBuilder::new("leaf")
             .u64(29)
@@ -1039,8 +1039,8 @@ mod tests {
             .membership()
             .register_epoch(epoch, TEST_DRB_RESULT);
         assert!(
-            coordinator.membership_for_epoch(Some(epoch)).is_ok()
-                && coordinator.membership_for_epoch(Some(lock_epoch)).is_err(),
+            coordinator.membership_for_epoch(epoch).is_ok()
+                && coordinator.membership_for_epoch(lock_epoch).is_err(),
             "setup: the certificate's committee is known, the lock's is not"
         );
         let mut verifier = CertBySenderVerifier::<TestTypes, TimeoutCertificate3<TestTypes>>::new(

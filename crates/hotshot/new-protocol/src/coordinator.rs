@@ -2017,7 +2017,7 @@ where
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .ok()?;
         membership.leader(view).ok()
     }
