@@ -1,10 +1,15 @@
+use std::path::PathBuf;
+
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use espresso_node::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
+    membership_store::MembershipStore,
     persistence,
 };
 use espresso_types::v0::traits::MembershipPersistence;
 use espresso_utils::logging;
+use hotshot_new_protocol::store::ConsensusStore;
 
 /// Reset the persistent storage of a sequencer.
 ///
@@ -20,6 +25,11 @@ struct Options {
     /// deleting any other data
     #[clap(long)]
     stake_table_only: bool,
+
+    /// The node's consensus store, which holds its stake tables and DRB results, and with a full
+    /// reset its votes and locks too. Without it, only the storage below is reset.
+    #[clap(long, env = "ESPRESSO_NODE_CONSENSUS_STORE_PATH")]
+    consensus_store_path: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -37,6 +47,27 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
+
+    match &opt.consensus_store_path {
+        Some(path) if opt.stake_table_only => {
+            tracing::warn!(?path, "clearing stake tables from the consensus store");
+            let (store, _) = ConsensusStore::open(path.clone(), async || {
+                anyhow::bail!("there is no consensus store at {}", path.display())
+            })
+            .await?;
+            MembershipStore::new(store).delete_stake_tables().await?;
+        },
+        Some(path) => {
+            tracing::warn!(?path, "deleting the consensus store");
+            if path.exists() {
+                std::fs::remove_dir_all(path)
+                    .with_context(|| format!("deleting {}", path.display()))?;
+            }
+        },
+        None => tracing::warn!(
+            "no consensus store given; its stake tables, votes and locks stay as they are"
+        ),
+    }
 
     match opt.command {
         Command::Fs(persistence_opt) => {

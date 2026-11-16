@@ -196,6 +196,29 @@ pub struct Import<T: NodeType> {
 
     /// The latest decided leaf.
     pub anchor: Option<Anchor<T>>,
+
+    /// The application's tables, as [`ConsensusStore::app_write`] writes them.
+    pub app: Vec<AppWrite>,
+}
+
+/// A write to a table the application keeps in the store, next to the consensus state.
+///
+/// Consensus does not read these tables. A table name is lowercase ASCII letters, digits, `_`
+/// and `-`.
+#[derive(Clone, Debug)]
+pub enum AppWrite {
+    /// Sets `key` to `value`.
+    Put {
+        table: &'static str,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+
+    /// Deletes the keys before `key`.
+    DeleteBefore { table: &'static str, key: Vec<u8> },
+
+    /// Deletes every key.
+    Clear { table: &'static str },
 }
 
 impl<T: NodeType> ConsensusStore<T, DiskStore> {
@@ -377,6 +400,32 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         self.measure_decide_log()
     }
 
+    /// The value of `key` in the application's `table`.
+    pub fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        let snap = self.store.snapshot()?;
+        Ok(snap.get(&app_table(table)?, key)?.map(|v| v.to_vec()))
+    }
+
+    /// The entries of the application's `table` from `from` on, in key order.
+    pub fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let snap = self.store.snapshot()?;
+        let range = KeyRange::starting_at(Bytes::copy_from_slice(from));
+        snap.range(&app_table(table)?, &range)?
+            .map(|entry| {
+                let (k, v) = entry?;
+                Ok((k.to_vec(), v.to_vec()))
+            })
+            .collect()
+    }
+
+    /// Applies `writes` to the application's tables, all or none.
+    pub fn app_write(&self, writes: &[AppWrite]) -> anyhow::Result<()> {
+        let mut batch = Batch::new();
+        put_app(&mut batch, writes)?;
+        self.store.apply(&batch)?;
+        Ok(())
+    }
+
     /// Whether [`Self::import`] has run on this store.
     pub fn imported(&self) -> anyhow::Result<bool> {
         Ok(self.store.snapshot()?.get(&SAFETY, IMPORTED)?.is_some())
@@ -418,6 +467,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         if let Some(anchor) = &import.anchor {
             put_anchor(&mut batch, anchor)?;
         }
+        put_app(&mut batch, &import.app)?;
         batch.put(&SAFETY, IMPORTED, Bytes::new());
         self.store.apply(&batch)?;
         Ok(())
@@ -679,6 +729,35 @@ fn encode<V: Serialize>(value: &V) -> anyhow::Result<Bytes> {
 
 fn decode<V: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<V> {
     Ok(bincode::deserialize(bytes)?)
+}
+
+fn put_app(batch: &mut Batch, writes: &[AppWrite]) -> anyhow::Result<()> {
+    for write in writes {
+        match write {
+            AppWrite::Put { table, key, value } => {
+                batch.put(
+                    &app_table(table)?,
+                    key.clone(),
+                    Bytes::copy_from_slice(value),
+                );
+            },
+            AppWrite::DeleteBefore { table, key } => {
+                batch.delete_range(
+                    &app_table(table)?,
+                    KeyRange::before(Bytes::copy_from_slice(key)),
+                );
+            },
+            AppWrite::Clear { table } => {
+                batch.delete_range(&app_table(table)?, KeyRange::all());
+            },
+        }
+    }
+    Ok(())
+}
+
+/// The application's table `name`, apart from the consensus tables.
+fn app_table(name: &str) -> anyhow::Result<Table> {
+    Table::new(format!("app-{name}")).with_context(|| format!("application table name {name:?}"))
 }
 
 fn table(name: &str) -> Table {

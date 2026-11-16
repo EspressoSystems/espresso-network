@@ -1,4 +1,5 @@
 mod external_event_handler;
+pub mod membership_store;
 mod message_compat_tests;
 mod request_response;
 mod startup_catchup;
@@ -36,6 +37,7 @@ use espresso_types::{
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::Fetcher,
 };
+use membership_store::MembershipStore;
 
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
@@ -365,6 +367,11 @@ where
         persistence.save_config(&network_config).await?;
     }
 
+    let (consensus_store, restored) = ConsensusStore::open(consensus_store_path, async || {
+        import_state(&persistence).await
+    })
+    .await?;
+
     let NodeStateParts {
         node_state: instance_state,
         state_catchup: state_catchup_providers,
@@ -375,6 +382,7 @@ where
         l1_params,
         catchup_params,
         persistence,
+        Some(MembershipStore::new(consensus_store.clone())),
         &*metrics,
     )
     .await?;
@@ -388,11 +396,6 @@ where
         &instance_state.l1_client,
     )
     .await;
-
-    let (consensus_store, restored) = ConsensusStore::open(consensus_store_path, async || {
-        import_state(&*persistence).await
-    })
-    .await?;
 
     // Load saved consensus state from storage. It is loaded once here, both to
     // seed consensus in `SequencerContext::init` below and to tell whether the
@@ -459,7 +462,7 @@ where
 }
 
 /// Reads the consensus state that the consensus store takes over on its first open.
-pub(crate) async fn import_state<P: SequencerPersistence>(
+pub(crate) async fn import_state<P: SequencerPersistence + MembershipPersistence>(
     persistence: &P,
 ) -> anyhow::Result<Import<SeqTypes>> {
     let mut proposals = Vec::new();
@@ -487,6 +490,7 @@ pub(crate) async fn import_state<P: SequencerPersistence>(
         state_cert: persistence.load_state_cert().await?,
         payloads,
         anchor: import_anchor(persistence).await?,
+        app: membership_store::import(persistence).await?,
     })
 }
 
@@ -623,6 +627,7 @@ pub(crate) async fn init_node_state<P>(
     l1_params: L1Params,
     catchup: CatchupParams,
     mut persistence: P,
+    membership_store: Option<MembershipStore>,
     metrics: &dyn Metrics,
 ) -> anyhow::Result<NodeStateParts<P>>
 where
@@ -699,9 +704,15 @@ where
 
     persistence.enable_metrics(metrics);
 
+    // Consensus keeps its membership in its store; a follower, which runs no consensus, in its
+    // persistence.
+    let membership_persistence: Arc<Mutex<dyn MembershipPersistence>> = match &membership_store {
+        Some(store) => Arc::new(Mutex::new(store.clone())),
+        None => Arc::new(Mutex::new(persistence.clone())),
+    };
     let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
-        Arc::new(Mutex::new(persistence.clone())),
+        membership_persistence,
         l1_client.clone(),
         genesis.chain_config,
     );
@@ -736,7 +747,10 @@ where
     info!("Stake reloaded");
 
     let persistence = Arc::new(persistence);
-    let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
+    let coordinator = match &membership_store {
+        Some(store) => EpochMembershipCoordinator::new(membership, epoch_height, store),
+        None => EpochMembershipCoordinator::new(membership, epoch_height, &persistence),
+    };
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -1598,6 +1612,18 @@ pub mod testing {
                 catchup_providers.add_provider(Arc::new(state_peers));
             }
 
+            let store_dir = self
+                .consensus_stores
+                .lock()
+                .entry(format!("{i}/{persistence_opt:?}"))
+                .or_insert_with(|| tempfile::tempdir().unwrap().keep())
+                .clone();
+            let (consensus_store, restored) =
+                ConsensusStore::open(store_dir, async || import_state(&persistence).await)
+                    .await
+                    .unwrap();
+            let membership_store = MembershipStore::new(consensus_store.clone());
+
             // If we have a working local catchup provider, add it
             // Local is a single attempt per call; remote providers retry.
             match persistence
@@ -1624,7 +1650,7 @@ pub mod testing {
 
             let fetcher = Fetcher::new(
                 Arc::new(catchup_providers.clone()),
-                Arc::new(Mutex::new(persistence.clone())),
+                Arc::new(Mutex::new(membership_store.clone())),
                 l1_client.clone(),
                 chain_config,
             );
@@ -1647,11 +1673,8 @@ pub mod testing {
             let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
-            let coordinator = EpochMembershipCoordinator::new(
-                membership,
-                config.epoch_height,
-                &persistence.clone(),
-            );
+            let coordinator =
+                EpochMembershipCoordinator::new(membership, config.epoch_height, &membership_store);
 
             let max_block_size = *chain_config.max_block_size;
             let mut node_state = NodeState::new(
@@ -1695,16 +1718,6 @@ pub mod testing {
                 )
             };
 
-            let store_dir = self
-                .consensus_stores
-                .lock()
-                .entry(format!("{i}/{persistence_opt:?}"))
-                .or_insert_with(|| tempfile::tempdir().unwrap().keep())
-                .clone();
-            let (consensus_store, restored) =
-                ConsensusStore::open(store_dir, async || import_state(&*persistence).await)
-                    .await
-                    .unwrap();
             let initializer = persistence
                 .load_consensus_state(node_state, upgrade, &restored)
                 .await
@@ -2117,6 +2130,7 @@ mod test {
                 l1_params,
                 catchup,
                 persistence,
+                None,
                 &NoMetrics,
             ),
         )

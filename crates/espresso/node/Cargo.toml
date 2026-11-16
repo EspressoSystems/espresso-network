@@ -29,7 +29,6 @@ anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 async-broadcast = { workspace = true }
-async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }

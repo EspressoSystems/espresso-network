@@ -262,6 +262,7 @@ where
         l1_params,
         params.catchup.clone(),
         persistence,
+        None,
         &*metrics,
     )
     .await?;

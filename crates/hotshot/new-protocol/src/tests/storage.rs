@@ -23,7 +23,7 @@ use tokio::time::timeout;
 use super::common::utils::{build_cert1, mock_membership};
 use crate::{
     storage::{ActionKind, Storage, StorageOutput},
-    store::ConsensusStore,
+    store::{AppWrite, ConsensusStore, Import},
 };
 
 /// A writer over a store that can be made to fail, counting the batches it commits.
@@ -332,6 +332,67 @@ async fn test_decide_log_limit() {
         StorageOutput::DecideLogFull(false)
     );
     assert_nothing_more(&mut storage).await;
+}
+
+/// The application's tables keep their writes apart from each other and from consensus, and the
+/// import writes them with the rest of the imported state.
+#[tokio::test]
+async fn test_app_tables() {
+    let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
+    let put = |table, key: u8, value: &[u8]| AppWrite::Put {
+        table,
+        key: vec![key],
+        value: value.to_vec(),
+    };
+    store
+        .import(Import {
+            proposals: Vec::new(),
+            locked_qc: None,
+            boundary_qc: None,
+            acted_view: None,
+            restart_view: None,
+            upgrade_cert: None,
+            state_cert: None,
+            payloads: Vec::new(),
+            anchor: None,
+            app: vec![
+                put("a", 1, b"one"),
+                put("a", 2, b"two"),
+                put("b", 1, b"other"),
+            ],
+        })
+        .unwrap();
+    assert_eq!(store.app_get("a", &[1]).unwrap(), Some(b"one".to_vec()));
+    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(b"other".to_vec()));
+    assert_eq!(store.app_get("a", &[3]).unwrap(), None);
+
+    store
+        .app_write(&[
+            put("a", 3, b"three"),
+            AppWrite::DeleteBefore {
+                table: "a",
+                key: vec![2],
+            },
+        ])
+        .unwrap();
+    assert_eq!(
+        store.app_entries("a", &[]).unwrap(),
+        vec![(vec![2], b"two".to_vec()), (vec![3], b"three".to_vec())]
+    );
+    assert_eq!(
+        store.app_entries("a", &[3]).unwrap(),
+        vec![(vec![3], b"three".to_vec())]
+    );
+
+    store.app_write(&[AppWrite::Clear { table: "a" }]).unwrap();
+    assert!(store.app_entries("a", &[]).unwrap().is_empty());
+    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(b"other".to_vec()));
+
+    assert!(
+        store.app_get("Not a name", &[1]).is_err(),
+        "invalid table names are refused"
+    );
+    assert!(store.imported().unwrap());
 }
 
 /// Applies everything queued, by queueing one more write and waiting for it.
