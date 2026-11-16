@@ -2179,7 +2179,6 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
             follower,
-            proposal_fetcher: _,
             l1: _,
             l1_provider_count,
             l1_ws_provider_count,
@@ -2265,7 +2264,6 @@ impl From<crate::options::StorageConfig> for proto::NodeStorage {
             .into(),
             fs: storage.fs.map(|fs| proto::FsStorage {
                 path: fs.path.display().to_string(),
-                consensus_view_retention: fs.consensus_view_retention,
             }),
             sql: storage.sql.map(Into::into),
         }
@@ -2303,11 +2301,6 @@ impl From<crate::options::SqlStorageConfig> for proto::SqlStorage {
                 max_usage: sql.pruning.max_usage.map(u32::from),
                 interval_ms: sql.pruning.interval.map(millis),
                 pages: sql.pruning.pages,
-            }),
-            consensus_pruning: Some(proto::ConsensusPruningConfig {
-                target_retention: sql.consensus_pruning.target_retention,
-                minimum_retention: sql.consensus_pruning.minimum_retention,
-                target_usage: sql.consensus_pruning.target_usage,
             }),
         }
     }
@@ -6313,7 +6306,6 @@ mod tests {
                     // still reads ESPRESSO_NODE_STORAGE_PATH.
                     fs: cfg.storage.fs.as_ref().map(|fs| proto::FsStorage {
                         path: fs.path.display().to_string(),
-                        consensus_view_retention: fs.consensus_view_retention,
                     }),
                     sql: None,
                 }),
@@ -6513,17 +6505,11 @@ mod tests {
                         .map(|interval| interval.as_millis() as u64),
                     pages: sql.pruning.pages,
                 }),
-                consensus_pruning: Some(proto::ConsensusPruningConfig {
-                    target_retention: sql.consensus_pruning.target_retention,
-                    minimum_retention: sql.consensus_pruning.minimum_retention,
-                    target_usage: sql.consensus_pruning.target_usage,
-                }),
             })
         );
         // The defaults these come from are non-zero, so the comparisons above are not vacuous.
         let served = storage.sql.unwrap();
         assert!(served.statement_timeout_ms > 0);
-        assert!(served.consensus_pruning.unwrap().target_retention > 0);
     }
 
     fn assert_matches_v1_rendering<E, I, T, const ARITY: usize>(

@@ -38,7 +38,7 @@ pub mod sql {
     pub use super::storage::sql::{Migration, include_migrations, postgres, sqlite};
 }
 pub mod storage;
-mod update;
+pub(crate) mod update;
 
 pub use extension::ExtensibleDataSource;
 pub use fetching::{AvailabilityProvider, FetchingDataSource};

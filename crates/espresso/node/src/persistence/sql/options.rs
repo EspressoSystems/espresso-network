@@ -174,10 +174,6 @@ pub struct Options {
     #[clap(flatten)]
     pub(crate) pruning: PruningOptions,
 
-    /// Pruning parameters for ephemeral consensus storage.
-    #[clap(flatten)]
-    pub(crate) consensus_pruning: ConsensusPruningOptions,
-
     /// Retry/backoff parameters for PostgreSQL serialization conflicts.
     #[clap(flatten)]
     pub(crate) serializable_retry: SerializableRetryOptions,
@@ -385,7 +381,6 @@ impl From<SqliteOptions> for Options {
             statement_timeout: Duration::from_secs(600),
             prune: false,
             pruning: Default::default(),
-            consensus_pruning: Default::default(),
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
@@ -533,82 +528,6 @@ impl From<PruningOptions> for PrunerCfg {
     }
 }
 
-/// Pruning parameters for ephemeral consensus storage.
-#[derive(Parser, Clone, Copy, Debug)]
-pub struct ConsensusPruningOptions {
-    /// Number of views to try to retain in consensus storage before data that hasn't been archived
-    /// is garbage collected.
-    ///
-    /// The longer this is, the more certain that all data will eventually be archived, even if
-    /// there are temporary problems with archive storage or partially missing data. This can be set
-    /// very large, as most data is garbage collected as soon as it is finalized by consensus. This
-    /// setting only applies to views which never get decided (ie forks in consensus) and views for
-    /// which this node is partially offline. These should be exceptionally rare.
-    ///
-    /// Note that in extreme scenarios, data may be garbage collected even before TARGET_RETENTION
-    /// views, if consensus storage exceeds TARGET_USAGE. For a hard lower bound on how long
-    /// consensus data will be retained, see MINIMUM_RETENTION.
-    ///
-    /// The default of 302000 views equates to approximately 1 week (604800 seconds) at an average
-    /// view time of 2s.
-    #[clap(
-        name = "TARGET_RETENTION",
-        long = "consensus-storage-target-retention",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_RETENTION",
-        default_value = "302000"
-    )]
-    pub(crate) target_retention: u64,
-
-    /// Minimum number of views to try to retain in consensus storage before data that hasn't been
-    /// archived is garbage collected.
-    ///
-    /// This bound allows data to be retained even if consensus storage occupies more than
-    /// TARGET_USAGE. This can be used to ensure sufficient time to move consensus data to archival
-    /// storage as necessary, even under extreme circumstances where otherwise garbage collection
-    /// would kick in based on TARGET_RETENTION.
-    ///
-    /// The default of 130000 views equates to approximately 3 days (259200 seconds) at an average
-    /// view time of 2s.
-    #[clap(
-        name = "MINIMUM_RETENTION",
-        long = "consensus-storage-minimum-retention",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_MINIMUM_RETENTION",
-        default_value = "130000"
-    )]
-    pub(crate) minimum_retention: u64,
-
-    /// Amount (in bytes) of data to retain in consensus storage before garbage collecting more
-    /// aggressively.
-    ///
-    /// See also TARGET_RETENTION and MINIMUM_RETENTION.
-    #[clap(
-        name = "TARGET_USAGE",
-        long = "consensus-storage-target-usage",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_USAGE",
-        default_value = "1000000000"
-    )]
-    pub(crate) target_usage: u64,
-
-    /// How often to measure consensus storage against TARGET_USAGE.
-    ///
-    /// On SQLite a measurement scans every page of the consensus tables. Between measurements,
-    /// each decide prunes only to TARGET_RETENTION.
-    #[clap(
-        name = "USAGE_CHECK_INTERVAL",
-        long = "consensus-storage-usage-check-interval",
-        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_USAGE_CHECK_INTERVAL",
-        default_value = "5m",
-        value_parser = parse_duration
-    )]
-    pub(crate) usage_check_interval: Duration,
-}
-
-impl Default for ConsensusPruningOptions {
-    fn default() -> Self {
-        Self::parse_from(std::iter::empty::<String>())
-    }
-}
-
 /// Configuration for retrying transactions aborted by PostgreSQL serialization conflicts (error
 /// 40001).  Under SERIALIZABLE isolation these aborts are expected and safe to retry from scratch.
 #[derive(Parser, Clone, Copy, Debug)]
@@ -669,18 +588,6 @@ impl Default for SerializableRetryOptions {
     fn default() -> Self {
         Self::parse_from(std::iter::empty::<String>())
     }
-}
-
-/// How far behind the newest persisted decide an out-of-order ("gap-fill") decide can still
-/// arrive. Mirrors `DECIDE_BUFFER` in `hotshot-new-protocol`; a leaf missing further behind the
-/// watermark than this will never be filled in by consensus.
-pub(crate) const DECIDE_GAP_FILL_HORIZON: u64 = 20;
-
-/// Whether the height gap directly below the leaf at `view` can still be filled by a late
-/// decide: the missing view (at most `view - 1`) must be within [`DECIDE_GAP_FILL_HORIZON`] of
-/// `watermark`, the newest persisted decide.
-pub(crate) fn within_gap_fill_horizon(view: u64, watermark: u64) -> bool {
-    view.saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark
 }
 
 #[cfg(test)]

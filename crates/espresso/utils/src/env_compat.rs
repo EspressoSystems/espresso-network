@@ -253,12 +253,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT",
             "ESPRESSO_SEQUENCER_LOCAL_CATCHUP_TIMEOUT",
         ),
-        // ── crates/espresso/node/src/persistence/fs.rs ──
-        // Number of consensus views to retain
-        (
-            "ESPRESSO_NODE_CONSENSUS_VIEW_RETENTION",
-            "ESPRESSO_SEQUENCER_CONSENSUS_VIEW_RETENTION",
-        ),
         // ── crates/espresso/node/src/persistence/sql.rs ──
         // Minimum delay between active fetches in a stream
         (
@@ -276,21 +270,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         (
             "ESPRESSO_NODE_CHUNK_FETCH_DELAY",
             "ESPRESSO_SEQUENCER_CHUNK_FETCH_DELAY",
-        ),
-        // Minimum retention for consensus storage
-        (
-            "ESPRESSO_NODE_CONSENSUS_STORAGE_MINIMUM_RETENTION",
-            "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_MINIMUM_RETENTION",
-        ),
-        // Target retention for consensus storage
-        (
-            "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_RETENTION",
-            "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_RETENTION",
-        ),
-        // Target disk usage for consensus storage
-        (
-            "ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_USAGE",
-            "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_USAGE",
         ),
         // Maximum lifetime of a database connection
         (
@@ -431,17 +410,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         (
             "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE",
             "ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE",
-        ),
-        // ── crates/espresso/node/src/proposal_fetcher.rs ──
-        // Timeout for proposal fetch requests
-        (
-            "ESPRESSO_NODE_PROPOSAL_FETCHER_FETCH_TIMEOUT",
-            "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_FETCH_TIMEOUT",
-        ),
-        // Number of proposal fetcher workers
-        (
-            "ESPRESSO_NODE_PROPOSAL_FETCHER_NUM_WORKERS",
-            "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_NUM_WORKERS",
         ),
         // ── crates/espresso/types/src/v0/v0_4/state.rs ──
         // Reward merkle tree concurrent update permits

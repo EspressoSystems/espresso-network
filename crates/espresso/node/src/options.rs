@@ -31,7 +31,6 @@ use crate::{
     genesis::{Genesis, GenesisSource},
     keyset::KeySetOptions,
     persistence,
-    proposal_fetcher::ProposalFetcherConfig,
 };
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
@@ -232,9 +231,6 @@ pub struct Options {
 
     #[clap(flatten)]
     pub telemetry: TelemetryOptions,
-
-    #[clap(flatten)]
-    pub proposal_fetcher_config: ProposalFetcherConfig,
 }
 
 impl Options {
@@ -682,7 +678,6 @@ pub struct PublicNodeConfig {
     pub catchup_backoff: BackoffParams,
     /// Unset on a validator.
     pub follower: Option<FollowerConfig>,
-    pub proposal_fetcher: ProposalFetcherConfig,
     pub l1: L1Tuning,
     pub l1_provider_count: usize,
     pub l1_ws_provider_count: usize,
@@ -709,7 +704,6 @@ pub struct StorageConfig {
 #[derive(Clone, Debug, Serialize)]
 pub struct FsStorageConfig {
     pub path: PathBuf,
-    pub consensus_view_retention: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -736,7 +730,6 @@ pub struct SqlStorageConfig {
     pub query_min_connections: Option<u32>,
     pub query_max_connections: Option<u32>,
     pub pruning: PruningView,
-    pub consensus_pruning: ConsensusPruningView,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -748,13 +741,6 @@ pub struct PruningView {
     pub max_usage: Option<u16>,
     pub interval: Option<Duration>,
     pub pages: Option<u64>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ConsensusPruningView {
-    pub target_retention: u64,
-    pub minimum_retention: u64,
-    pub target_usage: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -813,16 +799,6 @@ impl From<&persistence::sql::PruningOptions> for PruningView {
     }
 }
 
-impl From<&persistence::sql::ConsensusPruningOptions> for ConsensusPruningView {
-    fn from(o: &persistence::sql::ConsensusPruningOptions) -> Self {
-        Self {
-            target_retention: o.target_retention,
-            minimum_retention: o.minimum_retention,
-            target_usage: o.target_usage,
-        }
-    }
-}
-
 impl From<&persistence::sql::Options> for SqlStorageConfig {
     fn from(o: &persistence::sql::Options) -> Self {
         Self {
@@ -849,7 +825,6 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
             query_min_connections: o.query_min_connections.filter(|_| !o.embedded_db),
             query_max_connections: o.query_max_connections.filter(|_| !o.embedded_db),
             pruning: PruningView::from(&o.pruning),
-            consensus_pruning: ConsensusPruningView::from(&o.consensus_pruning),
         }
     }
 }
@@ -858,7 +833,6 @@ impl From<&persistence::fs::Options> for FsStorageConfig {
     fn from(o: &persistence::fs::Options) -> Self {
         Self {
             path: o.path.clone(),
-            consensus_view_retention: o.consensus_view_retention,
         }
     }
 }
@@ -984,7 +958,6 @@ impl PublicNodeConfig {
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
             follower: modules.follower.as_ref().map(FollowerConfig::from),
-            proposal_fetcher: opt.proposal_fetcher_config,
             l1: L1Tuning::from(&opt.l1_options),
             l1_provider_count: opt.l1_provider_url.len(),
             l1_ws_provider_count: opt
@@ -1436,24 +1409,8 @@ pub(crate) mod tests {
             "expected pruning threshold value in JSON: {json}"
         );
         assert!(
-            json.contains("\"consensus_pruning\""),
-            "expected consensus_pruning object in JSON: {json}"
-        );
-        assert!(
             json.contains("\"pruning\""),
             "expected pruning object in JSON: {json}"
-        );
-        assert!(
-            json.contains("\"target_retention\":302000"),
-            "expected consensus_pruning target_retention default in JSON: {json}"
-        );
-        assert!(
-            json.contains("\"minimum_retention\":130000"),
-            "expected consensus_pruning minimum_retention default in JSON: {json}"
-        );
-        assert!(
-            json.contains("\"target_usage\":1000000000"),
-            "expected consensus_pruning target_usage default in JSON: {json}"
         );
         assert!(
             !json.contains("\"uri\""),

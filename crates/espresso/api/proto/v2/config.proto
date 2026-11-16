@@ -218,7 +218,8 @@ enum StorageBackend {
 message FsStorage {
   string path = 1;
 
-  uint64 consensus_view_retention = 2;
+  reserved 2;
+  reserved "consensus_view_retention";
 }
 
 // Retention policy for the archival tables. Durations are whole milliseconds, rounded down
@@ -240,18 +241,6 @@ message PruningConfig {
 
   // SQLite pages vacuumed from the freelist per pruner cycle; unused on Postgres
   optional uint64 pages = 7;
-}
-
-// Retention policy for consensus storage
-message ConsensusPruningConfig {
-  // Views
-  uint64 target_retention = 1;
-
-  // Views
-  uint64 minimum_retention = 2;
-
-  // Bytes retained before garbage collection gets more aggressive
-  uint64 target_usage = 3;
 }
 
 // Durations are whole milliseconds, rounded down
@@ -296,7 +285,8 @@ message SqlStorage {
 
   PruningConfig pruning = 20;
 
-  ConsensusPruningConfig consensus_pruning = 21;
+  reserved 21;
+  reserved "consensus_pruning";
 }
 
 // `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
@@ -370,7 +360,7 @@ message FollowerModule {
 }
 
 // The node's effective runtime configuration: CLI flags, environment and defaults merged. The
-// genesis and the catchup, proposal-fetcher and L1 tuning stay on v1. No credential this
+// genesis and the catchup and L1 tuning stay on v1. No credential this
 // node holds is served, but a URL an operator configured with userinfo is served as given, as v1
 // serves it
 message RuntimeConfigResponse {

@@ -19,7 +19,7 @@ use consensus_api::{
 };
 use futures::StreamExt;
 use hotshot_types::{
-    data::{Leaf2, VidCommon},
+    data::{Leaf2, VidCommon, ViewNumber},
     simple_certificate::{Certificate1, Certificate2},
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -35,6 +35,7 @@ use crate::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         VidCommonQueryData,
     },
+    data_source::update::genesis_vid,
 };
 
 /// How long the ingester waits before reconnecting after the connection fails.
@@ -274,9 +275,19 @@ where
             None
         },
     };
-    let vid_common = ready
-        .vid_common
-        .map(|common| VidCommonQueryData::new(header, VidCommon::V2(common)));
+    let vid_common = match ready.vid_common {
+        Some(common) => Some(VidCommonQueryData::new(header, VidCommon::V2(common))),
+        None if ready.leaf.view_number() == ViewNumber::genesis() => {
+            match genesis_vid(&ready.leaf) {
+                Ok((common, _)) => Some(common),
+                Err(err) => {
+                    tracing::warn!("failed to compute the genesis VID common data: {err:#}");
+                    None
+                },
+            }
+        },
+        None => None,
+    };
     let leaf = LeafQueryData::new(ready.leaf, ready.qc)
         .with_context(|| format!("the QC does not certify the leaf at height {height}"))?;
     let mut info = BlockInfo::new(leaf, block, vid_common, None);

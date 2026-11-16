@@ -198,9 +198,9 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     }
 
     /// Record the newest decided leaf and the QC certifying it, keeping the
-    /// pair with the highest view. Plays the role of the application-level
-    /// anchor persistence (e.g. `append_decided_leaves` in the sequencer);
-    /// the anchor is what a restarted node resumes consensus from.
+    /// pair with the highest view. Plays the role of the anchor in the
+    /// consensus store; the anchor is what a restarted node resumes consensus
+    /// from.
     pub async fn update_anchor_leaf(&self, leaf: Leaf2<TYPES>, qc: QuorumCertificate2<TYPES>) {
         let mut inner = self.inner.write().await;
         if inner

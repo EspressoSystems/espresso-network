@@ -113,11 +113,6 @@ catchup_backoff:
     denominator: 10
   disable: false
 follower: ~
-proposal_fetcher:
-  num_workers: 2
-  fetch_timeout:
-    secs: 2
-    nanos: 0
 l1:
   retry_delay:
     secs: 1
@@ -198,10 +193,6 @@ storage:
       max_usage: ~
       interval: ~
       pages: ~
-    consensus_pruning:
-      target_retention: 302000
-      minimum_retention: 130000
-      target_usage: 1000000000
 modules:
   http:
     port: 24000

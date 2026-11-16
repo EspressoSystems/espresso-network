@@ -305,7 +305,6 @@ where
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
     };
 
-    let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
     let leader_trace_dir = opt.leader_trace_dir.clone();
     let consensus_store_path = opt.consensus_store_path.clone();
@@ -335,7 +334,6 @@ where
                             consumer,
                             opt.is_da,
                             opt.identity,
-                            proposal_fetcher_config,
                             empty_block_delay,
                             leader_trace_dir,
                             consensus_store_path,
@@ -358,7 +356,6 @@ where
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
-                proposal_fetcher_config,
                 empty_block_delay,
                 leader_trace_dir,
                 consensus_store_path,

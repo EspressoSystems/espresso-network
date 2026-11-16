@@ -1,6 +1,5 @@
 mod external_event_handler;
 mod message_compat_tests;
-mod proposal_fetcher;
 mod request_response;
 mod startup_catchup;
 
@@ -81,7 +80,6 @@ use hotshot_types::{
 use moka::future::Cache;
 use options::Identity;
 pub use options::Options;
-use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
 use tracing::info;
 use url::Url;
@@ -153,7 +151,6 @@ pub async fn init_node<P>(
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
-    proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
     leader_trace_dir: Option<PathBuf>,
     consensus_store_path: PathBuf,
@@ -399,7 +396,7 @@ where
     // Load saved consensus state from storage. It is loaded once here, both to
     // seed consensus in `SequencerContext::init` below and to tell whether the
     // network has already cut over to the new protocol.
-    let (initializer, anchor_view) = persistence
+    let initializer = persistence
         .load_consensus_state(instance_state, version_upgrade, &restored)
         .await?;
     let epoch_height = initializer.epoch_height();
@@ -436,7 +433,6 @@ where
         validator_config,
         coordinator,
         initializer,
-        anchor_view,
         storage,
         state_catchup_providers,
         persistence,
@@ -445,7 +441,6 @@ where
         &*metrics,
         genesis.stake_table.capacity,
         event_consumer,
-        proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
@@ -1707,7 +1702,7 @@ pub mod testing {
                 ConsensusStore::open(store_dir, async || import_state(&*persistence).await)
                     .await
                     .unwrap();
-            let (initializer, anchor_view) = persistence
+            let initializer = persistence
                 .load_consensus_state(node_state, upgrade, &restored)
                 .await
                 .unwrap();
@@ -1723,7 +1718,6 @@ pub mod testing {
                 validator_config,
                 coordinator,
                 initializer,
-                anchor_view,
                 storage,
                 catchup_providers,
                 persistence,
@@ -1732,7 +1726,6 @@ pub mod testing {
                 metrics,
                 stake_table_capacity,
                 event_consumer,
-                Default::default(),
                 Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),

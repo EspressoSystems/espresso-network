@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context, ensure};
@@ -37,10 +37,7 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
-    traits::{
-        election::Membership,
-        metrics::{Counter, Gauge, Histogram, Metrics},
-    },
+    traits::{election::Membership, metrics::Metrics},
     upgrade_config::UpgradeConfig,
 };
 use parking_lot::Mutex;
@@ -50,7 +47,6 @@ use tokio::{
     sync::{
         broadcast,
         mpsc::{channel, unbounded_channel},
-        watch,
     },
     task::JoinHandle,
 };
@@ -63,7 +59,6 @@ use crate::{
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
-    proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
@@ -133,7 +128,6 @@ where
         validator_config: ValidatorConfig<SeqTypes>,
         membership_coordinator: EpochMembershipCoordinator<SeqTypes>,
         initializer: HotShotInitializer<SeqTypes>,
-        anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
@@ -142,7 +136,6 @@ where
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
-        proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
@@ -338,9 +331,6 @@ where
             network_config,
             validator_config,
             event_consumer,
-            anchor_view,
-            proposal_fetcher_cfg,
-            metrics,
         )
         .with_task_list(tasks))
     }
@@ -357,9 +347,6 @@ where
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
         event_consumer: impl PersistenceEventConsumer + 'static,
-        anchor_view: Option<ViewNumber>,
-        proposal_fetcher_cfg: ProposalFetcherConfig,
-        metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
 
@@ -378,50 +365,20 @@ where
             validator_config,
         };
 
-        // Spawn proposal fetching tasks.
-        proposal_fetcher_cfg.spawn(
-            &mut ctx.tasks,
-            ctx.consensus_handle.clone(),
-            persistence.clone(),
-            metrics,
-        );
-
-        // Shared between the event loop and the background decide processor.
-        let event_consumer = Arc::new(event_consumer);
-
-        // Wakes the background decide processor. `watch` coalesces: the processor is cursor-driven,
-        // so it only needs the latest decided view.
-        let (decide_tx, decide_rx) = watch::channel::<DecideSignal>(None);
-
-        // Background decide processor: query-service ingestion + GC, decoupled from the event loop.
-        ctx.spawn(
-            "decide processor",
-            process_decided_events_task(
-                persistence.clone(),
-                event_consumer.clone(),
-                decide_rx,
-                anchor_view,
-                DecideProcessorMetrics::new(metrics),
-            ),
-        );
-
         let (signer_tx, signer_rx) = broadcast::channel(SIGNER_QUEUE_CAPACITY);
         ctx.spawn(
             "state signer",
             sign_decided_leaves(ctx.consensus_handle.clone(), state_signer, signer_rx),
         );
 
-        // Event loop. On a decide this only does the leaf write, then signals `decide_tx`.
         ctx.spawn(
             "event handler",
             handle_events(
                 node_id,
                 events,
-                persistence,
                 signer_tx,
                 external_event_handler,
                 event_consumer,
-                decide_tx,
             ),
         );
 
@@ -652,52 +609,14 @@ impl<P: SequencerPersistence> Drop for SequencerContext<P> {
     }
 }
 
-/// Latest decided view, sent from the event loop to the background decide processor. `None` is
-/// the initial/no-op value of the `watch` channel.
-type DecideSignal = Option<ViewNumber>;
-
-/// Metrics for the background decide processor. `backlog` (decided - processed) is the key signal:
-/// sustained growth means staging tables accumulate (no data lost, but disk grows).
-struct DecideProcessorMetrics {
-    last_decided: Arc<dyn Gauge>,
-    last_processed: Arc<dyn Gauge>,
-    backlog: Arc<dyn Gauge>,
-    duration: Arc<dyn Histogram>,
-    failures: Arc<dyn Counter>,
-}
-
-impl DecideProcessorMetrics {
-    fn new(metrics: &(impl Metrics + ?Sized)) -> Self {
-        let metrics = metrics.subgroup("decide_processor".into());
-        Self {
-            last_decided: metrics
-                .create_gauge("last_decided".into(), Some("view".into()))
-                .into(),
-            last_processed: metrics
-                .create_gauge("last_processed".into(), Some("view".into()))
-                .into(),
-            backlog: metrics
-                .create_gauge("backlog".into(), Some("view".into()))
-                .into(),
-            duration: metrics
-                .create_histogram("process_duration".into(), Some("seconds".into()))
-                .into(),
-            failures: metrics.create_counter("failures".into(), None).into(),
-        }
-    }
-}
-
 #[tracing::instrument(skip_all, fields(node_id))]
-async fn handle_events<P, C>(
+async fn handle_events<C>(
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
-    persistence: Arc<P>,
     signer_tx: broadcast::Sender<DecidedLeaf>,
     external_event_handler: ExternalEventHandler,
-    event_consumer: Arc<C>,
-    decide_tx: watch::Sender<DecideSignal>,
+    event_consumer: C,
 ) where
-    P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
     while let Some(event) = events.next().await {
@@ -722,20 +641,6 @@ async fn handle_events<P, C>(
 
         if let Some(leaf) = DecidedLeaf::from_event(&event) {
             let _ = signer_tx.send(leaf);
-        }
-
-        // Critical path: only persist the decided leaves, then signal the background processor.
-        // Signalling after the persist means it never reads ahead of committed state.
-        if let Some(signal) = persistence
-            .persist_event(&event, event_consumer.as_ref())
-            .await
-        {
-            // Keep the max view: a gap-fill decide signals an *older* view
-            // and must not hide a newer, unconsumed tip signal.
-            decide_tx.send_modify(|current| match current {
-                Some(view) if *view > signal => {},
-                _ => *current = Some(signal),
-            });
         }
     }
 }
@@ -763,99 +668,6 @@ async fn sign_decided_leaves(
                 tracing::warn!(skipped, "state signer fell behind, dropped oldest decides");
             },
             Err(broadcast::error::RecvError::Closed) => break,
-        }
-    }
-}
-
-const PROCESS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
-
-/// Turns persisted decided leaves into query-service decide events and GCs processed data.
-/// Decoupled from [`handle_events`] so slow ingestion/GC can't stall (or drop) consensus events;
-/// cursor-driven, so it can lag without losing data.
-#[tracing::instrument(skip_all)]
-async fn process_decided_events_task<P, C>(
-    persistence: Arc<P>,
-    consumer: Arc<C>,
-    mut decide_rx: watch::Receiver<DecideSignal>,
-    anchor_view: Option<ViewNumber>,
-    metrics: DecideProcessorMetrics,
-) where
-    P: SequencerPersistence,
-    C: PersistenceEventConsumer + 'static,
-{
-    // Highest view confirmed processed, for the backlog gauge. Floored at the anchor view; the
-    // cursor reported below raises it.
-    let mut last_processed = anchor_view.map(|v| v.u64()).unwrap_or(0);
-
-    // Process leaves persisted before a previous shutdown but not yet handled.
-    if let Some(view) = anchor_view {
-        match persistence
-            .process_decided_events(view, consumer.as_ref())
-            .await
-        {
-            Ok(processed) => {
-                if let Some(v) = processed {
-                    last_processed = last_processed.max(v.u64());
-                }
-            },
-            Err(err) => tracing::warn!(
-                "failed to process decided leaves on startup, chain may not be up to date: {err:#}"
-            ),
-        }
-    }
-
-    // Reused on a timeout to re-attempt the most recent decide when no new one has arrived.
-    let mut latest: DecideSignal = None;
-
-    loop {
-        // Wait for the next decide, retrying the most recent one if none arrives within the timeout.
-        match tokio::time::timeout(PROCESS_RETRY_INTERVAL, decide_rx.changed()).await {
-            Ok(Ok(())) => latest = *decide_rx.borrow_and_update(),
-            Ok(Err(_)) => {
-                tracing::info!("decide signal channel closed, stopping decide processor");
-                return;
-            },
-            Err(_) => {}, // Timed out; fall through to retry `latest`.
-        }
-
-        let Some(view) = latest else {
-            continue;
-        };
-        let decided = view.u64();
-        metrics.last_decided.set(decided as usize);
-        metrics
-            .backlog
-            .set(decided.saturating_sub(last_processed) as usize);
-
-        let start = Instant::now();
-        let result = persistence
-            .process_decided_events(view, consumer.as_ref())
-            .await;
-        metrics.duration.add_point(start.elapsed().as_secs_f64());
-
-        match result {
-            Ok(processed) => {
-                // Advance from the real cursor, not `decided`: if ingestion/GC lagged, `processed`
-                // stays behind and the backlog gauge reflects it.
-                if let Some(v) = processed {
-                    last_processed = last_processed.max(v.u64());
-                }
-                // reset latest if we have processed all the decided leaves
-                if let Some(view) = latest
-                    && last_processed >= view.u64()
-                {
-                    latest = None;
-                }
-                metrics.last_processed.set(last_processed as usize);
-                metrics
-                    .backlog
-                    .set(decided.saturating_sub(last_processed) as usize);
-            },
-            Err(err) => {
-                // Cursor not advanced, so this range is retried next iteration; no data is lost.
-                metrics.failures.add(1);
-                tracing::warn!(?view, "deferred decide processing failed: {err:#}");
-            },
         }
     }
 }

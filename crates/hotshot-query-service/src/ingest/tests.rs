@@ -253,6 +253,33 @@ async fn ingests_decided_blocks() {
     .expect("every stored height is acknowledged");
 }
 
+/// Consensus does not disperse the genesis block, so its entry has no VID common data and the
+/// ingester computes it.
+#[tokio::test]
+async fn computes_the_genesis_vid_common() {
+    let chain = chain(1).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=1);
+    let genesis = &chain.blocks()[0];
+    assert_eq!(*genesis.leaf.leaf().view_number(), 0);
+    log.entries
+        .lock()
+        .unwrap()
+        .get_mut(&0)
+        .unwrap()
+        .body
+        .as_mut()
+        .unwrap()
+        .vid_common
+        .clear();
+    let sink = MemSink::new(0);
+    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+
+    wait_for(&sink, 1).await;
+    let blocks = sink.blocks.lock().unwrap();
+    assert_eq!(blocks[0].vid_common.as_ref(), Some(&genesis.vid_common));
+}
+
 /// A restarted ingester continues from what the sink holds, and acknowledges that first.
 #[tokio::test]
 async fn resumes_from_the_sink() {
