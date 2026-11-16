@@ -153,29 +153,6 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
     }
 }
 
-/// A captured membership whose DRB was available when it was captured.
-///
-/// This guarantees the leader-selection input, not that every leader lookup
-/// succeeds (for example, an implementation can have an empty committee).
-#[derive(Clone)]
-pub struct LeaderMembership<T: NodeType> {
-    snapshot: <T::Membership as Membership<T>>::Snapshot,
-}
-
-impl<T: NodeType> LeaderMembership<T> {
-    pub fn from_snapshot(snapshot: <T::Membership as Membership<T>>::Snapshot) -> Option<Self> {
-        snapshot.has_drb().then_some(Self { snapshot })
-    }
-
-    pub fn snapshot(&self) -> &<T::Membership as Membership<T>>::Snapshot {
-        &self.snapshot
-    }
-
-    pub fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
-        self.snapshot.leader(view)
-    }
-}
-
 /// Which persisted components to hydrate. Missing records are permitted;
 /// readiness must be checked on the snapshot captured after loading.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1806,8 +1806,6 @@ mod tests {
 
     #[tokio::test]
     async fn table_ensure_and_pure_reads_do_not_wait_for_legacy_drb_catchup() {
-        use hotshot_types::epoch_membership::ResidentEpochReadiness;
-
         let gate = Arc::new(tokio::sync::Notify::new());
         let control = Arc::new(ReadControl {
             drb_gate: Some(gate.clone()),
@@ -1822,11 +1820,6 @@ mod tests {
         );
         let epoch = EpochNumber::new(7);
         assert!(coordinator.snapshot(epoch).is_none());
-        assert!(coordinator.leader_snapshot(epoch).is_none());
-        assert_eq!(
-            coordinator.resident_readiness(epoch),
-            ResidentEpochReadiness::Unavailable
-        );
         tokio::task::yield_now().await;
         assert_eq!(control.stake_reads.load(Ordering::SeqCst), 0);
         assert_eq!(control.drb_reads.load(Ordering::SeqCst), 0);
@@ -1839,10 +1832,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), control.drb_started.notified())
             .await
             .unwrap();
-        assert_eq!(
-            coordinator.resident_readiness(epoch),
-            ResidentEpochReadiness::StakeTable
-        );
+        assert!(!coordinator.snapshot(epoch).unwrap().has_drb());
         tokio::time::timeout(
             Duration::from_millis(100),
             coordinator.ensure_stake_table(epoch),
@@ -1858,11 +1848,11 @@ mod tests {
             .await
             .is_err()
         );
-        assert!(coordinator.leader_snapshot(epoch).is_none());
+        assert!(!coordinator.snapshot(epoch).unwrap().has_drb());
 
         gate.notify_one();
         let leader = coordinator.ensure_leader_membership(epoch).await.unwrap();
-        assert!(leader.snapshot().has_drb());
+        assert!(leader.has_drb());
         assert!(!table.has_drb());
         assert_eq!(control.drb_reads.load(Ordering::SeqCst), 1);
         // A source-root storage error must not prevent restoring a saved DRB.
