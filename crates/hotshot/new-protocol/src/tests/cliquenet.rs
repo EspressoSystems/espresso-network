@@ -162,6 +162,48 @@ async fn bls_key_rotation_keeps_the_shared_x25519_party() {
     assert_delivers(&observer_net, observer, &mut validator_net, new, 2).await;
 }
 
+/// A validator that replaces its x25519 key keeps its BLS key, so the peer
+/// stays and only its cliquenet party changes. The old party must go, or the
+/// observer keeps a connection that nothing addresses any more.
+///
+/// The validator holds its old x25519 key in epochs 1-2 and its new one from
+/// epoch 3, so the observer switches when it applies epoch 2.
+#[tokio::test(flavor = "multi_thread")]
+async fn x25519_key_replacement_removes_the_old_party() {
+    let observer_identity = Identity::generate();
+    let old_identity = Identity::generate();
+    let new_identity = Identity::generate();
+    let mut members = members([
+        &observer_identity.info,
+        &old_identity.info,
+        &new_identity.info,
+    ]);
+    members[2].stake_table_entry = members[1].stake_table_entry.clone();
+    let [observer, validator] = [0, 1].map(|i| members[i].stake_table_entry.stake_key);
+    let membership = rotating_membership(&members);
+    let observer_party = (observer, observer_identity.info.clone());
+    let mut old_net = cliquenet(validator, old_identity, vec![observer_party.clone()]).await;
+    let mut new_net = cliquenet(validator, new_identity, vec![observer_party]).await;
+    let mut observer_net = cliquenet(observer, observer_identity, vec![]).await;
+
+    observer_net
+        .apply_epoch(EpochNumber::new(1), &membership)
+        .unwrap();
+    assert_delivers(&observer_net, observer, &mut old_net, validator, 1).await;
+
+    observer_net
+        .apply_epoch(EpochNumber::new(2), &membership)
+        .unwrap();
+    assert_delivers(&observer_net, observer, &mut new_net, validator, 2).await;
+
+    // The old party sends first, so a connection the observer still held
+    // would deliver its message before or right after the new party's.
+    send(&old_net, validator, observer, 3);
+    assert_delivers(&new_net, validator, &mut observer_net, observer, 4).await;
+    let stray = timeout(Duration::from_millis(250), observer_net.receive()).await;
+    assert!(stray.is_err(), "the old party still delivers: {stray:?}");
+}
+
 /// An x25519 keypair and the connect info that reaches it.
 struct Identity {
     keypair: Keypair,
@@ -239,17 +281,28 @@ async fn assert_delivers(
     to_key: BLSPubKey,
     view: u64,
 ) {
-    let view = ViewNumber::new(view);
-    let request = PayloadFetchMessage::Req(Request::new(view, PayloadRequestBody));
-    let message: Message<TestTypes, Validated> = Message {
-        sender: from_key,
-        message_type: MessageType::PayloadFetch(request),
-    };
-    from.sender().unicast(view, &to_key, &message).unwrap();
+    let message = send(from, from_key, to_key, view);
 
     let received = timeout(Duration::from_secs(10), to.receive())
         .await
         .unwrap_or_else(|_| panic!("no message arrived for {to_key} in view {view}"))
         .unwrap();
     assert_eq!(received, message.into_unchecked());
+}
+
+/// `from`, signing as `from_key`, unicasts a message to `to_key` in `view`.
+fn send(
+    from: &Cliquenet<TestTypes>,
+    from_key: BLSPubKey,
+    to_key: BLSPubKey,
+    view: u64,
+) -> Message<TestTypes, Validated> {
+    let view = ViewNumber::new(view);
+    let request = PayloadFetchMessage::Req(Request::new(view, PayloadRequestBody));
+    let message = Message {
+        sender: from_key,
+        message_type: MessageType::PayloadFetch(request),
+    };
+    from.sender().unicast(view, &to_key, &message).unwrap();
+    message
 }

@@ -63,7 +63,8 @@ impl<K> Shared<K> {
     /// The network parties of `removed` that no peer uses any more.
     ///
     /// A validator that rotates its signing key keeps its x25519 key, so its
-    /// old and its new signing key are two peers of one network party.
+    /// old and its new signing key are two peers of one network party. A peer
+    /// whose address alone changed still uses its x25519 key.
     fn unused_x25519_keys(
         &self,
         removed: impl IntoIterator<Item = x25519::PublicKey>,
@@ -357,13 +358,17 @@ impl<T: NodeType> Cliquenet<T> {
 
         let del_targets = {
             let mut shared = self.inner.shared.write();
+            let mut dropped: Vec<_> = to_del.iter().map(|(_, i)| i.x25519_key).collect();
             for (k, _) in &to_del {
                 shared.peers.remove(k);
             }
             for (k, info) in &to_add {
-                shared.peers.insert(k.clone(), info.clone());
+                // A peer that changed its x25519 key leaves its old party behind.
+                if let Some(old) = shared.peers.insert(k.clone(), info.clone()) {
+                    dropped.push(old.x25519_key);
+                }
             }
-            shared.unused_x25519_keys(to_del.iter().map(|(_, i)| i.x25519_key))
+            shared.unused_x25519_keys(dropped)
         };
 
         let add_targets: Vec<(PublicKey, NetAddr)> = to_add
