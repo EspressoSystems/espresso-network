@@ -271,12 +271,8 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     /// Operators are warned at startup on the version immediately preceding
     /// NEW_PROTOCOL if their on-chain entry is missing network info.
     pub fn is_eligible(&self, protocol_version: Version) -> bool {
-        if protocol_version >= NEW_PROTOCOL_VERSION
-            && (self.x25519_key.is_none() || self.p2p_addr.is_none())
-        {
-            return false;
-        }
-        true
+        protocol_version < NEW_PROTOCOL_VERSION
+            || (self.x25519_key.is_some() && self.p2p_addr.is_some())
     }
 
     pub fn stake_table_key(&self) -> &KEY {
