@@ -1295,6 +1295,18 @@ def test_report_records_the_slow_nodes(collected_run: Path) -> None:
     assert "- slow nodes: node2 on 4 cores" in summary
 
 
+def test_report_records_the_node_stake(collected_run: Path) -> None:
+    assert "node_stake" not in awsb.write_report(collected_run)["deployment"]
+    path = collected_run / "manifest.json"
+    manifest = netbench.read_json(path)
+    manifest["config"] |= {"node_stake": [4, 1, 1]}
+    netbench.write_json(path, manifest)
+    deployment = awsb.write_report(collected_run)["deployment"]
+    assert deployment["node_stake"] == [4, 1, 1]
+    summary = (collected_run / "summary.md").read_text()
+    assert "- node stake: 4,1,1" in summary
+
+
 UP = ["up", "--tag", "old", "--nodes", "3", "--yes"]
 RUN_FLEET = ["run", "--fleet", "fleet1", "--query-db", "rds", "--yes"]
 NODE = {"espresso-node": {"revision": "abc1234", "digest": "sha256:d1"}}
@@ -1481,6 +1493,13 @@ def test_node_env_overrides_the_leader_trace_dir(tmp_path: Path) -> None:
     text = read_host_file(tmp_path, "node1", "node.env")
     assert text.count("ESPRESSO_NODE_LEADER_TRACE_DIR=") == 1
     assert "\nESPRESSO_NODE_LEADER_TRACE_DIR=/x\n" in text
+
+
+def test_each_node_env_carries_its_node_stake(tmp_path: Path) -> None:
+    render_run_dir(tmp_path, two_node_cfg(node_stake=(4, 1)))
+    for node, stake in (("node0", 4), ("node1", 1)):
+        text = read_host_file(tmp_path, node, "node.env")
+        assert f"\nESPRESSO_NODE_STAKE_VALUE={stake}\n" in text
 
 
 def test_leader_trace_off_writes_no_env_or_mount(tmp_path: Path) -> None:

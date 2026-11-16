@@ -372,6 +372,23 @@ def test_node_env_belongs_to_one_run(harness, runner):
         harness.up_args("--node-env", "A=1")
 
 
+def test_node_stake_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).node_stake == ()
+    cfg = awsb.fleet_run_config(harness.run_args("--node-stake", "4,1"), manifest)
+    assert cfg.node_stake == (4, 1)
+    with pytest.raises(awsb.Refused, match="one value per node"):
+        awsb.fleet_run_config(harness.run_args("--node-stake", "4"), manifest)
+    with pytest.raises(awsb.Refused, match="L1 stake table"):
+        awsb.fleet_run_config(
+            harness.run_args("--node-stake", "4,1", "--epoch-height", "300"), manifest
+        )
+    with pytest.raises(SystemExit):
+        harness.run_args("--node-stake", "4,0")
+    with pytest.raises(SystemExit):
+        harness.up_args("--node-stake", "4,1")
+
+
 def test_consensus_storage_belongs_to_one_run(harness, runner):
     manifest = harness.fleet()
     assert awsb.fleet_run_config(harness.run_args(), manifest).consensus_storage == "fs"

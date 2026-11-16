@@ -9,6 +9,7 @@
 | `--consensus-storage journal`                    | bench                        |
 | `ESPRESSO_QUERY_PAYLOAD_DIR=/payload`            | bench                        |
 | `ESPRESSO_BENCH_BLAKE3_TX_HASH=1`                | bench                        |
+| `--node-stake N,N,...`                           | main                         |
 | `--query-engine sqlite`                          | main                         |
 | `EXPERIMENTAL_SQLITE_PRAGMAS=synchronous=normal` | bench                        |
 | `GLIBC_TUNABLES=glibc.malloc.hugetlb=1`          | main                         |
@@ -20,6 +21,10 @@ drops SQLite disk I/O entirely (needs `ESPRESSO_QUERY_PAYLOAD_DIR`). `EXPERIMENT
 `key=value` pragmas applied after the defaults.
 
 With `--prune` and `--query-engine sqlite`, each prune batch holds the write lock, which shows as query lag.
+
+`--node-stake` writes `ESPRESSO_NODE_STAKE_VALUE`, the stake a node registers with the orchestrator, into each node's
+environment. Share sizes, vote thresholds and leader frequency follow it, and VID uses the raw stakes as shard counts
+while the total stays at or below 1000.
 
 ## Host (with `--latency`)
 

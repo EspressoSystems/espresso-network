@@ -154,6 +154,14 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_IS_DA", action)]
     pub is_da: bool,
 
+    /// The stake this node registers with the orchestrator.
+    ///
+    /// A network bootstrapped from the orchestrator takes the stake table of its first two epochs
+    /// from these registrations; later epochs read the L1 stake table. VID share sizes, leader
+    /// selection and vote thresholds all weigh it.
+    #[clap(long, env = "ESPRESSO_NODE_STAKE_VALUE", default_value = "1")]
+    pub stake_value: NonZeroU64,
+
     /// Peer nodes use to fetch missing state
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
@@ -1056,6 +1064,18 @@ pub(crate) mod tests {
         args.extend(extra.iter().map(|s| s.to_string()));
 
         Options::parse_from(args)
+    }
+
+    /// Nodes that do not set a stake keep registering the stake of one they always had.
+    #[test]
+    fn stake_value_defaults_to_one() {
+        assert_eq!(parse_options_with(&[]).stake_value.get(), 1);
+        assert_eq!(
+            parse_options_with(&["--stake-value", "7"])
+                .stake_value
+                .get(),
+            7
+        );
     }
 
     /// A `Genesis` with every field populated (both upgrade modes, DA committee) so the
