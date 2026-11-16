@@ -109,6 +109,7 @@ processes:
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT},http://localhost:${ESPRESSO_NODE_2_API_PORT}
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq0-lc
+      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq0-consensus
       - ESPRESSO_NODE_POSTGRES_HOST=localhost
       - ESPRESSO_NODE_POSTGRES_PORT=${ESPRESSO_NODE_0_DB_PORT}
       - ESPRESSO_NODE_POSTGRES_USER=root
@@ -139,7 +140,7 @@ processes:
     availability: *run-forever
 
   espresso-node-1:
-    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- query -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node1.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
@@ -152,6 +153,7 @@ processes:
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_2_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1-lc
+      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1-consensus
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_1}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_1}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_1}
@@ -169,7 +171,7 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- query -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node2.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
@@ -182,6 +184,7 @@ processes:
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-lc
+      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-consensus
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_2}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_2}

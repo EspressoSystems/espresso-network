@@ -552,6 +552,8 @@ mod test {
             &format!("127.0.0.1:{port2}"),
             "--genesis-file",
             &genesis_file.display().to_string(),
+            "--consensus-store-path",
+            &tmp.path().join("consensus").display().to_string(),
         ]);
 
         // Start the sequencer in a background task. This process will not complete, because it will

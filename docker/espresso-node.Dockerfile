@@ -40,6 +40,10 @@ RUN chmod +x /bin/espresso-node
 # configuration beyond the lifetime of the Docker container itself.
 ENV ESPRESSO_NODE_STORAGE_PATH=/store/espresso
 
-CMD ["/bin/espresso-node", "--", "http"]
+# The consensus store: this node's votes, locks and undecided blocks. Keep it on a volume too; a
+# node that loses it can vote twice in a view.
+ENV ESPRESSO_NODE_CONSENSUS_STORE_PATH=/store/consensus
+
+CMD ["/bin/espresso-node", "--", "http", "--", "query"]
 HEALTHCHECK --interval=1s --timeout=1s --retries=100 CMD curl --fail http://localhost:${ESPRESSO_NODE_API_PORT}/healthcheck  || exit 1
 EXPOSE ${ESPRESSO_NODE_API_PORT}

@@ -1235,6 +1235,7 @@ pub mod testing {
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
                 genesis_chain_config: None,
+                consensus_stores: Default::default(),
             }
         }
 
@@ -1370,6 +1371,12 @@ pub mod testing {
         contracts: Option<Contracts>,
         /// See [`Self::set_genesis_chain_config`].
         genesis_chain_config: Option<ChainConfig>,
+
+        /// The consensus store of each node and persistence, by the node's index and the
+        /// persistence's options. A node restarted on the same persistence finds the
+        /// store it left, and a node started on new persistence starts a new one, as an operator
+        /// would set them up. The index separates nodes without persistence.
+        consensus_stores: Arc<parking_lot::Mutex<HashMap<String, PathBuf>>>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1696,10 +1703,12 @@ pub mod testing {
                 )
             };
 
-            // A fresh store per start: it imports what the persistence holds, so a node
-            // restarted on the same persistence resumes from that, not from the store of its
-            // previous run.
-            let store_dir = tempfile::tempdir().unwrap().keep();
+            let store_dir = self
+                .consensus_stores
+                .lock()
+                .entry(format!("{i}/{persistence_opt:?}"))
+                .or_insert_with(|| tempfile::tempdir().unwrap().keep())
+                .clone();
             let (consensus_store, restored) =
                 ConsensusStore::open(store_dir, async || import_state(&*persistence).await)
                     .await

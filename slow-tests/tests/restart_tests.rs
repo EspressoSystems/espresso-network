@@ -278,6 +278,9 @@ impl NodeParams {
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
+
+    /// Kept across restarts, like `storage`, and deleted with the node.
+    _consensus_store: tempfile::TempDir,
     context: Option<SequencerContext<<S::Options as PersistenceOptions>::Persistence>>,
     modules: Modules,
     opt: Options,
@@ -296,31 +299,31 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
+        let consensus_store = tempfile::tempdir().unwrap();
         let opt = S::options(&storage, opts);
 
-        // Storage options stay set even without the query module, matching how
-        // a production validator runs (`storage-sql` without `query`); only the
-        // public node config reads them here.
+        // Every node runs the query module, whose ingester frees the decide log. Query nodes
+        // also fetch from their peers and serve the light client.
+        let peers = if node.is_query && node.query_peers {
+            network
+                .api_ports
+                .iter()
+                .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
+                .collect()
+        } else {
+            vec![]
+        };
         let mut modules = Modules {
             http: Some(api::options::Http::with_port(node.api_port)),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
+            query: Some(Query {
+                peers,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         if node.is_query {
-            let peers = if node.query_peers {
-                network
-                    .api_ports
-                    .iter()
-                    .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
-                    .collect()
-            } else {
-                vec![]
-            };
-            modules.query = Some(Query {
-                peers,
-                ..Default::default()
-            });
             modules.light_client = Some(Default::default());
         }
 
@@ -363,10 +366,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             "1s",
             "--bootstrap-epoch-catchup-timeout",
             "2s",
+            "--consensus-store-path",
+            &consensus_store.path().display().to_string(),
         ]);
         opt.is_da = node.is_da;
         Self {
             storage,
+            _consensus_store: consensus_store,
             modules,
             opt,
             num_nodes: network.peer_ports.len(),

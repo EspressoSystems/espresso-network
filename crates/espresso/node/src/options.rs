@@ -1053,6 +1053,8 @@ pub(crate) mod tests {
             priv_state,
             "--private-x25519-key".into(),
             priv_x25519,
+            "--consensus-store-path".into(),
+            "consensus-store".into(),
         ];
         args.extend(extra.iter().map(|s| s.to_string()));
 

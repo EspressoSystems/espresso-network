@@ -325,8 +325,10 @@ STORAGE_MODULES: dict[tuple[ConsensusStorage, NodeRole], tuple[str, ...]] = {
 }
 # `light-client` serves the readers of `--clients` and the query nodes fetching from each other
 # through ESPRESSO_NODE_API_PEERS; it adds routes only.
+# Every node runs `query`: its ingester frees the consensus store's decide log, without which the
+# node stops voting.
 API_MODULES: dict[NodeRole, tuple[str, ...]] = {
-    "validator": ("http", "status", "submit", "catchup", "config"),
+    "validator": ("http", "query", "status", "submit", "catchup", "config"),
     "query": ("http", "query", "submit", "catchup", "config", "light-client"),
 }
 # `--prune` runs node0's pruner this often; a run deletes everything past the retention.
@@ -2511,6 +2513,7 @@ def render_node_env(
         "RUST_LOG": "info",
         "RUST_LOG_FORMAT": "json",
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
+        "ESPRESSO_NODE_CONSENSUS_STORE_PATH": "/store/consensus",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
     }
     if consensus_storage == "journal":

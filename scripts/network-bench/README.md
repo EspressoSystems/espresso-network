@@ -86,7 +86,7 @@ laptop                       EC2, one AZ, private IPs
 | `ctl`       | anvil, `deploy`, `stake`, orchestrator, relay, `state-prover`, `agent-drive`, `agent-host`             |
 | `node0`     | espresso-node `-- storage-sql -- http -- query ... -- light-client`, postgres container, `agent-host`  |
 | query nodes | with `--query-nodes K` (all nodes under `--chaos`), `node0..node{K-1}` run the same modules as `node0` |
-| `node1..`   | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`           |
+| `node1..`   | espresso-node `-- storage-fs -- http -- query -- status -- submit -- catchup -- config`, `agent-host`  |
 
 Modules shown are for `--consensus-storage fs` (default). With `journal`, both roles also get `storage-journal` first.
 
