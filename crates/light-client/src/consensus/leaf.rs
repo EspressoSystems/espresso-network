@@ -411,13 +411,14 @@ fn ensure_signs_child(qc: &Certificate, child: &Leaf2, parent: &Leaf2) -> Result
 
 #[cfg(test)]
 mod test {
+    use hotshot_types::data::ViewNumber;
     use pretty_assertions::assert_eq;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
     use super::*;
     use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum, custom_leaf_chain, leaf_chain,
-        leaf_chain_with_upgrade,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum, custom_leaf_chain,
+        leaf_chain, leaf_chain_with_upgrade,
     };
 
     /// A proof as a dishonest prover might send it: the requested leaf alone, with a 2-chain of
@@ -644,12 +645,10 @@ mod test {
             assert!(!proof.push(leaf.clone()));
         }
         assert!(proof.push(leaves[4].clone()));
-        assert_eq!(proof.leaves().len(), 2);
+        assert_eq!(proof.leaves.len(), 2);
 
         let err = proof
-            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
-                LEAF_CHAIN_EPOCH_HEIGHT,
-            )))
+            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
             .await
             .unwrap_err();
         assert!(
@@ -685,9 +684,7 @@ mod test {
                 deciding_leaf,
             );
             let err = proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
-                    LEAF_CHAIN_EPOCH_HEIGHT,
-                )))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
                 .unwrap_err();
             assert!(err.to_string().contains(error), "unexpected error: {err:#}");
@@ -741,9 +738,7 @@ mod test {
             ),
         ] {
             let err = proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum::new(
-                    LEAF_CHAIN_EPOCH_HEIGHT,
-                )))
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
                 .unwrap_err();
             assert!(err.to_string().contains(error), "unexpected error: {err:#}");

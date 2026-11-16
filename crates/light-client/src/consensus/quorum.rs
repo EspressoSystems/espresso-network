@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
+    data::ViewNumber,
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
@@ -472,6 +473,8 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
     use bitvec::vec::BitVec;
     use committable::Commitment;
     use espresso_types::PrivKey;
@@ -957,7 +960,7 @@ mod test {
                 Certificate::non_epoch_change(qc)
             })
             .collect::<Vec<_>>();
-        let err = AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
+        let err = AlwaysTrueQuorum
             .verify_qc_chain_and_get_version(leaves[0].leaf(), &qcs)
             .await
             .unwrap_err();

@@ -1047,9 +1047,7 @@ where
         let child = self
             .fetch_proven_leaf_from_server(LeafId::Number(1), known_finalized, make_quorum)
             .await?;
-        let mut leaves = self
-            .fetch_leaves_in_range_from_server(0, 1, &child, CacheLeaves::Yes)
-            .await?;
+        let mut leaves = self.fetch_leaves_in_range_from_server(0, 1, &child).await?;
         Ok(leaves.remove(0))
     }
 
@@ -1256,14 +1254,14 @@ mod test {
         let leaf = client.leaf(0).await;
 
         let lc = LightClient::from_genesis(
-            SqlStorage::default().await.unwrap(),
+            SqliteStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
         assert_eq!(lc.fetch_leaf(LeafId::Number(0)).await.unwrap(), leaf);
 
         let lc = LightClient::from_genesis(
-            SqlStorage::default().await.unwrap(),
+            SqliteStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
@@ -1274,7 +1272,7 @@ mod test {
 
         // A cached leaf close above genesis is sent to the server as a finalized hint.
         let lc = LightClient::from_genesis(
-            SqlStorage::default().await.unwrap(),
+            SqliteStorage::default().await.unwrap(),
             client.clone(),
             client.genesis().await,
         );
