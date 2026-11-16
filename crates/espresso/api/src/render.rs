@@ -1007,6 +1007,118 @@ impl TryFrom<&VidCommonQueryData<SeqTypes>> for proto::VidCommonResponse {
                     .collect(),
                 ns_lens: namespaced.ns_lens.iter().map(|len| *len as u64).collect(),
             }),
+<<<<<<< HEAD
+||||||| parent of 7ae7a9af5 (fix: light client checks (#5603))
+        })
+    }
+}
+
+impl TryFrom<&VidCommon> for proto::VidCommon {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        Ok(proto::VidCommon {
+            common: Some(common.try_into()?),
+        })
+    }
+}
+
+impl From<&LeafProof> for proto::LightClientLeafProofResponse {
+    fn from(proof: &LeafProof) -> Self {
+        proto::LightClientLeafProofResponse {
+            leaves: proof.leaves().iter().map(Into::into).collect(),
+            proof: Some(proof.proof().into()),
+        }
+    }
+}
+
+impl From<&FinalityProof> for proto::FinalityProof {
+    fn from(proof: &FinalityProof) -> Self {
+        use proto::finality_proof::Proof;
+
+        let arm = match proof {
+            FinalityProof::Assumption => Proof::Assumption(proto::FinalityAssumption {}),
+            FinalityProof::HotStuff2 {
+                committing_qc,
+                deciding_qc,
+            } => Proof::HotStuff2(proto::HotStuff2Finality {
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+            }),
+            FinalityProof::NewProtocol { cert2, leaf_qc } => {
+                Proof::NewProtocol(proto::NewProtocolFinality {
+                    cert2: Some(cert2.as_ref().into()),
+                    leaf_qc: Some(leaf_qc.as_ref().into()),
+                })
+            },
+            FinalityProof::HotStuff {
+                precommit_qc,
+                committing_qc,
+                deciding_qc,
+            } => Proof::HotStuff(proto::HotStuffFinality {
+                precommit_qc: Some(precommit_qc.as_ref().into()),
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+            }),
+=======
+        })
+    }
+}
+
+impl TryFrom<&VidCommon> for proto::VidCommon {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        Ok(proto::VidCommon {
+            common: Some(common.try_into()?),
+        })
+    }
+}
+
+impl From<&LeafProof> for proto::LightClientLeafProofResponse {
+    fn from(proof: &LeafProof) -> Self {
+        proto::LightClientLeafProofResponse {
+            leaves: proof.leaves().iter().map(Into::into).collect(),
+            proof: Some(proof.proof().into()),
+        }
+    }
+}
+
+impl From<&FinalityProof> for proto::FinalityProof {
+    fn from(proof: &FinalityProof) -> Self {
+        use proto::finality_proof::Proof;
+
+        let arm = match proof {
+            FinalityProof::Assumption => Proof::Assumption(proto::FinalityAssumption {}),
+            FinalityProof::HotStuff2 {
+                committing_qc,
+                deciding_qc,
+                deciding_leaf,
+            } => Proof::HotStuff2(proto::HotStuff2Finality {
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+                deciding_leaf: Some(deciding_leaf.as_ref().into()),
+            }),
+            FinalityProof::NewProtocol { cert2, leaf_qc } => {
+                Proof::NewProtocol(proto::NewProtocolFinality {
+                    cert2: Some(cert2.as_ref().into()),
+                    leaf_qc: Some(leaf_qc.as_ref().into()),
+                })
+            },
+            FinalityProof::HotStuff {
+                precommit_qc,
+                committing_qc,
+                deciding_qc,
+                committing_leaf,
+                deciding_leaf,
+            } => Proof::HotStuff(proto::HotStuffFinality {
+                precommit_qc: Some(precommit_qc.as_ref().into()),
+                committing_qc: Some(committing_qc.as_ref().into()),
+                deciding_qc: Some(deciding_qc.as_ref().into()),
+                committing_leaf: Some(committing_leaf.as_ref().into()),
+                deciding_leaf: Some(deciding_leaf.as_ref().into()),
+            }),
+>>>>>>> 7ae7a9af5 (fix: light client checks (#5603))
         };
         Ok(proto::VidCommonResponse {
             height: common.height,

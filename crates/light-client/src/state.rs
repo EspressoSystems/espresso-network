@@ -1020,6 +1020,51 @@ where
     {
         async move {
             let id = id.into();
+            let genesis = matches!(
+                id,
+                LeafRequest::Leaf(LeafId::Number(0)) | LeafRequest::Header(BlockId::Number(0))
+            );
+            if genesis {
+                return self
+                    .fetch_genesis_leaf_from_server(known_finalized, make_quorum)
+                    .await;
+            }
+            self.fetch_proven_leaf_from_server(id, known_finalized, make_quorum)
+                .await
+        }
+    }
+
+    /// The genesis QC is unsigned, so the genesis leaf is proven through its child instead.
+    async fn fetch_genesis_leaf_from_server<Q>(
+        &self,
+        known_finalized: Option<&Leaf2>,
+        make_quorum: impl Send + FnOnce(EpochNumber) -> Q,
+    ) -> Result<LeafQueryData<SeqTypes>>
+    where
+        Q: Send + Quorum,
+    {
+        let known_finalized = known_finalized.filter(|leaf| leaf.height() > 1);
+        let child = self
+            .fetch_proven_leaf_from_server(LeafId::Number(1), known_finalized, make_quorum)
+            .await?;
+        let mut leaves = self
+            .fetch_leaves_in_range_from_server(0, 1, &child, CacheLeaves::Yes)
+            .await?;
+        Ok(leaves.remove(0))
+    }
+
+    fn fetch_proven_leaf_from_server<'a, 'b, Q>(
+        &'a self,
+        id: impl Send + Into<LeafRequest> + 'a,
+        known_finalized: Option<&'b Leaf2>,
+        make_quorum: impl 'a + Send + FnOnce(EpochNumber) -> Q,
+    ) -> impl 'b + Send + Future<Output = Result<LeafQueryData<SeqTypes>>>
+    where
+        'a: 'b,
+        Q: Send + Quorum,
+    {
+        async move {
+            let id = id.into();
             let proof = self
                 .server
                 .leaf_proof(id, known_finalized.map(Leaf2::height))
@@ -1202,6 +1247,39 @@ mod test {
         // Fetching the leaf again hits the cache.
         client.forget_leaf(1).await;
         assert_eq!(lc.fetch_leaf(LeafId::Number(1)).await.unwrap(), leaf);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_genesis_leaf_and_header() {
+        let client = TestClient::default();
+        let leaf = client.leaf(0).await;
+
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        assert_eq!(lc.fetch_leaf(LeafId::Number(0)).await.unwrap(), leaf);
+
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        assert_eq!(
+            lc.fetch_header(BlockId::Number(0)).await.unwrap(),
+            *leaf.header()
+        );
+
+        // A cached leaf close above genesis is sent to the server as a finalized hint.
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+        lc.fetch_leaf(LeafId::Number(10)).await.unwrap();
+        assert_eq!(lc.fetch_leaf(LeafId::Number(0)).await.unwrap(), leaf);
     }
 
     #[tokio::test]
