@@ -72,6 +72,10 @@ where
     D: SequencerDataSource + Debug + Send + Sync + 'static,
 {
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+        // The ingester stores decided blocks, from the consensus store.
+        if matches!(event, CoordinatorEvent::NewDecide { .. }) {
+            return Ok(());
+        }
         if let Err(height) = self.inner.update(event).await {
             bail!("failed to update API state after {height}: {event:?}",);
         }
@@ -90,5 +94,19 @@ where
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         Ok(NodeDataSource::block_height(&*self.inner).await? as u64)
+    }
+}
+
+/// A [`DecideSink`] as the ingester writes to it.
+pub(crate) struct IngestSink(pub Arc<dyn DecideSink>);
+
+#[async_trait]
+impl hotshot_query_service::ingest::Sink<SeqTypes> for IngestSink {
+    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
+        self.0.append(info).await
+    }
+
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        self.0.block_height().await
     }
 }

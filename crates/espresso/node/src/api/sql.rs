@@ -67,7 +67,7 @@ use crate::{
         data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
         options::{self, Query, get_public_env_vars, init_query_data_source},
         state::NodeApiStateImpl,
-        update::{ApiEventConsumer, ApiSink},
+        update::{ApiEventConsumer, ApiSink, DecideSink},
     },
     catchup::{CatchupStorage, NullStateCatchup},
     context::TaskList,
@@ -162,6 +162,7 @@ pub(in crate::api) async fn init_query_module(
     Box<dyn Metrics>,
     Box<dyn ApiSink>,
     Option<RequestResponseStorage>,
+    Option<Arc<dyn DecideSink>>,
 )> {
     let mut provider = Provider::default();
 
@@ -248,10 +249,12 @@ pub(in crate::api) async fn init_query_module(
         });
     }
 
+    let consumer = ApiEventConsumer::from(ds);
     Ok((
         registry,
-        Box::new(ApiEventConsumer::from(ds)),
+        Box::new(consumer.clone()),
         Some(RequestResponseStorage::Sql(inner_storage)),
+        Some(Arc::new(consumer)),
     ))
 }
 

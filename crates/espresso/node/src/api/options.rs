@@ -22,7 +22,7 @@ use super::{
     data_source::{DataSourceOptions, PruningDataSource, SequencerDataSource, provider},
     fs, sql,
     state::NodeApiStateImpl,
-    update::{ApiEventConsumer, ApiSink},
+    update::{ApiEventConsumer, ApiSink, DecideSink, IngestSink},
 };
 use crate::{
     catchup::CatchupStorage, context::TaskList, options::PublicNodeConfig, persistence,
@@ -153,10 +153,11 @@ impl Options {
         // The server state type depends on whether we are running a query or status API or not, so
         // we handle the two cases differently.
         #[allow(clippy::type_complexity)]
-        let (registry, consumer, storage): (
+        let (registry, consumer, storage, ingest_sink): (
             Box<dyn Metrics>,
             Box<dyn ApiSink>,
             Option<RequestResponseStorage>,
+            Option<Arc<dyn DecideSink>>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
                 match opt.into_backend() {
@@ -211,7 +212,7 @@ impl Options {
                 tracing::warn!("gRPC API not available in status-only mode");
             }
 
-            (registry, Box::new(NullEventConsumer), None)
+            (registry, Box::new(NullEventConsumer), None, None)
         } else {
             // If no status or availability API is requested, we don't need metrics or a query
             // service data source. The only app state is the HotShot handle, which we use to
@@ -242,12 +243,18 @@ impl Options {
                 anyhow::Ok(())
             });
 
-            (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
+            (Box::new(NoMetrics), Box::new(NullEventConsumer), None, None)
         };
 
         // The status API reads consensus gauges from this subgroup, by this name.
         let metrics = registry.subgroup("consensus".into());
         let ctx = init_context(metrics, consumer, storage.clone(), registry).await?;
+        // The query service gets the chain from this node's consensus through the ingester.
+        if let (Some(sink), Some(addr)) = (ingest_sink, ctx.consensus_api_addr()) {
+            tasks.spawn("ingester", async move {
+                hotshot_query_service::ingest::run(addr, &IngestSink(sink)).await
+            });
+        }
         send_ctx
             .send(Box::new(ctx.clone()))
             .ok()
@@ -265,6 +272,7 @@ impl Options {
         Box<dyn Metrics>,
         Box<dyn ApiSink>,
         Option<RequestResponseStorage>,
+        Option<Arc<dyn DecideSink>>,
     )> {
         let light_client_db = mod_opt.light_client_db(&query_opt)?;
         let ds = <fs::DataSource as SequencerDataSource>::create(
@@ -312,10 +320,12 @@ impl Options {
             tracing::warn!("gRPC API not available with filesystem storage");
         }
 
+        let consumer = ApiEventConsumer::from(ds);
         Ok((
             registry,
-            Box::new(ApiEventConsumer::from(ds)),
+            Box::new(consumer.clone()),
             Some(RequestResponseStorage::Fs(inner_storage)),
+            Some(Arc::new(consumer)),
         ))
     }
 }

@@ -66,6 +66,7 @@ backon = { workspace = true }
 bincode = { workspace = true }
 chrono = { workspace = true }
 committable = { workspace = true }
+consensus-api = { workspace = true }
 custom_debug = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
@@ -101,7 +102,9 @@ tagged-base64 = { workspace = true }
 tempfile = { workspace = true, optional = true }
 test-utils = { workspace = true, optional = true }
 time = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 trait-variant = { workspace = true }
@@ -121,6 +124,7 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+bytes = { workspace = true }
 disco-types = { workspace = true }
 generic-array = "0.14"
 # Enable our own `testing` feature when building tests.

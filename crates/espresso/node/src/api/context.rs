@@ -70,6 +70,11 @@ pub trait ApiContext: Send + Sync + 'static {
     fn validator_config(&self) -> Option<&ValidatorConfig<SeqTypes>>;
     fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>>;
 
+    /// Where this node serves the ingester API, if it runs consensus.
+    fn consensus_api_addr(&self) -> Option<std::net::SocketAddr> {
+        None
+    }
+
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
     fn request_vid_shares(
@@ -156,6 +161,10 @@ impl<P> ApiContext for SequencerContext<P>
 where
     P: SequencerPersistence,
 {
+    fn consensus_api_addr(&self) -> Option<std::net::SocketAddr> {
+        SequencerContext::consensus_api_addr(self)
+    }
+
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus_handle()
     }
