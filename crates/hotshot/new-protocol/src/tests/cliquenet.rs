@@ -1,8 +1,39 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+    time::Duration,
+};
 
-use hotshot_types::data::ViewNumber;
+use hotshot_example_types::{
+    membership::{
+        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+    },
+    node_stake::{TestNodeStakes, gen_node_lists},
+    node_types::TestTypes,
+    storage_types::TestStorage,
+};
+use hotshot_types::{
+    PeerConfig, PeerConnectInfo,
+    addr::NetAddr,
+    data::{EpochNumber, ViewNumber},
+    drb::INITIAL_DRB_RESULT,
+    epoch_membership::EpochMembershipCoordinator,
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::{election::Membership, metrics::NoMetrics},
+    x25519::Keypair,
+};
+use tokio::time::timeout;
 
-use crate::tests::common::runner::TestRunner;
+use crate::{
+    helpers::test_upgrade_lock,
+    message::{
+        Message, MessageType, Validated,
+        fetch::Request,
+        payload::{PayloadFetchMessage, PayloadRequestBody},
+    },
+    network::Cliquenet,
+    tests::common::runner::TestRunner,
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn five_nodes_decide_same_chain_over_cliquenet() {
@@ -95,4 +126,130 @@ async fn share_starved_node_recovers_over_cliquenet() {
         .run()
         .await
         .unwrap();
+}
+
+/// A validator that rotates its BLS key keeps its x25519 key, so the old and
+/// the new key name one cliquenet party. When the old key leaves the peer
+/// window, the party must stay: the new key still uses it.
+///
+/// The validator holds its old key in epochs 1-2 and its new key from epoch
+/// 3, so the observer drops the old key when it applies epoch 4.
+#[tokio::test(flavor = "multi_thread")]
+async fn bls_key_rotation_keeps_the_shared_x25519_party() {
+    let observer_identity = Identity::generate();
+    let validator_identity = Identity::generate();
+    let members = members([
+        &observer_identity.info,
+        &validator_identity.info,
+        &validator_identity.info,
+    ]);
+    let [observer, old, new] = [0, 1, 2].map(|i| members[i].stake_table_entry.stake_key);
+    let membership = rotating_membership(&members);
+    let observer_party = (observer, observer_identity.info.clone());
+    let mut validator_net = cliquenet(old, validator_identity, vec![observer_party]).await;
+    let mut observer_net = cliquenet(observer, observer_identity, vec![]).await;
+
+    observer_net
+        .apply_epoch(EpochNumber::new(1), &membership)
+        .unwrap();
+    assert_delivers(&observer_net, observer, &mut validator_net, old, 1).await;
+
+    for epoch in 2..=4 {
+        observer_net
+            .apply_epoch(EpochNumber::new(epoch), &membership)
+            .unwrap();
+    }
+    assert_delivers(&observer_net, observer, &mut validator_net, new, 2).await;
+}
+
+/// An x25519 keypair and the connect info that reaches it.
+struct Identity {
+    keypair: Keypair,
+    info: PeerConnectInfo,
+}
+
+impl Identity {
+    fn generate() -> Self {
+        let keypair = Keypair::generate().expect("keypair generation should succeed");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let info = PeerConnectInfo {
+            x25519_key: keypair.public_key(),
+            p2p_addr: NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port),
+        };
+        Self { keypair, info }
+    }
+}
+
+/// Three members, registered with `infos` in order.
+fn members(infos: [&PeerConnectInfo; 3]) -> Vec<PeerConfig<TestTypes>> {
+    let mut members = gen_node_lists::<TestTypes>(3, 3, &TestNodeStakes::default()).0;
+    for (member, info) in members.iter_mut().zip(infos) {
+        member.connect_info = Some(info.clone());
+    }
+    members
+}
+
+/// Epochs 1-2 hold members 0 and 1, epochs 3-5 hold members 0 and 2.
+fn rotating_membership(members: &[PeerConfig<TestTypes>]) -> EpochMembershipCoordinator<TestTypes> {
+    const EPOCH_HEIGHT: u64 = 10;
+    let before = vec![members[0].clone(), members[1].clone()];
+    let after = vec![members[0].clone(), members[2].clone()];
+    let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
+        before.clone(),
+        before,
+        members[0].stake_table_entry.stake_key,
+        EPOCH_HEIGHT,
+        EpochNumber::genesis(),
+    );
+    membership.add_quorum_committee(EpochNumber::new(3), after.clone());
+    membership.add_da_committee(EpochNumber::new(3), after);
+    for epoch in 3..=5 {
+        membership.register_epoch(EpochNumber::new(epoch), INITIAL_DRB_RESULT);
+    }
+    EpochMembershipCoordinator::new(membership, EPOCH_HEIGHT, &TestStorage::default())
+}
+
+/// Networks handshake only with networks of the same name.
+async fn cliquenet(
+    key: BLSPubKey,
+    identity: Identity,
+    parties: Vec<(BLSPubKey, PeerConnectInfo)>,
+) -> Cliquenet<TestTypes> {
+    Cliquenet::create(
+        "test-key-rotation",
+        key,
+        identity.keypair,
+        identity.info.p2p_addr,
+        parties,
+        None,
+        test_upgrade_lock(),
+        Box::new(NoMetrics),
+    )
+    .await
+    .expect("cliquenet creation should succeed")
+}
+
+/// `from`, signing as `from_key`, unicasts a message to `to_key` in `view` and
+/// `to` receives it.
+async fn assert_delivers(
+    from: &Cliquenet<TestTypes>,
+    from_key: BLSPubKey,
+    to: &mut Cliquenet<TestTypes>,
+    to_key: BLSPubKey,
+    view: u64,
+) {
+    let view = ViewNumber::new(view);
+    let request = PayloadFetchMessage::Req(Request::new(view, PayloadRequestBody));
+    let message: Message<TestTypes, Validated> = Message {
+        sender: from_key,
+        message_type: MessageType::PayloadFetch(request),
+    };
+    from.sender().unicast(view, &to_key, &message).unwrap();
+
+    let received = timeout(Duration::from_secs(10), to.receive())
+        .await
+        .unwrap_or_else(|_| panic!("no message arrived for {to_key} in view {view}"))
+        .unwrap();
+    assert_eq!(received, message.into_unchecked());
 }
