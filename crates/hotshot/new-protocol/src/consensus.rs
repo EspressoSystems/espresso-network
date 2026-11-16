@@ -275,6 +275,10 @@ pub struct Consensus<T: NodeType> {
     /// Highest locked QC confirmed persisted; gates release of phase-2 votes.
     stored_high_qc: Option<LockView>,
 
+    /// Whether the decide log is full. Vote2 waits while it is, so a node whose ingester falls
+    /// behind stops helping to decide blocks it cannot deliver.
+    decide_log_full: bool,
+
     /// Messages constructed and accounted for in `voted_*_views` /
     /// `proposed_views`, awaiting their storage confirmations. A pending vote2
     /// also records the locked-QC view it must see persisted before release.
@@ -462,6 +466,7 @@ impl<T: NodeType> Consensus<T> {
             stored_actions: BTreeSet::new(),
             requested_actions: BTreeSet::new(),
             stored_high_qc: None,
+            decide_log_full: false,
             pending_vote1: BTreeMap::new(),
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
@@ -3388,6 +3393,14 @@ impl<T: NodeType> Consensus<T> {
                 }
                 return;
             },
+            StorageOutput::DecideLogFull(full) => {
+                self.decide_log_full = full;
+                let pending: Vec<ViewEpoch> = self.pending_vote2.keys().copied().collect();
+                for key in pending {
+                    self.release_vote2_at(key, outbox);
+                }
+                return;
+            },
         }
         self.release_vote1(view, outbox);
         self.release_vote2(view, outbox);
@@ -3460,7 +3473,8 @@ impl<T: NodeType> Consensus<T> {
             self.pending_vote2.remove(&key);
             return;
         }
-        if !self.vote2_persisted(view, pending.block_view, pending.block_commitment)
+        if self.decide_log_full
+            || !self.vote2_persisted(view, pending.block_view, pending.block_commitment)
             || !self.high_qc_persisted(pending.lock)
         {
             return;
@@ -3960,7 +3974,8 @@ impl<T: NodeType> Consensus<T> {
         let required = self
             .lock_view()
             .expect("locked_cert is set before voting in phase 2");
-        if self.vote2_persisted(view, block_view, proposal_block_commitment)
+        if !self.decide_log_full
+            && self.vote2_persisted(view, block_view, proposal_block_commitment)
             && self.high_qc_persisted(required)
         {
             outbox.push_back(ConsensusOutput::SendVote2(vote));

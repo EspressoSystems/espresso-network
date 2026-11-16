@@ -298,6 +298,42 @@ async fn test_decide_log() {
     assert_eq!(left, vec![v2.leaf.height()]);
 }
 
+/// The writer reports when the decide log reaches its limit, and again when the ingester frees
+/// enough of it.
+#[tokio::test]
+async fn test_decide_log_limit() {
+    let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
+    let mut storage = Storage::new(store.clone(), &private_key).with_decide_log_limit(1);
+    let data = super::common::utils::TestData::new(1).await;
+    let v0 = &data.views[0];
+    let view = ViewNumber::new(5);
+
+    storage.append_decided(std::slice::from_ref(&v0.leaf), &v0.cert1, None, &[None]);
+    storage.record_action(view, ActionKind::Vote);
+    // The log is measured while the batch completes, so either may be reported first.
+    let mut outputs = vec![storage.next().await.unwrap(), storage.next().await.unwrap()];
+    outputs.sort_by_key(|output| matches!(output, StorageOutput::DecideLogFull(_)));
+    assert_eq!(
+        outputs,
+        vec![
+            StorageOutput::Action(view, ActionKind::Vote),
+            StorageOutput::DecideLogFull(true)
+        ]
+    );
+    assert_nothing_more(&mut storage).await;
+
+    store.ack(v0.leaf.height() + 1).unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(5), storage.next())
+            .await
+            .expect("the freed log is reported")
+            .unwrap(),
+        StorageOutput::DecideLogFull(false)
+    );
+    assert_nothing_more(&mut storage).await;
+}
+
 /// Applies everything queued, by queueing one more write and waiting for it.
 async fn flush(storage: &mut Storage<TestTypes, FlakyStore>) {
     let view = ViewNumber::new(u64::MAX - 1);

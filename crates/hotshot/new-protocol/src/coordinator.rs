@@ -64,7 +64,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
-    storage::Storage,
+    storage::{DEFAULT_DECIDE_LOG_LIMIT, Storage},
     store::{ConsensusStore, DiskStore, Restored},
     upgrade::UpgradeProtocol,
     vid::{
@@ -204,6 +204,9 @@ where
         /// `Certificate2` of the anchor persisted on a prior run.
         anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
+        /// How many bytes the decide log may take up before this node holds its vote2.
+        #[builder(default = DEFAULT_DECIDE_LOG_LIMIT)]
+        decide_log_limit: u64,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
     ) -> Self {
@@ -442,7 +445,11 @@ where
                 initializer.epoch_height(),
                 upgrade_lock,
             ))
-            .storage(Storage::new(store, &private_key).with_metrics(metrics))
+            .storage(
+                Storage::new(store, &private_key)
+                    .with_metrics(metrics)
+                    .with_decide_log_limit(decide_log_limit),
+            )
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)

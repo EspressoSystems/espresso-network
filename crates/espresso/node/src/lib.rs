@@ -155,6 +155,7 @@ pub async fn init_node<P>(
     leader_trace_dir: Option<PathBuf>,
     consensus_store_path: PathBuf,
     consensus_api_addr: Option<std::net::SocketAddr>,
+    decide_log_limit: u64,
 ) -> anyhow::Result<SequencerContext<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -447,6 +448,7 @@ where
         leader_trace_dir,
         consensus_store.clone(),
         restored,
+        decide_log_limit,
     )
     .await?;
 
@@ -1732,6 +1734,7 @@ pub mod testing {
                 None,
                 consensus_store,
                 restored,
+                hotshot_new_protocol::storage::DEFAULT_DECIDE_LOG_LIMIT,
             )
             .await
         }

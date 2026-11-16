@@ -17,13 +17,13 @@ use hotshot_types::{
     simple_vote::LockView,
     traits::{
         BlockPayload, EncodeBytes,
-        metrics::{Histogram, Metrics},
+        metrics::{Gauge, Histogram, Metrics},
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::watch, task::JoinHandle};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -34,6 +34,10 @@ use crate::{
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
+
+/// How many bytes the decide log may take up, with the payloads of its entries, before this
+/// node stops sending vote2, unless configured otherwise.
+pub const DEFAULT_DECIDE_LOG_LIMIT: u64 = 10 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActionKind {
@@ -62,6 +66,9 @@ pub enum StorageOutput<T: NodeType> {
     HighQc(LockView),
     /// The payload of the block with this commitment, proposed in this view, is on disk.
     Payload(ViewNumber, VidCommitment2),
+
+    /// The decide log has reached its limit, or has room again after reaching it.
+    DecideLogFull(bool),
 }
 
 impl<T: NodeType> StorageOutput<T> {
@@ -69,6 +76,7 @@ impl<T: NodeType> StorageOutput<T> {
         match self {
             Self::Proposal(view, _) | Self::Action(view, _) | Self::Payload(view, _) => *view,
             Self::HighQc(lock) => lock.view,
+            Self::DecideLogFull(_) => ViewNumber::genesis(),
         }
     }
 }
@@ -99,6 +107,10 @@ pub struct StorageMetrics {
     record_action: Arc<dyn Histogram>,
     /// Duration of one batch commit.
     apply: Arc<dyn Histogram>,
+
+    /// The bytes the decide log takes up, and how many it may.
+    decide_log_bytes: Arc<dyn Gauge>,
+    decide_log_limit: Arc<dyn Gauge>,
 }
 
 impl StorageMetrics {
@@ -114,6 +126,12 @@ impl StorageMetrics {
             append_proposal: histogram("append_proposal"),
             record_action: histogram("record_action"),
             apply: histogram("apply"),
+            decide_log_bytes: m
+                .create_gauge("storage_decide_log_bytes".into(), Some("bytes".into()))
+                .into(),
+            decide_log_limit: m
+                .create_gauge("storage_decide_log_limit".into(), Some("bytes".into()))
+                .into(),
         }
     }
 }
@@ -133,6 +151,14 @@ pub struct Storage<T: NodeType, S> {
 
     /// Outputs of applied batches, not yet returned by [`Self::next`].
     durable: std::collections::VecDeque<StorageOutput<T>>,
+
+    /// The size of the decide log, and the size at which it is full.
+    decide_log_bytes: watch::Receiver<u64>,
+    decide_log_limit: u64,
+
+    /// Whether the last [`StorageOutput::DecideLogFull`] reported the log full.
+    decide_log_full: bool,
+
     metrics: Option<StorageMetrics>,
 }
 
@@ -179,19 +205,40 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     ) -> Self {
         let signature =
             T::SignatureKey::sign(private_key, &[]).expect("signing empty data cannot fail");
+        let decide_log_bytes = store.decide_log_bytes();
         Self {
             store,
             signature,
             pending: Pending::default(),
             applying: None,
             durable: Default::default(),
+            decide_log_bytes,
+            decide_log_limit: DEFAULT_DECIDE_LOG_LIMIT,
+            decide_log_full: false,
             metrics: None,
         }
     }
 
     pub fn with_metrics(mut self, m: &dyn Metrics) -> Self {
         if m.is_recording() {
-            self.metrics = Some(StorageMetrics::new(m));
+            let metrics = StorageMetrics::new(m);
+            metrics
+                .decide_log_limit
+                .set(usize::try_from(self.decide_log_limit).unwrap_or(usize::MAX));
+            self.metrics = Some(metrics);
+        }
+        self
+    }
+
+    /// Sets how many bytes the decide log may take up, with the payloads of its entries.
+    ///
+    /// Once it is full, [`Self::next`] reports [`StorageOutput::DecideLogFull`], and consensus
+    /// holds its vote2 until the ingester frees entries.
+    pub fn with_decide_log_limit(mut self, limit: u64) -> Self {
+        self.decide_log_limit = limit;
+        if let Some(m) = &self.metrics {
+            m.decide_log_limit
+                .set(usize::try_from(limit).unwrap_or(usize::MAX));
         }
         self
     }
@@ -326,19 +373,26 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         }
     }
 
-    /// The next write that has become durable.
+    /// The next write that has become durable, or a change of whether the decide log is full.
     ///
     /// Starts applying the queued writes whenever no batch is being applied. Cancel-safe: a
-    /// batch in progress stays in progress. Pends forever while there is nothing to write.
+    /// batch in progress stays in progress.
     pub async fn next(&mut self) -> Result<StorageOutput<T>, StorageError> {
         loop {
             if let Some(output) = self.durable.pop_front() {
                 return Ok(output);
             }
-            if self.applying.is_none() && self.pending.is_empty() {
-                return std::future::pending().await;
+            if let Some(full) = self.decide_log_full_changed() {
+                return Ok(StorageOutput::DecideLogFull(full));
             }
-            self.apply_next().await?;
+            let idle = self.applying.is_none() && self.pending.is_empty();
+            // A clone, since `apply_next` borrows `self`. It has seen what the original has.
+            let mut decide_log_bytes = self.decide_log_bytes.clone();
+            tokio::select! {
+                applied = self.apply_next(), if !idle => applied?,
+                // The sender lives as long as the store, which this writer holds.
+                _ = decide_log_bytes.changed() => {},
+            }
         }
     }
 
@@ -393,6 +447,30 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         Ok(())
     }
 
+    /// Whether the decide log is full, if that differs from what was last reported.
+    fn decide_log_full_changed(&mut self) -> Option<bool> {
+        let bytes = *self.decide_log_bytes.borrow_and_update();
+        if let Some(m) = &self.metrics {
+            m.decide_log_bytes
+                .set(usize::try_from(bytes).unwrap_or(usize::MAX));
+        }
+        let full = bytes >= self.decide_log_limit;
+        if full == self.decide_log_full {
+            return None;
+        }
+        self.decide_log_full = full;
+        if full {
+            warn!(
+                bytes,
+                limit = self.decide_log_limit,
+                "the decide log is full; holding vote2 until the ingester frees entries"
+            );
+        } else {
+            info!(bytes, "the decide log has room again");
+        }
+        Some(full)
+    }
+
     fn queued(
         &mut self,
         written: anyhow::Result<()>,
@@ -414,13 +492,19 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     }
 
     fn spawn(&self, pending: Pending<T>, delay: Duration) -> JoinHandle<Applied<T>> {
-        let store = self.store.store().clone();
+        let store = self.store.clone();
         let apply_histogram = self.metrics.as_ref().map(|m| m.apply.clone());
         tokio::task::spawn_blocking(move || {
             std::thread::sleep(delay);
             let timer = apply_histogram.map(Measurement::start);
-            let result = store.apply(&pending.batch);
+            let result = store.store().apply(&pending.batch);
             drop(timer);
+            if result.is_ok()
+                && pending.next_height.is_some()
+                && let Err(err) = store.measure_decide_log()
+            {
+                warn!(%err, "failed to measure the decide log");
+            }
             Applied { pending, result }
         })
     }

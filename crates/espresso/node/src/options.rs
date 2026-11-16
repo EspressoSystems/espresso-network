@@ -218,6 +218,19 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CONSENSUS_API_ADDR")]
     pub consensus_api_addr: Option<std::net::SocketAddr>,
 
+    /// Bytes the decide log may take up, with the payloads of its entries, before this node
+    /// stops sending vote2.
+    ///
+    /// The decide log holds decided blocks until the API service has ingested them. It fills
+    /// only while the ingester is down or falls behind; the node votes again once the ingester
+    /// frees entries. Alert on `consensus_storage_decide_log_bytes` well before this limit.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_DECIDE_LOG_LIMIT",
+        default_value = "10737418240"
+    )]
+    pub decide_log_limit: u64,
+
     /// Directory for the leader-event trace `leader_trace_node{N}.csv`. Disabled when unset.
     /// Use local disk: a slow flush blocks consensus.
     #[clap(long, env = "ESPRESSO_NODE_LEADER_TRACE_DIR", hide = true)]

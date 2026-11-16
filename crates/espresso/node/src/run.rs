@@ -309,10 +309,15 @@ where
     let leader_trace_dir = opt.leader_trace_dir.clone();
     let consensus_store_path = opt.consensus_store_path.clone();
     let consensus_api_addr = opt.consensus_api_addr;
+    let decide_log_limit = opt.decide_log_limit;
 
-    if modules.query.is_none() {
-        storage_opt.set_consensus_only();
-    }
+    // Only the query module's ingester frees the decide log. Without it the log fills, and
+    // the node stops voting.
+    anyhow::ensure!(
+        modules.query.is_some(),
+        "the query module is required: it ingests the decided chain, without which this node \
+         stops voting"
+    );
     let persistence = storage_opt.create().await?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
@@ -338,6 +343,7 @@ where
                             leader_trace_dir,
                             consensus_store_path,
                             consensus_api_addr,
+                            decide_log_limit,
                         )
                         .await
                     }
@@ -360,6 +366,7 @@ where
                 leader_trace_dir,
                 consensus_store_path,
                 consensus_api_addr,
+                decide_log_limit,
             )
             .await?
         },

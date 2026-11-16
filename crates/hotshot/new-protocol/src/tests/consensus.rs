@@ -3647,6 +3647,66 @@ async fn test_vote2_gated_on_payload_storage() {
     );
 }
 
+/// Vote2 is held while the decide log is full, and sent once it has room again.
+#[tokio::test]
+async fn test_vote2_held_while_decide_log_full() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = ViewNumber::new(1);
+    let commit = proposal_commitment(&test_data.views[0].proposal.data);
+    let consensus = &mut harness.consensus;
+    let mut outbox = Outbox::new();
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::DecideLogFull(true)),
+        &mut outbox,
+    );
+    let (proposal_input, vid_share_input) = test_data.views[0].proposal_input_consensus(&node_key);
+    consensus.apply(proposal_input, &mut outbox);
+    consensus.apply(vid_share_input, &mut outbox);
+    consensus.apply(
+        state_verified_input(&test_data.views[0].proposal.data, view),
+        &mut outbox,
+    );
+    let VidCommitment::V2(payload) =
+        hotshot_types::traits::block_contents::BlockHeader::<TestTypes>::payload_commitment(
+            &test_data.views[0].proposal.data.block_header,
+        )
+    else {
+        panic!("test blocks have V2 commitments");
+    };
+    for stored in [
+        StorageOutput::Action(view, ActionKind::Vote),
+        StorageOutput::Proposal(view, commit),
+        StorageOutput::Payload(view, payload),
+    ] {
+        consensus.apply(ConsensusInput::Stored(stored), &mut outbox);
+    }
+    assert_eq!(
+        count_matching(&outbox, is_vote1),
+        1,
+        "vote1 does not wait for the decide log"
+    );
+
+    consensus.apply(test_data.views[0].block_reconstructed_input(), &mut outbox);
+    consensus.apply(test_data.views[0].cert1_input(), &mut outbox);
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::HighQc(LockView::of(
+            &test_data.views[0].cert1,
+        ))),
+        &mut outbox,
+    );
+    assert!(any(&outbox, is_view_changed), "the lock still moves");
+    assert!(!any(&outbox, is_vote2), "vote2 waits for room in the log");
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::DecideLogFull(false)),
+        &mut outbox,
+    );
+    assert_eq!(count_matching(&outbox, is_vote2), 1);
+}
+
 /// A pending vote1 is dropped if its view times out before the storage
 /// confirmations arrive.
 #[tokio::test]

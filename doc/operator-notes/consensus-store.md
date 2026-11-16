@@ -11,6 +11,18 @@ On the first start with the setting, the node copies this state from its existin
 the directory. Keep the directory across restarts and upgrades: a node that loses it can vote twice in a view. Do not
 point two nodes at the same directory.
 
+### The query module is required, and a full decide log stops voting
+
+Urgency: High
+
+A node now refuses to start without the `query` module. Consensus keeps decided blocks in a decide log in the consensus
+store until the query module's ingester has stored them, and only the ingester frees them.
+
+The decide log may take up `ESPRESSO_NODE_DECIDE_LOG_LIMIT` bytes (or `--decide-log-limit`, default 10 GiB). When it is
+full, because the ingester is down or falls behind, the node keeps running but stops sending its second-round votes,
+and resumes once the ingester frees entries. Alert on `consensus_storage_decide_log_bytes` well before
+`consensus_storage_decide_log_limit`, and make room for the limit on the disk of the consensus store directory.
+
 ### Removed settings: consensus storage pruning and the proposal fetcher
 
 Urgency: Medium

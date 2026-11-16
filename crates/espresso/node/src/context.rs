@@ -142,6 +142,7 @@ where
         leader_trace_dir: Option<PathBuf>,
         consensus_store: ConsensusStore<SeqTypes>,
         restored: Restored<SeqTypes>,
+        decide_log_limit: u64,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -223,6 +224,7 @@ where
             .block_sizes(block_sizes)
             .store(consensus_store)
             .restored(restored)
+            .decide_log_limit(decide_log_limit)
             .metrics(metrics)
             .consensus_metrics(ConsensusMetricsValue::new(metrics))
             .maybe_anchor_cert2(anchor_cert2)

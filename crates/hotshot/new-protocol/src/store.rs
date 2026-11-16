@@ -99,6 +99,10 @@ impl<T, S> Clone for ConsensusStore<T, S> {
 struct Changes {
     /// The height after the newest decide log entry.
     next_height: watch::Sender<u64>,
+
+    /// The bytes the decide log takes up, with the payloads of its entries.
+    decide_log_bytes: watch::Sender<u64>,
+
     payloads: broadcast::Sender<StoredPayload>,
 }
 
@@ -227,8 +231,13 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             .ok()
             .flatten()
             .map_or(0, |h| h + 1);
+        let decide_log_bytes = store
+            .snapshot()
+            .and_then(|snap| decide_log_bytes(&snap))
+            .unwrap_or(0);
         let changes = Changes {
             next_height: watch::channel(next_height).0,
+            decide_log_bytes: watch::channel(decide_log_bytes).0,
             payloads: broadcast::channel(PAYLOAD_ANNOUNCEMENTS).0,
         };
         Self {
@@ -246,6 +255,19 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     /// Payloads as they become durable. A reader that falls behind misses some.
     pub fn stored_payloads(&self) -> broadcast::Receiver<StoredPayload> {
         self.changes.payloads.subscribe()
+    }
+
+    /// The bytes the decide log takes up, with the payloads of its entries, as it grows and
+    /// as the ingester frees entries.
+    pub fn decide_log_bytes(&self) -> watch::Receiver<u64> {
+        self.changes.decide_log_bytes.subscribe()
+    }
+
+    /// Measures the decide log and announces its size. Blocks on the store.
+    pub(crate) fn measure_decide_log(&self) -> anyhow::Result<()> {
+        let bytes = decide_log_bytes(&self.store.snapshot()?)?;
+        self.changes.decide_log_bytes.send_replace(bytes);
+        Ok(())
     }
 
     /// Announces durable writes: decide log entries up to `next_height`, and `payloads`.
@@ -352,7 +374,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             .delete_range(&DECIDE_LOG, below())
             .delete_range(&DECIDED_PAYLOADS, below());
         self.store.apply(&batch)?;
-        Ok(())
+        self.measure_decide_log()
     }
 
     /// Whether [`Self::import`] has run on this store.
@@ -542,6 +564,13 @@ pub fn put_decided<T: NodeType>(
 }
 
 /// The height of the newest decide log entry.
+/// The bytes the decide log takes up in `snap`, with the payloads of its entries.
+fn decide_log_bytes(snap: &impl Snapshot) -> Result<u64, consensus_store::Error> {
+    let mut usage = snap.usage(&DECIDE_LOG)?;
+    usage.add(snap.usage(&DECIDED_PAYLOADS)?);
+    Ok(usage.inline_bytes.saturating_add(usage.extern_bytes))
+}
+
 fn newest_decided(store: &impl Store) -> anyhow::Result<Option<u64>> {
     let snap = store.snapshot()?;
     match snap.range(&DECIDE_LOG, &KeyRange::all())?.last() {

@@ -320,7 +320,7 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: espresso-node -- http -- config
+    command: espresso-node -- http -- config -- query
     environment:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_2_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_2_TONIC_PORT}

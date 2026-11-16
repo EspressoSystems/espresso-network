@@ -402,14 +402,16 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_2_API_PORT:$ESPRESSO_NODE_2_API_PORT"
-    command: espresso-node -- http -- config
+    command: espresso-node -- http -- config -- query
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_2_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
+      - ESPRESSO_NODE_API_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
       - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
       - ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE
