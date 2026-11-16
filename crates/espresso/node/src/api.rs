@@ -7266,7 +7266,7 @@ mod test {
                 "epoch {skipped} below the seeded window was walked"
             );
             assert!(
-                coordinator.membership_for_epoch(Some(skipped)).is_err(),
+                coordinator.membership_for_epoch(skipped).is_err(),
                 "epoch {skipped} below the seeded window is held"
             );
             coordinator
