@@ -798,15 +798,13 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     // handle_proposal skips the DRB check for epoch 1 (genesis epoch),
     // so voting works. After processing view 7, the leader for view 8
     // should propose — but maybe_propose also needs to skip the DRB check.
-    for i in 0..7 {
+    for view in &test_data.views[..7] {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+        harness.apply(view.cert2_input()).await;
     }
 
     assert!(
@@ -884,15 +882,13 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     harness.apply(first_e2_view.cert2_input()).await;
 
     // ---- Epoch 2 views 12-16 (blocks 12-16, before transition window) ----
-    for i in 11..16 {
+    for view in &test_data.views[11..16] {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+        harness.apply(view.cert2_input()).await;
     }
 
     // ---- Epoch 2 transition window (block 17+) ----
@@ -974,15 +970,13 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     harness.apply(first_e2_view.cert2_input()).await;
 
     // ---- Epoch 2 views 12-16 (before transition window) ----
-    for i in 11..16 {
+    for view in &test_data.views[11..16] {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+        harness.apply(view.cert2_input()).await;
     }
 
     // Epoch 3's stake table and DRB result should already be registered
