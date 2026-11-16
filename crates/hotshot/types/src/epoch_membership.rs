@@ -456,13 +456,15 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     /// Whether `epoch`'s stake table is in memory.
     ///
-    /// It is read from storage if it is not already in RAM.
+    /// It is read from storage if it is not already in RAM. A table storage
+    /// fails to produce counts as not stored, so that catchup goes on to fetch
+    /// it from peers.
     async fn stake_table_present(&self, epoch: EpochNumber) -> Result<bool> {
         if self.membership.snapshot(epoch).is_some() {
             return Ok(true);
         }
         debug!(%epoch, "loading stake table from storage");
-        timeout(
+        let loaded = timeout(
             self.catchup_timeout,
             self.membership
                 .load_epoch(epoch, EpochComponents::StakeTable),
@@ -473,9 +475,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 "loading the stake table for epoch {epoch} from storage exceeded {:?}",
                 self.catchup_timeout
             )
-        })?
-        .map(|availability| availability == StakeTableAvailability::Present)
-        .wrap()
+        })?;
+        match loaded {
+            Ok(availability) => Ok(availability == StakeTableAvailability::Present),
+            Err(err) => {
+                warn!(%epoch, %err, "failed to load the stake table from storage");
+                Ok(self.membership.snapshot(epoch).is_some())
+            },
+        }
     }
 
     /// Make `epoch`'s DRB result present.
@@ -489,13 +496,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         {
             return Ok(());
         }
-        timeout(
-            self.catchup_timeout,
-            self.membership.load_epoch(epoch, EpochComponents::Leader),
-        )
-        .await
-        .map_err(|_| anytrace::error!("loading persisted DRB for epoch {epoch} timed out"))?
-        .wrap()?;
+        self.load_persisted_drb(epoch).await;
         if self.leader_snapshot(epoch).is_some() {
             return Ok(());
         }
@@ -540,6 +541,27 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             Err(anytrace::error!(
                 "the drb result for epoch {epoch} was not stored; its stake table is gone"
             ))
+        }
+    }
+
+    /// Restore `epoch`'s DRB result from storage, if it is stored.
+    ///
+    /// `drb_ready` goes on to peers for a DRB this does not produce, so a
+    /// storage failure is logged rather than returned.
+    async fn load_persisted_drb(&self, epoch: EpochNumber) {
+        let loaded = timeout(
+            self.catchup_timeout,
+            self.membership.load_epoch(epoch, EpochComponents::Leader),
+        )
+        .await;
+        match loaded {
+            Ok(Ok(_)) => {},
+            Ok(Err(err)) => warn!(%epoch, %err, "failed to load the persisted DRB result"),
+            Err(_) => warn!(
+                %epoch,
+                timeout = ?self.catchup_timeout,
+                "loading the persisted DRB result timed out"
+            ),
         }
     }
 

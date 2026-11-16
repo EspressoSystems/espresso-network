@@ -397,6 +397,32 @@ async fn catchup_retries_after_persistence_query_stalls() {
     );
 }
 
+/// A stake table that storage fails to produce counts as not stored, so the
+/// attempt goes on to fetch it from peers.
+///
+/// Pins the fail-over itself, which a retry does not prove: an attempt that
+/// stopped at the storage timeout would be retried just the same, and a node
+/// whose storage stays stalled would never ask a peer.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn stalled_persistence_query_fails_over_to_peers() {
+    let (store, coordinator) = setup();
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    let Err(err) = coordinator.ensure_stake_table(target).await else {
+        panic!("neither the stalled storage nor the mock peers can serve epoch {target}")
+    };
+
+    assert!(
+        store.loads_of(WALK_EPOCH) >= 1,
+        "catchup never tried storage for epoch {WALK_EPOCH}"
+    );
+    let err = format!("{err:?}");
+    assert!(
+        err.contains("failed to fetch epoch root leaf"),
+        "catchup should have failed fetching from peers, not at the stalled read: {err}"
+    );
+}
+
 /// Blast radius: `load_stake_table` serializes on a process-wide lock, so a
 /// single stalled query would make every *other* epoch permanently
 /// unserviceable — no load could even reach storage.

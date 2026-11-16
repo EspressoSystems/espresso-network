@@ -318,8 +318,7 @@ impl EpochCommittees {
             let next_epoch = epoch
                 .checked_sub(1)
                 .context("underflow: cannot get next epoch when epoch is 0")?;
-            self.load_epoch(EpochNumber::new(next_epoch), EpochComponents::SourceRoot)
-                .await?;
+            self.restore_source_root(EpochNumber::new(next_epoch)).await;
             let prev_ts = match self.map_header(next_epoch, |h| h.timestamp_millis_internal()) {
                 Some(ts) => ts,
                 None => {
@@ -560,6 +559,16 @@ impl EpochCommittees {
         }
     }
 
+    /// Restore `epoch`'s persisted root header if it is not already resident.
+    ///
+    /// Every caller falls back to peers or L1 for a header this does not
+    /// produce, so a storage failure is logged rather than returned.
+    async fn restore_source_root(&self, epoch: EpochNumber) {
+        if let Err(err) = self.load_epoch(epoch, EpochComponents::SourceRoot).await {
+            warn!(%epoch, %err, "failed to restore the persisted epoch root");
+        }
+    }
+
     async fn read_epoch_components(
         &self,
         persistence: &dyn MembershipPersistence,
@@ -720,8 +729,8 @@ pub async fn fetch_and_calculate_block_reward(
     if committee.header.is_none() {
         coordinator
             .membership()
-            .load_epoch(current_epoch, EpochComponents::SourceRoot)
-            .await?;
+            .restore_source_root(current_epoch)
+            .await;
     }
     let header = match committee.header.clone().or_else(|| {
         coordinator
@@ -908,7 +917,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             block_reward = Some(reward);
         }
 
-        self.load_epoch(epoch, EpochComponents::SourceRoot).await?;
+        self.restore_source_root(epoch).await;
 
         let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
 
@@ -1629,6 +1638,7 @@ mod tests {
         drb_reads: AtomicUsize,
         root_reads: AtomicUsize,
         fail_stake: AtomicBool,
+        fail_drb: AtomicBool,
         fail_root: AtomicBool,
         drb_gate: Option<Arc<tokio::sync::Notify>>,
         drb_started: tokio::sync::Notify,
@@ -1667,6 +1677,9 @@ mod tests {
             self.control.drb_started.notify_one();
             if let Some(gate) = &self.control.drb_gate {
                 gate.notified().await;
+            }
+            if self.control.fail_drb.load(Ordering::SeqCst) {
+                anyhow::bail!("injected drb read failure");
             }
             Ok((*epoch == 7).then_some([7; 32]))
         }
@@ -1867,10 +1880,16 @@ mod tests {
         ));
     }
 
+    // The persisted root is an optimisation here: a root that fails to read
+    // must not stop a decided epoch root from being installed.
+    #[rstest]
+    #[case::root_read_succeeds(false)]
+    #[case::root_read_fails(true)]
     #[tokio::test]
-    async fn add_epoch_root_does_not_wait_for_persisted_drb() {
+    async fn add_epoch_root_does_not_wait_for_persisted_drb(#[case] fail_root: bool) {
         let control = Arc::new(ReadControl {
             drb_gate: Some(Arc::new(tokio::sync::Notify::new())),
+            fail_root: AtomicBool::new(fail_root),
             ..Default::default()
         });
         let committees = committees_with_read_control(control.clone()).await;
@@ -1956,6 +1975,66 @@ mod tests {
                 .unwrap(),
             StakeTableAvailability::Present
         );
+    }
+
+    // The reward path has a peer fallback for a missing root, so a root that
+    // fails to read must reach it instead of failing the reward.
+    #[tokio::test]
+    async fn block_reward_falls_back_to_peers_when_root_read_fails() {
+        let control = Arc::new(ReadControl {
+            fail_root: AtomicBool::new(true),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let epoch = EpochNumber::new(3);
+        {
+            let mut inner = committees.inner.write();
+            let template = inner
+                .epoch_committee(EpochNumber::genesis())
+                .unwrap()
+                .clone();
+            inner.put_epoch_committee(epoch, template);
+        }
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees,
+            100u64,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        let err = fetch_and_calculate_block_reward(coordinator, epoch)
+            .await
+            .unwrap_err();
+        assert_eq!(control.root_reads.load(Ordering::SeqCst), 1);
+        assert!(
+            format!("{err:#}").contains("Failed to get epoch root"),
+            "the reward should have failed in the peer fallback, got: {err:#}"
+        );
+    }
+
+    // `drb_ready` goes to peers for a DRB it does not have, so a DRB that
+    // fails to read must reach them instead of failing the acquisition.
+    #[tokio::test]
+    async fn leader_acquisition_falls_back_to_peers_when_drb_read_fails() {
+        let control = Arc::new(ReadControl {
+            fail_drb: AtomicBool::new(true),
+            ..Default::default()
+        });
+        let committees = committees_with_read_control(control.clone()).await;
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees,
+            100u64,
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        let epoch = EpochNumber::new(7);
+        let Err(err) = coordinator.ensure_leader_membership(epoch).await else {
+            panic!("neither storage nor the mock peers can produce the DRB")
+        };
+        assert_eq!(control.drb_reads.load(Ordering::SeqCst), 1);
+        let err = format!("{err:?}");
+        assert!(
+            !err.contains("failed to load persisted DRB"),
+            "the storage failure should have been logged, not returned: {err}"
+        );
+        assert!(coordinator.snapshot(epoch).is_some());
     }
 
     #[tokio::test]
