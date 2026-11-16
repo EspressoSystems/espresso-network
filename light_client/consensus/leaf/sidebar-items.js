@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["FinalityProof","LeafProofHint"],"struct":["LeafProof"]};
+window.SIDEBAR_ITEMS = {"enum":["FinalityProof","LeafProofHint"],"fn":["ensure_signs_child"],"struct":["LeafProof"]};
