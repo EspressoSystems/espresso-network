@@ -58,6 +58,38 @@ type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
 /// snapshot.
 type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
 
+/// Consensus components currently resident in memory. This says nothing about
+/// reward context, authenticated roots, or persistence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidentEpochReadiness {
+    Unavailable,
+    StakeTable,
+    Leader,
+}
+
+/// A captured membership whose DRB was available when it was captured.
+///
+/// This guarantees the leader-selection input, not that every leader lookup
+/// succeeds (for example, an implementation can have an empty committee).
+#[derive(Clone)]
+pub struct LeaderMembership<T: NodeType> {
+    snapshot: Snapshot<T>,
+}
+
+impl<T: NodeType> LeaderMembership<T> {
+    pub fn from_snapshot(snapshot: Snapshot<T>) -> Option<Self> {
+        snapshot.has_drb().then_some(Self { snapshot })
+    }
+
+    pub fn snapshot(&self) -> &Snapshot<T> {
+        &self.snapshot
+    }
+
+    pub fn leader(&self, view: ViewNumber) -> Result<T::SignatureKey> {
+        self.snapshot.leader(view)
+    }
+}
+
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     membership: Arc<TYPES::Membership>,
@@ -164,6 +196,20 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     pub fn set_drb_difficulty_selector(&self, f: DrbDifficultySelectorFn) {
         let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write();
         *drb_difficulty_selector_writer = Some(f);
+    }
+
+    /// Capture leader-selection inputs without starting acquisition.
+    pub fn leader_snapshot(&self, epoch: EpochNumber) -> Option<LeaderMembership<TYPES>> {
+        LeaderMembership::from_snapshot(self.membership.snapshot(epoch)?)
+    }
+
+    /// What is resident for `epoch`, without storage, network or tasks.
+    pub fn resident_readiness(&self, epoch: EpochNumber) -> ResidentEpochReadiness {
+        match self.membership.snapshot(epoch) {
+            None => ResidentEpochReadiness::Unavailable,
+            Some(snapshot) if snapshot.has_drb() => ResidentEpochReadiness::Leader,
+            Some(_) => ResidentEpochReadiness::StakeTable,
+        }
     }
 
     /// Get a Membership for a given Epoch, which is guaranteed to have a randomized stake
