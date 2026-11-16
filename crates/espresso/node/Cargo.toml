@@ -8,7 +8,7 @@ edition.workspace = true
 normal = ["hotshot-testing"]
 
 [package.metadata.cargo-machete]
-ignored = ["vergen", "vergen-gitcl", "include_dir", "hotshot_builder_api"]
+ignored = ["vergen", "include_dir", "hotshot_builder_api"]
 
 [lib]
 name = "espresso_node"
@@ -55,7 +55,7 @@ disco-types = { workspace = true }
 dotenvy = { workspace = true }
 dyn-clone = { workspace = true }
 either = { workspace = true }
-espresso-api = { path = "../api" }
+espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-keyset = { workspace = true }
 espresso-telemetry = { workspace = true }
@@ -126,7 +126,6 @@ vid = { workspace = true }
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
-vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 bitvec = { workspace = true }
