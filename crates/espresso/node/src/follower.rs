@@ -760,7 +760,7 @@ impl<P: SequencerPersistence> Follower<P> {
         let epoch = epoch_from_block_number(from, self.epoch_height);
         let _ = self
             .coordinator
-            .membership_for_epoch(Some(EpochNumber::new(epoch)));
+            .membership_for_epoch(EpochNumber::new(epoch));
     }
 
     /// The height the first poll ingests from: the upstreams' when they answer by `deadline`, else
