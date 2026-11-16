@@ -550,7 +550,7 @@ async fn catchup_skips_seed_when_adjacent_ok() {
     // Epoch 3 is one beyond the held pair; the walk starts, the seed does not.
     assert!(
         coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(WALK_EPOCH)))
+            .stake_table_for_epoch(EpochNumber::new(WALK_EPOCH))
             .is_err()
     );
 
@@ -567,7 +567,7 @@ async fn seed_error_is_followed_by_walk_ok() {
 
     assert!(
         coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH))
             .is_err()
     );
 
@@ -588,7 +588,7 @@ async fn seeds_do_not_overlap_ok() {
     coordinator.set_catchup_seed(seed);
 
     for target in [TARGET_EPOCH, TARGET_EPOCH + 1, TARGET_EPOCH + 2] {
-        let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(target)));
+        let _ = coordinator.stake_table_for_epoch(EpochNumber::new(target));
     }
 
     assert!(wait_until(RECOVERY_BUDGET, || calls.lock().len() >= 3).await);
@@ -606,7 +606,7 @@ async fn seeded_start_resumes_the_walk_ok() {
 
     assert!(
         coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH))
             .is_err()
     );
 
@@ -647,10 +647,10 @@ async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
     };
     coordinator.set_catchup_seed(seed);
 
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH));
     assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
     // Pair (TARGET_EPOCH - 3, TARGET_EPOCH - 2) is held once the first seed has installed.
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH - 1)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH - 1));
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
@@ -675,9 +675,9 @@ async fn adjacent_catchup_does_not_wait_for_a_running_seed_ok() {
     };
     coordinator.set_catchup_seed(seed);
 
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH));
     assert!(wait_until(RECOVERY_BUDGET, || calls.load(Ordering::SeqCst) == 1).await);
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(WALK_EPOCH)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(WALK_EPOCH));
 
     assert!(
         wait_until(RECOVERY_BUDGET, || store.loads_of(WALK_EPOCH) >= 1).await,
