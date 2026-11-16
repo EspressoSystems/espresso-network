@@ -261,7 +261,7 @@ async fn test_timeout_certificate_naming_another_view_is_not_delivered() {
     let mut harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(timed_out.epoch_number))
+        .membership_for_epoch(timed_out.epoch_number)
         .expect("the genesis epoch resolves");
     let message = |named: ViewNumber| Message::<TestTypes, Validated> {
         sender: timed_out.leader_public_key,
@@ -300,7 +300,7 @@ async fn test_timeout_evidence_naming_another_view_is_invalid() {
     let harness = TestHarness::new_with_upgrade_lock(0, test_timeout_epoch_lock()).await;
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(timed_out.epoch_number))
+        .membership_for_epoch(timed_out.epoch_number)
         .expect("the genesis epoch resolves");
     let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
     let threshold = membership.success_threshold();
@@ -406,7 +406,7 @@ async fn test_unsigned_view_zero_timeout_certificate_does_not_move_the_epoch() {
     // Signed under another epoch, and relabelled to the forged one.
     let genesis = harness
         .membership()
-        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .membership_for_epoch(EpochNumber::genesis())
         .expect("the genesis epoch resolves");
     let mut cert = build_timeout_cert3_with_lock(
         ViewNumber::genesis(),
@@ -521,7 +521,7 @@ fn view_one_proposal_on_forged_genesis_parent(
 
     let leader = harness
         .membership()
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the forged epoch resolves")
         .leader(proposal.view_number)
         .expect("view 1 has a leader");
@@ -609,7 +609,7 @@ async fn test_signed_view_zero_timeout_certificate_is_delivered() {
     let epoch = EpochNumber::genesis();
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the genesis epoch resolves");
     let cert = timeout_cert_naming(
         ViewNumber::genesis(),
@@ -731,7 +731,7 @@ async fn test_timeout_vote_evidence_overrides_the_epoch_check() {
 
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the genesis epoch resolves");
     let evidence = build_timeout_cert3(
         test_data.views[0].view_number,
@@ -1807,7 +1807,7 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
     let timed_out = &test_data.views[30];
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(timed_out.epoch_number))
+        .membership_for_epoch(timed_out.epoch_number)
         .expect("the genesis epoch resolves");
     let tc = CatchupEvidence::from(&build_timeout_cert(
         timed_out.view_number,
@@ -2139,7 +2139,7 @@ async fn test_malformed_certificate1_is_not_delivered() {
     let (view, epoch) = (ViewNumber::new(1), EpochNumber::genesis());
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the genesis epoch resolves");
     let cert = |block| {
         let signer = &signers.views[0];
@@ -2221,7 +2221,7 @@ async fn test_view_zero_certificate1_is_not_delivered() {
     let epoch = EpochNumber::genesis();
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the genesis epoch resolves");
     let signer = &signers.views[0];
     let genuine = build_cert1(
@@ -2246,7 +2246,7 @@ async fn test_malformed_certificate2_is_not_delivered() {
     let (view, epoch) = (ViewNumber::new(1), EpochNumber::genesis());
     let membership = harness
         .membership()
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the genesis epoch resolves");
     let cert = |block| {
         let signer = &signers.views[0];
@@ -2295,7 +2295,7 @@ async fn test_malformed_high_qc_moves_nothing() {
     let cert = |epoch: EpochNumber, block| {
         let membership = harness
             .membership()
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .expect("the epoch resolves");
         let signer = &signers.views[0];
         build_cert1(
@@ -2784,7 +2784,7 @@ fn late_member(key: &BLSPubKey) -> LatePeer {
 fn leader_of(harness: &TestHarness, view: ViewNumber) -> BLSPubKey {
     let leader = harness
         .membership()
-        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .membership_for_epoch(EpochNumber::genesis())
         .expect("the genesis epoch resolves")
         .leader(view)
         .expect("the view has a leader");

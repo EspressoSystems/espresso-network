@@ -261,6 +261,7 @@ fn setup_with(
         EPOCH_HEIGHT,
         EpochNumber::new(FIRST_EPOCH),
     )
+    .expect("genesis without duplicate keys")
     .with_storage_read_timeout(storage_read_timeout);
 
     let coordinator = EpochMembershipCoordinator::new(
@@ -372,7 +373,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     let (store, coordinator) = setup();
     let target = EpochNumber::new(TARGET_EPOCH);
 
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} has no local snapshot, so this must not succeed")
     };
     assert!(
@@ -385,7 +386,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
     );
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} must still be unavailable")
     };
     assert!(
@@ -400,7 +401,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     // restarted and every view it leads times out.
     let stalled_epoch = WALK_EPOCH;
     let retried = wait_until(RECOVERY_BUDGET, || {
-        let _ = coordinator.stake_table_for_epoch(Some(target));
+        let _ = coordinator.stake_table_for_epoch(target);
         store.loads_of(stalled_epoch) >= 2
     })
     .await;
@@ -429,7 +430,7 @@ async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
     let target = EpochNumber::new(TARGET_EPOCH);
     let other = EpochNumber::new(OTHER_EPOCH);
 
-    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
+    assert!(coordinator.stake_table_for_epoch(target).is_err());
     assert!(
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
@@ -474,7 +475,7 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
     let (store, coordinator) = setup_with(Duration::from_secs(3600), Duration::from_millis(500));
     let target = EpochNumber::new(TARGET_EPOCH);
 
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} has no local snapshot, so this must not succeed")
     };
     assert!(
@@ -494,7 +495,7 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
     // fine — the wedge under test is the permanent map entry, not the locks.
     let recovered = wait_until(RECOVERY_BUDGET, || {
         matches!(
-            coordinator.stake_table_for_epoch(Some(target)),
+            coordinator.stake_table_for_epoch(target),
             Err(e) if format!("{e:?}").contains("Starting catchup")
         )
     })
@@ -549,7 +550,7 @@ async fn catchup_skips_seed_when_adjacent_ok() {
     // Epoch 3 is one beyond the held pair; the walk starts, the seed does not.
     assert!(
         coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(WALK_EPOCH)))
+            .stake_table_for_epoch(EpochNumber::new(WALK_EPOCH))
             .is_err()
     );
 
@@ -566,7 +567,7 @@ async fn seed_error_is_followed_by_walk_ok() {
 
     assert!(
         coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH))
             .is_err()
     );
 
@@ -587,7 +588,7 @@ async fn seeds_do_not_overlap_ok() {
     coordinator.set_catchup_seed(seed);
 
     for target in [TARGET_EPOCH, TARGET_EPOCH + 1, TARGET_EPOCH + 2] {
-        let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(target)));
+        let _ = coordinator.stake_table_for_epoch(EpochNumber::new(target));
     }
 
     assert!(wait_until(RECOVERY_BUDGET, || calls.lock().len() >= 3).await);
@@ -605,7 +606,7 @@ async fn seeded_start_resumes_the_walk_ok() {
 
     assert!(
         coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)))
+            .stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH))
             .is_err()
     );
 
@@ -646,10 +647,10 @@ async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
     };
     coordinator.set_catchup_seed(seed);
 
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH));
     assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
     // Pair (TARGET_EPOCH - 3, TARGET_EPOCH - 2) is held once the first seed has installed.
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH - 1)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH - 1));
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
@@ -674,9 +675,9 @@ async fn adjacent_catchup_does_not_wait_for_a_running_seed_ok() {
     };
     coordinator.set_catchup_seed(seed);
 
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(TARGET_EPOCH)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH));
     assert!(wait_until(RECOVERY_BUDGET, || calls.load(Ordering::SeqCst) == 1).await);
-    let _ = coordinator.stake_table_for_epoch(Some(EpochNumber::new(WALK_EPOCH)));
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(WALK_EPOCH));
 
     assert!(
         wait_until(RECOVERY_BUDGET, || store.loads_of(WALK_EPOCH) >= 1).await,
