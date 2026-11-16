@@ -1043,6 +1043,7 @@ mod tests {
                 NodeState::mock(),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
                 &imported(&storage).await,
+                None,
             )
             .await
             .unwrap();
@@ -1111,6 +1112,7 @@ mod tests {
                 NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
                 &imported(&storage).await,
+                None,
             )
             .await
             .unwrap();
@@ -1130,6 +1132,7 @@ mod tests {
                 NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
                 &imported(&storage).await,
+                None,
             )
             .await
             .unwrap();

@@ -4060,6 +4060,7 @@ dependencies = [
  "sha3 0.10.9",
  "static_assertions",
  "tagged-base64",
+ "tempfile",
  "test-log",
  "test-server",
  "test-utils",

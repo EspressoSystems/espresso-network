@@ -677,7 +677,10 @@ impl<P: SequencerPersistence> Follower<P> {
         {
             info = info.with_cert2(cert2);
         }
-        self.sink.append(info, None).await.context("storing block")?;
+        self.sink
+            .append(info, None)
+            .await
+            .context("storing block")?;
 
         self.track_upgrade(leaf.leaf()).await;
         self.track_epoch(leaf.leaf()).await?;

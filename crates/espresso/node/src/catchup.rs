@@ -1659,14 +1659,6 @@ impl StateCatchup for ParallelStateCatchup {
     fn is_local(&self) -> bool {
         self.providers.lock().iter().all(|p| p.catchup.is_local())
     }
-
-    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
-        // The copy shares the provider list, so it also sees providers added later.
-        Some(Arc::new(Self {
-            local_timeout,
-            ..self.clone()
-        }))
-    }
 }
 
 /// Add accounts to the in-memory consensus state.
@@ -1817,7 +1809,6 @@ mod test {
         time::Instant,
     };
 
-    use espresso_types::v0::mock::MockStateCatchup;
     use hotshot_types::traits::metrics::NoMetrics;
     use test_utils::reserve_tcp_port;
 
@@ -1912,39 +1903,6 @@ mod test {
             elapsed >= 5 * BASE_TIMEOUT,
             "the peer got only {elapsed:?} to answer"
         );
-    }
-
-    /// A copy with a longer local timeout waits that long on a slow local provider, where the
-    /// original gives up on it.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn with_local_timeout_waits_longer_on_local_providers() {
-        let slow = MockStateCatchup::default().with_delay(Duration::from_millis(500));
-        let catchup = ParallelStateCatchup::new(&[Arc::new(slow)], Duration::from_millis(50));
-        let chain_config = ChainConfig::default().commit();
-        // There is no remote provider, so a local read cut short fails.
-        assert!(
-            catchup
-                .try_fetch_chain_config(0, chain_config)
-                .await
-                .is_err()
-        );
-
-        let longer = catchup
-            .with_local_timeout(Duration::from_secs(5))
-            .expect("a parallel catchup has a local timeout");
-        longer
-            .try_fetch_chain_config(0, chain_config)
-            .await
-            .expect("the local provider answers within the longer timeout");
-
-        // The copy shares the provider list, so it also sees providers added later.
-        catchup.add_provider(Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
-            vec!["http://127.0.0.1:1".parse().unwrap()],
-            BackoffParams::default(),
-            Duration::from_secs(1),
-            &NoMetrics,
-        )));
-        assert!(!longer.is_local());
     }
 
     #[test]

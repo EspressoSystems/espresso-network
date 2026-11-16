@@ -3,6 +3,8 @@ pub mod v0;
 // Re-export the latest major version compatibility types.
 pub use v0::*;
 
+#[cfg(feature = "node")]
+pub mod decided_state;
 pub mod eth_signature_key;
 mod reference_tests;
 

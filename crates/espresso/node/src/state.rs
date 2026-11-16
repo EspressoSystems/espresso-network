@@ -6,7 +6,8 @@ use async_lock::Mutex;
 use committable::Committable;
 use either::Either;
 use espresso_types::{
-    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BackoffParams, BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2,
+    ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::{Delta, PermittedRewardMerkleTreeV2},
@@ -30,7 +31,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 use crate::{
     NodeState, SeqTypes,
     api::{LightClientProvider, RewardMerkleTreeDataSource},
-    catchup::{CatchupStorage, SingleAttemptCatchup},
+    catchup::{CatchupStorage, ParallelStateCatchup, SingleAttemptCatchup, SqlStateCatchup},
     persistence::ChainConfigPersistence,
 };
 
@@ -361,9 +362,8 @@ const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 /// start from a recent epoch boundary.
 const BOUNDARY_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
-/// How long the loop waits on a local catchup read. Consensus cuts local reads short, so that it
-/// can still vote in time. The loop has no such deadline, while peers may have pruned the heights
-/// it reads, so a slow read cut short on every try would stall it.
+/// How long the loop waits on a read of its own database. It has no deadline, while peers may have
+/// pruned the heights it reads, so a slow read cut short on every try would stall it.
 const LOCAL_CATCHUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Where the state loop starts when it has no state of its own.
@@ -393,13 +393,17 @@ where
     // Use a separate rewards calculator for the state loop so it doesn't
     // interfere with consensus, which may be on a very different epoch.
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
-    // The loop can wait longer on its own database than consensus can.
-    if let Some(catchup) = instance
-        .state_catchup
-        .with_local_timeout(LOCAL_CATCHUP_TIMEOUT)
-    {
-        instance.state_catchup = catchup;
-    }
+    // The loop reads its own database first, as only it may still hold the loop's head once peers
+    // have pruned it, and then the node's catchup providers.
+    let catchup = ParallelStateCatchup::new(
+        &[Arc::new(SqlStateCatchup::new(
+            storage.clone(),
+            BackoffParams::disabled(),
+        ))],
+        LOCAL_CATCHUP_TIMEOUT,
+    );
+    catchup.add_provider(instance.state_catchup.clone());
+    instance.state_catchup = Arc::new(catchup);
 
     // Resume from the newest snapshot in storage. The loop cannot start anywhere else:
     // `from_header` gives it a bare state, and its catchup fills in the block frontier and any fee

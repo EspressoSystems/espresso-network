@@ -13,6 +13,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     NodeState, Transaction, ValidatedState,
+    decided_state::DecidedStateWriter,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
@@ -210,6 +211,8 @@ where
             })
             .transpose()?;
 
+        let decided_state = DecidedStateWriter::new(&consensus_store, initializer.anchor_leaf())
+            .context("reading the decided state")?;
         let (external_tx, external_rx) = unbounded_channel();
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
@@ -226,6 +229,7 @@ where
             .store(consensus_store.clone())
             .restored(restored)
             .decide_log_limit(decide_log_limit)
+            .decided_state(Box::new(decided_state))
             .metrics(metrics)
             .consensus_metrics(ConsensusMetricsValue::new(metrics))
             .maybe_anchor_cert2(anchor_cert2)

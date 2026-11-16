@@ -672,6 +672,31 @@ pub fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
         .delete_range(&PAYLOADS, before());
 }
 
+/// Queues `writes` to the application's tables in `batch`.
+pub fn put_app(batch: &mut Batch, writes: &[AppWrite]) -> anyhow::Result<()> {
+    for write in writes {
+        match write {
+            AppWrite::Put { table, key, value } => {
+                batch.put(
+                    &app_table(table)?,
+                    key.clone(),
+                    Bytes::copy_from_slice(value),
+                );
+            },
+            AppWrite::DeleteBefore { table, key } => {
+                batch.delete_range(
+                    &app_table(table)?,
+                    KeyRange::before(Bytes::copy_from_slice(key)),
+                );
+            },
+            AppWrite::Clear { table } => {
+                batch.delete_range(&app_table(table)?, KeyRange::all());
+            },
+        }
+    }
+    Ok(())
+}
+
 /// A monotonic compare-and-set: the stored certificate is replaced only by a later lock.
 ///
 /// A stored value that fails to decode is replaced, so a corrupt row cannot block the lock.
@@ -751,30 +776,6 @@ fn encode<V: Serialize>(value: &V) -> anyhow::Result<Bytes> {
 
 fn decode<V: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<V> {
     Ok(bincode::deserialize(bytes)?)
-}
-
-fn put_app(batch: &mut Batch, writes: &[AppWrite]) -> anyhow::Result<()> {
-    for write in writes {
-        match write {
-            AppWrite::Put { table, key, value } => {
-                batch.put(
-                    &app_table(table)?,
-                    key.clone(),
-                    Bytes::copy_from_slice(value),
-                );
-            },
-            AppWrite::DeleteBefore { table, key } => {
-                batch.delete_range(
-                    &app_table(table)?,
-                    KeyRange::before(Bytes::copy_from_slice(key)),
-                );
-            },
-            AppWrite::Clear { table } => {
-                batch.delete_range(&app_table(table)?, KeyRange::all());
-            },
-        }
-    }
-    Ok(())
 }
 
 /// The application's table `name`, apart from the consensus tables.

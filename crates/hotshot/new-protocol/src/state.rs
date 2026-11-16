@@ -177,6 +177,11 @@ impl<T: NodeType> StateManager<T> {
             .map(|(_, entry)| entry)
     }
 
+    /// The state of the leaf with this commitment.
+    pub fn state_of(&self, leaf: Commitment<Leaf2<T>>) -> Option<&StateEntry<T>> {
+        self.validated_states.get(&leaf)
+    }
+
     /// Get the leaf for a given view
     pub fn get_leaf(&self, view: ViewNumber) -> Option<Leaf2<T>> {
         self.validated_states

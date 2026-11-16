@@ -78,6 +78,7 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
         &v1.cert1,
         Some(&v1.cert2),
         &[None, None],
+        &[],
     );
     flush(&mut storage).await;
     storage.append_decided(
@@ -85,6 +86,7 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
         &v2.cert1,
         Some(&v2.cert2),
         &[None],
+        &[],
     );
     flush(&mut storage).await;
 

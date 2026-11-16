@@ -400,8 +400,13 @@ where
     // Load saved consensus state from storage. It is loaded once here, both to
     // seed consensus in `SequencerContext::init` below and to tell whether the
     // network has already cut over to the new protocol.
+    let anchor_state = restored.anchor.as_ref().and_then(|anchor| {
+        espresso_types::decided_state::load(&consensus_store, &anchor.leaf)
+            .inspect_err(|err| tracing::warn!(%err, "failed to load the decided state"))
+            .ok()
+    });
     let initializer = persistence
-        .load_consensus_state(instance_state, version_upgrade, &restored)
+        .load_consensus_state(instance_state, version_upgrade, &restored, anchor_state)
         .await?;
     let block_sizes = genesis.block_sizes();
     let cliquenet = {
@@ -687,20 +692,6 @@ where
         metrics,
     );
     state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
-    // Local is a single attempt per call; remote providers retry.
-    match persistence
-        .clone()
-        .into_catchup_provider(BackoffParams::disabled())
-    {
-        Ok(provider) => {
-            state_catchup_providers.add_provider(Arc::new(provider));
-        },
-        Err(e) => {
-            tracing::warn!(
-                "Failed to create local catchup provider: {e:#}. Only using remote catchup."
-            );
-        },
-    };
 
     persistence.enable_metrics(metrics);
 
@@ -1624,23 +1615,6 @@ pub mod testing {
                     .unwrap();
             let membership_store = MembershipStore::new(consensus_store.clone());
 
-            // If we have a working local catchup provider, add it
-            // Local is a single attempt per call; remote providers retry.
-            match persistence
-                .clone()
-                .into_catchup_provider(BackoffParams::disabled())
-            {
-                Ok(local_catchup) => {
-                    catchup_providers.add_provider(local_catchup);
-                },
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to create local catchup provider: {e:#}. Only using remote \
-                         catchup."
-                    );
-                },
-            };
-
             let l1_client = self
                 .l1_opt
                 .clone()
@@ -1718,8 +1692,11 @@ pub mod testing {
                 )
             };
 
+            let anchor_state = restored.anchor.as_ref().map(|anchor| {
+                espresso_types::decided_state::load(&consensus_store, &anchor.leaf).unwrap()
+            });
             let initializer = persistence
-                .load_consensus_state(node_state, upgrade, &restored)
+                .load_consensus_state(node_state, upgrade, &restored, anchor_state)
                 .await
                 .unwrap();
 

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, future::Future, time::Instant};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    AuthenticatedValidatorMap, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{PersistenceOptions, SequencerPersistence, StateCatchup, StateCertPersistence},
+    v0::traits::{PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
@@ -56,7 +56,6 @@ use super::{
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     api::options::Query,
-    catchup::SqlStateCatchup,
     persistence::{
         migrate_network_config, persistence_metrics::PersistenceMetricsValue,
         storage_probe::StorageProbe,
@@ -243,13 +242,6 @@ impl Persistence {
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-    fn into_catchup_provider(
-        self,
-        backoff: BackoffParams,
-    ) -> anyhow::Result<Arc<dyn StateCatchup>> {
-        Ok(Arc::new(SqlStateCatchup::new(Arc::new(self.db), backoff)))
-    }
-
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         tracing::info!("loading config from Postgres");
 
@@ -1637,6 +1629,8 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
 
 #[cfg(test)]
 mod testing {
+    use std::sync::Arc;
+
     use super::{super::qs::testing::TmpDb, *};
     use crate::persistence::tests::TestablePersistence;
 

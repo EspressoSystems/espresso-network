@@ -2,11 +2,11 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
 use std::{cmp::max, collections::BTreeMap};
-use std::{fmt::Debug, ops::Range, sync::Arc, time::Duration};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
@@ -297,12 +297,6 @@ pub trait StateCatchup: Send + Sync {
 
     /// Returns the name of the catchup provider.
     fn name(&self) -> String;
-
-    /// A copy of this provider that waits up to `local_timeout` on its local providers, or `None`
-    /// if it has no such timeout.
-    fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
-        None
-    }
 }
 
 #[async_trait]
@@ -483,10 +477,6 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     fn is_local(&self) -> bool {
         (**self).is_local()
     }
-
-    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
-        (**self).with_local_timeout(local_timeout)
-    }
 }
 
 #[cfg(feature = "node")]
@@ -601,14 +591,6 @@ pub trait StateCertPersistence: Send + Sync + 'static {
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + MembershipPersistence + StateCertPersistence
 {
-    /// Use this storage as a state catchup backend, if supported.
-    fn into_catchup_provider(
-        self,
-        _backoff: BackoffParams,
-    ) -> anyhow::Result<Arc<dyn StateCatchup>> {
-        bail!("state catchup is not implemented for this persistence type");
-    }
-
     /// Load the orchestrator config from storage.
     ///
     /// Returns `None` if no config exists (we are joining a network for the first time). Fails with
@@ -658,12 +640,14 @@ pub trait SequencerPersistence:
     /// if applicable,.
     ///
     /// The safety state (actions, lock, undecided proposals, upgrade and state certificates)
-    /// comes from the consensus store, as `restored`; this storage provides the rest.
+    /// comes from the consensus store, as `restored`, and so may the state at its anchor, as
+    /// `anchor_state`; this storage provides the rest.
     async fn load_consensus_state(
         &self,
         state: NodeState,
         upgrade: Upgrade,
         restored: &Restored<SeqTypes>,
+        anchor_state: Option<ValidatedState>,
     ) -> anyhow::Result<HotShotInitializer<SeqTypes>> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match restored.acted_view {
@@ -760,9 +744,8 @@ pub trait SequencerPersistence:
             // If we are starting from genesis, we can provide the full state.
             genesis_validated_state
         } else {
-            // Otherwise, we will have to construct a sparse state and fetch missing data during
-            // catchup.
-            ValidatedState::from_header(leaf.block_header())
+            // Otherwise, what the store kept of it, and catchup fetches the rest.
+            anchor_state.unwrap_or_else(|| ValidatedState::from_header(leaf.block_header()))
         };
 
         // If we are not starting from genesis, we start from the view following the maximum view

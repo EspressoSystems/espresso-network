@@ -30,7 +30,8 @@ use crate::{
     coordinator::metrics::Measurement,
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
-    store::{self, ConsensusStore, StoredPayload},
+    state::StateEntry,
+    store::{self, AppWrite, ConsensusStore, StoredPayload},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
@@ -79,6 +80,18 @@ impl<T: NodeType> StorageOutput<T> {
             Self::DecideLogFull(_) => ViewNumber::genesis(),
         }
     }
+}
+
+/// What the application keeps of the latest decided state, in its own tables of the store.
+///
+/// Its writes join the batch that appends the decide to the decide log, so the tables never
+/// fall behind or run ahead of the anchor.
+pub trait DecidedState<T: NodeType>: Send + Sync {
+    /// The writes that bring the application's tables up to date with the decided `leaf`.
+    ///
+    /// Called for each leaf of a decide, oldest first. `state` is what this node holds for
+    /// `leaf`: a state with its delta if this node validated `leaf`, else one without, or none.
+    fn decided(&mut self, leaf: &Leaf2<T>, state: Option<&StateEntry<T>>) -> Vec<AppWrite>;
 }
 
 /// Storage cannot go on.
@@ -163,6 +176,8 @@ pub struct Storage<T: NodeType, S> {
     /// their epoch root. A decide finds them here even before their write is durable.
     state_certs: BTreeMap<ViewNumber, LightClientStateUpdateCertificateV2<T>>,
 
+    decided_state: Option<Box<dyn DecidedState<T>>>,
+
     metrics: Option<StorageMetrics>,
 }
 
@@ -220,6 +235,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             decide_log_limit: DEFAULT_DECIDE_LOG_LIMIT,
             decide_log_full: false,
             state_certs: BTreeMap::new(),
+            decided_state: None,
             metrics: None,
         }
     }
@@ -245,6 +261,12 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             m.decide_log_limit
                 .set(usize::try_from(limit).unwrap_or(usize::MAX));
         }
+        self
+    }
+
+    /// Keeps the application's decided state with every decide.
+    pub fn with_decided_state(mut self, decided_state: Box<dyn DecidedState<T>>) -> Self {
+        self.decided_state = Some(decided_state);
         self
     }
 
@@ -343,13 +365,14 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     }
 
     /// Appends a decide to the decide log and moves the anchor: `leaves` newest first, with
-    /// the certificates that decided the newest, and this node's VID share of each.
+    /// the certificates that decided the newest, and this node's VID share and state of each.
     pub fn append_decided(
         &mut self,
         leaves: &[Leaf2<T>],
         cert1: &Certificate1<T>,
         cert2: Option<&Certificate2<T>>,
         vid_shares: &[Option<SignedProposal<T, VidDisperseShare2<T>>>],
+        states: &[Option<StateEntry<T>>],
     ) {
         let vid_common: Vec<_> = vid_shares
             .iter()
@@ -372,8 +395,18 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 self.pending.next_height = self.pending.next_height.max(next);
             },
             Err(err) => {
-                error!(%err, view = %cert1.view_number(), "failed to encode decided leaves")
+                error!(%err, view = %cert1.view_number(), "failed to encode decided leaves");
+                return;
             },
+        }
+        let Some(decided_state) = &mut self.decided_state else {
+            return;
+        };
+        for (i, leaf) in leaves.iter().enumerate().rev() {
+            let writes = decided_state.decided(leaf, states.get(i).and_then(Option::as_ref));
+            if let Err(err) = store::put_app(&mut self.pending.batch, &writes) {
+                error!(%err, view = %leaf.view_number(), "failed to write the decided state");
+            }
         }
     }
 

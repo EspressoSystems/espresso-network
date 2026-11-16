@@ -13,7 +13,7 @@ use consensus_store::{
 };
 use hotshot_example_types::{block_types::TestBlockPayload, node_types::TestTypes};
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     signature_key::BLSPubKey,
     simple_vote::LockView,
     traits::{BlockPayload, signature_key::SignatureKey},
@@ -22,7 +22,8 @@ use tokio::time::timeout;
 
 use super::common::utils::{build_cert1, mock_membership};
 use crate::{
-    storage::{ActionKind, Storage, StorageOutput},
+    state::StateEntry,
+    storage::{ActionKind, DecidedState, Storage, StorageOutput},
     store::{AppWrite, ConsensusStore, Import},
 };
 
@@ -240,6 +241,7 @@ async fn test_decide_log() {
         &v2.cert1,
         Some(&v2.cert2),
         &[None, None],
+        &[],
     );
     storage.gc(v2.view_number + 1);
     flush(&mut storage).await;
@@ -280,7 +282,13 @@ async fn test_decide_log() {
     );
 
     // A decide that fills a gap trails the anchor and does not move it.
-    storage.append_decided(std::slice::from_ref(&v0.leaf), &v0.cert1, None, &[None]);
+    storage.append_decided(
+        std::slice::from_ref(&v0.leaf),
+        &v0.cert1,
+        None,
+        &[None],
+        &[],
+    );
     flush(&mut storage).await;
     assert_eq!(
         store.load().unwrap().anchor.map(|a| a.leaf.height()),
@@ -309,7 +317,13 @@ async fn test_decide_log_limit() {
     let v0 = &data.views[0];
     let view = ViewNumber::new(5);
 
-    storage.append_decided(std::slice::from_ref(&v0.leaf), &v0.cert1, None, &[None]);
+    storage.append_decided(
+        std::slice::from_ref(&v0.leaf),
+        &v0.cert1,
+        None,
+        &[None],
+        &[],
+    );
     storage.record_action(view, ActionKind::Vote);
     // The log is measured while the batch completes, so either may be reported first.
     let mut outputs = vec![storage.next().await.unwrap(), storage.next().await.unwrap()];
@@ -355,6 +369,7 @@ async fn test_decided_state_cert() {
         &v1.cert1,
         Some(&v1.cert2),
         &[None, None],
+        &[],
     );
     storage.decided(v1.view_number);
     flush(&mut storage).await;
@@ -363,6 +378,68 @@ async fn test_decided_state_cert() {
     let certs: Vec<_> = entries.iter().map(|(d, _)| d.state_cert.clone()).collect();
     assert_eq!(certs, vec![None, Some(cert.clone())]);
     assert_eq!(store.load().unwrap().state_cert, Some(cert));
+}
+
+/// The application's decided state is written in the batch of the decide, leaf by leaf from the
+/// oldest, with the state of each leaf.
+#[tokio::test]
+async fn test_decided_state_written_with_the_decide() {
+    struct Order(u64);
+
+    impl DecidedState<TestTypes> for Order {
+        fn decided(
+            &mut self,
+            leaf: &Leaf2<TestTypes>,
+            state: Option<&StateEntry<TestTypes>>,
+        ) -> Vec<AppWrite> {
+            self.0 += 1;
+            vec![AppWrite::Put {
+                table: "order",
+                key: self.0.to_be_bytes().to_vec(),
+                value: [
+                    leaf.height().to_be_bytes().as_slice(),
+                    &[state.is_some() as u8],
+                ]
+                .concat(),
+            }]
+        }
+    }
+
+    let (storage, store) = test_storage();
+    let mut storage = storage.with_decided_state(Box::new(Order(0)));
+    let data = super::common::utils::TestData::new(2).await;
+    let [v0, v1] = [&data.views[0], &data.views[1]];
+    let entry = StateEntry {
+        state: Arc::new(Default::default()),
+        delta: None,
+        leaf: v1.leaf.clone(),
+    };
+
+    storage.append_decided(
+        &[v1.leaf.clone(), v0.leaf.clone()],
+        &v1.cert1,
+        Some(&v1.cert2),
+        &[None, None],
+        &[Some(entry), None],
+    );
+    flush(&mut storage).await;
+
+    let batches = store.store().commits.load(Ordering::SeqCst);
+    assert_eq!(batches, 1, "the decided state joins the decide's batch");
+    let order: Vec<_> = store
+        .app_entries("order", &[])
+        .unwrap()
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect();
+    let row = |v: &super::common::utils::TestView, with_state: bool| {
+        [
+            v.leaf.height().to_be_bytes().as_slice(),
+            &[with_state as u8],
+        ]
+        .concat()
+    };
+    assert_eq!(order, vec![row(v0, false), row(v1, true)]);
 }
 
 /// The application's tables keep their writes apart from each other and from consensus, and the

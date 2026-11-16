@@ -9,7 +9,7 @@ use std::{
 };
 
 use bon::{Builder, bon};
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
@@ -64,7 +64,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
-    storage::{DEFAULT_DECIDE_LOG_LIMIT, Storage},
+    storage::{DEFAULT_DECIDE_LOG_LIMIT, DecidedState, Storage},
     store::{ConsensusStore, DiskStore, Restored},
     upgrade::UpgradeProtocol,
     vid::{
@@ -207,6 +207,8 @@ where
         /// How many bytes the decide log may take up before this node holds its vote2.
         #[builder(default = DEFAULT_DECIDE_LOG_LIMIT)]
         decide_log_limit: u64,
+        /// What the application keeps of the latest decided state.
+        decided_state: Option<Box<dyn DecidedState<T>>>,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
     ) -> Self {
@@ -445,11 +447,15 @@ where
                 initializer.epoch_height(),
                 upgrade_lock,
             ))
-            .storage(
-                Storage::new(store, &private_key)
+            .storage({
+                let storage = Storage::new(store, &private_key)
                     .with_metrics(metrics)
-                    .with_decide_log_limit(decide_log_limit),
-            )
+                    .with_decide_log_limit(decide_log_limit);
+                match decided_state {
+                    Some(decided_state) => storage.with_decided_state(decided_state),
+                    None => storage,
+                }
+            })
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)
@@ -903,9 +909,14 @@ where
                             VidCommitment::V0(_) | VidCommitment::V1(_) => None,
                         }
                     }));
-                // Before gc, which deletes the payloads the decide log entries share.
+                // Before gc, which deletes the payloads the decide log entries share, and the
+                // states of the decided leaves.
+                let states: Vec<_> = leaves
+                    .iter()
+                    .map(|leaf| self.state_manager.state_of(leaf.commit()).cloned())
+                    .collect();
                 self.storage
-                    .append_decided(&leaves, &cert1, cert2.as_ref(), &vid_shares);
+                    .append_decided(&leaves, &cert1, cert2.as_ref(), &vid_shares, &states);
                 // `leaves` is ordered newest first.
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
