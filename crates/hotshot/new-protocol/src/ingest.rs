@@ -159,6 +159,12 @@ fn entry<T: NodeType>(
             .map(bincode::serialize)
             .transpose()?
             .unwrap_or_default(),
+        state_cert: decided
+            .state_cert
+            .as_ref()
+            .map(bincode::serialize)
+            .transpose()?
+            .unwrap_or_default(),
     };
     Ok(DecidedEntry {
         height: leaf.height(),

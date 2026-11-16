@@ -334,6 +334,37 @@ async fn test_decide_log_limit() {
     assert_nothing_more(&mut storage).await;
 }
 
+/// A decided epoch root carries its state certificate in the decide log, and the certificate is
+/// finalized, also when it is written in the same batch as the decide.
+#[tokio::test]
+async fn test_decided_state_cert() {
+    let (mut storage, store) = test_storage();
+    let data = super::common::utils::TestData::new(2).await;
+    let [v0, v1] = [&data.views[0], &data.views[1]];
+    let cert = super::common::utils::build_state_cert_for_test(
+        v1.leaf.block_header(),
+        v1.view_number,
+        EpochNumber::new(2),
+        &Default::default(),
+        1,
+    );
+
+    storage.append_state_cert(v1.view_number, cert.clone());
+    storage.append_decided(
+        &[v1.leaf.clone(), v0.leaf.clone()],
+        &v1.cert1,
+        Some(&v1.cert2),
+        &[None, None],
+    );
+    storage.decided(v1.view_number);
+    flush(&mut storage).await;
+
+    let entries = store.decided_from(0, usize::MAX).unwrap();
+    let certs: Vec<_> = entries.iter().map(|(d, _)| d.state_cert.clone()).collect();
+    assert_eq!(certs, vec![None, Some(cert.clone())]);
+    assert_eq!(store.load().unwrap().state_cert, Some(cert));
+}
+
 /// The application's tables keep their writes apart from each other and from consensus, and the
 /// import writes them with the rest of the imported state.
 #[tokio::test]

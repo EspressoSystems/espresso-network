@@ -74,6 +74,10 @@ message Body {
 
   // The VID common data of the block; empty if this node did not have its share.
   bytes vid_common = 5;
+
+  // The light client state update certificate of the epoch this block is the root of; empty if
+  // it is no epoch root or this node did not have the certificate.
+  bytes state_cert = 6;
 }
 
 message AckRequest {

@@ -20,7 +20,7 @@ use consensus_api::{
 use futures::StreamExt;
 use hotshot_types::{
     data::{Leaf2, VidCommon, ViewNumber},
-    simple_certificate::{Certificate1, Certificate2},
+    simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::NodeType,
@@ -44,8 +44,13 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 /// Where the ingester writes.
 #[async_trait]
 pub trait Sink<Types: NodeType>: Send + Sync {
-    /// Makes the block durable.
-    async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()>;
+    /// Makes the block durable, with the state certificate of the epoch it is the root of, if
+    /// any.
+    async fn append(
+        &self,
+        info: BlockInfo<Types>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
+    ) -> anyhow::Result<()>;
 
     /// The height of the first block the sink does not hold. Everything below it is durable.
     async fn block_height(&self) -> anyhow::Result<u64>;
@@ -107,9 +112,11 @@ where
                 chain.skip_to(start.earliest_height);
             },
             Some(Event::Decided(entry)) => {
-                for ready in chain.push(decode(entry)?)? {
+                for mut ready in chain.push(decode(entry)?)? {
                     let height = ready.leaf.height();
-                    sink.append(block_info(&mut client, ready).await?).await?;
+                    let state_cert = ready.state_cert.take();
+                    sink.append(block_info(&mut client, ready).await?, state_cert)
+                        .await?;
                     client.ack(AckRequest { height: height + 1 }).await?;
                 }
             },
@@ -128,6 +135,7 @@ struct Entry<Types: NodeType> {
     cert1: Option<Certificate1<Types>>,
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
+    state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
 }
 
 /// An entry with the QC that certifies its leaf, ready to append.
@@ -137,6 +145,7 @@ struct Ready<Types: NodeType> {
     payload_size: Option<u64>,
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
+    state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
 }
 
 /// The ingester's position in the chain.
@@ -209,6 +218,7 @@ impl<Types: NodeType> Ready<Types> {
             payload_size: entry.payload_size,
             cert2: entry.cert2,
             vid_common: entry.vid_common,
+            state_cert: entry.state_cert,
         }
     }
 }
@@ -240,6 +250,7 @@ fn decode<Types: NodeType>(entry: Decided) -> anyhow::Result<Entry<Types>> {
         cert1: optional(&body.cert1).context("decoding the cert1")?,
         cert2: optional(&body.cert2).context("decoding the cert2")?,
         vid_common: optional(&body.vid_common).context("decoding the VID common data")?,
+        state_cert: optional(&body.state_cert).context("decoding the state certificate")?,
     })
 }
 

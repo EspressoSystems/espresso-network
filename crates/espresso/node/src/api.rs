@@ -2405,6 +2405,7 @@ pub mod test_helpers {
         async fn append(
             &self,
             info: hotshot_query_service::availability::BlockInfo<SeqTypes>,
+            _: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
         ) -> anyhow::Result<()> {
             use hotshot_query_service::types::HeightIndexed as _;
             self.0

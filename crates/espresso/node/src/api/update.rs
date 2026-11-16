@@ -13,14 +13,24 @@ use hotshot_query_service::{
     node::NodeDataSource,
     types::HeightIndexed,
 };
-use hotshot_types::new_protocol::CoordinatorEvent;
+use hotshot_types::{
+    new_protocol::CoordinatorEvent, simple_certificate::LightClientStateUpdateCertificateV2,
+};
 
-use super::{StorageState, data_source::SequencerDataSource};
+use super::{
+    StorageState,
+    data_source::{SequencerDataSource, StateCertDataSource},
+};
 use crate::{EventConsumer, SeqTypes};
 
 #[async_trait]
 pub trait DecideSink: Send + Sync + Debug {
-    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()>;
+    /// Stores a decided block, with the state certificate of the epoch it is the root of.
+    async fn append(
+        &self,
+        info: BlockInfo<SeqTypes>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+    ) -> anyhow::Result<()>;
 
     /// The first height a resuming node has to append.
     async fn block_height(&self) -> anyhow::Result<u64>;
@@ -31,8 +41,12 @@ impl<T> DecideSink for Box<T>
 where
     T: DecideSink + ?Sized,
 {
-    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
-        (**self).append(info).await
+    async fn append(
+        &self,
+        info: BlockInfo<SeqTypes>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        (**self).append(info, state_cert).await
     }
 
     async fn block_height(&self) -> anyhow::Result<u64> {
@@ -48,7 +62,11 @@ impl<T: EventConsumer + DecideSink> ApiSink for T {}
 /// here fails on the first one instead of reporting progress it never persisted.
 #[async_trait]
 impl DecideSink for NullEventConsumer {
-    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
+    async fn append(
+        &self,
+        info: BlockInfo<SeqTypes>,
+        _: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+    ) -> anyhow::Result<()> {
         bail!(
             "cannot store block {}: the API has no query storage",
             info.height()
@@ -88,7 +106,16 @@ impl<D> DecideSink for ApiEventConsumer<D>
 where
     D: SequencerDataSource + UpdateAvailabilityData<SeqTypes> + Debug + Send + Sync + 'static,
 {
-    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
+    /// Stores the state certificate before the block, so that a block this node holds always
+    /// has its certificate; storing either again is harmless.
+    async fn append(
+        &self,
+        info: BlockInfo<SeqTypes>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        if let Some(cert) = state_cert {
+            self.inner.insert_state_cert(*cert.epoch, cert).await?;
+        }
         self.inner.append(info).await
     }
 
@@ -102,8 +129,12 @@ pub(crate) struct IngestSink(pub Arc<dyn DecideSink>);
 
 #[async_trait]
 impl hotshot_query_service::ingest::Sink<SeqTypes> for IngestSink {
-    async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {
-        self.0.append(info).await
+    async fn append(
+        &self,
+        info: BlockInfo<SeqTypes>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        self.0.append(info, state_cert).await
     }
 
     async fn block_height(&self) -> anyhow::Result<u64> {

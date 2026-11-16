@@ -131,6 +131,9 @@ pub struct Decided<T: NodeType> {
 
     /// The VID common data of the leaf's block, if this node had its share.
     pub vid_common: Option<AvidmGf2Common>,
+
+    /// The state certificate of the epoch whose root this leaf is, if this node has it.
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
 }
 
 /// The latest decided leaf with the certificates that decided it.
@@ -400,6 +403,18 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         self.measure_decide_log()
     }
 
+    /// The state certificate of the epoch root proposed in `view`, if stored and not yet decided.
+    pub fn pending_state_cert(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<T>>> {
+        get(
+            &self.store.snapshot()?,
+            &PENDING_STATE_CERTS,
+            &key::u64(*view),
+        )
+    }
+
     /// The value of `key` in the application's `table`.
     pub fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
         let snap = self.store.snapshot()?;
@@ -481,7 +496,12 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         &self,
         batch: &mut Batch,
         decided: ViewNumber,
+        queued: &BTreeMap<ViewNumber, LightClientStateUpdateCertificateV2<T>>,
     ) -> anyhow::Result<()> {
+        // Certificates queued in `batch` or one being applied are not in the snapshot.
+        for cert in queued.range(..=decided).map(|(_, cert)| cert) {
+            batch.put(&STATE_CERTS, key::u64(*cert.epoch).to_vec(), encode(cert)?);
+        }
         let snap = self.store.snapshot()?;
         let up_to = KeyRange::new(
             std::ops::Bound::Unbounded,
@@ -576,6 +596,7 @@ pub fn put_decided<T: NodeType>(
     cert1: &Certificate1<T>,
     cert2: Option<&Certificate2<T>>,
     vid_common: &[Option<AvidmGf2Common>],
+    state_certs: &[Option<LightClientStateUpdateCertificateV2<T>>],
 ) -> anyhow::Result<()> {
     for (i, leaf) in leaves.iter().enumerate() {
         let mut leaf = leaf.clone();
@@ -594,6 +615,7 @@ pub fn put_decided<T: NodeType>(
             cert1: newest.then(|| cert1.clone()),
             cert2: if newest { cert2.cloned() } else { None },
             vid_common: vid_common.get(i).cloned().flatten(),
+            state_cert: state_certs.get(i).cloned().flatten(),
             leaf,
         };
         batch.put(&DECIDE_LOG, height, encode(&decided)?);

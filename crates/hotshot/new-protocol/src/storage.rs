@@ -5,7 +5,7 @@
 //! its fsync. Each write names the [`StorageOutput`] that reports it durable, which consensus
 //! waits on before sending the messages that depend on it.
 
-use std::{marker::PhantomData, mem, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, marker::PhantomData, mem, sync::Arc, time::Duration};
 
 use committable::Commitment;
 use consensus_store::{Batch, Store};
@@ -159,6 +159,10 @@ pub struct Storage<T: NodeType, S> {
     /// Whether the last [`StorageOutput::DecideLogFull`] reported the log full.
     decide_log_full: bool,
 
+    /// State certificates written since this writer started and not yet decided, by the view of
+    /// their epoch root. A decide finds them here even before their write is durable.
+    state_certs: BTreeMap<ViewNumber, LightClientStateUpdateCertificateV2<T>>,
+
     metrics: Option<StorageMetrics>,
 }
 
@@ -215,6 +219,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             decide_log_bytes,
             decide_log_limit: DEFAULT_DECIDE_LOG_LIMIT,
             decide_log_full: false,
+            state_certs: BTreeMap::new(),
             metrics: None,
         }
     }
@@ -298,7 +303,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             .as_ref()
             .map(|m| Measurement::start(m.append_state_cert.clone()));
         match store::put_pending_state_cert(&mut self.pending.batch, view, &state_cert) {
-            Ok(()) => self.pending.timers.extend(timer),
+            Ok(()) => {
+                self.pending.timers.extend(timer);
+                self.state_certs.insert(view, state_cert);
+            },
             Err(err) => error!(%err, %view, "failed to encode state certificate"),
         }
     }
@@ -347,7 +355,18 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             .iter()
             .map(|share| share.as_ref().map(|s| s.data.common.clone()))
             .collect();
-        match store::put_decided(&mut self.pending.batch, leaves, cert1, cert2, &vid_common) {
+        let state_certs: Vec<_> = leaves
+            .iter()
+            .map(|leaf| self.state_cert(leaf.view_number()))
+            .collect();
+        match store::put_decided(
+            &mut self.pending.batch,
+            leaves,
+            cert1,
+            cert2,
+            &vid_common,
+            &state_certs,
+        ) {
             Ok(()) => {
                 let next = leaves.iter().map(|l| l.height() + 1).max();
                 self.pending.next_height = self.pending.next_height.max(next);
@@ -365,12 +384,25 @@ impl<T: NodeType, S: Store> Storage<T, S> {
 
     /// Marks the state certificates of views up to `view` as decided.
     pub fn decided(&mut self, view: ViewNumber) {
-        if let Err(err) = self
-            .store
-            .finalize_state_certs(&mut self.pending.batch, view)
+        if let Err(err) =
+            self.store
+                .finalize_state_certs(&mut self.pending.batch, view, &self.state_certs)
         {
             warn!(%err, %view, "failed to finalize state certificates");
         }
+        self.state_certs = self.state_certs.split_off(&(view + 1));
+    }
+
+    /// The undecided state certificate of the epoch root proposed in `view`, if any.
+    fn state_cert(&self, view: ViewNumber) -> Option<LightClientStateUpdateCertificateV2<T>> {
+        if let Some(cert) = self.state_certs.get(&view) {
+            return Some(cert.clone());
+        }
+        self.store
+            .pending_state_cert(view)
+            .inspect_err(|err| warn!(%err, %view, "failed to read a state certificate"))
+            .ok()
+            .flatten()
     }
 
     /// The next write that has become durable, or a change of whether the decide log is full.

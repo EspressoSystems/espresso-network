@@ -93,6 +93,7 @@ fn entry(chain: &MockChain, block: &crate::testing::chain::MockBlock, newest: bo
                 .flatten()
                 .map(|c| bincode::serialize(&c).unwrap())),
             vid_common,
+            state_cert: Vec::new(),
         }),
     }
 }
@@ -140,6 +141,7 @@ impl Source for FakeLog {
 struct MemSink {
     start: u64,
     blocks: Mutex<Vec<BlockInfo<MockTypes>>>,
+    state_certs: Mutex<Vec<LightClientStateUpdateCertificateV2<MockTypes>>>,
 }
 
 impl MemSink {
@@ -147,6 +149,7 @@ impl MemSink {
         Arc::new(Self {
             start,
             blocks: Mutex::default(),
+            state_certs: Mutex::default(),
         })
     }
 
@@ -162,8 +165,15 @@ impl MemSink {
 
 #[async_trait]
 impl Sink<MockTypes> for MemSink {
-    async fn append(&self, info: BlockInfo<MockTypes>) -> anyhow::Result<()> {
+    async fn append(
+        &self,
+        info: BlockInfo<MockTypes>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<MockTypes>>,
+    ) -> anyhow::Result<()> {
         self.blocks.lock().unwrap().push(info);
+        if let Some(cert) = state_cert {
+            self.state_certs.lock().unwrap().push(cert);
+        }
         Ok(())
     }
 
@@ -278,6 +288,35 @@ async fn computes_the_genesis_vid_common() {
     wait_for(&sink, 1).await;
     let blocks = sink.blocks.lock().unwrap();
     assert_eq!(blocks[0].vid_common.as_ref(), Some(&genesis.vid_common));
+}
+
+/// The state certificate an entry carries reaches the sink with its block.
+#[tokio::test]
+async fn passes_the_state_certificate() {
+    let chain = chain(1).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=1);
+    let cert = LightClientStateUpdateCertificateV2::<MockTypes> {
+        epoch: hotshot_types::data::EpochNumber::new(3),
+        light_client_state: Default::default(),
+        next_stake_table_state: Default::default(),
+        signatures: Vec::new(),
+        auth_root: Default::default(),
+    };
+    log.entries
+        .lock()
+        .unwrap()
+        .get_mut(&1)
+        .unwrap()
+        .body
+        .as_mut()
+        .unwrap()
+        .state_cert = bincode::serialize(&cert).unwrap();
+    let sink = MemSink::new(0);
+    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+
+    wait_for(&sink, 1).await;
+    assert_eq!(*sink.state_certs.lock().unwrap(), vec![cert]);
 }
 
 /// A restarted ingester continues from what the sink holds, and acknowledges that first.
