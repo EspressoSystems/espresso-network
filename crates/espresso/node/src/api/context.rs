@@ -162,7 +162,7 @@ where
     P: SequencerPersistence,
 {
     fn consensus_api_addr(&self) -> Option<std::net::SocketAddr> {
-        SequencerContext::consensus_api_addr(self)
+        Some(SequencerContext::consensus_api_addr(self))
     }
 
     fn consensus(&self) -> Arc<dyn ConsensusSource> {

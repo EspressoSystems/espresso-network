@@ -2208,19 +2208,22 @@ pub mod test_helpers {
                                 .await
                                 .unwrap()
                             } else {
-                                cfg.init_node(
-                                    i,
-                                    state,
-                                    persistence,
-                                    Some(state_peers),
-                                    None,
-                                    &NoMetrics,
-                                    STAKE_TABLE_CAPACITY_FOR_TEST,
-                                    NullEventConsumer,
-                                    upgrade,
-                                    upgrades_map,
-                                )
-                                .await
+                                let mut ctx = cfg
+                                    .init_node(
+                                        i,
+                                        state,
+                                        persistence,
+                                        Some(state_peers),
+                                        None,
+                                        &NoMetrics,
+                                        STAKE_TABLE_CAPACITY_FOR_TEST,
+                                        NullEventConsumer,
+                                        upgrade,
+                                        upgrades_map,
+                                    )
+                                    .await;
+                                ingest_and_discard(&mut ctx);
+                                ctx
                             }
                         }
                         .boxed()
@@ -2346,7 +2349,7 @@ pub mod test_helpers {
             catchup: C,
             upgrade: versions::Upgrade,
         ) -> SequencerContext<P::Persistence> {
-            let ctx = self
+            let mut ctx = self
                 .cfg
                 .init_node(
                     i,
@@ -2361,6 +2364,7 @@ pub mod test_helpers {
                     self.cfg.upgrades(),
                 )
                 .await;
+            ingest_and_discard(&mut ctx);
             ctx.start_consensus().await;
             ctx
         }
@@ -2380,6 +2384,36 @@ pub mod test_helpers {
             } else {
                 &self.peers[i - 1]
             }
+        }
+    }
+
+    /// Runs an ingester that stores nothing for `ctx`, a node without the query module, so that
+    /// its decide log is freed as on a node with one.
+    fn ingest_and_discard<P: SequencerPersistence>(ctx: &mut SequencerContext<P>) {
+        let addr = ctx.consensus_api_addr();
+        ctx.spawn("ingester", async move {
+            hotshot_query_service::ingest::run::<SeqTypes>(addr, &DiscardSink::default()).await
+        });
+    }
+
+    /// The height after the last block appended, which is all it keeps.
+    #[derive(Default)]
+    struct DiscardSink(std::sync::atomic::AtomicU64);
+
+    #[async_trait]
+    impl hotshot_query_service::ingest::Sink<SeqTypes> for DiscardSink {
+        async fn append(
+            &self,
+            info: hotshot_query_service::availability::BlockInfo<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            use hotshot_query_service::types::HeightIndexed as _;
+            self.0
+                .store(info.height() + 1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn block_height(&self) -> anyhow::Result<u64> {
+            Ok(self.0.load(std::sync::atomic::Ordering::Relaxed))
         }
     }
 

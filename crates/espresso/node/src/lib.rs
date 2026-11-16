@@ -400,8 +400,6 @@ where
     let initializer = persistence
         .load_consensus_state(instance_state, version_upgrade, &restored)
         .await?;
-    let epoch_height = initializer.epoch_height();
-
     let block_sizes = genesis.block_sizes();
     let cliquenet = {
         let metrics = clone_box(&*metrics);
@@ -446,18 +444,12 @@ where
         empty_block_delay,
         block_sizes,
         leader_trace_dir,
-        consensus_store.clone(),
+        consensus_store,
         restored,
         decide_log_limit,
+        consensus_api_addr,
     )
     .await?;
-
-    let addr = consensus_api_addr.unwrap_or((std::net::Ipv4Addr::LOCALHOST, 0).into());
-    let (addr, server) = hotshot_new_protocol::ingest::bind(consensus_store, epoch_height, addr)
-        .with_context(|| format!("binding the ingester API to {addr}"))?;
-    tracing::info!(%addr, "serving the ingester API");
-    ctx.spawn("ingester API", server);
-    ctx.set_consensus_api_addr(addr);
 
     if let Some(peer_config) = orchestrator_peer_config {
         ctx = ctx.wait_for_orchestrator(orchestrator_client, peer_config);
@@ -1744,6 +1736,7 @@ pub mod testing {
                 consensus_store,
                 restored,
                 hotshot_new_protocol::storage::DEFAULT_DECIDE_LOG_LIMIT,
+                None,
             )
             .await
         }

@@ -103,8 +103,8 @@ pub struct SequencerContext<P: SequencerPersistence> {
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
 
-    /// Where the ingester API is served, once it is.
-    consensus_api_addr: Option<SocketAddr>,
+    /// Where the ingester API is served.
+    consensus_api_addr: SocketAddr,
 
     detached: bool,
 
@@ -143,6 +143,7 @@ where
         consensus_store: ConsensusStore<SeqTypes>,
         restored: Restored<SeqTypes>,
         decide_log_limit: u64,
+        consensus_api_addr: Option<SocketAddr>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -222,7 +223,7 @@ where
             .timeout_duration(Duration::from_secs(10))
             .empty_block_delay(empty_block_delay)
             .block_sizes(block_sizes)
-            .store(consensus_store)
+            .store(consensus_store.clone())
             .restored(restored)
             .decide_log_limit(decide_log_limit)
             .metrics(metrics)
@@ -307,8 +308,16 @@ where
         // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
 
-        // Create the external event handler
         let mut tasks = TaskList::default();
+        // A free port on localhost by default, for the API service in this process.
+        let addr = consensus_api_addr.unwrap_or((std::net::Ipv4Addr::LOCALHOST, 0).into());
+        let (consensus_api_addr, server) =
+            hotshot_new_protocol::ingest::bind(consensus_store, epoch_height, addr)
+                .with_context(|| format!("binding the ingester API to {addr}"))?;
+        info!(addr = %consensus_api_addr, "serving the ingester API");
+        tasks.spawn("ingester API", server);
+
+        // Create the external event handler
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,
@@ -333,6 +342,7 @@ where
             network_config,
             validator_config,
             event_consumer,
+            consensus_api_addr,
         )
         .with_task_list(tasks))
     }
@@ -349,6 +359,7 @@ where
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
         event_consumer: impl PersistenceEventConsumer + 'static,
+        consensus_api_addr: SocketAddr,
     ) -> Self {
         let events = consensus_handle.event_stream();
 
@@ -359,7 +370,7 @@ where
             state_signatures: Arc::clone(&state_signer.signatures),
             request_response_protocol,
             tasks: Default::default(),
-            consensus_api_addr: None,
+            consensus_api_addr,
             detached: false,
             wait_for_orchestrator: None,
             node_state,
@@ -486,12 +497,8 @@ where
     }
 
     /// Where the ingester API is served, for an API service in this process.
-    pub fn consensus_api_addr(&self) -> Option<SocketAddr> {
+    pub fn consensus_api_addr(&self) -> SocketAddr {
         self.consensus_api_addr
-    }
-
-    pub(crate) fn set_consensus_api_addr(&mut self, addr: SocketAddr) {
-        self.consensus_api_addr = Some(addr);
     }
 
     /// Spawn a short-lived background task attached to this context.
