@@ -30,7 +30,7 @@ pub use impls::testing;
 pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
     LcContractFinalizedState, ProposalValidationError, RECENT_STAKE_TABLES_LIMIT,
-    StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
+    StateValidationError, ValidatorSet, get_l1_deposits, preceding_root_height, retain_accounts,
     validators_from_l1_events,
 };
 pub use nsproof::*;
