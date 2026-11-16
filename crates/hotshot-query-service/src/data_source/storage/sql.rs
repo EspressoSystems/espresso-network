@@ -347,6 +347,28 @@ impl Config {
 /// The pause between two transactions of [`SqlStorage::delete_aggregates`].
 const AGGREGATE_DELETE_PAUSE: Duration = Duration::from_millis(250);
 
+/// `op`, retried with backoff, so that one failed transaction does not end a deletion of totals
+/// that takes hours.
+async fn retry_deleting_aggregates<T, F, Fut>(mut op: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
+    loop {
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(err) => match backoff.next() {
+                Some(delay) => {
+                    tracing::warn!("retrying deleting transaction and payload totals: {err:#}");
+                    sleep(delay).await;
+                },
+                None => return Err(err),
+            },
+        }
+    }
+}
+
 /// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
 #[derive(Clone, Debug)]
 pub struct SqlStorage {
@@ -696,14 +718,20 @@ impl SqlStorage {
     /// is free most of the time.
     pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<u64> {
         let heights = heights.max(1);
+        let mut top = retry_deleting_aggregates(|| self.highest_aggregate_height(u64::MAX)).await?;
         let mut total = 0;
         let mut batches = 0u64;
-        loop {
-            let deleted = self.delete_newest_aggregates_with_retry(heights).await?;
-            if deleted == 0 {
-                return Ok(total);
-            }
-            total += deleted;
+        while let Some(height) = top {
+            total += retry_deleting_aggregates(|| self.delete_newest_aggregates(height, heights))
+                .await?;
+            // Below the heights just deleted, so that the search does not pass their index entries,
+            // which Postgres keeps until it vacuums the table. It also skips any gap in the heights.
+            top = match height.checked_sub(heights) {
+                Some(below) => {
+                    retry_deleting_aggregates(|| self.highest_aggregate_height(below)).await?
+                },
+                None => None,
+            };
             batches += 1;
             if batches.is_multiple_of(100) {
                 tracing::info!(
@@ -713,41 +741,46 @@ impl SqlStorage {
                     "deleting transaction and payload totals"
                 );
             }
-            sleep(AGGREGATE_DELETE_PAUSE).await;
-        }
-    }
-
-    /// [`Self::delete_newest_aggregates`], retried with backoff, so that one failed transaction
-    /// does not end a deletion that takes hours.
-    async fn delete_newest_aggregates_with_retry(&self, heights: u64) -> anyhow::Result<u64> {
-        let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
-        loop {
-            match self.delete_newest_aggregates(heights).await {
-                Ok(deleted) => return Ok(deleted),
-                Err(err) => match backoff.next() {
-                    Some(delay) => {
-                        tracing::warn!(%err, "retrying deleting transaction and payload totals");
-                        sleep(delay).await;
-                    },
-                    None => return Err(err),
-                },
+            if top.is_some() {
+                sleep(AGGREGATE_DELETE_PAUSE).await;
             }
         }
+        Ok(total)
     }
 
-    /// Delete the rows of the newest `heights` heights of the totals in one transaction, and
-    /// return how many rows were deleted.
-    async fn delete_newest_aggregates(&self, heights: u64) -> anyhow::Result<u64> {
+    /// The highest height of the totals at or below `at_most`, if any.
+    async fn highest_aggregate_height(&self, at_most: u64) -> anyhow::Result<Option<u64>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to read the totals' heights")?;
+        let (height,): (Option<i64>,) =
+            query_as("SELECT max(height) FROM aggregate WHERE height <= $1")
+                .bind(i64::try_from(at_most).unwrap_or(i64::MAX))
+                .fetch_one(tx.as_mut())
+                .await
+                .context("reading the totals' heights")?;
+        Ok(height.map(|height| height as u64))
+    }
+
+    /// Delete the rows of the `heights` heights of the totals from `top` down in one transaction,
+    /// and return how many rows were deleted.
+    ///
+    /// Both ends of the range are bound values: Postgres then searches the primary key, where a
+    /// bound it cannot estimate, such as a subquery, makes it scan the whole table.
+    async fn delete_newest_aggregates(&self, top: u64, heights: u64) -> anyhow::Result<u64> {
+        let top = i64::try_from(top).unwrap_or(i64::MAX);
+        let bottom = top.saturating_sub(i64::try_from(heights).unwrap_or(i64::MAX));
         let mut tx = self
             .prune_write()
             .await
             .context("opening transaction to delete totals")?;
-        let res =
-            query("DELETE FROM aggregate WHERE height > (SELECT max(height) FROM aggregate) - $1")
-                .bind(i64::try_from(heights).unwrap_or(i64::MAX))
-                .execute(tx.as_mut())
-                .await
-                .context("deleting totals")?;
+        let res = query("DELETE FROM aggregate WHERE height > $1 AND height <= $2")
+            .bind(bottom)
+            .bind(top)
+            .execute(tx.as_mut())
+            .await
+            .context("deleting totals")?;
         tx.commit().await.context("committing deleted totals")?;
         Ok(res.rows_affected())
     }
@@ -3140,6 +3173,114 @@ mod test {
         }
     }
 
+    /// The aggregator writes every height, but `delete_aggregates` deletes every row whatever
+    /// heights the table holds, also across gaps wider than a chunk.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_heights_with_gaps() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for table in [
+            [0, 1, 7, 20, 21].as_slice(),
+            &[5, 6, 30],
+            &[0, 1000, 1001, 5000],
+        ] {
+            for heights in [1, 2, 3, 25] {
+                let rows = totals_at(table);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert_eq!(
+                    delete_all_aggregates(&storage, heights).await,
+                    rows.len() as u64,
+                    "table {table:?}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_lowest_height_above_zero() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let tables: [Vec<u64>; 2] = [(6..=13).collect(), (1_000_000..1_000_005).collect()];
+        for table in &tables {
+            for heights in [1, 3, 8, 20] {
+                let rows = totals_at(table);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert_eq!(
+                    delete_all_aggregates(&storage, heights).await,
+                    rows.len() as u64,
+                    "table {table:?}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_single_height() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Heights with one row and with several.
+        for height in [0, 2, 41] {
+            for heights in [1, 2, AGGREGATE_HEIGHTS] {
+                let rows = totals_at(&[height]);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert_eq!(
+                    delete_all_aggregates(&storage, heights).await,
+                    rows.len() as u64,
+                    "height {height}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    /// A chunk wider than any difference of two heights deletes every row, and does not overflow.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_chunk_beyond_i64() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX] {
+            write_aggregates(&storage).await;
+            let rows = count_rows(&storage, "aggregate").await;
+            assert_eq!(
+                delete_all_aggregates(&storage, heights).await,
+                rows as u64,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// While `delete_aggregates` runs, the rows left are always every row up to some height, so an
+    /// aggregator started at any moment resumes from the right totals.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_keeps_oldest_heights_while_running() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [1, 3] {
+            write_aggregates(&storage).await;
+            watch_delete_all_aggregates(&storage, heights).await;
+        }
+        insert_aggregate_rows(&storage, &totals_at(&[0, 1, 7, 20, 21])).await;
+        watch_delete_all_aggregates(&storage, 3).await;
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_delete_newest_aggregates_deletes_top_heights() {
         let db = TmpDb::init().await;
@@ -3161,7 +3302,10 @@ mod test {
             let deleted = (new_end..end).map(rows_at_height).sum::<u64>();
 
             assert_eq!(
-                storage.delete_newest_aggregates(heights).await.unwrap(),
+                storage
+                    .delete_newest_aggregates(end - 1, heights)
+                    .await
+                    .unwrap(),
                 deleted,
                 "heights {new_end}..{end}"
             );
@@ -3186,7 +3330,10 @@ mod test {
             write_aggregates(&storage).await;
             let rows = count_rows(&storage, "aggregate").await;
             assert_eq!(
-                storage.delete_newest_aggregates(heights).await.unwrap(),
+                storage
+                    .delete_newest_aggregates(AGGREGATE_HEIGHTS - 1, heights)
+                    .await
+                    .unwrap(),
                 rows as u64,
                 "heights {heights}"
             );
@@ -3203,7 +3350,10 @@ mod test {
 
         for heights in [1, AGGREGATE_HEIGHTS] {
             assert_eq!(
-                storage.delete_newest_aggregates(heights).await.unwrap(),
+                storage
+                    .delete_newest_aggregates(AGGREGATE_HEIGHTS - 1, heights)
+                    .await
+                    .unwrap(),
                 0,
                 "heights {heights}"
             );
@@ -3340,5 +3490,88 @@ mod test {
         assert_eq!(prev.height, height as i64);
         assert_eq!(prev.num_transactions, expected.num_transactions);
         assert_eq!(prev.payload_size, expected.payload_size);
+    }
+
+    /// Rows of the totals as (height, namespace, transactions, bytes) at each of `heights`: one for
+    /// all namespaces together, and one for each of namespaces 1 to `height % 3`, so that heights
+    /// have different numbers of rows.
+    fn totals_at(heights: &[u64]) -> Vec<(i64, i64, i64, i64)> {
+        heights
+            .iter()
+            .flat_map(|&height| {
+                let height = height as i64;
+                std::iter::once(-1)
+                    .chain(1..=height % 3)
+                    .map(move |ns| (height, ns, height + 1, (ns + 2) * (height + 1)))
+            })
+            .collect()
+    }
+
+    /// Insert `rows` into an empty table of the totals, as (height, namespace, transactions,
+    /// bytes).
+    async fn insert_aggregate_rows(storage: &SqlStorage, rows: &[(i64, i64, i64, i64)]) {
+        assert_eq!(count_rows(storage, "aggregate").await, 0);
+        let mut tx = storage.write().await.unwrap();
+        for &(height, namespace, num_transactions, payload_size) in rows {
+            query(
+                "INSERT INTO aggregate (height, namespace, num_transactions, payload_size)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(height)
+            .bind(namespace)
+            .bind(num_transactions)
+            .bind(payload_size)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(aggregate_rows(storage).await, rows);
+    }
+
+    /// Run `delete_aggregates` and read the totals again and again until it finishes. Assert that
+    /// each read finds the rows there were up to some height, that some read finds only part of
+    /// them, and that it returns the number of rows there were.
+    async fn watch_delete_all_aggregates(storage: &SqlStorage, heights: u64) {
+        let written = aggregate_rows(storage).await;
+        let deleting = tokio::spawn({
+            let storage = storage.clone();
+            async move { storage.delete_aggregates(heights).await }
+        });
+
+        let watch = async {
+            let mut partial_reads = 0;
+            while !deleting.is_finished() {
+                let left = aggregate_rows(storage).await;
+                let newest = left.last().map(|&(height, ..)| height);
+                let oldest_written = written
+                    .iter()
+                    .copied()
+                    .filter(|&(height, ..)| newest.is_some_and(|newest| height <= newest))
+                    .collect::<Vec<_>>();
+                assert_eq!(left, oldest_written, "heights {heights}");
+                if !left.is_empty() && left.len() < written.len() {
+                    partial_reads += 1;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+            partial_reads
+        };
+        let partial_reads = tokio::time::timeout(Duration::from_secs(60), watch)
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"));
+
+        // Each transaction deletes at most `heights` heights, and a pause follows it, so the reads
+        // see the table partly deleted.
+        assert!(
+            partial_reads > 0,
+            "heights {heights}: no read found the table partly deleted"
+        );
+        assert_eq!(
+            deleting.await.unwrap().unwrap(),
+            written.len() as u64,
+            "heights {heights}"
+        );
+        assert_no_aggregates(storage).await;
     }
 }
