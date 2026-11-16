@@ -1,0 +1,21 @@
+[package]
+name = "consensus-store"
+description = "Byte-centric storage interface for consensus"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = "MIT"
+
+[features]
+# In-memory store and the conformance suite that every backend runs.
+testing = []
+
+[dependencies]
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+quickcheck = { workspace = true }
+
+[lints]
+workspace = true

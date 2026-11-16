@@ -11,6 +11,8 @@ members = [
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
+    "crates/consensus-store",
+    "crates/consensus-store-redb",
     "crates/espresso/api",
     "crates/espresso/deploy",
     "crates/espresso/dev-node",
@@ -63,6 +65,8 @@ default-members = [
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
+    "crates/consensus-store",
+    "crates/consensus-store-redb",
     "crates/espresso/api",
     "crates/espresso/deploy",
     "crates/espresso/keyset",
@@ -163,6 +167,8 @@ cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
 ] }
+consensus-store = { path = "crates/consensus-store" }
+crc32fast = "1.5"
 criterion = "0.8.1"
 csv = "1"
 custom_debug = "0.6"
@@ -307,6 +313,7 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = "0.3"
 rand_distr = "0.4"
 rayon = "1.12.0"
+redb = "4.6"
 reed-solomon-simd = { git = "https://github.com/EspressoSystems/reed-solomon-simd", rev = "1c3020e8484915028306aa28a9b6fc2b1e789d96" }
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 refinery-core = { version = "0.8" }

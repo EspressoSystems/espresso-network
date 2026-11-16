@@ -1,0 +1,21 @@
+[package]
+name = "consensus-store-redb"
+description = "redb backend of consensus-store"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = "MIT"
+
+[dependencies]
+bytes = { workspace = true }
+consensus-store = { workspace = true }
+crc32fast = { workspace = true }
+parking_lot = { workspace = true }
+redb = { workspace = true }
+
+[dev-dependencies]
+consensus-store = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

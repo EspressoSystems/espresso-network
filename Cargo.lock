@@ -2616,6 +2616,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "consensus-store"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "quickcheck",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "consensus-store-redb"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "consensus-store",
+ "crc32fast",
+ "parking_lot",
+ "redb",
+ "tempfile",
+]
+
+[[package]]
 name = "console"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8094,6 +8115,15 @@ name = "readme-rustdocifier"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08ad765b21a08b1a8e5cdce052719188a23772bcbefb3c439f0baaf62c56ceac"
+
+[[package]]
+name = "redb"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "096b1dd5ec053c9c2a5a26a93aafeadf73ebcb710ea54dc3151f17a8e20535ef"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "redox_syscall"
