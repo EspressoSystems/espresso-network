@@ -1,0 +1,25 @@
+[package]
+name        = "consensus-api"
+description = "The interface between a consensus node and its ingester"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+license     = "MIT"
+
+[dependencies]
+async-trait = { workspace = true }
+bytes       = { workspace = true }
+futures     = { workspace = true }
+prost       = { workspace = true }
+tokio       = { workspace = true }
+tonic       = { workspace = true }
+tonic-prost = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
+[dev-dependencies]
+test-utils = { workspace = true }
+
+[lints]
+workspace = true

@@ -11,9 +11,9 @@ use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 #[cfg(feature = "node")]
-use hotshot_new_protocol::storage::NewProtocolStorage;
+use hotshot_new_protocol::store::Restored;
 #[cfg(feature = "node")]
-use hotshot_types::simple_certificate::{Certificate1, Certificate2};
+use hotshot_types::simple_certificate::Certificate2;
 #[cfg(feature = "node")]
 use hotshot_types::{
     data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
@@ -657,17 +657,17 @@ pub trait SequencerPersistence:
     /// if there is no saved state). Also returns the anchor view number, which can be used as a
     /// reference point to process any events which were not processed before a previous shutdown,
     /// if applicable,.
+    ///
+    /// The safety state (actions, lock, undecided proposals, upgrade and state certificates)
+    /// comes from the consensus store, as `restored`; this storage provides the rest.
     async fn load_consensus_state(
         &self,
         state: NodeState,
         upgrade: Upgrade,
+        restored: &Restored<SeqTypes>,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
-        let highest_voted_view = match self
-            .load_latest_acted_view()
-            .await
-            .context("loading last voted view")?
-        {
+        let highest_voted_view = match restored.acted_view {
             Some(view) => {
                 tracing::info!(?view, "starting with last actioned view");
                 view
@@ -678,11 +678,7 @@ pub trait SequencerPersistence:
             },
         };
 
-        let restart_view = match self
-            .load_restart_view()
-            .await
-            .context("loading restart view")?
-        {
+        let restart_view = match restored.restart_view {
             Some(view) => {
                 tracing::info!(?view, "starting from saved view");
                 view
@@ -700,11 +696,11 @@ pub trait SequencerPersistence:
                 .map(|c| c.config.epoch_height)
                 .unwrap_or_default()
         });
-        let (leaf, cert_pair, anchor_view) = match self
-            .load_anchor_leaf()
-            .await
-            .context("loading anchor leaf")?
-        {
+        let anchor = restored
+            .anchor
+            .as_ref()
+            .map(|a| (a.leaf.clone(), CertificatePair::new(a.cert1.clone(), None)));
+        let (leaf, cert_pair, anchor_view) = match anchor {
             Some((leaf, cert_pair)) => {
                 tracing::info!(?leaf, ?cert_pair, "starting from saved leaf");
                 let high_qc = cert_pair.qc().clone();
@@ -757,13 +753,10 @@ pub trait SequencerPersistence:
             high_qc = extended_high_qc;
         }
 
-        if let Some(running_high_qc) = self
-            .load_high_qc2()
-            .await
-            .context("loading persisted high qc")?
+        if let Some(running_high_qc) = &restored.locked_qc
             && running_high_qc.view_number() > high_qc.view_number()
         {
-            high_qc = running_high_qc;
+            high_qc = running_high_qc.clone();
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
@@ -781,25 +774,27 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
 
-        let saved_proposals = self
-            .load_quorum_proposals()
-            .await
-            .context("loading saved proposals")?;
+        let saved_proposals = restored
+            .proposals
+            .iter()
+            .map(|(view, p)| {
+                let wrapper = Proposal {
+                    data: QuorumProposalWrapper::from(p.data.clone()),
+                    signature: p.signature.clone(),
+                    _pd: std::marker::PhantomData,
+                };
+                (*view, wrapper)
+            })
+            .collect();
 
-        let upgrade_certificate = self
-            .load_upgrade_certificate()
-            .await
-            .context("loading upgrade certificate")?;
+        let upgrade_certificate = restored.upgrade_cert.clone();
 
         let start_epoch_info = self
             .load_start_epoch_info()
             .await
             .context("loading start epoch info")?;
 
-        let state_cert = self
-            .load_state_cert()
-            .await
-            .context("loading light client state update certificate")?;
+        let state_cert = restored.state_cert.clone();
 
         tracing::warn!(
             ?leaf,
@@ -1142,30 +1137,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).add_state_cert(state_cert).await
-    }
-}
-
-#[cfg(feature = "node")]
-#[async_trait]
-impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
-    async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
-        // Writes are spawned concurrently and retried, so a stale write can land
-        // after a newer one. The backend applies a monotonic compare-and-set
-        // atomically, so such a stale write is a no-op and never regresses the
-        // persisted view.
-        (**self).append_high_qc2(high_qc).await
-    }
-
-    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
-        (**self).load_high_qc2().await
-    }
-
-    async fn append_boundary_qc2(&self, qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
-        (**self).append_boundary_qc2(qc).await
-    }
-
-    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
-        (**self).load_boundary_qc2().await
     }
 }
 

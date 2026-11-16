@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
+    net::SocketAddr,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -22,6 +23,7 @@ use hotshot_new_protocol::{
     coordinator::Coordinator,
     leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::{Cliquenet, NetworkError},
+    store::{ConsensusStore, Restored},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
@@ -85,7 +87,7 @@ const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 #[derivative(Debug(bound = ""))]
 pub struct SequencerContext<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
 
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -105,6 +107,9 @@ pub struct SequencerContext<P: SequencerPersistence> {
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
+
+    /// Where the ingester API is served, once it is.
+    consensus_api_addr: Option<SocketAddr>,
 
     detached: bool,
 
@@ -142,6 +147,8 @@ where
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
         leader_trace_dir: Option<PathBuf>,
+        consensus_store: ConsensusStore<SeqTypes>,
+        restored: Restored<SeqTypes>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -195,22 +202,8 @@ where
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 
-        // Restore the persisted lock so the new protocol resumes with the lock
-        // it actually held, not the older decided-anchor QC.
-        let locked_qc = persistence
-            .load_high_qc2()
-            .await
-            .context("loading persisted locked QC")?;
-        // And the epoch boundary certificate a re-vote and the next epoch's
-        // first block name.
-        let boundary_qc = persistence
-            .load_boundary_qc2()
-            .await
-            .context("loading persisted boundary QC")?;
-        let anchor_cert2 = persistence
-            .load_cert2(initializer.anchor_leaf().view_number())
-            .await
-            .context("loading the anchor's cert2")?;
+        // `seed_anchor_cert2` keeps it only if it decided the initializer's anchor.
+        let anchor_cert2 = restored.anchor.as_ref().and_then(|a| a.cert2.clone());
 
         let leader_tracer = leader_trace_dir
             .map(|dir| {
@@ -235,11 +228,10 @@ where
             .timeout_duration(Duration::from_secs(10))
             .empty_block_delay(empty_block_delay)
             .block_sizes(block_sizes)
-            .storage(Arc::clone(&persistence))
+            .store(consensus_store)
+            .restored(restored)
             .metrics(metrics)
             .consensus_metrics(ConsensusMetricsValue::new(metrics))
-            .maybe_locked_qc(locked_qc)
-            .maybe_boundary_qc(boundary_qc)
             .maybe_anchor_cert2(anchor_cert2)
             .maybe_leader_tracer(leader_tracer)
             .upgrade_config(UpgradeConfig {
@@ -356,7 +348,7 @@ where
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
@@ -378,6 +370,7 @@ where
             state_signatures: Arc::clone(&state_signer.signatures),
             request_response_protocol,
             tasks: Default::default(),
+            consensus_api_addr: None,
             detached: false,
             wait_for_orchestrator: None,
             node_state,
@@ -468,7 +461,7 @@ where
         self.consensus_handle.submit_transaction(tx).await
     }
 
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, Arc<P>>> {
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes>> {
         self.consensus_handle.clone()
     }
 
@@ -531,6 +524,15 @@ where
     /// cancelled in the reverse order that they were spawned.
     pub fn spawn(&mut self, name: impl Display, task: impl Future<Output: Debug> + Send + 'static) {
         self.tasks.spawn(name, task);
+    }
+
+    /// Where the ingester API is served, for an API service in this process.
+    pub fn consensus_api_addr(&self) -> Option<SocketAddr> {
+        self.consensus_api_addr
+    }
+
+    pub(crate) fn set_consensus_api_addr(&mut self, addr: SocketAddr) {
+        self.consensus_api_addr = Some(addr);
     }
 
     /// Spawn a short-lived background task attached to this context.
@@ -745,13 +747,11 @@ const SIGNER_QUEUE_CAPACITY: usize = 128;
 /// relay post can take as long as its HTTP timeout. The relay needs a threshold of signatures on
 /// one height, so every node must sign the same heights. Signing every decide keeps that while
 /// posts fall behind, and dropping only the oldest once the queue is full keeps it as well.
-async fn sign_decided_leaves<P>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
+async fn sign_decided_leaves(
+    consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
     mut leaves: broadcast::Receiver<DecidedLeaf>,
-) where
-    P: SequencerPersistence,
-{
+) {
     loop {
         match leaves.recv().await {
             Ok(leaf) => {

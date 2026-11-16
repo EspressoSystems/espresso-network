@@ -11,6 +11,7 @@ members = [
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
+    "crates/consensus-api",
     "crates/consensus-store",
     "crates/consensus-store-redb",
     "crates/espresso/api",
@@ -65,6 +66,7 @@ default-members = [
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
+    "crates/consensus-api",
     "crates/consensus-store",
     "crates/consensus-store-redb",
     "crates/espresso/api",
@@ -167,7 +169,9 @@ cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
 ] }
+consensus-api = { path = "crates/consensus-api" }
 consensus-store = { path = "crates/consensus-store" }
+consensus-store-redb = { path = "crates/consensus-store-redb" }
 crc32fast = "1.5"
 criterion = "0.8.1"
 csv = "1"

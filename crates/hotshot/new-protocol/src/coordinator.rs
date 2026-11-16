@@ -64,7 +64,8 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
-    storage::{NewProtocolStorage, Storage},
+    storage::Storage,
+    store::{ConsensusStore, DiskStore, Restored},
     upgrade::UpgradeProtocol,
     vid::{
         BuiltDispersal, ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser,
@@ -106,7 +107,7 @@ const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, S> {
+pub struct Coordinator<T: NodeType, S = DiskStore> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Cliquenet<T>,
@@ -179,7 +180,7 @@ pub struct Coordinator<T: NodeType, S> {
 impl<T, S> Coordinator<T, S>
 where
     T: NodeType,
-    S: NewProtocolStorage<T>,
+    S: consensus_store::Store,
 {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     #[allow(clippy::too_many_arguments)]
@@ -195,14 +196,11 @@ where
         timeout_duration: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
-        storage: S,
+        store: ConsensusStore<T, S>,
+        /// What the store held on start, from [`ConsensusStore::load`].
+        restored: Restored<T>,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
-        /// Locked QC persisted on a prior run; restored so the lock survives restart.
-        locked_qc: Option<Certificate1<T>>,
-        /// Boundary certificate persisted on a prior run (see
-        /// [`ConsensusOutput::PersistBoundaryQc`]).
-        boundary_qc: Option<Certificate1<T>>,
         /// `Certificate2` of the anchor persisted on a prior run.
         anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
@@ -266,8 +264,8 @@ where
         );
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
-        for p in initializer.saved_proposals().values() {
-            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
+        for p in restored.proposals.values() {
+            state_manager.seed_from_header(p.data.clone());
         }
         state_manager.seed_state(
             anchor_view,
@@ -280,26 +278,20 @@ where
         let reconstructed_blocks =
             std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
                 .chain(
-                    initializer
-                        .saved_proposals()
+                    restored
+                        .proposals
                         .iter()
-                        .map(|(view, p)| (*view, p.data.block_header().clone())),
+                        .map(|(view, p)| (*view, p.data.block_header.clone())),
                 )
                 .filter_map(|(view, header)| match header.payload_commitment() {
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
-                });
+                })
+                .collect::<Vec<_>>();
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         // They are kept signed, so this node can serve them to a peer fetching
         // them, as one fetching an epoch's boundary block for a re-vote.
-        let saved_proposals = initializer
-            .saved_proposals()
-            .values()
-            .map(|p| SignedProposal {
-                data: message::Proposal::from(p.data.clone()),
-                signature: p.signature.clone(),
-                _pd: std::marker::PhantomData,
-            });
+        let saved_proposals = restored.proposals.into_values();
         consensus.seed_signed_proposals(saved_proposals);
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
@@ -308,12 +300,13 @@ where
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         // Restore the persisted lock; it can be newer than the anchor QC, so
         // this must run after `seed_parent`.
-        if let Some(locked_qc) = locked_qc {
+        if let Some(locked_qc) = restored.locked_qc {
             consensus.seed_locked_cert(locked_qc);
         }
-        if let Some(boundary_qc) = boundary_qc {
+        if let Some(boundary_qc) = restored.boundary_qc {
             consensus.seed_boundary_cert(boundary_qc);
         }
+        consensus.seed_stored_payloads(restored.payloads);
         if let Some(anchor_cert2) = anchor_cert2 {
             consensus.seed_anchor_cert2(anchor_cert2);
         }
@@ -334,12 +327,17 @@ where
             upgrade_lock.set_decided_upgrade_cert(cert.clone());
         }
 
+        // A restarted node starts after both the anchor and the last view it voted in, so it
+        // neither votes twice in a view nor starts behind its anchor.
+        let start_view = restored
+            .restart_view
+            .map_or(anchor_view, |view| view.max(anchor_view));
         consensus.resume_from_restart(
             anchor_view,
-            initializer.start_view(),
-            initializer.last_actioned_view(),
+            start_view,
+            restored.acted_view.unwrap_or_else(ViewNumber::genesis),
         );
-        if let Some(state_cert) = initializer.state_cert().cloned() {
+        if let Some(state_cert) = restored.state_cert {
             consensus.seed_state_cert(state_cert);
         }
 
@@ -444,7 +442,7 @@ where
                 initializer.epoch_height(),
                 upgrade_lock,
             ))
-            .storage(Storage::new(storage, private_key).with_metrics(metrics))
+            .storage(Storage::new(store, &private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)
@@ -753,7 +751,10 @@ where
                     self.vid_reconstructor.retire_view(out.view);
                     return Ok(self.on_payload_obtained(out))
                 },
-                Some(stored) = self.storage.next() => {
+                stored = self.storage.next() => {
+                    let stored = stored.map_err(|e| {
+                        CoordinatorError::critical(ErrorSource::Message(e.to_string()))
+                    })?;
                     return Ok(ConsensusInput::Stored(stored))
                 },
                 Some(result) = self.epoch_manager.next() => match result {
@@ -873,7 +874,12 @@ where
                 debug!(%node, %epoch, "request drb result");
                 self.epoch_manager.request_drb_result(epoch);
             },
-            ConsensusOutput::LeafDecided { leaves, cert1, .. } => {
+            ConsensusOutput::LeafDecided {
+                leaves,
+                cert1,
+                cert2,
+                vid_shares,
+            } => {
                 info!(
                     %node,
                     view = %cert1.view_number(),
@@ -890,6 +896,9 @@ where
                             VidCommitment::V0(_) | VidCommitment::V1(_) => None,
                         }
                     }));
+                // Before gc, which deletes the payloads the decide log entries share.
+                self.storage
+                    .append_decided(&leaves, &cert1, cert2.as_ref(), &vid_shares);
                 // `leaves` is ordered newest first.
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
@@ -987,7 +996,6 @@ where
             } => {
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "proposal paired with vid share");
-                self.storage.append_vid(vid_share.clone());
                 self.storage.append_proposal(proposal.data.clone());
                 // Same gate as the in-memory store in `Consensus::apply`: persisting
                 // unconditionally writes a `state_cert` row under a view the sender
@@ -2334,6 +2342,7 @@ where
                     .retain(|key, _| key.view > view);
                 self.fetcher.gc(view);
                 self.state_manager.gc(view);
+                self.storage.decided(view);
                 self.storage
                     .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());
                 self.vid_reconstructor

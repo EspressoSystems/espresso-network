@@ -189,6 +189,16 @@ impl Snapshot for RedbSnapshot {
         }))
     }
 
+    fn value_len(&self, table: &Table, key: &[u8]) -> Result<Option<u64>, Error> {
+        let Some(t) = self.open(table)? else {
+            return Ok(None);
+        };
+        match t.get(key).map_err(backend)? {
+            Some(raw) => Ok(Some(Row::decode(table, key, raw.value())?.value_len())),
+            None => Ok(None),
+        }
+    }
+
     fn usage(&self, table: &Table) -> Result<Usage, Error> {
         let t = match self.txn.open_table(USAGE) {
             Ok(t) => t,

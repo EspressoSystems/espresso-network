@@ -310,6 +310,19 @@ mod tests {
         }
     }
 
+    /// What a consensus store holds after importing this persistence, as on a node's first
+    /// start with the store.
+    async fn imported<P: SequencerPersistence>(
+        persistence: &P,
+    ) -> hotshot_new_protocol::store::Restored<SeqTypes> {
+        use hotshot_new_protocol::store::{ConsensusStore, MemStore};
+        let store = ConsensusStore::new(Arc::new(MemStore::new()));
+        store
+            .import(crate::import_state(persistence).await.unwrap())
+            .unwrap();
+        store.load().unwrap()
+    }
+
     #[rstest_reuse::template]
     #[rstest::rstest]
     #[case::postgres(PhantomData::<crate::persistence::sql::postgres::Persistence>)]
@@ -1165,14 +1178,12 @@ mod tests {
         assert_eq!(view_number, new_view_number_for_certificate);
     }
 
-    /// The `NewProtocolStorage` impl on `Arc<P>` (the object the coordinator actually holds) is the
+    /// The persistence behind `Arc<P>` is the
     /// persist-before-vote hook. It must durably route to the `high_qc2` table and stay monotonic.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_arc_storage_append_high_qc2_persists<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) {
-        use hotshot_new_protocol::storage::NewProtocolStorage;
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
         // Production wraps the persistence as `Arc<P>`; that is the impl under test.
@@ -1187,7 +1198,7 @@ mod tests {
         )
         .await;
         high_qc.view_number = ViewNumber::new(7);
-        NewProtocolStorage::append_high_qc2(&arc, high_qc.clone())
+        SequencerPersistence::append_high_qc2(&*arc, high_qc.clone())
             .await
             .unwrap();
         assert_eq!(
@@ -1198,7 +1209,7 @@ mod tests {
         // A stale write through the wrapper must not regress the persisted view.
         let mut stale = high_qc.clone();
         stale.view_number = ViewNumber::new(3);
-        NewProtocolStorage::append_high_qc2(&arc, stale)
+        SequencerPersistence::append_high_qc2(&*arc, stale)
             .await
             .unwrap();
         assert_eq!(
@@ -1231,6 +1242,7 @@ mod tests {
             .load_consensus_state(
                 NodeState::mock(),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+                &imported(&storage).await,
             )
             .await
             .unwrap();
@@ -1298,6 +1310,7 @@ mod tests {
             .load_consensus_state(
                 NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+                &imported(&storage).await,
             )
             .await
             .unwrap();
@@ -1316,6 +1329,7 @@ mod tests {
             .load_consensus_state(
                 NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+                &imported(&storage).await,
             )
             .await
             .unwrap();
@@ -3306,6 +3320,7 @@ mod tests {
             .load_consensus_state(
                 NodeState::mock(),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+                &imported(&storage).await,
             )
             .await
             .unwrap();

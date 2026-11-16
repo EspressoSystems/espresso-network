@@ -2616,6 +2616,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "consensus-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "prost",
+ "test-utils",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "consensus-store"
 version = "0.1.0"
 dependencies = [
@@ -4928,6 +4943,9 @@ dependencies = [
  "bon",
  "cliquenet",
  "committable",
+ "consensus-api",
+ "consensus-store",
+ "consensus-store-redb",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-example-types",
@@ -4946,6 +4964,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tonic",
  "tracing",
  "tracing-subscriber 0.3.23",
  "vbs",
@@ -4964,6 +4983,7 @@ dependencies = [
  "clap",
  "cliquenet",
  "committable",
+ "consensus-store",
  "csv",
  "hotshot-example-types",
  "hotshot-new-protocol",

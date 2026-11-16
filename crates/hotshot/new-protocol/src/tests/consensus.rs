@@ -3582,10 +3582,10 @@ async fn test_vote1_gated_on_storage() {
 }
 
 /// The lock update and view change fire as soon as cert1 is valid, but
-/// vote2 is held until the node's own VID share is durably stored.  Vote1
+/// vote2 is held until the block's payload is durably stored.  Vote1
 /// and vote2 for the same view share a single action record.
 #[tokio::test]
-async fn test_vote2_gated_on_vid_storage() {
+async fn test_vote2_gated_on_payload_storage() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -3615,10 +3615,17 @@ async fn test_vote2_gated_on_vid_storage() {
     consensus.apply(test_data.views[0].cert1_input(), &mut outbox);
 
     assert!(any(&outbox, is_view_changed), "lock update is not gated");
-    assert!(!any(&outbox, is_vote2), "vote2 must wait for the VID share");
+    assert!(!any(&outbox, is_vote2), "vote2 must wait for the payload");
 
+    let VidCommitment::V2(payload) =
+        hotshot_types::traits::block_contents::BlockHeader::<TestTypes>::payload_commitment(
+            &test_data.views[0].proposal.data.block_header,
+        )
+    else {
+        panic!("test blocks have V2 commitments");
+    };
     consensus.apply(
-        ConsensusInput::Stored(StorageOutput::Vid(view)),
+        ConsensusInput::Stored(StorageOutput::Payload(view, payload)),
         &mut outbox,
     );
     assert!(

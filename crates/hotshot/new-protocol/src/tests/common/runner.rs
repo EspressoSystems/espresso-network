@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     net::IpAddr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -9,6 +10,7 @@ use async_broadcast::Sender;
 use bon::Builder;
 use cliquenet::noise::Protocol;
 use committable::{Commitment, Committable};
+use consensus_store::mem::MemStore;
 use hotshot_example_types::{
     block_types::TestTransaction, membership::fetcher::ExternalMessage, node_types::TestTypes,
     storage_types::TestStorage,
@@ -22,7 +24,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    traits::{metrics::NoMetrics, signature_key::SignatureKey, storage::Storage as _},
     vote::HasViewNumber,
     x25519::Keypair,
 };
@@ -45,6 +47,7 @@ use crate::{
     coordinator::{Coordinator, error::Severity},
     message::{ConsensusMessage, Message, MessageType, OpaqueMessage, Unchecked},
     network::Cliquenet,
+    store::ConsensusStore,
     tests::common::{
         coordinator_builder::{UpgradeSetup, build_test_coordinator},
         utils::{
@@ -134,6 +137,10 @@ pub struct TestRunner {
     /// can inspect persisted state (e.g. the action log) after a run.
     #[builder(skip)]
     node_storages: Vec<TestStorage<TestTypes>>,
+
+    /// Per-node consensus store, created and kept like `node_storages`.
+    #[builder(skip)]
+    node_stores: Vec<ConsensusStore<TestTypes, MemStore>>,
 
     /// Node indices that are offline for the entire test.  Down nodes do
     /// not run a coordinator.  Views where a down node is leader are
@@ -375,6 +382,10 @@ impl TestRunner {
         &self.node_storages
     }
 
+    pub fn node_stores(&self) -> &[ConsensusStore<TestTypes, MemStore>] {
+        &self.node_stores
+    }
+
     pub fn decided_transactions(&self) -> &BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>> {
         &self.decided_transactions
     }
@@ -385,7 +396,10 @@ impl TestRunner {
 
     /// A node's upgrade lock, restored from its (possibly persisted) storage.
     async fn make_upgrade_lock(&mut self, idx: usize) -> UpgradeLock<TestTypes> {
-        let decided_cert = self.node_storages[idx].decided_upgrade_certificate().await;
+        let decided_cert = self.node_stores[idx]
+            .load()
+            .expect("load consensus store")
+            .upgrade_cert;
         let lock = UpgradeLock::from_certificate(self.upgrade, &decided_cert);
         self.node_locks[idx] = Some(lock.clone());
         lock
@@ -464,6 +478,7 @@ impl TestRunner {
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
             .collect();
+        self.node_stores = (0..self.num_nodes).map(|_| new_store()).collect();
         self.node_locks = vec![None; self.num_nodes];
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
@@ -539,6 +554,7 @@ impl TestRunner {
                 network,
                 membership,
                 storage,
+                self.node_stores[i].clone(),
                 client,
                 self.epoch_height,
                 self.view_timeout,
@@ -651,6 +667,7 @@ impl TestRunner {
                                     self.node_storages[change.idx].mark_restart().await;
                                 } else {
                                     self.node_storages[change.idx] = TestStorage::default();
+                                    self.node_stores[change.idx] = new_store();
                                 }
                                 let upgrade_lock = self.make_upgrade_lock(change.idx).await;
                                 let net = create_network(
@@ -678,6 +695,7 @@ impl TestRunner {
                                     net,
                                     membership,
                                     storage,
+                                    self.node_stores[change.idx].clone(),
                                     client,
                                     self.epoch_height,
                                     self.view_timeout,
@@ -933,7 +951,7 @@ async fn submit_transactions(clients: Vec<ClientApi<TestTypes>>, count: usize) {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_node(
-    mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
+    mut coord: Coordinator<TestTypes, MemStore>,
     mut external_rx: mpsc::UnboundedReceiver<OpaqueMessage<BLSPubKey>>,
     storage: TestStorage<TestTypes>,
     output_tx: UnboundedSender<TaggedEvent>,
@@ -980,6 +998,27 @@ async fn run_node(
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
+            // Keep the application storage up to date with what the node
+            // stores: `assert_no_view_reentered` reads its action log, and
+            // its leaf fetcher serves the proposals to peers catching up on
+            // an epoch's stake table.
+            match &output {
+                ConsensusOutput::RecordAction(view, kind) => {
+                    let _ = storage.record_action(*view, (*kind).into()).await;
+                },
+                ConsensusOutput::PersistProposal(proposal)
+                | ConsensusOutput::ProposalPaired { proposal, .. } => {
+                    let wrapper = hotshot_types::message::Proposal {
+                        data: hotshot_types::data::QuorumProposalWrapper::from(
+                            proposal.data.clone(),
+                        ),
+                        signature: proposal.signature.clone(),
+                        _pd: std::marker::PhantomData,
+                    };
+                    let _ = storage.append_proposal_wrapper(&wrapper).await;
+                },
+                _ => {},
+            }
             if let ConsensusOutput::LeafDecided {
                 leaves,
                 cert1,
@@ -1050,4 +1089,8 @@ async fn run_node(
             }
         }
     }
+}
+
+fn new_store() -> ConsensusStore<TestTypes, MemStore> {
+    ConsensusStore::new(Arc::new(MemStore::new()))
 }

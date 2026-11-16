@@ -204,6 +204,21 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
 
+    /// Directory of the consensus store: this node's votes, locks, proposals and payloads.
+    ///
+    /// On first use, the store takes over that state from the configured storage, which
+    /// consensus then no longer uses for it. Use local disk: consensus waits for writes here
+    /// before it votes.
+    #[clap(long, env = "ESPRESSO_NODE_CONSENSUS_STORE_PATH")]
+    pub consensus_store_path: PathBuf,
+
+    /// Address to serve the ingester API on: the decided chain and its payloads, for the API
+    /// service. When unset, a free port on localhost, which the API service in the same process
+    /// uses. Bind it to a private address only: it is unauthenticated, and acknowledging frees
+    /// decided data.
+    #[clap(long, env = "ESPRESSO_NODE_CONSENSUS_API_ADDR")]
+    pub consensus_api_addr: Option<std::net::SocketAddr>,
+
     /// Directory for the leader-event trace `leader_trace_node{N}.csv`. Disabled when unset.
     /// Use local disk: a slow flush blocks consensus.
     #[clap(long, env = "ESPRESSO_NODE_LEADER_TRACE_DIR", hide = true)]

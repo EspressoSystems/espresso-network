@@ -57,12 +57,15 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
 pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
-use hotshot_new_protocol::network::{Cliquenet, message_limit};
+use hotshot_new_protocol::{
+    network::{Cliquenet, message_limit},
+    store::{Anchor, ConsensusStore, Import},
+};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
-    data::ViewNumber,
+    data::{VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
@@ -153,6 +156,8 @@ pub async fn init_node<P>(
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
     leader_trace_dir: Option<PathBuf>,
+    consensus_store_path: PathBuf,
+    consensus_api_addr: Option<std::net::SocketAddr>,
 ) -> anyhow::Result<SequencerContext<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -386,12 +391,18 @@ where
     )
     .await;
 
+    let (consensus_store, restored) = ConsensusStore::open(consensus_store_path, async || {
+        import_state(&*persistence).await
+    })
+    .await?;
+
     // Load saved consensus state from storage. It is loaded once here, both to
     // seed consensus in `SequencerContext::init` below and to tell whether the
     // network has already cut over to the new protocol.
     let (initializer, anchor_view) = persistence
-        .load_consensus_state(instance_state, version_upgrade)
+        .load_consensus_state(instance_state, version_upgrade, &restored)
         .await?;
+    let epoch_height = initializer.epoch_height();
 
     let block_sizes = genesis.block_sizes();
     let cliquenet = {
@@ -439,14 +450,71 @@ where
         empty_block_delay,
         block_sizes,
         leader_trace_dir,
+        consensus_store.clone(),
+        restored,
     )
     .await?;
+
+    let addr = consensus_api_addr.unwrap_or((std::net::Ipv4Addr::LOCALHOST, 0).into());
+    let (addr, server) = hotshot_new_protocol::ingest::bind(consensus_store, epoch_height, addr)
+        .with_context(|| format!("binding the ingester API to {addr}"))?;
+    tracing::info!(%addr, "serving the ingester API");
+    ctx.spawn("ingester API", server);
+    ctx.set_consensus_api_addr(addr);
 
     if let Some(peer_config) = orchestrator_peer_config {
         ctx = ctx.wait_for_orchestrator(orchestrator_client, peer_config);
     }
 
     Ok(ctx)
+}
+
+/// Reads the consensus state that the consensus store takes over on its first open.
+pub(crate) async fn import_state<P: SequencerPersistence>(
+    persistence: &P,
+) -> anyhow::Result<Import<SeqTypes>> {
+    let mut proposals = Vec::new();
+    let mut payloads = Vec::new();
+    for (view, p) in persistence.load_quorum_proposals().await? {
+        let proposal = hotshot_types::new_protocol::Proposal::from(p.data);
+        if let VidCommitment::V2(commitment) = proposal.block_header.payload_commitment()
+            && let Some(da) = persistence.load_da_proposal(view).await?
+        {
+            payloads.push((view, commitment, da.data.encoded_transactions));
+        }
+        proposals.push(hotshot_types::message::Proposal {
+            data: proposal,
+            signature: p.signature,
+            _pd: std::marker::PhantomData,
+        });
+    }
+    Ok(Import {
+        proposals,
+        locked_qc: persistence.load_high_qc2().await?,
+        boundary_qc: persistence.load_boundary_qc2().await?,
+        acted_view: persistence.load_latest_acted_view().await?,
+        restart_view: persistence.load_restart_view().await?,
+        upgrade_cert: persistence.load_upgrade_certificate().await?,
+        state_cert: persistence.load_state_cert().await?,
+        payloads,
+        anchor: import_anchor(persistence).await?,
+    })
+}
+
+/// The latest decided leaf of the persistence, with the certificates that decided it.
+async fn import_anchor<P: SequencerPersistence>(
+    persistence: &P,
+) -> anyhow::Result<Option<Anchor<SeqTypes>>> {
+    let Some((mut leaf, certs)) = persistence.load_anchor_leaf().await? else {
+        return Ok(None);
+    };
+    leaf.unfill_block_payload();
+    let cert2 = persistence.load_cert2(leaf.view_number()).await?;
+    Ok(Some(Anchor {
+        leaf,
+        cert1: certs.qc().clone(),
+        cert2,
+    }))
 }
 
 /// This node's own validator config, which `status/keys` reports.
@@ -1631,8 +1699,16 @@ pub mod testing {
                 )
             };
 
+            // A fresh store per start: it imports what the persistence holds, so a node
+            // restarted on the same persistence resumes from that, not from the store of its
+            // previous run.
+            let store_dir = tempfile::tempdir().unwrap().keep();
+            let (consensus_store, restored) =
+                ConsensusStore::open(store_dir, async || import_state(&*persistence).await)
+                    .await
+                    .unwrap();
             let (initializer, anchor_view) = persistence
-                .load_consensus_state(node_state, upgrade)
+                .load_consensus_state(node_state, upgrade, &restored)
                 .await
                 .unwrap();
 
@@ -1661,6 +1737,8 @@ pub mod testing {
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
                 None,
+                consensus_store,
+                restored,
             )
             .await
         }

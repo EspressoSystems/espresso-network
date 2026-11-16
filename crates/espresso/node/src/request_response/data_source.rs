@@ -91,7 +91,7 @@ pub trait RequestStorage: Send + Sync {
 
 #[derive(Clone)]
 pub struct DataSource<P: SequencerPersistence> {
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage

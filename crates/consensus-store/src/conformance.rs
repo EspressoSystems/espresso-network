@@ -328,7 +328,13 @@ fn large_values<S: Store>(store: &S) {
             Some(big(*len, i as u64)),
             "length {len}"
         );
+        assert_eq!(
+            snap.value_len(&t, &key::u64(i as u64)).unwrap(),
+            Some(*len as u64)
+        );
     }
+    assert_eq!(snap.value_len(&t, b"absent").unwrap(), None);
+    assert_eq!(snap.value_len(&table("never"), b"k").unwrap(), None);
     let all = entries(&snap, &t, &KeyRange::all());
     assert_eq!(all.len(), lens.len());
     for ((_, v), len) in all.iter().zip(lens) {

@@ -87,7 +87,7 @@ pub trait ApiContext: Send + Sync + 'static {
 }
 
 #[async_trait]
-impl<P: SequencerPersistence> ConsensusSource for ConsensusHandle<SeqTypes, Arc<P>> {
+impl ConsensusSource for ConsensusHandle<SeqTypes> {
     async fn decided_leaf(&self) -> Leaf2 {
         ConsensusHandle::decided_leaf(self).await
     }

@@ -308,6 +308,8 @@ where
     let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
     let leader_trace_dir = opt.leader_trace_dir.clone();
+    let consensus_store_path = opt.consensus_store_path.clone();
+    let consensus_api_addr = opt.consensus_api_addr;
 
     if modules.query.is_none() {
         storage_opt.set_consensus_only();
@@ -336,6 +338,8 @@ where
                             proposal_fetcher_config,
                             empty_block_delay,
                             leader_trace_dir,
+                            consensus_store_path,
+                            consensus_api_addr,
                         )
                         .await
                     }
@@ -357,6 +361,8 @@ where
                 proposal_fetcher_config,
                 empty_block_delay,
                 leader_trace_dir,
+                consensus_store_path,
+                consensus_api_addr,
             )
             .await?
         },

@@ -50,7 +50,7 @@ impl ProposalFetcherConfig {
     pub(crate) fn spawn<P>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
@@ -111,7 +111,7 @@ where
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,

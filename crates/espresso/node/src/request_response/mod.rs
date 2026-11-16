@@ -23,14 +23,8 @@ pub struct RequestResponseProtocol<P: SequencerPersistence> {
     #[deref]
     #[allow(clippy::type_complexity)]
     /// The actual inner request response protocol
-    inner: RequestResponse<
-        Sender,
-        Receiver<Bytes>,
-        Request,
-        RecipientSource<P>,
-        DataSource<P>,
-        PubKey,
-    >,
+    inner:
+        RequestResponse<Sender, Receiver<Bytes>, Request, RecipientSource, DataSource<P>, PubKey>,
 
     /// The configuration we used for the above inner protocol. This is nice to have for
     /// estimating when we should make another request
@@ -53,7 +47,7 @@ impl<P: SequencerPersistence> RequestResponseProtocol<P> {
         receiver: Receiver<Bytes>,
         // The recipient source that [`RequestResponseProtocol`] will use to get the recipients
         // that a specific message should expect responses from
-        recipient_source: RecipientSource<P>,
+        recipient_source: RecipientSource,
         // The [response] data source that [`RequestResponseProtocol`] will use to derive the
         // response data for a specific request
         data_source: DataSource<P>,

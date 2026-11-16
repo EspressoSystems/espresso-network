@@ -7,7 +7,7 @@ use std::{
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
-use espresso_types::{Header, traits::SequencerPersistence};
+use espresso_types::Header;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -92,10 +92,10 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_decide<P: SequencerPersistence>(
+    pub(super) async fn handle_decide(
         &mut self,
         leaf: &DecidedLeaf,
-        consensus_handle: &ConsensusHandle<SeqTypes, Arc<P>>,
+        consensus_handle: &ConsensusHandle<SeqTypes>,
     ) {
         match leaf.header.get_light_client_state(leaf.view) {
             Ok(state) => {

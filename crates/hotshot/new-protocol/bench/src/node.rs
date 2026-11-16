@@ -1,11 +1,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use consensus_store::mem::MemStore;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
@@ -44,7 +44,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, MemStore>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -255,8 +255,8 @@ async fn build_coordinator(
         .proposal_validator(proposal_validator)
         .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
-            TestStorage::default(),
-            private_key,
+            hotshot_new_protocol::store::ConsensusStore::new(Arc::new(MemStore::new())),
+            &private_key,
         ))
         .client(client)
         .membership_coordinator(membership)

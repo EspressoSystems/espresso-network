@@ -58,6 +58,13 @@ impl<'a> Row<'a> {
         }
     }
 
+    pub fn value_len(&self) -> u64 {
+        match self {
+            Self::Inline(v) => v.len() as u64,
+            Self::Extern(r) => r.len,
+        }
+    }
+
     pub fn extern_ref(&self) -> Option<ExternRef> {
         match self {
             Self::Inline(_) => None,

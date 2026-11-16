@@ -1,101 +1,333 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use committable::RawCommitmentBuilder;
-use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
+use consensus_store::{
+    Batch, Error, Store,
+    mem::{MemSnapshot, MemStore},
+};
+use hotshot_example_types::{block_types::TestBlockPayload, node_types::TestTypes};
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
     signature_key::BLSPubKey,
-    traits::signature_key::SignatureKey,
+    simple_vote::LockView,
+    traits::{BlockPayload, signature_key::SignatureKey},
 };
 use tokio::time::timeout;
 
 use super::common::utils::{build_cert1, mock_membership};
-use crate::storage::{ActionKind, Storage, StorageOutput};
+use crate::{
+    storage::{ActionKind, Storage, StorageOutput},
+    store::ConsensusStore,
+};
 
+/// A writer over a store that can be made to fail, counting the batches it commits.
 fn test_storage() -> (
-    Storage<TestTypes, TestStorage<TestTypes>>,
-    TestStorage<TestTypes>,
+    Storage<TestTypes, FlakyStore>,
+    ConsensusStore<TestTypes, FlakyStore>,
 ) {
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
-    let inner = TestStorage::<TestTypes>::default();
-    (Storage::new(inner.clone(), private_key), inner)
+    let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
+    (Storage::new(store.clone(), &private_key), store)
 }
 
-/// A successful write surfaces exactly one completion through `next()`.
+/// A write surfaces exactly one completion, once it is in the store.
 #[tokio::test]
 async fn test_record_action_completion() {
-    let (mut storage, inner) = test_storage();
+    let (mut storage, store) = test_storage();
     let view = ViewNumber::new(7);
 
     storage.record_action(view, ActionKind::Vote);
 
     let stored = storage.next().await.expect("completion");
     assert_eq!(stored, StorageOutput::Action(view, ActionKind::Vote));
-    assert_eq!(inner.last_actioned_view().await, view);
-    assert_eq!(inner.restart_view().await, view + 1);
-    assert!(storage.next().await.is_none());
+    let restored = store.load().unwrap();
+    assert_eq!(restored.acted_view, Some(view));
+    assert_eq!(restored.restart_view, Some(view + 1));
+    assert_nothing_more(&mut storage).await;
 }
 
-/// A failing write retries until it succeeds and only then completes.
+/// A failing batch is retried until it succeeds, and only then completes.
 #[tokio::test]
 async fn test_record_action_retries_until_success() {
-    let (mut storage, inner) = test_storage();
+    let (mut storage, store) = test_storage();
     let view = ViewNumber::new(3);
 
-    inner.should_return_err.store(true, Ordering::Relaxed);
+    store.store().fail.store(true, Ordering::Relaxed);
     storage.record_action(view, ActionKind::Propose);
     assert!(
         timeout(Duration::from_millis(100), storage.next())
             .await
             .is_err(),
-        "no completion while the write keeps failing"
+        "no completion while the batch keeps failing"
     );
 
-    inner.should_return_err.store(false, Ordering::Relaxed);
+    store.store().fail.store(false, Ordering::Relaxed);
     let stored = timeout(Duration::from_secs(5), storage.next())
         .await
-        .expect("completes once the write succeeds")
+        .expect("completes once the batch succeeds")
         .expect("completion");
     assert_eq!(stored, StorageOutput::Action(view, ActionKind::Propose));
-    assert!(storage.next().await.is_none());
+    assert_eq!(store.load().unwrap().acted_view, Some(view));
+    assert_nothing_more(&mut storage).await;
 }
 
-/// gc aborts in-flight writes below the given view; no completion fires.
+/// Writes queued before the writer runs share one commit, and complete in order.
 #[tokio::test]
-async fn test_gc_aborts_pending_writes() {
-    let (mut storage, inner) = test_storage();
+async fn test_writes_share_one_commit() {
+    let (mut storage, store) = test_storage();
+    let views = [5, 3, 9].map(ViewNumber::new);
+    for view in views {
+        storage.record_action(view, ActionKind::Vote);
+    }
 
-    inner.should_return_err.store(true, Ordering::Relaxed);
-    storage.record_action(ViewNumber::new(2), ActionKind::Vote);
-    storage.gc(ViewNumber::new(5));
-    inner.should_return_err.store(false, Ordering::Relaxed);
-
-    assert!(storage.next().await.is_none());
+    for view in views {
+        let stored = storage.next().await.expect("completion");
+        assert_eq!(stored, StorageOutput::Action(view, ActionKind::Vote));
+    }
+    assert_eq!(store.store().commits.load(Ordering::Relaxed), 1);
+    // The views only ever rise.
+    assert_eq!(store.load().unwrap().acted_view, Some(ViewNumber::new(9)));
+    assert_nothing_more(&mut storage).await;
 }
 
-/// The boundary certificate is written however long storage fails, even after
-/// gc passes its view: nothing else carries it once the view has passed.
+/// A payload write reports the block it stored, and garbage collection removes it.
 #[tokio::test]
-async fn test_gc_does_not_abort_the_boundary_certificate() {
-    let (mut storage, inner) = test_storage();
+async fn test_payload_completion_and_gc() {
+    let (mut storage, store) = test_storage();
+    let view = ViewNumber::new(4);
+    let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::empty();
+    let commitment = VidCommitment2::default();
+
+    storage.append_da(
+        view,
+        EpochNumber::genesis(),
+        payload,
+        metadata,
+        VidCommitment::V2(commitment),
+    );
+    let stored = storage.next().await.expect("completion");
+    assert_eq!(stored, StorageOutput::Payload(view, commitment));
+    assert!(store.load().unwrap().payloads.contains(&(view, commitment)));
+
+    storage.gc(view);
+    storage.record_action(view, ActionKind::Vote);
+    storage.next().await.expect("completion");
+    assert!(store.load().unwrap().payloads.contains(&(view, commitment)));
+
+    storage.gc(view + 1);
+    storage.record_action(view + 1, ActionKind::Vote);
+    storage.next().await.expect("completion");
+    assert!(store.load().unwrap().payloads.is_empty());
+}
+
+/// The lock only moves forward, and garbage collection never removes it or the boundary
+/// certificate: nothing else carries the boundary certificate once its view has passed.
+#[tokio::test]
+async fn test_lock_is_monotonic_and_survives_gc() {
+    let (mut storage, store) = test_storage();
     let epoch = EpochNumber::genesis();
     let membership = mock_membership().membership_for_epoch(epoch).unwrap();
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
-    let leaf = RawCommitmentBuilder::new("leaf").u64(9).finalize();
-    let view = ViewNumber::new(10);
-    let cert = build_cert1(leaf, epoch, 9, &membership, view, &public_key, &private_key);
+    let cert_at = |view: u64| {
+        let leaf = RawCommitmentBuilder::new("leaf").u64(view).finalize();
+        build_cert1(
+            leaf,
+            epoch,
+            view,
+            &membership,
+            ViewNumber::new(view),
+            &public_key,
+            &private_key,
+        )
+    };
+    let later = cert_at(10);
+    let earlier = cert_at(8);
 
-    inner.should_return_err.store(true, Ordering::Relaxed);
-    storage.append_boundary_qc2(cert.clone());
-    storage.gc(view + 5);
-    inner.should_return_err.store(false, Ordering::Relaxed);
+    storage.append_high_qc2(later.clone());
+    storage.append_boundary_qc2(later.clone());
+    assert_eq!(
+        storage.next().await.expect("completion"),
+        StorageOutput::HighQc(LockView::of(&later))
+    );
+    storage.append_high_qc2(earlier.clone());
+    storage.gc(ViewNumber::new(15));
+    assert_eq!(
+        storage.next().await.expect("completion"),
+        StorageOutput::HighQc(LockView::of(&earlier))
+    );
 
-    timeout(Duration::from_secs(5), async {
-        while inner.boundary_qc_cloned().await.is_none() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    let restored = store.load().unwrap();
+    assert_eq!(restored.locked_qc, Some(later.clone()));
+    assert_eq!(restored.boundary_qc, Some(later));
+}
+
+/// A store that can no longer tell whether a commit happened stops the writer.
+#[tokio::test]
+async fn test_poisoned_store_is_an_error() {
+    let (mut storage, store) = test_storage();
+    store.store().poisoned.store(true, Ordering::Relaxed);
+    storage.record_action(ViewNumber::new(1), ActionKind::Vote);
+    assert!(storage.next().await.is_err());
+}
+
+async fn assert_nothing_more(storage: &mut Storage<TestTypes, FlakyStore>) {
+    assert!(
+        timeout(Duration::from_millis(50), storage.next())
+            .await
+            .is_err(),
+        "no further completion"
+    );
+}
+
+#[derive(Default)]
+struct FlakyStore {
+    inner: MemStore,
+    fail: AtomicBool,
+    poisoned: AtomicBool,
+    commits: AtomicUsize,
+}
+
+impl Store for FlakyStore {
+    type Snapshot = MemSnapshot;
+
+    fn apply(&self, batch: &Batch) -> Result<(), Error> {
+        if self.poisoned.load(Ordering::Relaxed) {
+            return Err(Error::Poisoned("test".into()));
         }
-    })
-    .await
-    .expect("the write completes once storage recovers");
-    assert_eq!(inner.boundary_qc_cloned().await, Some(cert));
+        if self.fail.load(Ordering::Relaxed) {
+            return Err(Error::Io(std::io::Error::other("test")));
+        }
+        self.inner.apply(batch)?;
+        self.commits.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Result<MemSnapshot, Error> {
+        self.inner.snapshot()
+    }
+}
+
+/// Decides land in the decide log with their payloads, which outlive the payload table's
+/// garbage collection; the anchor only moves forward; `ack` frees entries below a height.
+#[tokio::test]
+async fn test_decide_log() {
+    let (mut storage, store) = test_storage();
+    let data = super::common::utils::TestData::new(3).await;
+    let [v0, v1, v2] = [&data.views[0], &data.views[1], &data.views[2]];
+    let payload_of = |v: &super::common::utils::TestView| {
+        let VidCommitment::V2(c) = v.leaf.payload_commitment() else {
+            panic!("test blocks have V2 commitments");
+        };
+        (c, hotshot_types::traits::EncodeBytes::encode(&v.payload))
+    };
+
+    let mut batch = Batch::new();
+    for v in [v0, v1, v2] {
+        let (c, bytes) = payload_of(v);
+        crate::store::put_payload(&mut batch, v.view_number, &c, bytes).unwrap();
+    }
+    store.store().apply(&batch).unwrap();
+
+    // v2 decides v1 and v2, newest first.
+    storage.append_decided(
+        &[v2.leaf.clone(), v1.leaf.clone()],
+        &v2.cert1,
+        Some(&v2.cert2),
+        &[None, None],
+    );
+    storage.gc(v2.view_number + 1);
+    flush(&mut storage).await;
+
+    let entries = store.decided_from(0, usize::MAX).unwrap();
+    assert_eq!(entries.len(), 2);
+    let heights: Vec<_> = entries.iter().map(|(d, _)| d.leaf.height()).collect();
+    assert_eq!(heights, vec![v1.leaf.height(), v2.leaf.height()]);
+    assert_eq!(
+        entries[0].0.cert1, None,
+        "only the newest carries the certificates"
+    );
+    assert_eq!(entries[1].0.cert1.as_ref(), Some(&v2.cert1));
+    assert_eq!(entries[1].0.cert2.as_ref(), Some(&v2.cert2));
+    for ((decided, size), v) in entries.iter().zip([v1, v2]) {
+        assert!(
+            decided.leaf.block_payload().is_none(),
+            "stored without payload"
+        );
+        let payload = payload_of(v).1;
+        assert_eq!(*size, Some(payload.len() as u64));
+        assert_eq!(
+            store
+                .decided_payload(decided.leaf.height())
+                .unwrap()
+                .as_deref(),
+            Some(&payload[..])
+        );
+    }
+    assert_eq!(store.earliest_decided().unwrap(), Some(v1.leaf.height()));
+    assert!(
+        store.load().unwrap().payloads.is_empty(),
+        "garbage collection cleared the payload table"
+    );
+    assert_eq!(
+        store.load().unwrap().anchor.map(|a| a.leaf.height()),
+        Some(v2.leaf.height())
+    );
+
+    // A decide that fills a gap trails the anchor and does not move it.
+    storage.append_decided(std::slice::from_ref(&v0.leaf), &v0.cert1, None, &[None]);
+    flush(&mut storage).await;
+    assert_eq!(
+        store.load().unwrap().anchor.map(|a| a.leaf.height()),
+        Some(v2.leaf.height())
+    );
+    assert_eq!(store.decided_from(0, usize::MAX).unwrap().len(), 3);
+
+    store.ack(v2.leaf.height()).unwrap();
+    let left: Vec<_> = store
+        .decided_from(0, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .map(|(d, _)| d.leaf.height())
+        .collect();
+    assert_eq!(left, vec![v2.leaf.height()]);
+}
+
+/// Applies everything queued, by queueing one more write and waiting for it.
+async fn flush(storage: &mut Storage<TestTypes, FlakyStore>) {
+    let view = ViewNumber::new(u64::MAX - 1);
+    storage.record_action(view, ActionKind::Propose);
+    loop {
+        if storage.next().await.expect("completion")
+            == StorageOutput::Action(view, ActionKind::Propose)
+        {
+            return;
+        }
+    }
+}
+
+/// Shutdown finishes when the queued writes report nothing durable, such as only garbage
+/// collection, and when a batch is already being applied.
+#[tokio::test]
+async fn test_flush_completes_without_outputs() {
+    let (mut storage, store) = test_storage();
+    storage.gc(ViewNumber::new(3));
+    timeout(Duration::from_secs(5), storage.flush())
+        .await
+        .expect("flush finishes");
+
+    let (mut storage, _) = test_storage();
+    storage.record_action(ViewNumber::new(1), ActionKind::Vote);
+    // Start applying the batch, then shut down while it runs.
+    let _ = timeout(Duration::ZERO, storage.next()).await;
+    storage.gc(ViewNumber::new(3));
+    timeout(Duration::from_secs(5), storage.flush())
+        .await
+        .expect("flush finishes");
+    drop(store);
 }

@@ -15,7 +15,6 @@ use hotshot_new_protocol::{
     },
     message::OpaqueMessage,
     state::UpdateLeaf,
-    storage::NewProtocolStorage,
 };
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
@@ -39,13 +38,13 @@ use tracing::{error, warn};
 
 /// The node's handle on consensus: the [`Coordinator`], run on its own task from
 /// [`start_consensus`](Self::start_consensus) on, and what the rest of the node reads from it.
-pub struct ConsensusHandle<T: NodeType, S> {
+pub struct ConsensusHandle<T: NodeType> {
     epoch_height: BlockNumber,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
     membership_coordinator: EpochMembershipCoordinator<T>,
     resting: Arc<RwLock<Resting<T>>>,
-    coordinator: Arc<RwLock<CoordinatorState<T, S>>>,
+    coordinator: Arc<RwLock<CoordinatorState<T>>>,
     /// Cancelled once the coordinator task has ended, however it ended.
     exited: CancellationToken,
 }
@@ -59,10 +58,10 @@ struct Resting<T: NodeType> {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum CoordinatorState<T: NodeType, S> {
+enum CoordinatorState<T: NodeType> {
     Empty,
     Init {
-        coordinator: Coordinator<T, S>,
+        coordinator: Coordinator<T>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         event_tx: Sender<CoordinatorEvent<T>>,
         queue_len: Option<Arc<dyn Gauge>>,
@@ -76,19 +75,18 @@ enum CoordinatorState<T: NodeType, S> {
     },
 }
 
-impl<T: NodeType, S> CoordinatorState<T, S> {
+impl<T: NodeType> CoordinatorState<T> {
     fn take(&mut self) -> Self {
         mem::replace(self, Self::Empty)
     }
 }
 
-impl<T, S> ConsensusHandle<T, S>
+impl<T> ConsensusHandle<T>
 where
     T: NodeType,
-    S: NewProtocolStorage<T>,
 {
     pub fn new(
-        coordinator: Coordinator<T, S>,
+        coordinator: Coordinator<T>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         upgrade_lock: UpgradeLock<T>,
         membership_coordinator: EpochMembershipCoordinator<T>,
@@ -444,8 +442,8 @@ where
     }
 }
 
-async fn run_coordinator<T, S>(
-    mut coord: Coordinator<T, S>,
+async fn run_coordinator<T>(
+    mut coord: Coordinator<T>,
     mut external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
     tx: Sender<CoordinatorEvent<T>>,
     queue_len: Option<Arc<dyn Gauge>>,
@@ -454,7 +452,6 @@ async fn run_coordinator<T, S>(
     resting: Arc<RwLock<Resting<T>>>,
 ) where
     T: NodeType,
-    S: NewProtocolStorage<T>,
 {
     let _exited = exited.drop_guard();
     coord.start();
@@ -501,14 +498,13 @@ async fn run_coordinator<T, S>(
     coord.stop().await;
 }
 
-async fn apply_input<T, S>(
-    coord: &mut Coordinator<T, S>,
+async fn apply_input<T>(
+    coord: &mut Coordinator<T>,
     tx: &Sender<CoordinatorEvent<T>>,
     it: Result<ConsensusInput<T>, CoordinatorError>,
 ) -> Result<(), CoordinatorError>
 where
     T: NodeType,
-    S: NewProtocolStorage<T>,
 {
     match it {
         Ok(it) => coord.apply_consensus(it),
@@ -538,13 +534,12 @@ where
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
 // state and delta only become available one level up, in `Coordinator`.
-fn consensus_event<T, S>(
-    coordinator: &Coordinator<T, S>,
+fn consensus_event<T>(
+    coordinator: &Coordinator<T>,
     output: &ConsensusOutput<T>,
 ) -> Option<CoordinatorEvent<T>>
 where
     T: NodeType,
-    S: NewProtocolStorage<T>,
 {
     match output {
         ConsensusOutput::LeafDecided {

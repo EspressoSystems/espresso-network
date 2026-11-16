@@ -7,6 +7,7 @@ mod epoch_boundary_stall;
 mod epoch_change;
 mod equivocation;
 mod failures;
+mod ingest;
 mod integration;
 mod liveness;
 mod proposal;

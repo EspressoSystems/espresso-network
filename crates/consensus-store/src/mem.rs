@@ -114,6 +114,10 @@ impl Snapshot for MemSnapshot {
         Ok(entries)
     }
 
+    fn value_len(&self, table: &Table, key: &[u8]) -> Result<Option<u64>, Error> {
+        Ok(self.0.get(table, key).map(|v| v.len() as u64))
+    }
+
     fn usage(&self, table: &Table) -> Result<Usage, Error> {
         let mut usage = Usage::default();
         for (k, v) in self.0.tables.get(table).into_iter().flat_map(|t| t.iter()) {

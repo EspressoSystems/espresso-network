@@ -50,6 +50,9 @@ pub trait Store: Send + Sync + 'static {
 pub trait Snapshot {
     fn get(&self, table: &Table, key: &[u8]) -> Result<Option<Bytes>, Error>;
 
+    /// The length of the value of `key`, without reading an extern value.
+    fn value_len(&self, table: &Table, key: &[u8]) -> Result<Option<u64>, Error>;
+
     /// The entries of `table` whose keys lie in `keys`, in ascending key order.
     fn range(
         &self,

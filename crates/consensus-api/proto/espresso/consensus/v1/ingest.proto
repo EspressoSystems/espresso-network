@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package espresso.consensus.v1;
+
+// The chain as a consensus node decides it, for its ingester.
+//
+// Entries carry the fields an ingester acts on as protobuf fields, and the consensus objects
+// themselves in `Body`, in the encoding consensus nodes exchange.
+service DecideLog {
+  // The decided entries from `from_height` on, in height order. The stream stays open and
+  // delivers each entry once it is decided.
+  //
+  // If `from_height` is below the earliest entry the node still keeps, the stream starts with
+  // `Start`, and the entries from `from_height` up to `Start.earliest_height` must come from
+  // elsewhere.
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+
+  // Frees the entries below `height`, and their payloads. The caller has made them durable.
+  rpc Ack(AckRequest) returns (AckResponse);
+
+  // A payload, in chunks: of a decided height, or of a block by view and payload commitment.
+  rpc GetPayload(GetPayloadRequest) returns (stream PayloadChunk);
+
+  // Payloads as they are stored, before their block is decided. Best effort: a slow reader
+  // misses notifications, and finds the payload through the decided entry instead.
+  rpc PayloadsReady(PayloadsReadyRequest) returns (stream PayloadReady);
+}
+
+message SubscribeRequest {
+  uint64 from_height = 1;
+}
+
+message SubscribeResponse {
+  oneof event {
+    Start start = 1;
+    Decided decided = 2;
+  }
+}
+
+message Start {
+  uint64 earliest_height = 1;
+}
+
+message Decided {
+  uint64 height = 1;
+  uint64 view = 2;
+  uint64 epoch = 3;
+
+  // The leaf's commitment, and the commitment of the leaf before it, as tagged base64.
+  string leaf_commitment = 4;
+  string parent_commitment = 5;
+
+  // The block's payload commitment, as tagged base64.
+  string payload_commitment = 6;
+
+  // The payload's size in bytes; absent if this node does not have the payload.
+  optional uint64 payload_size = 7;
+
+  Body body = 8;
+}
+
+// Consensus objects, each bincode-encoded as consensus nodes exchange them.
+message Body {
+  // The version of the encoding. This is version 1.
+  uint32 format = 1;
+
+  // The leaf, without its payload.
+  bytes leaf = 2;
+
+  // The `Certificate1` and `Certificate2` of the newest leaf of a decide; empty for the older
+  // leaves of the same decide, which the next leaf's justify QC certifies.
+  bytes cert1 = 3;
+  bytes cert2 = 4;
+
+  // The VID common data of the block; empty if this node did not have its share.
+  bytes vid_common = 5;
+}
+
+message AckRequest {
+  uint64 height = 1;
+}
+
+message AckResponse {}
+
+message GetPayloadRequest {
+  oneof key {
+    uint64 height = 1;
+    Block block = 2;
+  }
+}
+
+message Block {
+  uint64 view = 1;
+  string payload_commitment = 2;
+}
+
+message PayloadChunk {
+  bytes data = 1;
+}
+
+message PayloadsReadyRequest {}
+
+message PayloadReady {
+  uint64 view = 1;
+  string payload_commitment = 2;
+  uint64 size = 3;
+}
