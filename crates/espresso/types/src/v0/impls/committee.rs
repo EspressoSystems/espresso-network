@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ops::Bound,
     sync::Arc,
     time::Duration,
@@ -816,6 +816,16 @@ impl EpochCommittees {
             previous = Some(header);
         }
         Ok(())
+    }
+
+    /// The epochs that have a stake table in storage.
+    pub async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        self.fetcher
+            .persistence
+            .lock()
+            .await
+            .stored_stake_epochs()
+            .await
     }
 
     /// Derives the table of the epoch `root` defines and writes it to storage, without putting it
@@ -1767,12 +1777,9 @@ fn end_process_on_hash_mismatch(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeSet,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use committable::Committable;

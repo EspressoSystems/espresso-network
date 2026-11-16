@@ -87,6 +87,18 @@ order, one after another; the first verified answer of either source wins.
 An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
 tables are present and skipped.
 
+After a seed, the epochs below its window have no stored stake table. The `StakeTableBackfill` task
+(`crates/espresso/node/src/stake_table_backfill.rs`) stores them: a pass lists the epochs with a stored table, takes
+the missing ones between the first epoch that a root defines and the highest stored epoch, fetches their root headers
+with proofs against the LC contract state (only roots below `F`; later epochs wait for the next pass), derives each
+table (`EpochCommittees::store_derived_stake_table`) and writes it to storage, ascending, in chunks. Nothing is put in
+memory. It runs at start, after each seed that installed tables, and every 10 minutes while epochs are missing, so an
+interrupted fill continues after a restart. An epoch is retried like a seed request, then logged with `error!` and
+left for the next pass. A table whose hash differs from the one the next root decides is logged with `error!` and not
+stored; the process continues. Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge, set at the
+start and end of each pass), `stake_table_backfill_stored`, `stake_table_backfill_hash_mismatches`,
+`stake_table_backfill_failed` (counters).
+
 ## Consensus upgrades
 
 Mechanism and configuration: `doc/upgrades.md`.

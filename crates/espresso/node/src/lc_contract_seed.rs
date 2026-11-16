@@ -19,11 +19,13 @@ use hotshot_types::{
     traits::metrics::{Counter, Metrics},
 };
 
+use crate::stake_table_backfill::StakeTableBackfill;
+
 /// Most requests of one seed in flight; peers answer 4 requests per key at a time.
 const MAX_CONCURRENT_REQUESTS: usize = 3;
 
 /// Retries of one seed request after its first attempt.
-const SEED_REQUEST_RETRIES: u32 = 4;
+pub(crate) const SEED_REQUEST_RETRIES: u32 = 4;
 
 /// The LC-contract seed of the catchup, behind `CatchupSeedFn`; steps in
 /// `doc/agents/architecture.md`.
@@ -35,6 +37,8 @@ const SEED_REQUEST_RETRIES: u32 = 4;
 pub struct LcContractSeed {
     /// Seed attempts that installed a window.
     seeded: Arc<dyn Counter>,
+    /// Asked for a pass after each install.
+    backfill: StakeTableBackfill,
 }
 
 impl LcContractSeed {
@@ -45,16 +49,20 @@ impl LcContractSeed {
                 .subgroup("catchup".into())
                 .create_counter("lc_contract_seeds".into(), None)
                 .into(),
+            backfill: StakeTableBackfill::new(metrics),
         })
     }
 
-    /// Sets the catchup hook of `coordinator` to this seed.
-    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
+    /// Sets the catchup hook of `coordinator` to this seed. Returns the backfill that the seed
+    /// asks for a pass after it installs tables; the caller runs it.
+    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) -> StakeTableBackfill {
+        let backfill = self.backfill.clone();
         let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
             async move { seed.run(target, start, coordinator).await }.boxed()
         }));
+        backfill
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
@@ -106,6 +114,7 @@ impl LcContractSeed {
             .await?;
 
         self.seeded.add(1);
+        self.backfill.request_pass();
         log("seeded");
         Ok(*window.epochs.end())
     }
@@ -113,7 +122,7 @@ impl LcContractSeed {
 
 /// The preceding root (the block time source of the lowest installed reward) split off, and the
 /// headers at `proven_heights`, ascending, proven against the root of the header at `F`.
-async fn fetch_headers(
+pub(crate) async fn fetch_headers(
     peers: &dyn StateCatchup,
     lc_contract_state: &LcContractFinalizedState,
     preceding_height: Option<u64>,
@@ -147,7 +156,7 @@ async fn fetch_headers(
 }
 
 /// `request` with up to `SEED_REQUEST_RETRIES` retries; attempt `n` (0-based) is called with `n`.
-async fn retry_request<T, Fut>(request: impl Fn(usize) -> Fut) -> anyhow::Result<T>
+pub(crate) async fn retry_request<T, Fut>(request: impl Fn(usize) -> Fut) -> anyhow::Result<T>
 where
     Fut: Future<Output = anyhow::Result<T>>,
 {
@@ -163,7 +172,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use espresso_types::v0::mock::MockStateCatchup;
     use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
     use light_client::testing::TestClient;
@@ -171,10 +180,12 @@ mod tests {
 
     use super::*;
 
-    const EPOCH_HEIGHT: u64 = 10;
+    pub(crate) const EPOCH_HEIGHT: u64 = 10;
 
     /// The mock serving the headers of `heights` and of `F = 62`, and the contract state at `F`.
-    async fn mock_with_headers(heights: &[usize]) -> (MockStateCatchup, LcContractFinalizedState) {
+    pub(crate) async fn mock_with_headers(
+        heights: &[usize],
+    ) -> (MockStateCatchup, LcContractFinalizedState) {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
         let mut headers = Vec::new();
         for height in heights.iter().copied().chain([62]) {

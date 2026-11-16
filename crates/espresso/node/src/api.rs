@@ -6172,6 +6172,30 @@ mod test {
             "{export}"
         );
 
+        // The seed skipped the epochs below its window; the backfill stores them.
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let export = reqwest::get(format!(
+                    "http://localhost:{follower_port}/v1/status/metrics"
+                ))
+                .await?
+                .text()
+                .await?;
+                if metric_value(&export, "consensus_catchup_stake_table_backfill_stored")
+                    >= Some(1.0)
+                    && metric_value(
+                        &export,
+                        "consensus_catchup_stake_table_backfill_missing_epochs",
+                    ) == Some(0.0)
+                {
+                    return anyhow::Ok(());
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .context("the stake table backfill did not store the skipped epochs")??;
+
         let finalized_height = latest_cert2_height(&api_client, tip)
             .await
             .context("no cert2 stored on a new protocol chain")?;
