@@ -273,14 +273,14 @@ impl<T: NodeType> Cliquenet<T> {
         }
 
         // Validators of the new epoch.
-        let Some(curr_infos) = coord.epoch_peers(Some(epoch)) else {
+        let Some(curr_infos) = coord.epoch_peers(epoch) else {
             error!(%epoch, "no stake table available");
             return Ok(());
         };
 
         // Validators leaving are retained as peers for one additional epoch.
         let prev_infos = if *epoch > 0 {
-            coord.epoch_peers(Some(epoch - 1)).unwrap_or_else(|| {
+            coord.epoch_peers(epoch - 1).unwrap_or_else(|| {
                 info!(%epoch, "previous epoch's stake table unavailable");
                 HashMap::new()
             })
@@ -289,7 +289,7 @@ impl<T: NodeType> Cliquenet<T> {
         };
 
         // Validators joining in the next epoch are connected to early.
-        let next_infos = coord.epoch_peers(Some(epoch + 1)).unwrap_or_else(|| {
+        let next_infos = coord.epoch_peers(epoch + 1).unwrap_or_else(|| {
             info!(%epoch, "next epoch's stake table not available");
             HashMap::new()
         });

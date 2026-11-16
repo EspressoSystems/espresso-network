@@ -2085,7 +2085,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
+        let epoch_membership = match coordinator.membership_for_epoch(proposal_epoch) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(
@@ -2099,9 +2099,7 @@ async fn reward_header_dependencies(
             },
         };
 
-        let snapshot = epoch_membership
-            .snapshot()
-            .with_context(|| format!("no committee for epoch={proposal_epoch}"))?;
+        let snapshot = epoch_membership.snapshot();
         let leader = snapshot.lookup_leader(proposal.view_number())?;
         let validator = snapshot.validator_config(&leader)?;
 

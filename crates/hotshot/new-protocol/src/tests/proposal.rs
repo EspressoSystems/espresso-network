@@ -659,7 +659,7 @@ async fn evidence_with_a_lock_of_a_later_epoch_is_rejected_before_lookup() {
     let mut lock = previous.cert1.clone();
     lock.data.epoch = Some(view.epoch_number + 1000);
     let committee = membership
-        .membership_for_epoch(Some(view.epoch_number))
+        .membership_for_epoch(view.epoch_number)
         .expect("the proposal's committee");
     let evidence = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         previous.view_number,
@@ -699,7 +699,7 @@ async fn evidence_of_another_epoch_than_the_proposal_is_rejected_before_lookup()
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
     let committee = membership
-        .membership_for_epoch(Some(view.epoch_number))
+        .membership_for_epoch(view.epoch_number)
         .expect("the proposal's committee");
     let later = view.epoch_number + 1000;
     let earlier = EpochNumber::new(view.epoch_number.saturating_sub(1));
