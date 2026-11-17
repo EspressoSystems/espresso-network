@@ -338,7 +338,7 @@ impl EpochCommittees {
                  height",
             )?;
             let prev_ts = match preceding_root {
-                PrecedingRoot::Seed(Some(preceding_root)) => {
+                PrecedingRoot::Supplied(Some(preceding_root)) => {
                     ensure!(
                         preceding_root.height() == root_height,
                         "preceding epoch root is at height {}, expected {root_height}",
@@ -346,7 +346,7 @@ impl EpochCommittees {
                     );
                     preceding_root.timestamp_millis_internal()
                 },
-                PrecedingRoot::Seed(None) => {
+                PrecedingRoot::Supplied(None) => {
                     bail!("no preceding epoch root for the block reward of epoch {epoch}")
                 },
                 PrecedingRoot::Peers(coordinator) => {
@@ -782,8 +782,8 @@ impl EpochCommittees {
             block_reward = reward;
         }
 
-        // A seeded table without a reward is not persisted.
-        if preceding_root.is_seed() && block_reward.is_none() {
+        // A table from supplied roots (a seed or the backfill) without a reward is not stored.
+        if preceding_root.is_supplied() && block_reward.is_none() {
             return Err(EpochCommitteesError::Reward(anyhow::anyhow!(
                 "no block reward for the table of epoch {epoch}"
             )));
@@ -812,7 +812,7 @@ impl EpochCommittees {
             let height = header.height();
             tokio::time::timeout(
                 coordinator.catchup_timeout(),
-                self.install_root(header.clone(), PrecedingRoot::Seed(preceding.as_ref())),
+                self.install_root(header.clone(), PrecedingRoot::Supplied(preceding.as_ref())),
             )
             .await
             .map_err(|_| {
@@ -870,7 +870,7 @@ impl EpochCommittees {
                 epoch,
                 root,
                 None,
-                PrecedingRoot::Seed(preceding_root),
+                PrecedingRoot::Supplied(preceding_root),
                 EventSource::StoredOnly,
             )
             .await?;
@@ -1459,16 +1459,16 @@ enum PrecedingRoot<'a> {
     /// The held committee below, else a leaf through the coordinator; a missing reward is stored
     /// as such.
     Peers(&'a EpochMembershipCoordinator<SeqTypes>),
-    /// The given header (`None` where the reward assumes the block time): no held header, no peer
-    /// fetch; a missing reward is an error.
-    Seed(Option<&'a Header>),
+    /// The given header (`None` where the reward assumes the block time), for a seed or the
+    /// backfill: no held header, no peer fetch; a missing reward is an error.
+    Supplied(Option<&'a Header>),
 }
 
 #[cfg(feature = "node")]
 impl PrecedingRoot<'_> {
-    /// Whether this is a seed install.
-    fn is_seed(self) -> bool {
-        matches!(self, Self::Seed(_))
+    /// Whether the root comes from the caller, as in a seed or the backfill.
+    fn is_supplied(self) -> bool {
+        matches!(self, Self::Supplied(_))
     }
 }
 
@@ -3846,9 +3846,6 @@ mod tests {
         }
     }
 
-    /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
-    /// counts its calls and finds nothing, and `store_stake` counts its entries, then waits while
-    /// `stall_store_stake` is set, fails while `fail_store_stake` is set, else records its epoch.
     /// A write to storage that `StalledStakeStore` completed.
     #[derive(Clone, Debug, PartialEq)]
     enum StoredWrite {
@@ -3860,6 +3857,9 @@ mod tests {
         Stake(u64, Option<RewardAmount>, Option<StakeTableHash>),
     }
 
+    /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
+    /// counts its calls and finds nothing, and `store_stake` counts its entries, then waits while
+    /// `stall_store_stake` is set, fails while `fail_store_stake` is set, else records its epoch.
     #[derive(Debug)]
     struct StalledStakeStore {
         events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,

@@ -72,7 +72,6 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    stake_table_backfill::StakeTableBackfill,
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 
@@ -181,12 +180,10 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         // Before the anchor `apply_epoch` in `connect_startup_peers`, which can start a catchup.
-        let backfill = StakeTableBackfill::new(metrics);
-        let seed = LcContractSeed::new(&instance_state.chain_config, metrics, backfill.clone());
-        let stake_table_backfill = seed.map(|seed| {
-            seed.install(&membership_coordinator);
-            backfill
-        });
+        let mut stake_table_backfill = None;
+        if let Some(seed) = LcContractSeed::new(&instance_state.chain_config, metrics) {
+            stake_table_backfill = Some(seed.install(&membership_coordinator));
+        }
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 

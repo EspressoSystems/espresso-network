@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
@@ -1591,17 +1591,10 @@ impl MembershipPersistence for Persistence {
         let inner = self.inner.read().await;
         let path = inner.stake_table_dir_path();
         // The directory is created by the first `store_stake`.
-        match epoch_files(path) {
-            Ok(files) => Ok(files.map(|(epoch, _)| epoch).collect()),
-            Err(err)
-                if err
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|err| err.kind() == ErrorKind::NotFound) =>
-            {
-                Ok(BTreeSet::new())
-            },
-            Err(err) => Err(err),
+        if !path.try_exists()? {
+            return Ok(BTreeSet::new());
         }
+        Ok(epoch_files(path)?.map(|(epoch, _)| epoch).collect())
     }
 
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {

@@ -6026,8 +6026,7 @@ mod test {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
         const EPOCHS_TO_FOLLOW: u64 = 12;
-        /// Inside epoch 10, which starts at height 91. The seed installs epochs 7 to 11, so the
-        /// backfill stores epoch 6, whose block reward reads the root below its own.
+        /// Inside epoch 10, which starts at height 91. The seed installs epochs 7 to 11.
         const LC_CONTRACT_HEIGHT: u64 = 92;
         const EPOCHS_BEFORE_START: u64 = 10;
         /// The backfilled epoch whose block reward reads the root below its own.

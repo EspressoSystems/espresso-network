@@ -1,9 +1,15 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
-use std::sync::Arc;
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use espresso_types::{
-    ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::StateCatchup,
+    BackoffParams, ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::StateCatchup,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use hotshot_types::{
@@ -16,6 +22,10 @@ use crate::{
     lc_contract_headers::{fetch_anchor_root, fetch_proven_header},
     stake_table_backfill::StakeTableBackfill,
 };
+
+/// Retries of one request after its first attempt. The seed is on the startup path, so it retries
+/// at once; the backfill leaves retries to its fill loop.
+const REQUEST_RETRIES: u32 = 4;
 
 /// Most requests of one seed in flight; peers answer 4 requests per key at a time.
 const MAX_CONCURRENT_REQUESTS: usize = 3;
@@ -36,28 +46,26 @@ pub struct LcContractSeed {
 
 impl LcContractSeed {
     /// `None` when `chain_config` names no stake table contract to read the LC contract from.
-    /// `backfill` is asked for a fill after each install; the caller runs it.
-    pub fn new(
-        chain_config: &ChainConfig,
-        metrics: &dyn Metrics,
-        backfill: StakeTableBackfill,
-    ) -> Option<Self> {
+    pub fn new(chain_config: &ChainConfig, metrics: &dyn Metrics) -> Option<Self> {
         chain_config.stake_table_contract.map(|_| Self {
             seeded: metrics
                 .subgroup("catchup".into())
                 .create_counter("lc_contract_seeds".into(), None)
                 .into(),
-            backfill,
+            backfill: StakeTableBackfill::new(metrics),
         })
     }
 
-    /// Sets the catchup hook of `coordinator` to this seed.
-    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
+    /// Sets the catchup hook of `coordinator` to this seed. Returns the backfill that the seed
+    /// asks for a fill after each install; the caller runs it.
+    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) -> StakeTableBackfill {
+        let backfill = self.backfill.clone();
         let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
             async move { seed.run(target, start, coordinator).await }.boxed()
         }));
+        backfill
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
@@ -135,15 +143,35 @@ async fn fetch_headers(
     preceding_height: Option<u64>,
     proven_heights: Vec<u64>,
 ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
-    let anchor = fetch_anchor_root(peers, lc_contract_state).await?;
+    let anchor = retry_request(|retry| fetch_anchor_root(peers, lc_contract_state, retry)).await?;
     let heights = preceding_height.into_iter().chain(proven_heights);
     let mut headers: Vec<Header> = stream::iter(heights)
-        .map(|height| fetch_proven_header(peers, lc_contract_state, anchor, height))
+        .map(|height| {
+            retry_request(move |retry| {
+                fetch_proven_header(peers, lc_contract_state, anchor, height, retry)
+            })
+        })
         .buffered(MAX_CONCURRENT_REQUESTS)
         .try_collect()
         .await?;
     let preceding = preceding_height.map(|_| headers.remove(0));
     Ok((preceding, headers))
+}
+
+/// `request` with up to `REQUEST_RETRIES` retries; attempt `n` (0-based) is called with `n`.
+async fn retry_request<T, Fut>(request: impl Fn(usize) -> Fut) -> anyhow::Result<T>
+where
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    let attempts = AtomicUsize::new(0);
+    // Not `peers.backoff()`: disabled on `ParallelStateCatchup`, unreachable on request-response.
+    BackoffParams::default()
+        .retry_if(
+            REQUEST_RETRIES,
+            |_| true,
+            || request(attempts.fetch_add(1, Ordering::SeqCst)),
+        )
+        .await
 }
 
 #[cfg(test)]
@@ -176,15 +204,42 @@ mod tests {
         assert_eq!(preceding.map(|root| root.height()), Some(5));
     }
 
+    /// A request is retried up to `REQUEST_RETRIES` times, then the error surfaces.
+    #[rstest::rstest]
+    #[case::retried_ok(2, 3, true)]
+    #[case::bounded_fails(usize::MAX, REQUEST_RETRIES as usize + 1, false)]
+    #[tokio::test(start_paused = true)]
+    async fn fetch_headers_retries_failed_request(
+        #[case] failing_calls: usize,
+        #[case] expected_calls: usize,
+        #[case] expect_ok: bool,
+    ) {
+        let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
+        let peers = peers.with_failing_header_calls(failing_calls);
+
+        let result = fetch_headers(&peers, &lc_contract_state, None, vec![15]).await;
+
+        assert_eq!(result.is_ok(), expect_ok);
+        if let Err(err) = result {
+            assert!(
+                format!("{err:#}").contains("the header proof at height 15"),
+                "{err:#}"
+            );
+        }
+        assert_eq!(peers.proven_header_calls(), expected_calls);
+        let attempts: Vec<usize> = (0..expected_calls).collect();
+        assert_eq!(peers.proven_header_retries(), attempts);
+    }
+
     /// A failed install returns its error and asks for a fill.
     #[tokio::test]
     async fn install_roots_error_is_returned_and_requests_a_fill() {
-        let backfill = StakeTableBackfill::new(&NoMetrics);
         let chain_config = ChainConfig {
             stake_table_contract: Some(Address::ZERO),
             ..Default::default()
         };
-        let seed = LcContractSeed::new(&chain_config, &NoMetrics, backfill.clone()).unwrap();
+        let seed = LcContractSeed::new(&chain_config, &NoMetrics).unwrap();
+        let backfill = seed.backfill.clone();
         let committees = EpochCommittees::new(
             vec![],
             vec![],
