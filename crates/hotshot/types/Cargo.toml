@@ -35,9 +35,9 @@ committable = { workspace = true }
 derive_more = { workspace = true }
 digest = { workspace = true }
 displaydoc = { workspace = true }
-dyn-clone = { workspace = true }
 futures = { workspace = true }
 generic-array = { workspace = true }
+hotshot-metrics = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
 jf-crhf = { workspace = true }

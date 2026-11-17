@@ -1,0 +1,12 @@
+[package]
+name = "hotshot-metrics"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "The Metrics trait family and its no-op implementation"
+
+[dependencies]
+dyn-clone = { workspace = true }
+
+[lints]
+workspace = true

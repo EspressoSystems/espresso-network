@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use hotshot_types::traits::metrics::{Gauge, Metrics};
+use hotshot_metrics::{Gauge, Metrics};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::interval;
 

@@ -23,6 +23,7 @@ members = [
     "crates/hotshot-query-service-types",
     "crates/hotshot-state-prover",
     "crates/hotshot/example-types",
+    "crates/hotshot/metrics",
     "crates/hotshot/new-protocol",
     "crates/hotshot/new-protocol/bench",
     "crates/hotshot/orchestrator",
@@ -73,6 +74,7 @@ default-members = [
     "crates/hotshot-query-service",
     "crates/hotshot-state-prover",
     "crates/hotshot/example-types",
+    "crates/hotshot/metrics",
     "crates/hotshot/new-protocol",
     "crates/hotshot/orchestrator",
     "crates/hotshot/types",
@@ -197,6 +199,7 @@ hex = "0.4"
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 
 hotshot-example-types = { path = "crates/hotshot/example-types" }
+hotshot-metrics = { path = "crates/hotshot/metrics" }
 hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "crates/hotshot-query-service" }
