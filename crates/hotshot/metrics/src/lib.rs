@@ -13,6 +13,9 @@ use std::fmt::Debug;
 
 use dyn_clone::DynClone;
 
+#[cfg(feature = "prometheus")]
+pub mod prometheus;
+
 /// The metrics type.
 pub trait Metrics: Send + Sync + DynClone + Debug {
     /// Create a [`Counter`] with an optional `unit_label`.

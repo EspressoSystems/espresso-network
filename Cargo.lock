@@ -4898,6 +4898,12 @@ name = "hotshot-metrics"
 version = "0.1.0"
 dependencies = [
  "dyn-clone",
+ "hotshot-metrics",
+ "itertools 0.14.0",
+ "prometheus",
+ "snafu 0.8.9",
+ "test-log",
+ "tracing",
 ]
 
 [[package]]
@@ -5012,6 +5018,7 @@ dependencies = [
  "futures",
  "generic-array 0.14.7",
  "hotshot-example-types",
+ "hotshot-metrics",
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
@@ -5024,7 +5031,6 @@ dependencies = [
  "lazy_static",
  "log",
  "pretty_assertions",
- "prometheus",
  "rand 0.8.6",
  "refinery",
  "refinery-core",
