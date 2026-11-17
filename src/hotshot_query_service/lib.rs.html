@@ -295,13 +295,14 @@
 <a href=#295 id=295 data-nosnippet>295</a></span><span class="kw">pub mod </span>sqlite_options;
 <a href=#296 id=296 data-nosnippet>296</a><span class="kw">pub mod </span>status;
 <a href=#297 id=297 data-nosnippet>297</a><span class="kw">pub mod </span>task;
-<a href=#298 id=298 data-nosnippet>298</a><span class="kw">pub mod </span>testing;
-<a href=#299 id=299 data-nosnippet>299</a><span class="kw">pub mod </span>types;
-<a href=#300 id=300 data-nosnippet>300</a>
-<a href=#301 id=301 data-nosnippet>301</a><span class="kw">pub use </span>error::Error;
-<a href=#302 id=302 data-nosnippet>302</a><span class="kw">pub use </span>hotshot_query_service_types::{
-<a href=#303 id=303 data-nosnippet>303</a>    ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
-<a href=#304 id=304 data-nosnippet>304</a>    QueryResult, QuorumCertificate, SignatureKey, Transaction,
-<a href=#305 id=305 data-nosnippet>305</a>};
-<a href=#306 id=306 data-nosnippet>306</a><span class="kw">pub use </span>resolvable::Resolvable;
+<a href=#298 id=298 data-nosnippet>298</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#299 id=299 data-nosnippet>299</a></span><span class="kw">pub mod </span>testing;
+<a href=#300 id=300 data-nosnippet>300</a><span class="kw">pub mod </span>types;
+<a href=#301 id=301 data-nosnippet>301</a>
+<a href=#302 id=302 data-nosnippet>302</a><span class="kw">pub use </span>error::Error;
+<a href=#303 id=303 data-nosnippet>303</a><span class="kw">pub use </span>hotshot_query_service_types::{
+<a href=#304 id=304 data-nosnippet>304</a>    ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
+<a href=#305 id=305 data-nosnippet>305</a>    QueryResult, QuorumCertificate, SignatureKey, Transaction,
+<a href=#306 id=306 data-nosnippet>306</a>};
+<a href=#307 id=307 data-nosnippet>307</a><span class="kw">pub use </span>resolvable::Resolvable;
 </code></pre></div></section></main></body></html>
