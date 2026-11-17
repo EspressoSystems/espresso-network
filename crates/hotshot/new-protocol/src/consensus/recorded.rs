@@ -66,7 +66,7 @@ impl<T: NodeType> Consensus<T> {
     pub(crate) fn committee(&self, epoch: EpochNumber) -> Option<Vec<T::SignatureKey>> {
         let membership = self
             .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .ok()?;
         Some(
             membership
