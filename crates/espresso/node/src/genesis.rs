@@ -6,14 +6,19 @@ use std::{
     str::FromStr,
 };
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use anyhow::{Context, Ok, ensure};
 use espresso_types::{
-    FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes, Timestamp, Upgrade,
-    v0_3::ChainConfig,
+    FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, PubKey, SeqTypes, Timestamp,
+    Upgrade, v0_3::ChainConfig,
 };
 use hotshot_types::{
-    VersionedDaCommittee, data::EpochNumber, utils::epoch_from_block_number, version_ser,
+    PeerConfig, VersionedDaCommittee,
+    data::EpochNumber,
+    network::{NetworkConfig, PeerConfigKeys},
+    traits::signature_key::SignatureKey,
+    utils::epoch_from_block_number,
+    version_ser,
 };
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
@@ -62,6 +67,13 @@ impl Serialize for GenesisSource {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct StakeTableConfig {
     pub capacity: usize,
+
+    /// The stake table the chain starts with, in order, with the DA committee marked in it.
+    ///
+    /// It governs the blocks before epochs and the first two epochs; later stake tables come
+    /// from L1. Its order matters, since certificates of those blocks are verified against it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genesis: Vec<PeerConfigKeys<SeqTypes>>,
 }
 
 /// An L1 block from which an Espresso chain should start syncing.
@@ -143,6 +155,35 @@ impl Genesis {
         std::iter::once((self.base_version, *self.chain_config.max_block_size))
             .chain(upgrades)
             .collect()
+    }
+
+    /// The network config of a node with key `node_key`, built from the genesis stake table, or
+    /// `None` if the genesis file has none.
+    ///
+    /// The node's index is its position in the table, or the table's length for a node outside
+    /// it. Everything else that genesis decides is applied separately.
+    pub fn network_config(&self, node_key: &PubKey) -> Option<NetworkConfig<SeqTypes>> {
+        let genesis = &self.stake_table.genesis;
+        if genesis.is_empty() {
+            return None;
+        }
+        let peer = |keys: &PeerConfigKeys<SeqTypes>| PeerConfig {
+            stake_table_entry: keys
+                .stake_table_key
+                .stake_table_entry(U256::from(keys.stake)),
+            state_ver_key: keys.state_ver_key.clone(),
+            connect_info: keys.connect_info.clone(),
+        };
+        let mut config = NetworkConfig::<SeqTypes> {
+            node_index: genesis
+                .iter()
+                .position(|keys| keys.stake_table_key == *node_key)
+                .unwrap_or(genesis.len()) as u64,
+            ..Default::default()
+        };
+        config.config.known_nodes_with_stake = genesis.iter().map(peer).collect();
+        config.config.known_da_nodes = genesis.iter().filter(|keys| keys.da).map(peer).collect();
+        Some(config)
     }
 
     /// The first epoch, which runs on the genesis stake table.
@@ -620,7 +661,13 @@ mod test {
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
         assert_eq!(genesis.genesis_version, Version { major: 0, minor: 1 });
-        assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
+        assert_eq!(
+            genesis.stake_table,
+            StakeTableConfig {
+                capacity: 10,
+                genesis: Vec::new(),
+            }
+        );
         assert_eq!(
             genesis.chain_config,
             ChainConfig {
@@ -700,7 +747,13 @@ mod test {
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
 
-        assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
+        assert_eq!(
+            genesis.stake_table,
+            StakeTableConfig {
+                capacity: 10,
+                genesis: Vec::new(),
+            }
+        );
         assert_eq!(
             genesis.chain_config,
             ChainConfig {
@@ -1169,7 +1222,13 @@ mod test {
         .to_string();
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
-        assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
+        assert_eq!(
+            genesis.stake_table,
+            StakeTableConfig {
+                capacity: 10,
+                genesis: Vec::new(),
+            }
+        );
         assert_eq!(*genesis.chain_config.max_block_size, 30000000);
         assert_eq!(genesis.chain_config.base_fee, 1_000_000_000.into());
         assert_eq!(

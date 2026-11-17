@@ -18,7 +18,8 @@ x-availability:
     restart: exit_on_failure
 
 environment:
-  - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
+  # No builder runs here; leaders build empty blocks themselves.
+  - ESPRESSO_BUILDER_URLS=http://localhost:1
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
   - ESPRESSO_NODE_GENESIS_FILE=scripts/network-bench/genesis.toml
@@ -52,23 +53,6 @@ processes:
     depends_on:
       demo-l1-network:
         condition: process_healthy
-    availability: *exit-ok
-
-  orchestrator:
-    command: orchestrator --num-nodes 3
-    log_location: ${BENCH_OUT}/logs/orchestrator.log
-    environment:
-      # No builder runs here; leaders fall back to an empty block after the timeout.
-      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
-      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=100ms
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: localhost
-        port: ${ESPRESSO_ORCHESTRATOR_PORT}
-        path: /healthcheck
-      period_seconds: 1
-      failure_threshold: 100
     availability: *exit-ok
 
   state-relay-server:
@@ -121,8 +105,6 @@ processes:
       - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-0
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/
     depends_on: &node-deps
-      orchestrator:
-        condition: process_healthy
       state-relay-server:
         condition: process_healthy
       espresso-node-db-0:

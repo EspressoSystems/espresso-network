@@ -288,7 +288,6 @@ check-features-ci *args:
         --exclude-all-features \
         --exclude hotshot-contract-adapter \
         --exclude hotshot-example-types \
-        --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
         --exclude hotshot-state-prover \
         --exclude hotshot-types \
@@ -307,15 +306,11 @@ check-sp1-target:
         cargo +succinct check --ignore-rust-version --target riscv64im-succinct-zkvm-elf -p sp1-target-check
 
 # Helpful shortcuts for local development
-dev-orchestrator:
-    target/release/orchestrator -p 8080 -n 1
-
 dev-state-relay-server:
     target/release/state-relay-server -p 8083
 
 dev-espresso-node:
     target/release/espresso-node \
-    --orchestrator-url http://localhost:8080 \
     --state-relay-server-url http://localhost:8083 \
     -- http --port 8083  -- query --storage-path storage
 

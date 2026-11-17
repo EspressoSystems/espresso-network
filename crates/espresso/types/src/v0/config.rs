@@ -249,81 +249,35 @@ struct LegacyLibp2pConfig {
 }
 
 impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
+    /// Fills the fields the orchestrator once set with the values its defaults had, for peers
+    /// running a release before this one, which require them and read none of them.
     fn from(cfg: NetworkConfig<SeqTypes>) -> Self {
         Self {
-            rounds: cfg.rounds,
-            indexed_da: cfg.indexed_da,
-            transactions_per_round: cfg.transactions_per_round,
+            rounds: 100,
+            indexed_da: true,
+            transactions_per_round: 10,
             manual_start_password: Some("*****".into()),
-            num_bootrap: cfg.num_bootrap,
-            next_view_timeout: cfg.next_view_timeout,
-            view_sync_timeout: cfg.view_sync_timeout,
-            builder_timeout: cfg.builder_timeout,
-            data_request_delay: cfg.data_request_delay,
+            num_bootrap: 5,
+            next_view_timeout: 10,
+            view_sync_timeout: Duration::from_secs(2),
+            builder_timeout: Duration::from_secs(10),
+            data_request_delay: Duration::from_millis(2500),
             node_index: cfg.node_index,
-            seed: cfg.seed,
-            transaction_size: cfg.transaction_size,
-            key_type_name: cfg.key_type_name,
+            seed: [0; 32],
+            transaction_size: 100,
+            key_type_name: std::any::type_name::<SeqTypes>().to_string(),
             config: cfg.config.into(),
             libp2p_config: LegacyLibp2pConfig::default(),
-            commit_sha: cfg.commit_sha,
-            builder: cfg.builder,
-            random_builder: cfg.random_builder,
+            commit_sha: String::new(),
+            builder: BuilderType::default(),
+            random_builder: None,
         }
     }
 }
 
 impl PublicNetworkConfig {
-    pub fn into_network_config(
-        self,
-        my_own_validator_config: ValidatorConfig<SeqTypes>,
-    ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
-        let node_index = self
-            .config
-            .known_nodes_with_stake
-            .iter()
-            .position(|peer| peer.stake_table_entry.stake_key == my_own_validator_config.public_key)
-            .unwrap_or(0) as u64;
-
-        Ok(NetworkConfig {
-            rounds: self.rounds,
-            indexed_da: self.indexed_da,
-            transactions_per_round: self.transactions_per_round,
-            manual_start_password: self.manual_start_password,
-            num_bootrap: self.num_bootrap,
-            next_view_timeout: self.next_view_timeout,
-            view_sync_timeout: self.view_sync_timeout,
-            builder_timeout: self.builder_timeout,
-            data_request_delay: self.data_request_delay,
-            node_index,
-            seed: self.seed,
-            transaction_size: self.transaction_size,
-            key_type_name: self.key_type_name,
-            config: self.config.into_hotshot_config(),
-            commit_sha: self.commit_sha,
-            builder: self.builder,
-            random_builder: self.random_builder,
-            public_keys: Vec::new(),
-        })
-    }
-
     pub fn hotshot_config(&self) -> PublicHotShotConfig {
         self.config.clone()
-    }
-
-    // Read-only accessors rather than public fields: `manual_start_password` is masked when a
-    // `PublicNetworkConfig` is built, and a public constructor would let a real one through.
-
-    pub fn commit_sha(&self) -> &str {
-        &self.commit_sha
-    }
-
-    pub fn indexed_da(&self) -> bool {
-        self.indexed_da
-    }
-
-    pub fn builder(&self) -> BuilderType {
-        self.builder
     }
 }
 
@@ -340,12 +294,11 @@ mod tests {
         let PublicNetworkConfig {
             // Served.
             config: _,
+            // Dropped: the fields the orchestrator once set, served only to older peers, and the
+            // empty libp2p section served only to them.
             commit_sha: _,
             indexed_da: _,
             builder: _,
-            // Dropped: orchestrator run parameters, the masked password, a Rust type name, the
-            // timings and bootstrap count repeated here with stale values, and the empty libp2p
-            // section served only to older peers.
             libp2p_config: _,
             rounds: _,
             transactions_per_round: _,

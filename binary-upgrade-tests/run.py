@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import logging
 import os
 import re
@@ -62,12 +63,15 @@ SAFE_STOP_WINDOW = (2, 10)
 #     the base tag's compose runs: no image for it is published any more, and
 #     the upgraded nodes ignore it. Delete these entries once the base tag is a
 #     release cut after the CDN was removed from docker-compose.yaml.
+#   - the orchestrator, for the same reason: the base tag's compose starts its
+#     network with it, and no image for it is published any more.
 NOUPGRADE_SERVICES = (
     "block-explorer",
     "broker-0",
     "broker-1",
     "cdn-whitelist",
     "marshal-0",
+    "orchestrator",
     "demo-l1-network",
     "deploy-espresso-contracts",
     "deploy-lcv3-upgrade",
@@ -92,6 +96,7 @@ NODE_5_FS_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-fs.yaml
 NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml"
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
 CDN_OPEN_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.cdn-open.yaml"
+DOCKER_GENESIS = REPO_ROOT / "data" / "genesis" / "docker" / "demo-ff.toml"
 STAKE_NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.stake-node-5.yaml"
 
 
@@ -920,19 +925,51 @@ def _roll(compose: Compose, idx: int, upgrade_tag: str) -> None:
             raise
 
 
-def _restart_with_config_peer(compose: Compose, idx: int, tag: str) -> None:
-    peer_idx = _peer_idx(idx)
-    peer_port_var = f"ESPRESSO_NODE_{peer_idx}_API_PORT"
-    peer_port = os.environ.get(peer_port_var)
-    if not peer_port:
-        raise RuntimeError(f"Env var {peer_port_var} not set")
-    peer_url = f"http://espresso-node-{peer_idx}:{peer_port}"
+def _restart_with_live_genesis(compose: Compose, idx: int, tag: str) -> None:
+    """Restart a wiped node on `tag` with the genesis stake table of the running network.
+
+    The base network's orchestrator ordered its genesis committee by registration, and a node
+    with empty storage takes that table from its genesis file, so the file is written from a
+    peer's network config, as it was copied once for the live networks.
+    """
+    peer = Node.from_index(_peer_idx(idx))
+    code, body = _get(f"{peer.api_url}/config/hotshot")
+    if code != 200:
+        raise RuntimeError(f"Could not read the network config from {peer}: {code}")
+    config = json.loads(body)["config"]
+    da_keys = {p["stake_table_entry"]["stake_key"] for p in config["known_da_nodes"]}
+    entries = []
+    for peer_config in config["known_nodes_with_stake"]:
+        entry = peer_config["stake_table_entry"]
+        lines = [
+            "[[stake_table.genesis]]",
+            f'stake_table_key = "{entry["stake_key"]}"',
+            f'state_ver_key = "{peer_config["state_ver_key"]}"',
+            f"stake = {int(entry['stake_amount'], 16)}",
+            f"da = {str(entry['stake_key'] in da_keys).lower()}",
+        ]
+        if info := peer_config.get("connect_info"):
+            lines.append(
+                f'connect_info = {{ x25519_key = "{info["x25519_key"]}", '
+                f'p2p_addr = "{info["p2p_addr"]}" }}'
+            )
+        entries.append("\n".join(lines))
+    # The genesis without its stake table and the comment above it.
+    base = DOCKER_GENESIS.read_text().split("[[stake_table.genesis]]")[0].splitlines()
+    while base and (not base[-1].strip() or base[-1].startswith("#")):
+        base.pop()
+    base = "\n".join(base) + "\n\n"
+    genesis = compose.base_dir / f"genesis-node-{idx}.toml"
+    genesis.write_text(base + "\n\n".join(entries) + "\n")
+
     overlay = compose.base_dir / f"restart-node-{idx}.yaml"
     overlay.write_text(
-        f"services:\n  espresso-node-{idx}:\n    environment:\n      ESPRESSO_NODE_CONFIG_PEERS: {peer_url}\n"
+        f"services:\n  espresso-node-{idx}:\n"
+        f"    environment:\n      ESPRESSO_NODE_GENESIS_FILE: /live-genesis.toml\n"
+        f"    volumes:\n      - {genesis}:/live-genesis.toml:ro\n"
     )
     log.info(
-        f"Restarting espresso-node-{idx} with ESPRESSO_NODE_CONFIG_PEERS={peer_url} on tag {tag}"
+        f"Restarting espresso-node-{idx} on tag {tag} with the network's genesis stake table"
     )
     compose.with_overlays(overlay).run(
         "up",
@@ -978,7 +1015,7 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
                 compose.wipe_fs_node(idx)
             else:
                 compose.wipe_pg_node(idx)
-            _restart_with_config_peer(compose, idx, config.upgrade_tag)
+            _restart_with_live_genesis(compose, idx, config.upgrade_tag)
             _wait_storage(compose, idx, timeout=240.0, backfill=backend == "pg")
 
         case JoinNode(idx=idx, overlay=overlay, timeout=timeout):

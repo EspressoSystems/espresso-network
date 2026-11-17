@@ -42,5 +42,30 @@ Remove these from the node's configuration:
 - `--local-catchup-timeout` / `ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT`
 
 A node started with one of the flags refuses to start; the environment variables are ignored. The config endpoints no
-longer report these settings, and the `decide_processor_*`, `proposal_fetcher_*` and
-`internal_process_decided_events_duration` metrics are gone.
+longer report these settings, and the `decide_processor_*`, `proposal_fetcher_*`,
+`internal_process_decided_events_duration` and `internal_append_{vid,da2,quorum2}_duration` metrics are gone.
+
+### The genesis stake table comes from the genesis file
+
+Urgency: Medium
+
+A node takes the stake table the chain started with from its genesis file, from the `[[stake_table.genesis]]` entries.
+The genesis files of mainnet and decaf carry it, so a node started with empty storage on these networks needs nothing
+else. A node whose storage holds the network config it received from the orchestrator or a config peer keeps using that
+config.
+
+The orchestrator is gone, and nodes no longer fetch the config from peers. Remove these from the node's configuration:
+
+- `--orchestrator-url` / `ESPRESSO_NODE_ORCHESTRATOR_URL`
+- `--config-peers` / `ESPRESSO_NODE_CONFIG_PEERS`
+
+A node started with one of the flags refuses to start; the environment variables are ignored. `/config/runtime` no
+longer reports these settings, and the v2 runtime config leaves `orchestrator_url` and `config_peers` empty. `/config/hotshot`
+keeps the fields the orchestrator set, which nodes of earlier releases need to join, but with fixed values, and the v2
+HotShot config leaves `commit_sha`, `indexed_da` and `builder` empty. `submit-transactions` reads its node count from
+`ESPRESSO_SUBMIT_TRANSACTIONS_NUM_NODES` instead of `ESPRESSO_ORCHESTRATOR_NUM_NODES`.
+
+A network with its own genesis file must add its stake table to that file before it starts a node with empty storage,
+with each node's staking key, state key, stake and DA membership, in the order of the network's genesis committee, as
+`/config/hotshot` of a running node lists them. A follower derives the root of trust of its light client from the same
+table unless `--light-client-genesis` pins one.

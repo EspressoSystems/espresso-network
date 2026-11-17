@@ -11,9 +11,8 @@ use espresso_types::{
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot_types::{
-    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
+    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidDisperseShare},
     drb::{DrbInput, DrbResult},
-    event::HotShotAction,
     initializer::InitializerEpochInfo,
     message::Proposal,
     simple_certificate::{
@@ -31,8 +30,6 @@ pub struct Options;
 #[async_trait]
 impl PersistenceOptions for Options {
     type Persistence = NoStorage;
-
-    fn set_consensus_only(&mut self) {}
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         Ok(NoStorage)
@@ -100,21 +97,6 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn append_vid(
-        &self,
-        _proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn record_action(&self, _view: ViewNumber, _action: HotShotAction) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn append_quorum_proposal2(
-        &self,
-        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
     async fn store_upgrade_certificate(
         &self,
         _decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
@@ -129,14 +111,6 @@ impl SequencerPersistence for NoStorage {
         NextEpochQuorumCertificate2<SeqTypes>,
     )> {
         None
-    }
-
-    async fn append_da2(
-        &self,
-        _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn store_drb_result(
@@ -156,13 +130,6 @@ impl SequencerPersistence for NoStorage {
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         Ok(Vec::new())
-    }
-
-    async fn add_state_cert(
-        &self,
-        _state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn load_state_cert(

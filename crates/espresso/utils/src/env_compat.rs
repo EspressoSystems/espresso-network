@@ -144,11 +144,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS",
             "ESPRESSO_SEQUENCER_CLIQUENET_BIND_ADDRESS",
         ),
-        // Peer nodes used to fetch missing config
-        (
-            "ESPRESSO_NODE_CONFIG_PEERS",
-            "ESPRESSO_SEQUENCER_CONFIG_PEERS",
-        ),
         // Path to the genesis TOML file
         (
             "ESPRESSO_NODE_GENESIS_FILE",
@@ -236,11 +231,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         ),
         // Whether this node participates in DA
         ("ESPRESSO_NODE_IS_DA", "ESPRESSO_SEQUENCER_IS_DA"),
-        // Orchestrator URL for consensus coordination
-        (
-            "ESPRESSO_NODE_ORCHESTRATOR_URL",
-            "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL",
-        ),
         // Public API URL advertised to other nodes
         (
             "ESPRESSO_NODE_PUBLIC_API_URL",

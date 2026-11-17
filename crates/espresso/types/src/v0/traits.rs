@@ -16,9 +16,8 @@ use hotshot_new_protocol::store::Restored;
 use hotshot_types::simple_certificate::Certificate2;
 #[cfg(feature = "node")]
 use hotshot_types::{
-    data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
+    data::{DaProposal2, QuorumProposalWrapper, VidDisperseShare},
     drb::DrbInput,
-    event::HotShotAction,
     initializer::{HotShotInitializer, InitializerEpochInfo},
     message::Proposal,
     simple_certificate::{
@@ -484,7 +483,6 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
-    fn set_consensus_only(&mut self);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
 }
@@ -591,13 +589,14 @@ pub trait StateCertPersistence: Send + Sync + 'static {
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + MembershipPersistence + StateCertPersistence
 {
-    /// Load the orchestrator config from storage.
+    /// Load the network config a node stored when an orchestrator or a config peer gave it one.
     ///
-    /// Returns `None` if no config exists (we are joining a network for the first time). Fails with
-    /// `Err` if it could not be determined whether a config exists or not.
+    /// Returns `None` if no config exists. Fails with `Err` if it could not be determined whether
+    /// a config exists or not.
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>>;
 
-    /// Save the orchestrator config to storage.
+    /// Save a network config to storage, as a node did when an orchestrator or a config peer
+    /// gave it one.
     async fn save_config(&self, cfg: &NetworkConfig) -> anyhow::Result<()>;
 
     /// Load the highest view saved with [`save_voted_view`](Self::save_voted_view).
@@ -800,25 +799,6 @@ pub trait SequencerPersistence:
     }
 
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>>;
-    async fn append_vid(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()>;
-    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
-
-    async fn append_quorum_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()>;
-
-    /// Persist cert2 for the given view.
-    async fn append_cert2(
-        &self,
-        _view: ViewNumber,
-        _cert2: Certificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
 
     /// Load a persisted cert2 by view, if any.
     async fn load_cert2(
@@ -828,30 +808,13 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
-    /// Persist the new protocol's locked QC, written before each phase-2 vote.
-    ///
-    /// Implementations must apply this as an atomic monotonic compare-and-set: a
-    /// write whose view is not newer than the stored one is a no-op. This lets
-    /// concurrent, retried writes race without ever regressing the persisted lock.
-    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Load the persisted locked QC, if any.
+    /// Load the persisted locked QC of the new protocol, if any.
     async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         Ok(None)
     }
 
-    /// Persist the new protocol's latest epoch boundary certificate: the own
-    /// `Certificate1` of the last block of an epoch, at the block's view.
-    ///
-    /// Implementations must apply this as an atomic monotonic compare-and-set,
-    /// ordered by epoch, then view, like [`Self::append_high_qc2`].
-    async fn append_boundary_qc2(&self, _qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Load the persisted boundary certificate, if any.
+    /// Load the persisted epoch boundary certificate of the new protocol: the own `Certificate1`
+    /// of the last block of an epoch, if any.
     async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         Ok(None)
     }
@@ -876,12 +839,6 @@ pub trait SequencerPersistence:
         }
     }
 
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()>;
-
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -889,10 +846,6 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
-    async fn add_state_cert(
-        &self,
-        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()>;
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics);
 }
@@ -925,41 +878,6 @@ impl EventConsumer for NullEventConsumer {
 #[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
-    async fn append_vid(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self).append_vid(proposal).await
-    }
-
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        (**self).append_da2(proposal, vid_commit).await
-    }
-
-    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
-        (**self).record_action(view, action).await
-    }
-
-    async fn append_proposal_wrapper(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self).append_quorum_proposal2(proposal).await
-    }
-
-    async fn update_decided_upgrade_certificate(
-        &self,
-        decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self)
-            .store_upgrade_certificate(decided_upgrade_certificate)
-            .await
-    }
-
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -982,13 +900,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
         (**self).load_drb_input(epoch).await
-    }
-
-    async fn update_state_cert(
-        &self,
-        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        (**self).add_state_cert(state_cert).await
     }
 }
 

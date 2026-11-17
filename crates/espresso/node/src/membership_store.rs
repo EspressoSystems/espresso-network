@@ -16,11 +16,8 @@ use espresso_types::{
 };
 use hotshot_new_protocol::store::{AppWrite, ConsensusStore};
 use hotshot_types::{
-    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
+    data::EpochNumber,
     drb::{DrbInput, DrbResult},
-    event::HotShotAction,
-    message::Proposal,
-    simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     traits::storage::Storage,
 };
 use indexmap::IndexMap;
@@ -394,50 +391,6 @@ impl Storage<SeqTypes> for MembershipStore {
         self.get(DRB_INPUTS, EpochNumber::new(epoch))
             .await?
             .with_context(|| format!("no DRB progress stored for epoch {epoch}"))
-    }
-
-    async fn append_vid(
-        &self,
-        _: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        bail!("VID shares are not membership data")
-    }
-
-    async fn append_da2(
-        &self,
-        _: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        _: VidCommitment,
-    ) -> anyhow::Result<()> {
-        bail!("DA proposals are not membership data")
-    }
-
-    async fn append_proposal_wrapper(
-        &self,
-        _: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        bail!("proposals are not membership data")
-    }
-
-    async fn record_action(
-        &self,
-        _: hotshot_types::data::ViewNumber,
-        _: HotShotAction,
-    ) -> anyhow::Result<()> {
-        bail!("actions are not membership data")
-    }
-
-    async fn update_state_cert(
-        &self,
-        _: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        bail!("state certificates are not membership data")
-    }
-
-    async fn update_decided_upgrade_certificate(
-        &self,
-        _: Option<UpgradeCertificate<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        bail!("upgrade certificates are not membership data")
     }
 }
 

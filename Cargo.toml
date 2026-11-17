@@ -28,7 +28,6 @@ members = [
     "crates/hotshot/example-types",
     "crates/hotshot/new-protocol",
     "crates/hotshot/new-protocol/bench",
-    "crates/hotshot/orchestrator",
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/http-client",
@@ -82,7 +81,6 @@ default-members = [
     "crates/hotshot/example-types",
     "crates/hotshot/new-protocol",
     "crates/hotshot/new-protocol/bench",
-    "crates/hotshot/orchestrator",
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/ingester",
@@ -210,7 +208,6 @@ hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
-hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "crates/hotshot-query-service" }
 hotshot-query-service-types = { path = "crates/hotshot-query-service-types" }
 hotshot-state-prover = { path = "crates/hotshot-state-prover" }
@@ -331,7 +328,6 @@ rust_decimal = "1.36.0"
 rustix = { version = "1", features = ["time"] }
 schemars = "0.9"
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde-inline-default = "0.2"
 serde_bytes = { version = "0.11" }
 serde_json = "1.0.113"
 serde_urlencoded = "0.7"

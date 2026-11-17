@@ -7,14 +7,9 @@ use url::Url;
 
 #[derive(Parser)]
 struct Args {
-    /// URL of the HotShot orchestrator.
-    #[clap(
-        short,
-        long,
-        env = "ESPRESSO_NODE_ORCHESTRATOR_URL",
-        default_value = "http://localhost:8080"
-    )]
-    pub orchestrator_url: Url,
+    /// URL of a node serving the HotShot config, whose genesis stake table is used.
+    #[clap(short, long, env = "ESPRESSO_API_NODE_URL")]
+    pub sequencer_url: Url,
 }
 
 fn main() {
@@ -29,7 +24,7 @@ fn main() {
 async fn async_main(_migrated_envs: Vec<(&str, &str)>) {
     let args = Args::parse();
     let pi: (LightClientStateSol, StakeTableStateSol) =
-        light_client_genesis(&args.orchestrator_url, DEFAULT_STAKE_TABLE_CAPACITY)
+        light_client_genesis(&args.sequencer_url, DEFAULT_STAKE_TABLE_CAPACITY)
             .await
             .unwrap();
     println!("{}", pi.abi_encode_params().encode_hex());

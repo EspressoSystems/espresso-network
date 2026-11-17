@@ -3885,7 +3885,6 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-example-types",
  "hotshot-new-protocol",
- "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-types",
  "http-client",
@@ -4978,30 +4977,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-orchestrator"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-lock",
- "axum",
- "clap",
- "csv",
- "futures",
- "hotshot-example-types",
- "hotshot-types",
- "http-client",
- "http-wire",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tower 0.4.13",
- "tracing",
- "vbs",
-]
-
-[[package]]
 name = "hotshot-query-service"
 version = "0.1.76"
 dependencies = [
@@ -5182,7 +5157,6 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
- "serde-inline-default",
  "serde_bytes",
  "serde_json",
  "sha2 0.10.9",
@@ -8968,17 +8942,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-inline-default"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59fb1bedd774187d304179493b0d3c41fbe97b04b14305363f68d2bdf5e47cb9"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "serde_bytes"
 version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9288,7 +9251,6 @@ dependencies = [
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
- "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-types",
  "http-client",
@@ -9308,7 +9270,6 @@ dependencies = [
  "tracing",
  "url",
  "vbs",
- "vec1",
  "versions",
 ]
 

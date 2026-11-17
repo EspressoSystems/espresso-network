@@ -31,3 +31,27 @@ stake_table_contract = "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
 
 [l1_finalized]
 number = 0
+
+# The bench nodes of process-compose.yaml (.env demo keys 0 to 2), in node order, at their .env
+# cliquenet ports. aws-bench replaces this table with the fleet's.
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~nsGB09pN_IPIjCKjmLW29zHfU6Z3KwpQ1LaFvqq9Uwuu6VsAPyJbKDkbHVo5qEKa9Q7zvQ4W7fbd0_eZrCM4KeV2Vquj4Mqh6O6kmtCz38lsIZN9z7y8b5vao_DEKI4VBkAwBXatQHYhwBtfuBbTH_Mg2nzNKx9rkvuK0FDong8A"
+state_ver_key = "SCHNORR_VER_KEY~d0Eq-lg0aGOPpxX1-fDg4LVYU5k-Vj4SmRa2G95d0i3cNYNeW77l-Jkel8dRQYGGiLH314cTdQQC-NF7Z_dXETc"
+stake = 1
+da = true
+connect_info = { x25519_key = "CExjPySTuNkRa9JgVbYAwSNjw4QHoaZtG1NU8cbuUBcP", p2p_addr = "127.0.0.1:11000" }
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~BBel036RpxP9VQcFwG0_6_OY64j4g1fx4zGw9DNepC0AW8La3p_0hhl9twcEGeHDMRTvvOHhHlkdINdwHopKLonUdU6ONFLRJHJKoQDumAYLWhMGXAtF_BvOc9jVDUgCpLr1-mLRJyk3nKaVmipXu5Qw6bVmjCP2RvvRu8gxyaOC"
+state_ver_key = "SCHNORR_VER_KEY~OTiyekzHMXM-ZUMKhWvG-xYePZvpGjmN2j2QiRq8nio2rsdqQoWWA7D8qFg5iSMjGcfdReznyP0nuSwNZUo6Aw8"
+stake = 1
+da = true
+connect_info = { x25519_key = "6o5Bo7mMiNqKm645j7ZS5hBA8S9gHoEEMNGWCgCXFDwH", p2p_addr = "127.0.0.1:11001" }
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~GYnErophqAE8DiqBqm5HaFJiXocoHIe5766NJIlGkg8n2i2Z0QabUItE2OmhEs6_-E8SKfnfo8H4dMIB9O0BEpezNMGTXNBlDGZp_ddN9lgBJK7FAeKWZQzaSCbeVnIRsdQiQS035MLFWPLmfzCPMmrP2250puIfTCGun0-ub5n3"
+state_ver_key = "SCHNORR_VER_KEY~XaDS3ypzmvVgiWiL1qheyJgBmt6BPUnKVo_R1O0N7hZyC_2MbEcuDXWKPGn2sF3Da2qp6k44vQweDbi4aHVOG_E"
+stake = 1
+da = true
+connect_info = { x25519_key = "Fowa1e1ceoKFcKjdcecGzdztn5Ln958wUcM1uyjEBz8B", p2p_addr = "127.0.0.1:11002" }

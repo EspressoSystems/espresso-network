@@ -3,10 +3,9 @@
 //! decides to, so every API module serves them unchanged.
 //!
 //! The light client's root of trust is its genesis stake table. Unless
-//! [`FollowerOptions::light_client_genesis`] pins one, it is derived from the network config, and
-//! a follower starting on an empty database fetches that config from its config peers, which
-//! default to the very upstreams it verifies. Pin the genesis wherever the upstreams are not
-//! trusted on first start.
+//! [`FollowerOptions::light_client_genesis`] pins one, it is derived from the network config: the
+//! genesis stake table of the genesis file, or the config a node of a network started by an
+//! orchestrator stored back then. Neither comes from the upstreams it verifies.
 
 use std::{cmp::max, collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
@@ -17,7 +16,7 @@ use ::light_client::{
     storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
-use anyhow::{Context, anyhow, bail, ensure};
+use anyhow::{Context, anyhow, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -59,7 +58,7 @@ use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
-    CatchupParams, Genesis, L1Params, LoadedNetworkConfig, NodeStateParts, SequencerApiVersion,
+    CatchupParams, Genesis, L1Params, NodeStateParts, SequencerApiVersion,
     api::{
         DecideSink,
         context::{ApiContext, ConsensusSource, Delta, NodeLightClient},
@@ -67,7 +66,7 @@ use crate::{
     },
     apply_genesis_overrides,
     context::TaskList,
-    init_node_state, load_or_fetch_network_config,
+    init_node_state, load_network_config,
     startup_catchup::bootstrap_epoch_window,
     state_signature::StateSignatureMemStorage,
 };
@@ -102,8 +101,6 @@ impl FollowerOptions {
 #[derive(Clone, Debug)]
 pub struct FollowerParams {
     pub upstreams: Vec<Url>,
-    /// The upstreams when unset.
-    pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub options: FollowerOptions,
@@ -222,27 +219,9 @@ where
         U256::ONE,
         false,
     );
-    let config_peers = params
-        .config_peers
-        .clone()
-        .unwrap_or_else(|| params.upstreams.clone());
-    let (mut network_config, fetched) = match load_or_fetch_network_config(
-        &persistence,
-        Some(config_peers),
-        &validator_config,
-        params.catchup.backoff,
-        params.catchup.base_timeout,
-    )
-    .await?
-    {
-        Some(LoadedNetworkConfig::Persisted(config)) => (config, false),
-        Some(LoadedNetworkConfig::Fetched(config)) => (config, true),
-        None => bail!("a follower needs peers to fetch the network config from"),
-    };
+    let mut network_config =
+        load_network_config(&persistence, &genesis, &validator_config.public_key).await?;
     apply_genesis_overrides(&mut network_config, &genesis);
-    if fetched {
-        persistence.save_config(&network_config).await?;
-    }
     // From genesis rather than the network config, as `init_node_state` reads it: the light
     // client verifies epochs, so a follower cannot run without them.
     let epoch_height = genesis.epoch_height.unwrap_or_default();
@@ -287,7 +266,6 @@ where
                     &params.upstreams,
                     &network_config,
                     genesis.chain_config.chain_id,
-                    fetched,
                     light_client_metrics,
                 )
                 .await?,
@@ -854,7 +832,6 @@ async fn connect_light_client(
     upstreams: &[Url],
     network_config: &NetworkConfig<SeqTypes>,
     chain_id: ChainId,
-    config_fetched: bool,
     metrics: LightClientMetrics,
 ) -> anyhow::Result<NodeLightClient> {
     let db = options
@@ -872,15 +849,7 @@ async fn connect_light_client(
     )?;
     let genesis = match options.light_client_genesis.clone() {
         Some(genesis) => genesis,
-        None => {
-            if config_fetched {
-                tracing::warn!(
-                    "deriving the light client's root of trust from a network config fetched from \
-                     peers; pin a light client genesis unless those peers are trusted"
-                );
-            }
-            light_client_genesis(network_config, chain_id)
-        },
+        None => light_client_genesis(network_config, chain_id),
     };
     Ok(
         LightClient::from_genesis_with_options(db, client, genesis, options.light_client.clone())

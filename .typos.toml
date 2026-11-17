@@ -10,7 +10,6 @@ extend-exclude = [
   "contracts/lib",
   "contracts/rust/adapter/src/bindings",
   "crates/node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
-  "crates/hotshot/orchestrator/run-config.toml",
   "crates/hotshot/types/src/light_client.rs",
   "lean",
   "crates/light-client-query-service/genesis/*.toml",

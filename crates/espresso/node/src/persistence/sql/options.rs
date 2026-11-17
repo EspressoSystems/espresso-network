@@ -330,9 +330,6 @@ pub struct Options {
     // creates a new reference-counted handle to the underlying pool state.
     #[clap(skip)]
     pub(crate) pool: Option<SqlPool>,
-
-    #[clap(skip)]
-    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -399,7 +396,6 @@ impl From<SqliteOptions> for Options {
             query_min_connections: None,
             query_max_connections: None,
             pool: None,
-            consensus_only: false,
             serializable_retry: SerializableRetryOptions::default(),
         }
     }

@@ -921,7 +921,6 @@ def test_support_containers_start_in_order_and_postgres_last(
         "anvil",
         "deploy",
         None,
-        "orchestrator",
         "state-relay-server",
         postgres,
         None,
@@ -988,13 +987,12 @@ def test_postgres_is_ready_before_its_extension_and_the_stats_reset():
     assert "PGPASSWORD=password" not in gate
 
 
-def test_every_contract_is_checked_between_deploy_and_orchestrator():
+def test_every_contract_is_checked_between_deploy_and_the_relay():
     plan = awsb.support_plan("colocated", ["0xabc", "0xdef"])
-    assert [step["what"] for step in plan][1:6] == [
+    assert [step["what"] for step in plan][1:5] == [
         "deploy",
         "eth_getCode 0xabc",
         "eth_getCode 0xdef",
-        "orchestrator healthcheck",
         "relay healthcheck",
     ]
     check = plan[3]
@@ -1012,7 +1010,7 @@ def test_start_support_starts_the_planned_containers_in_order(
     started = [
         c.rpartition("docker start ")[2] for c in commands if "docker start" in c
     ]
-    assert started == ["anvil", "deploy", "orchestrator", "state-relay-server"]
+    assert started == ["anvil", "deploy", "state-relay-server"]
 
 
 # TEST:collect-plan-skip-ok
@@ -1262,16 +1260,15 @@ def test_a_ramp_run_records_no_search(run_harness: RunHarness):
     assert agent["search"] is None
 
 
-def test_staking_runs_after_the_contract_checks_and_before_the_orchestrator():
+def test_staking_runs_after_the_contract_checks_and_before_the_relay():
     plan = awsb.support_plan("colocated", ["0xabc"], stake=True)
     whats = [step["what"] for step in plan]
-    assert whats[:7] == [
+    assert whats[:6] == [
         "anvil eth_chainId",
         "deploy",
         "eth_getCode 0xabc",
         "stake",
         "wait-for-l1-finalized",
-        "orchestrator healthcheck",
         "relay healthcheck",
     ]
     assert plan[3]["kind"] == "deploy"
@@ -1292,7 +1289,7 @@ def test_the_support_plan_is_unchanged_without_staking():
 
 
 @pytest.mark.usefixtures("valid")
-def test_epochs_start_stake_between_deploy_and_orchestrator(run_harness: RunHarness):
+def test_epochs_start_stake_between_deploy_and_the_relay(run_harness: RunHarness):
     runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
     assert run_harness.run(runner, "--epoch-height", "3000") == awsb.EXIT_OK
     started = [
@@ -1301,11 +1298,9 @@ def test_epochs_start_stake_between_deploy_and_orchestrator(run_harness: RunHarn
         if call[0] == "ssh" and "docker start" in call[-1]
     ]
     support = [
-        c
-        for c in started
-        if c in ("anvil", "deploy", "stake", "orchestrator", "state-relay-server")
+        c for c in started if c in ("anvil", "deploy", "stake", "state-relay-server")
     ]
-    assert support == ["anvil", "deploy", "stake", "orchestrator", "state-relay-server"]
+    assert support == ["anvil", "deploy", "stake", "state-relay-server"]
     assert runner.ran("docker wait stake")
     assert (run_harness.run_dir / "hosts/ctl/stake.env").exists()
 

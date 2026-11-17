@@ -4,7 +4,6 @@ use std::{
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
 };
 
 use alloy::primitives::Address;
@@ -26,19 +25,16 @@ use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, QuorumProposalWrapper, QuorumProposalWrapperLegacy,
-        VidCommitment, VidDisperseShare,
+        VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    event::HotShotAction,
     initializer::InitializerEpochInfo,
     message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
-    simple_vote::LockView,
     traits::{metrics::Metrics, node_implementation::NodeType},
-    vote::HasViewNumber,
 };
 use itertools::Itertools;
 
@@ -49,7 +45,6 @@ use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{
         migrate_network_config,
-        persistence_metrics::PersistenceMetricsValue,
         storage_probe::{self, StorageProbe},
     },
 };
@@ -120,9 +115,6 @@ pub struct Options {
     /// Storage path for persistent data.
     #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
     pub(crate) path: PathBuf,
-
-    #[clap(skip)]
-    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -133,10 +125,7 @@ impl Default for Options {
 
 impl Options {
     pub fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            consensus_only: false,
-        }
+        Self { path }
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -148,10 +137,6 @@ impl Options {
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
 
-    fn set_consensus_only(&mut self) {
-        self.consensus_only = true;
-    }
-
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let path = self.path.clone();
         // Fail fast if the data directory can't be created: every writer would fail on it later
@@ -161,9 +146,7 @@ impl PersistenceOptions for Options {
 
         Ok(Persistence {
             inner: Arc::new(RwLock::new(Inner { path })),
-            metrics: Arc::new(PersistenceMetricsValue::default()),
             probe,
-            consensus_only: self.consensus_only,
         })
     }
 
@@ -179,11 +162,8 @@ pub struct Persistence {
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
     inner: Arc<RwLock<Inner>>,
-    /// A reference to the metrics trait
-    metrics: Arc<PersistenceMetricsValue>,
     /// Startup findings about the filesystem backing the data directory.
     probe: StorageProbe,
-    consensus_only: bool,
 }
 
 #[derive(Debug)]
@@ -261,10 +241,6 @@ impl Inner {
         self.path.join("finalized_state_cert")
     }
 
-    fn state_cert_dir_path(&self) -> PathBuf {
-        self.path.join("state_cert")
-    }
-
     fn decided_cert2_dir_path(&self) -> PathBuf {
         self.path.join("decided_cert2")
     }
@@ -285,25 +261,6 @@ impl Inner {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize cert2")?,
         ))
-    }
-
-    fn append_cert2(
-        &mut self,
-        view: ViewNumber,
-        cert2: &Certificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let dir_path = self.decided_cert2_dir_path();
-        fs::create_dir_all(&dir_path).context("failed to create decided_cert2 dir")?;
-        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
-        self.replace(
-            &file_path,
-            |_| Ok(true),
-            |mut file| {
-                let bytes = bincode::serialize(cert2).context("serialize cert2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
     }
 
     /// Overwrite a file if a condition is met.
@@ -528,131 +485,6 @@ impl SequencerPersistence for Persistence {
         self.inner.read().await.load_vid_share(view)
     }
 
-    async fn append_vid(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let view_number = proposal.data.view_number().u64();
-        let dir_path = inner.vid2_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create vid dir")?;
-
-        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
-        inner.replace(
-            &file_path,
-            |_| {
-                // Don't overwrite an existing share, but warn about it as this is likely not intended
-                // behavior from HotShot.
-                tracing::warn!(view_number, "duplicate VID share");
-                Ok(false)
-            },
-            |mut file| {
-                let proposal_bytes = bincode::serialize(proposal).context("serialize proposal")?;
-                let now = Instant::now();
-                file.write_all(&proposal_bytes)?;
-                self.metrics
-                    .internal_append_vid_duration
-                    .add_point(now.elapsed().as_secs_f64());
-                Ok(())
-            },
-        )
-    }
-
-    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
-        // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
-        //
-        // A timeout vote counts: a restarted node must not vote2 at a view it
-        // sent a timeout vote for.
-        if !matches!(
-            action,
-            HotShotAction::Propose | HotShotAction::Vote | HotShotAction::TimeoutVote
-        ) {
-            return Ok(());
-        }
-        let mut inner = self.inner.write().await;
-        let path = &inner.voted_view_path();
-        inner.replace(
-            path,
-            |mut file| {
-                let mut bytes = vec![];
-                file.read_to_end(&mut bytes)?;
-                let bytes = bytes
-                    .try_into()
-                    .map_err(|bytes| anyhow!("malformed voted view file: {bytes:?}"))?;
-                let saved_view = ViewNumber::new(u64::from_le_bytes(bytes));
-
-                // Overwrite the file if the saved view is older than the new view.
-                Ok(saved_view < view)
-            },
-            |mut file| {
-                file.write_all(&view.u64().to_le_bytes())?;
-                Ok(())
-            },
-        )?;
-
-        if matches!(action, HotShotAction::Vote) {
-            let restart_view_path = &inner.restart_view_path();
-            let restart_view = view + 1;
-            inner.replace(
-                restart_view_path,
-                |mut file| {
-                    let mut bytes = vec![];
-                    file.read_to_end(&mut bytes)?;
-                    let bytes = bytes
-                        .try_into()
-                        .map_err(|bytes| anyhow!("malformed voted view file: {bytes:?}"))?;
-                    let saved_view = ViewNumber::new(u64::from_le_bytes(bytes));
-
-                    // Overwrite the file if the saved view is older than the new view.
-                    Ok(saved_view < restart_view)
-                },
-                |mut file| {
-                    file.write_all(&restart_view.u64().to_le_bytes())?;
-                    Ok(())
-                },
-            )?;
-        }
-        Ok(())
-    }
-
-    async fn append_quorum_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let view_number = proposal.data.view_number().u64();
-        let dir_path = inner.quorum_proposals2_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
-
-        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
-        inner.replace(
-            &file_path,
-            |_| {
-                // Always overwrite the previous file
-                Ok(true)
-            },
-            |mut file| {
-                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-                let now = Instant::now();
-                file.write_all(&proposal_bytes)?;
-                self.metrics
-                    .internal_append_quorum2_duration
-                    .add_point(now.elapsed().as_secs_f64());
-                Ok(())
-            },
-        )
-    }
-
-    async fn append_cert2(
-        &self,
-        view: ViewNumber,
-        cert2: Certificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        self.inner.write().await.append_cert2(view, &cert2)
-    }
-
     async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         self.inner.read().await.load_cert2(view)
     }
@@ -785,31 +617,6 @@ impl SequencerPersistence for Persistence {
         bincode::deserialize(&bytes).ok()
     }
 
-    async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let path = &inner.high_qc2();
-        // Locks are ordered by epoch, then view.
-        let lock = LockView::of(&high_qc);
-        inner.replace(
-            path,
-            |mut file| {
-                // Overwrite only when the new lock is newer. The whole replace
-                // runs under the inner write lock, so this compare-and-set is
-                // atomic and a stale concurrent write cannot regress the lock.
-                let mut bytes = vec![];
-                file.read_to_end(&mut bytes)?;
-                let existing: QuorumCertificate2<SeqTypes> =
-                    bincode::deserialize(&bytes).context("deserializing existing high_qc2")?;
-                Ok(LockView::of(&existing) < lock)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&high_qc).context("serializing high_qc2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
-
     async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         let inner = self.inner.read().await;
         let path = inner.high_qc2();
@@ -822,29 +629,6 @@ impl SequencerPersistence for Persistence {
         ))
     }
 
-    async fn append_boundary_qc2(&self, qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let path = &inner.boundary_qc2();
-        let lock = LockView::of(&qc);
-        inner.replace(
-            path,
-            |mut file| {
-                // Overwrite only when the new certificate is later, under the
-                // inner write lock, as for `high_qc2`.
-                let mut bytes = vec![];
-                file.read_to_end(&mut bytes)?;
-                let existing: QuorumCertificate2<SeqTypes> =
-                    bincode::deserialize(&bytes).context("deserializing existing boundary_qc2")?;
-                Ok(LockView::of(&existing) < lock)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&qc).context("serializing boundary_qc2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
-
     async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         let inner = self.inner.read().await;
         let path = inner.boundary_qc2();
@@ -855,41 +639,6 @@ impl SequencerPersistence for Persistence {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserializing boundary_qc2")?,
         ))
-    }
-
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        if self.consensus_only {
-            return Ok(());
-        }
-        let mut inner = self.inner.write().await;
-        let view_number = proposal.data.view_number().u64();
-        let dir_path = inner.da2_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create da dir")?;
-
-        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
-        inner.replace(
-            &file_path,
-            |_| {
-                // Don't overwrite an existing proposal, but warn about it as this is likely not
-                // intended behavior from HotShot.
-                tracing::warn!(view_number, "duplicate DA proposal");
-                Ok(false)
-            },
-            |mut file| {
-                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-                let now = Instant::now();
-                file.write_all(&proposal_bytes)?;
-                self.metrics
-                    .internal_append_da2_duration
-                    .add_point(now.elapsed().as_secs_f64());
-                Ok(())
-            },
-        )
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
@@ -966,38 +715,6 @@ impl SequencerPersistence for Persistence {
                     .context(format!("writing epoch drb result file for epoch {epoch:?}"))
             },
         )
-    }
-
-    async fn add_state_cert(
-        &self,
-        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        // let epoch = state_cert.epoch;
-        let view = state_cert.light_client_state.view_number;
-        let dir_path = inner.state_cert_dir_path();
-
-        fs::create_dir_all(dir_path.clone())
-            .context("failed to create light client state update certificate dir")?;
-
-        let bytes = bincode::serialize(&state_cert)
-            .context("serialize light client state update certificate")?;
-
-        let file_path = dir_path.join(view.to_string()).with_extension("txt");
-        inner
-            .replace(
-                &file_path,
-                |_| Ok(true),
-                |mut file| {
-                    file.write_all(&bytes)?;
-                    Ok(())
-                },
-            )
-            .context(format!(
-                "writing light client state update certificate file for view {view:?}"
-            ))?;
-
-        Ok(())
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -1102,7 +819,6 @@ impl SequencerPersistence for Persistence {
     }
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
         self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
@@ -1651,15 +1367,9 @@ fn epoch_files(
 
 #[cfg(test)]
 mod test {
-    use std::marker::PhantomData;
 
-    use committable::Committable;
-    use espresso_types::{Leaf, NodeState, PubKey};
-    use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
-    use hotshot_types::{
-        data::QuorumProposal2, simple_vote::Vote2Data, traits::signature_key::SignatureKey,
-    };
+    use hotshot_query_service::metrics::PrometheusMetrics;
+    use hotshot_types::traits::signature_key::SignatureKey;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -1672,16 +1382,6 @@ mod test {
 
         async fn tmp_storage() -> Self::Storage {
             TempDir::new().unwrap()
-        }
-
-        async fn insert_legacy_eqc(
-            &self,
-            high_qc: &QuorumCertificate2<SeqTypes>,
-            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
-        ) -> anyhow::Result<()> {
-            let inner = self.inner.read().await;
-            fs::write(inner.eqc(), bincode::serialize(&(high_qc, next_epoch_qc))?)?;
-            Ok(())
         }
 
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
@@ -1797,145 +1497,6 @@ mod test {
         });
 
         assert_eq!(migrate_network_config(before.clone()).unwrap(), before);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_load_quorum_proposals_invalid_extension() {
-        let tmp = Persistence::tmp_storage().await;
-        let storage = Persistence::connect(&tmp).await;
-
-        // Generate a couple of valid quorum proposals.
-        let leaf = Leaf2::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base).await;
-        let privkey = PubKey::generated_from_seed_indexed([0; 32], 1).1;
-        let signature = PubKey::sign(&privkey, &[]).unwrap();
-        let mut quorum_proposal = Proposal {
-            data: QuorumProposalWrapper::<SeqTypes> {
-                proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: None,
-                    block_header: leaf.block_header().clone(),
-                    view_number: ViewNumber::genesis(),
-                    justify_qc: QuorumCertificate2::genesis(
-                        &Default::default(),
-                        &NodeState::mock(),
-                        TEST_VERSIONS.test,
-                    )
-                    .await,
-                    upgrade_certificate: None,
-                    view_change_evidence: None,
-                    next_drb_result: None,
-                    next_epoch_justify_qc: None,
-                    state_cert: None,
-                },
-            },
-            signature,
-            _pd: Default::default(),
-        };
-
-        // Store quorum proposals.
-        let quorum_proposal1 = quorum_proposal.clone();
-        storage
-            .append_quorum_proposal2(&quorum_proposal1)
-            .await
-            .unwrap();
-        quorum_proposal.data.proposal.view_number = ViewNumber::new(1);
-        let quorum_proposal2 = quorum_proposal.clone();
-        storage
-            .append_quorum_proposal2(&quorum_proposal2)
-            .await
-            .unwrap();
-
-        // Change one of the file extensions. It can happen that we end up with files with the wrong
-        // extension if, for example, the node is killed before cleaning up a swap file.
-        fs::rename(
-            tmp.path().join("quorum_proposals2/1.txt"),
-            tmp.path().join("quorum_proposals2/1.swp"),
-        )
-        .unwrap();
-
-        // Loading should simply ignore the unrecognized extension.
-        assert_eq!(
-            storage.load_quorum_proposals().await.unwrap(),
-            [(ViewNumber::genesis(), quorum_proposal1)]
-                .into_iter()
-                .collect::<BTreeMap<_, _>>()
-        );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cert2_persisted_as_bin() {
-        let tmp = Persistence::tmp_storage().await;
-        let storage = Persistence::connect(&tmp).await;
-        let view = ViewNumber::new(7);
-        let leaf = Leaf2::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base).await;
-        let data = Vote2Data {
-            leaf_commit: leaf.commit(),
-            epoch: EpochNumber::new(1),
-            block_number: leaf.height(),
-        };
-        let cert2 = Certificate2::new(data.clone(), data.commit(), view, None, PhantomData);
-
-        storage.append_cert2(view, cert2.clone()).await.unwrap();
-
-        assert!(tmp.path().join("decided_cert2/7.bin").is_file());
-        assert!(!tmp.path().join("decided_cert2/7.txt").exists());
-        assert_eq!(storage.load_cert2(view).await.unwrap(), Some(cert2));
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_load_quorum_proposals_malformed_data() {
-        let tmp = Persistence::tmp_storage().await;
-        let storage = Persistence::connect(&tmp).await;
-
-        // Generate a valid quorum proposal.
-        let leaf: Leaf2 = Leaf::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base)
-            .await
-            .into();
-        let privkey = PubKey::generated_from_seed_indexed([0; 32], 1).1;
-        let signature = PubKey::sign(&privkey, &[]).unwrap();
-        let quorum_proposal = Proposal {
-            data: QuorumProposalWrapper::<SeqTypes> {
-                proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: None,
-                    block_header: leaf.block_header().clone(),
-                    view_number: ViewNumber::new(1),
-                    justify_qc: QuorumCertificate2::genesis(
-                        &Default::default(),
-                        &NodeState::mock(),
-                        TEST_VERSIONS.test,
-                    )
-                    .await,
-                    upgrade_certificate: None,
-                    view_change_evidence: None,
-                    next_drb_result: None,
-                    next_epoch_justify_qc: None,
-                    state_cert: None,
-                },
-            },
-            signature,
-            _pd: Default::default(),
-        };
-
-        // First store an invalid quorum proposal.
-        fs::create_dir_all(tmp.path().join("quorum_proposals2")).unwrap();
-        fs::write(
-            tmp.path().join("quorum_proposals2/0.txt"),
-            "invalid data".as_bytes(),
-        )
-        .unwrap();
-
-        // Store valid quorum proposal.
-        storage
-            .append_quorum_proposal2(&quorum_proposal)
-            .await
-            .unwrap();
-
-        // Loading should ignore the invalid data and return the valid proposal.
-        assert_eq!(
-            storage.load_quorum_proposals().await.unwrap(),
-            [(ViewNumber::new(1), quorum_proposal)]
-                .into_iter()
-                .collect::<BTreeMap<_, _>>()
-        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

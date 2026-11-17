@@ -78,3 +78,41 @@ committee = [
 # 2 = { stake_table_entry = { stake_key = "BLS_VER_KEY~GYnErophqAE8DiqBqm5HaFJiXocoHIe5766NJIlGkg8n2i2Z0QabUItE2OmhEs6_-E8SKfnfo8H4dMIB9O0BEpezNMGTXNBlDGZp_ddN9lgBJK7FAeKWZQzaSCbeVnIRsdQiQS035MLFWPLmfzCPMmrP2250puIfTCGun0-ub5n3", stake_amount = "0x1" }, state_ver_key = "SCHNORR_VER_KEY~XaDS3ypzmvVgiWiL1qheyJgBmt6BPUnKVo_R1O0N7hZyC_2MbEcuDXWKPGn2sF3Da2qp6k44vQweDbi4aHVOG_E" }
 # 3 = { stake_table_entry = { stake_key = "BLS_VER_KEY~83JiRDj_p-aHkBm-uc9uC43EjBRoWR0IRDpc_9wbeir5ebQeYgOaPCYVDQJUUnIy8yYp8xD02jlzwZHKEpsTCu7LjmztyYuXMGmp3whoLANnes1w07YtVStmni4kQ90VfayghryKcmBXKlxuN4y_Kilzzr8qCFHvv8WeSFcIc50D", stake_amount = "0x1" }, state_ver_key = "SCHNORR_VER_KEY~BgsxWFLYfuE8UNR8kLQyh0Kl8H_TVfadyDsz0dK8mh5yMvcAz6lZSniDknsl80ZhgKx3aD0Xpu8fexVDwEJpIL0" }
 # 4 = { stake_table_entry = { stake_key = "BLS_VER_KEY~gEmis1vrvptLvLCxGfyH8-jcQzDPLfDdnb30tLyotANcf3AoZIHUJx1d86vmTn9YqwnUiG1MrhopnxBdCm8UIMAHIhmfPhus6eQnNQrbK5G6aZxC31kGSPE_Qtj1AmUXYyUwWMxYsjxeuTPIi1dfdE5m_DQv9ex8GoiDR9wYv6kq", stake_amount = "0x1" }, state_ver_key = "SCHNORR_VER_KEY~g4YhB239zZbmw5wtvcq6IpCA7LFk6Fsst_fHKEDArxoQKZx-78wOyJZGurpq32S7C57Kqwq6Rsx045QbNzRxEXc" }
+
+# The demo nodes of .env, in node order, at their default cliquenet ports on this host.
+# docker/ holds the same table with the addresses docker-compose gives the nodes.
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~nsGB09pN_IPIjCKjmLW29zHfU6Z3KwpQ1LaFvqq9Uwuu6VsAPyJbKDkbHVo5qEKa9Q7zvQ4W7fbd0_eZrCM4KeV2Vquj4Mqh6O6kmtCz38lsIZN9z7y8b5vao_DEKI4VBkAwBXatQHYhwBtfuBbTH_Mg2nzNKx9rkvuK0FDong8A"
+state_ver_key = "SCHNORR_VER_KEY~d0Eq-lg0aGOPpxX1-fDg4LVYU5k-Vj4SmRa2G95d0i3cNYNeW77l-Jkel8dRQYGGiLH314cTdQQC-NF7Z_dXETc"
+stake = 1
+da = true
+connect_info = { x25519_key = "CExjPySTuNkRa9JgVbYAwSNjw4QHoaZtG1NU8cbuUBcP", p2p_addr = "127.0.0.1:11000" }
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~BBel036RpxP9VQcFwG0_6_OY64j4g1fx4zGw9DNepC0AW8La3p_0hhl9twcEGeHDMRTvvOHhHlkdINdwHopKLonUdU6ONFLRJHJKoQDumAYLWhMGXAtF_BvOc9jVDUgCpLr1-mLRJyk3nKaVmipXu5Qw6bVmjCP2RvvRu8gxyaOC"
+state_ver_key = "SCHNORR_VER_KEY~OTiyekzHMXM-ZUMKhWvG-xYePZvpGjmN2j2QiRq8nio2rsdqQoWWA7D8qFg5iSMjGcfdReznyP0nuSwNZUo6Aw8"
+stake = 1
+da = true
+connect_info = { x25519_key = "6o5Bo7mMiNqKm645j7ZS5hBA8S9gHoEEMNGWCgCXFDwH", p2p_addr = "127.0.0.1:11001" }
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~GYnErophqAE8DiqBqm5HaFJiXocoHIe5766NJIlGkg8n2i2Z0QabUItE2OmhEs6_-E8SKfnfo8H4dMIB9O0BEpezNMGTXNBlDGZp_ddN9lgBJK7FAeKWZQzaSCbeVnIRsdQiQS035MLFWPLmfzCPMmrP2250puIfTCGun0-ub5n3"
+state_ver_key = "SCHNORR_VER_KEY~XaDS3ypzmvVgiWiL1qheyJgBmt6BPUnKVo_R1O0N7hZyC_2MbEcuDXWKPGn2sF3Da2qp6k44vQweDbi4aHVOG_E"
+stake = 1
+da = true
+connect_info = { x25519_key = "Fowa1e1ceoKFcKjdcecGzdztn5Ln958wUcM1uyjEBz8B", p2p_addr = "127.0.0.1:11002" }
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~83JiRDj_p-aHkBm-uc9uC43EjBRoWR0IRDpc_9wbeir5ebQeYgOaPCYVDQJUUnIy8yYp8xD02jlzwZHKEpsTCu7LjmztyYuXMGmp3whoLANnes1w07YtVStmni4kQ90VfayghryKcmBXKlxuN4y_Kilzzr8qCFHvv8WeSFcIc50D"
+state_ver_key = "SCHNORR_VER_KEY~BgsxWFLYfuE8UNR8kLQyh0Kl8H_TVfadyDsz0dK8mh5yMvcAz6lZSniDknsl80ZhgKx3aD0Xpu8fexVDwEJpIL0"
+stake = 1
+da = false
+connect_info = { x25519_key = "ExRybUZwcLW82GyBXhnyCctumZEivyXip5RfLzYcyTj6", p2p_addr = "127.0.0.1:11003" }
+
+[[stake_table.genesis]]
+stake_table_key = "BLS_VER_KEY~gEmis1vrvptLvLCxGfyH8-jcQzDPLfDdnb30tLyotANcf3AoZIHUJx1d86vmTn9YqwnUiG1MrhopnxBdCm8UIMAHIhmfPhus6eQnNQrbK5G6aZxC31kGSPE_Qtj1AmUXYyUwWMxYsjxeuTPIi1dfdE5m_DQv9ex8GoiDR9wYv6kq"
+state_ver_key = "SCHNORR_VER_KEY~g4YhB239zZbmw5wtvcq6IpCA7LFk6Fsst_fHKEDArxoQKZx-78wOyJZGurpq32S7C57Kqwq6Rsx045QbNzRxEXc"
+stake = 1
+da = true
+connect_info = { x25519_key = "8dwUnSvL7nPtZZgi5qMyfdXGGHWHwNSbW62Jcg9mUuxE", p2p_addr = "127.0.0.1:11004" }

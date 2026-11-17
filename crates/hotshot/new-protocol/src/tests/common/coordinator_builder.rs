@@ -15,7 +15,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate2,
     simple_vote::QuorumData2,
-    traits::{signature_key::SignatureKey, storage::Storage as _},
+    traits::signature_key::SignatureKey,
     upgrade_config::UpgradeConfig,
 };
 use tokio::sync::mpsc;

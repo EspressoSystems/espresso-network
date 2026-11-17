@@ -13,7 +13,7 @@ default:
 
 # Release binaries the benchmark network runs.
 build:
-    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server -p espresso-deploy --bin deploy
+    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin state-relay-server -p espresso-deploy --bin deploy
 
 # AWS harness: plan|up|run|down|status|list|collect|render|destroy|prune|publish; `just bench aws --help`, README.md.
 [script("../with-tools", "aws", "uv", "tofu", "aws")]

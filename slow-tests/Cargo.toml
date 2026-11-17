@@ -20,7 +20,6 @@ espresso-node = { workspace = true, default-features = false, features = ["testi
 espresso-types = { workspace = true, features = ["node"] }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
@@ -40,7 +39,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
-vec1 = { workspace = true }
 versions = { workspace = true }
 
 [lints]

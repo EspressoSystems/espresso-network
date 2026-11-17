@@ -26,9 +26,8 @@ use hotshot_new_protocol::{
     network::{Cliquenet, NetworkError},
     store::{ConsensusStore, Restored},
 };
-use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
-    HotShotConfig, PeerConfig, ValidatorConfig,
+    HotShotConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
     data::{Leaf2, ViewNumber},
@@ -95,11 +94,6 @@ pub struct SequencerContext<P: SequencerPersistence> {
 
     /// Light client state signatures produced by the state signer task.
     state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
-
-    /// An orchestrator to wait for before starting consensus, with the peer config this node
-    /// registered there.
-    #[derivative(Debug = "ignore")]
-    wait_for_orchestrator: Option<(Arc<OrchestratorClient>, PeerConfig<SeqTypes>)>,
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
@@ -376,7 +370,6 @@ where
             tasks: Default::default(),
             consensus_api_addr,
             detached: false,
-            wait_for_orchestrator: None,
             node_state,
             network_config,
             validator_config,
@@ -400,19 +393,6 @@ where
         );
 
         ctx
-    }
-
-    /// Wait for a signal from the orchestrator before starting consensus.
-    ///
-    /// `peer_config` is what this node registered with the orchestrator. `/ready` posts it
-    /// again, and the orchestrator equality-checks it against `known_nodes_with_stake`.
-    pub fn wait_for_orchestrator(
-        mut self,
-        client: OrchestratorClient,
-        peer_config: PeerConfig<SeqTypes>,
-    ) -> Self {
-        self.wait_for_orchestrator = Some((Arc::new(client), peer_config));
-        self
     }
 
     /// Add a list of tasks to the given context.
@@ -477,17 +457,6 @@ where
 
     /// Start participating in consensus.
     pub async fn start_consensus(&self) {
-        if let Some((orchestrator_client, peer_config)) = &self.wait_for_orchestrator {
-            tracing::warn!("waiting for orchestrated start");
-            orchestrator_client
-                .wait_for_all_nodes_ready(PeerConfig::to_bytes(peer_config))
-                .await;
-        } else {
-            // the network config was loaded from storage or fetched from
-            // peers, so there is no need of orchestrator
-            // This is the normal path for a node rejoining an existing network.
-            tracing::info!("no orchestrator configured");
-        }
         tracing::warn!("starting consensus");
         self.consensus_handle.start_consensus().await;
     }

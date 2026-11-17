@@ -21,7 +21,7 @@ testing = [
     "hotshot-query-service/testing",
     "hotshot-new-protocol/testing",
 ]
-benchmarking = []
+benchmarking = ["dep:csv"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -42,7 +42,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
 committable = { workspace = true }
-csv = { workspace = true }
+csv = { workspace = true, optional = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 disco-types = { workspace = true }
@@ -58,7 +58,6 @@ espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-new-protocol = { workspace = true }
-hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }

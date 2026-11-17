@@ -309,7 +309,6 @@ async fn l1_block(provider: &impl Provider, number: u64) -> anyhow::Result<Block
 fn replay_params(own_url: url::Url) -> FollowerParams {
     FollowerParams {
         upstreams: vec![],
-        config_peers: None,
         catchup: CatchupParams {
             state_peers: vec![own_url],
             backoff: Default::default(),

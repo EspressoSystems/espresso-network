@@ -43,7 +43,8 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
   modules. The genesis and the catchup and L1 tuning stay on v1, and the L1 URLs are reported as a
-  count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from v1.
+  count because they can carry credentials. Nodes of older releases joining through `--config-peers` still fetch the full
+  config from v1.
   Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
   routes with a 404 in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.

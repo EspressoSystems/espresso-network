@@ -288,13 +288,11 @@ where
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
-        orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
         private_staking_key: staking,
         private_state_key: state,
-        config_peers: opt.config_peers,
         catchup: CatchupParams {
             state_peers: opt.state_peers,
             backoff: opt.catchup_backoff,
@@ -463,7 +461,10 @@ mod test {
         PubKey, Upgrade, UpgradeType,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
     };
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
+    use hotshot_types::{
+        light_client::StateKeyPair, network::PeerConfigKeys, traits::signature_key::SignatureKey,
+        x25519,
+    };
     use http_client::{Client, Url, error::ClientErr};
     use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
@@ -480,7 +481,7 @@ mod test {
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_startup_before_orchestrator() {
+    async fn test_startup_serves_api_before_consensus() {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
         let x25519_kp = x25519::Keypair::generate().unwrap();
@@ -492,7 +493,16 @@ mod test {
         let genesis_file = tmp.path().join("genesis.toml");
         let genesis = Genesis {
             chain_config: Default::default(),
-            stake_table: StakeTableConfig { capacity: 10 },
+            stake_table: StakeTableConfig {
+                capacity: 10,
+                genesis: vec![PeerConfigKeys {
+                    stake_table_key: pub_key,
+                    state_ver_key: state_key.ver_key(),
+                    stake: 1,
+                    da: true,
+                    connect_info: None,
+                }],
+            },
             accounts: Default::default(),
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
@@ -555,9 +565,8 @@ mod test {
             &tmp.path().join("consensus").display().to_string(),
         ]);
 
-        // Start the sequencer in a background task. This process will not complete, because it will
-        // be waiting for the orchestrator, but it should at least start up the API server and
-        // populate some metrics.
+        // Start the sequencer in a background task. This process will not complete, because no L1
+        // is running, but it should at least start up the API server and populate some metrics.
         tracing::info!(port = %port1, "starting sequencer");
         let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
         let task = spawn(async move {
@@ -574,8 +583,7 @@ mod test {
             }
         });
 
-        // The healthcheck should eventually come up even though the node is waiting for the
-        // orchestrator.
+        // The healthcheck should eventually come up even though the node is waiting for L1.
         tracing::info!("waiting for API to start");
         let url: Url = format!("http://localhost:{port1}").parse().unwrap();
         let client = Client::<ClientErr, SequencerApiVersion>::new(url.clone());

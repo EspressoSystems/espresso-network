@@ -3248,7 +3248,6 @@ mod test {
         FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
         RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
         StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
-        config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
@@ -3278,7 +3277,6 @@ mod test {
         types::HeightIndexed,
     };
     use hotshot_types::{
-        ValidatorConfig,
         addr::NetAddr,
         data::EpochNumber,
         epoch_membership::EpochMembershipCoordinator,
@@ -4524,49 +4522,6 @@ mod test {
         assert_eq!(chain, new_chain);
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_config() {
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: Url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url.clone());
-
-        let options = Options::with_port(port).config(Default::default());
-        let network_config = TestConfigBuilder::default().build();
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config)
-            .build();
-        let network = TestNetwork::new(config, TEST_UPGRADE).await;
-        client.connect(None).await;
-
-        // Fetch a network config from the API server. The first peer URL is bogus, to test the
-        // failure/retry case.
-        let peers = StatePeers::<StaticVersion<0, 1>>::from_urls(
-            vec!["https://notarealnode.network".parse().unwrap(), url],
-            Default::default(),
-            Duration::from_secs(2),
-            &NoMetrics,
-        );
-
-        // Fetch the config from node 1, a different node than the one running the service.
-        let validator =
-            ValidatorConfig::generated_from_seed_indexed([0; 32], 1, U256::from(1), false);
-        let config = peers.fetch_config(validator.clone()).await.unwrap();
-
-        // Check the node-specific information in the recovered config is correct.
-        assert_eq!(config.node_index, 1);
-
-        // Check the public information is also correct (with respect to the node that actually
-        // served the config, for public keys).
-        pretty_assertions::assert_eq!(
-            serde_json::to_value(PublicHotShotConfig::from(config.config)).unwrap(),
-            serde_json::to_value(PublicHotShotConfig::from(
-                network.cfg.hotshot_config().clone()
-            ))
-            .unwrap()
-        );
-    }
-
     #[apply(sql_data_sources)]
     async fn test_pos_rewards_basic<D: TestableSqlDataSource>(
         _d: PhantomData<D>,
@@ -5608,7 +5563,6 @@ mod test {
         let genesis = follower_genesis(&network.cfg, &genesis_state, NEW_PROTOCOL);
         let params = FollowerParams {
             upstreams: vec![api_url.clone()],
-            config_peers: None,
             catchup: CatchupParams {
                 state_peers: vec![api_url.clone()],
                 backoff: Default::default(),
@@ -5761,6 +5715,7 @@ mod test {
             chain_config,
             stake_table: StakeTableConfig {
                 capacity: hotshot.stake_table_capacity,
+                genesis: Vec::new(),
             },
             accounts: [(
                 TestConfig::<N>::builder_key().fee_account(),
@@ -10210,20 +10165,6 @@ mod test {
                     .collect(),
                 fixed_leader_for_gpuvid: v1_hotshot.fixed_leader_for_gpuvid as u64,
                 num_bootstrap: v1_hotshot.num_bootstrap as u64,
-                commit_sha: v1_config.commit_sha().to_string(),
-                indexed_da: v1_config.indexed_da(),
-                builder: match v1_config.builder() {
-                    hotshot_types::network::BuilderType::External => {
-                        espresso_api::proto::BuilderType::External
-                    },
-                    hotshot_types::network::BuilderType::Simple => {
-                        espresso_api::proto::BuilderType::Simple
-                    },
-                    hotshot_types::network::BuilderType::Random => {
-                        espresso_api::proto::BuilderType::Random
-                    },
-                }
-                .into(),
                 ..Default::default()
             }
         );

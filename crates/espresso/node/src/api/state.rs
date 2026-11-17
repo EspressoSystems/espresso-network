@@ -2161,14 +2161,12 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
         // a setting v2 silently never serves; the `_` bindings are the deliberate drops. The guard
         // stops at this level, as the storage and module structs below are read field by field.
         let crate::options::PublicNodeConfig {
-            orchestrator_url,
             cliquenet_bind_address,
             cliquenet_advertise_address,
             public_api_url,
             builder_urls,
             state_relay_server_url,
             state_peers,
-            config_peers,
             is_da,
             genesis_file,
             genesis: _,
@@ -2228,12 +2226,6 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
             state_relay_server_url: state_relay_server_url.to_string(),
             state_peers: state_peers.iter().map(ToString::to_string).collect(),
-            config_peers: config_peers
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            orchestrator_url: orchestrator_url.to_string(),
             // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
             // literal and its serde impl does not, so v1 serves the unbracketed form.
             cliquenet_bind_address: cliquenet_bind_address.unbracketed_string(),
@@ -6221,8 +6213,6 @@ mod tests {
         }
 
         let opt = parse_options_with(&[
-            "--config-peers",
-            "https://peer1.test,https://peer2.test",
             "--cliquenet-bind-address",
             "[2001:db8::1]:9999",
             "--",
@@ -6313,8 +6303,6 @@ mod tests {
                 builder_urls: strings(&cfg.builder_urls),
                 state_relay_server_url: cfg.state_relay_server_url.to_string(),
                 state_peers: strings(&cfg.state_peers),
-                config_peers: strings(cfg.config_peers.as_deref().unwrap()),
-                orchestrator_url: cfg.orchestrator_url.to_string(),
                 cliquenet_bind_address: cfg.cliquenet_bind_address.unbracketed_string(),
                 cliquenet_advertise_address: cfg
                     .cliquenet_advertise_address
@@ -6377,7 +6365,6 @@ mod tests {
         );
         // IPv6 because that is the only case where NetAddr's Display and its serde impl
         // disagree, and v1 goes through serde.
-        assert_eq!(runtime.config_peers.len(), 2);
         assert_eq!(runtime.cliquenet_bind_address, "2001:db8::1:9999");
     }
 
@@ -6386,18 +6373,11 @@ mod tests {
     #[test]
     fn hotshot_config_renders_the_fields_a_test_network_leaves_empty() {
         use espresso_types::config::PublicNetworkConfig;
-        use hotshot_types::{
-            PeerConfig, VersionedDaCommittee,
-            network::{BuilderType, NetworkConfig},
-        };
+        use hotshot_types::{PeerConfig, VersionedDaCommittee, network::NetworkConfig};
 
         let committee_member = PeerConfig::<SeqTypes>::test_default();
 
-        let mut network_config = NetworkConfig::<SeqTypes> {
-            commit_sha: "deadbeef".to_string(),
-            builder: BuilderType::Random,
-            ..Default::default()
-        };
+        let mut network_config = NetworkConfig::<SeqTypes>::default();
         network_config.config.da_committees = vec![VersionedDaCommittee {
             start_version: vbs::version::Version { major: 0, minor: 6 },
             start_epoch: 10,
@@ -6406,8 +6386,6 @@ mod tests {
 
         let served: proto::HotshotConfigResponse = PublicNetworkConfig::from(network_config).into();
 
-        assert_eq!(served.commit_sha, "deadbeef");
-        assert_eq!(served.builder, proto::BuilderType::Random as i32);
         // The version renders as v1's `version_ser` writes it, not as `Debug`.
         let da_committee = &served.da_committees[0];
         assert_eq!(served.da_committees.len(), 1);

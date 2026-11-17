@@ -2,7 +2,6 @@
 source: crates/espresso/node/src/options.rs
 expression: cfg
 ---
-orchestrator_url: "http://orchestrator.example:8080/"
 cliquenet_bind_address: "0.0.0.0:9977"
 cliquenet_advertise_address: "node1.example:9977"
 public_api_url: "http://node1.example:24000/"
@@ -12,8 +11,6 @@ state_relay_server_url: "http://relay.example:8083/"
 state_peers:
   - "https://peer1.example/"
   - "https://peer2.example/"
-config_peers:
-  - "https://peer1.example/"
 is_da: true
 genesis_file: /path/to/genesis.toml
 genesis:

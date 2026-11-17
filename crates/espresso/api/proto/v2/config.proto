@@ -93,11 +93,11 @@ message HotshotConfigResponse {
   // How many bootstrap nodes this node dials on startup
   uint64 num_bootstrap = 27;
 
-  // Git SHA the node was built from; empty when the build stamped none
-  string commit_sha = 28;
+  // Always empty: set by the orchestrator, which no longer exists
+  string commit_sha = 28 [deprecated = true];
 
-  // When true the first nodes to register form the DA committee; when false a node asks to join
-  bool indexed_da = 29;
+  // Always false: set by the orchestrator, which no longer exists
+  bool indexed_da = 29 [deprecated = true];
 
   // Always absent: the CDN marshal went with the networks consensus ran on before protocol 0.6
   optional string cdn_marshal_address = 30 [deprecated = true];
@@ -108,7 +108,8 @@ message HotshotConfigResponse {
   // Always absent: the combined network went with the networks consensus ran on before protocol 0.6
   optional CombinedNetworkConfig combined_network_config = 32 [deprecated = true];
 
-  BuilderType builder = 33;
+  // Always unspecified: set by the orchestrator, which no longer exists
+  BuilderType builder = 33 [deprecated = true];
 }
 
 message VersionedDaCommittee {
@@ -382,10 +383,12 @@ message RuntimeConfigResponse {
 
   repeated string state_peers = 8;
 
-  // Empty when not configured
-  repeated string config_peers = 9;
+  // Always empty: nodes take the genesis stake table from the genesis file, not from peers
+  repeated string config_peers = 9 [deprecated = true];
 
-  string orchestrator_url = 10;
+  // Always empty: nodes take the genesis stake table from the genesis file, not from an
+  // orchestrator
+  string orchestrator_url = 10 [deprecated = true];
 
   // Always empty: the CDN went with the networks consensus ran on before protocol 0.6
   string cdn_endpoint = 11 [deprecated = true];

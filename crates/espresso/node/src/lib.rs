@@ -62,7 +62,6 @@ use hotshot_new_protocol::{
     network::{Cliquenet, message_limit},
     store::{Anchor, ConsensusStore, Import},
 };
-use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
@@ -72,9 +71,7 @@ use hotshot_types::{
     network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
-        metrics::{Metrics, NoMetrics},
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
+        metrics::Metrics, node_implementation::NodeType, signature_key::SignatureKey,
         storage::Storage,
     },
     x25519,
@@ -93,7 +90,6 @@ pub type SequencerApiVersion = StaticVersion<0, 1>;
 
 #[derive(Clone, Debug)]
 pub struct NetworkParams {
-    pub orchestrator_url: Url,
     pub state_relay_server_url: Url,
 
     /// The URLs of the builders to use for submitting transactions
@@ -101,7 +97,6 @@ pub struct NetworkParams {
 
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
-    pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
     /// Per-step timeout for the startup stake-table catchup walk
     /// (`bootstrap_epoch_window`).
@@ -127,12 +122,6 @@ pub struct CatchupParams {
     pub backoff: BackoffParams,
     pub base_timeout: Duration,
     pub http_delay: Duration,
-}
-
-pub(crate) enum LoadedNetworkConfig {
-    Persisted(NetworkConfig<SeqTypes>),
-    /// The caller persists it once genesis overrides are applied.
-    Fetched(NetworkConfig<SeqTypes>),
 }
 
 pub(crate) struct NodeStateParts<P> {
@@ -300,9 +289,6 @@ where
         .text_family("node".into(), vec!["key".into()])
         .create(vec![pub_key.to_string()]);
 
-    // Orchestrator client
-    let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
-
     let validator_config = local_validator_config(
         network_params.private_staking_key,
         network_params.private_state_key,
@@ -313,41 +299,7 @@ where
 
     let catchup_params = network_params.catchup;
 
-    let loaded_network_config = load_or_fetch_network_config(
-        &persistence,
-        network_params.config_peers,
-        &validator_config,
-        catchup_params.backoff,
-        catchup_params.base_timeout,
-    )
-    .await?;
-    let (mut network_config, orchestrator_peer_config, persist_config) = match loaded_network_config
-    {
-        Some(LoadedNetworkConfig::Persisted(config)) => (config, None, false),
-        Some(LoadedNetworkConfig::Fetched(config)) => (config, None, true),
-        // Otherwise, this is a fresh network; load from the orchestrator.
-        None => {
-            tracing::warn!("loading network config from orchestrator");
-            tracing::warn!(
-                "waiting for other nodes to connect, DO NOT RESTART until fully connected"
-            );
-
-            let registration = orchestrator_registration(&validator_config)?;
-
-            let config = get_complete_config(&orchestrator_client, registration.clone())
-                .await?
-                .0;
-
-            tracing::warn!(
-                node_id = config.node_index,
-                stake_table = ?config.config.known_nodes_with_stake,
-                "loaded config",
-            );
-            tracing::warn!("all nodes connected");
-            (config, Some(registration.public_config()), true)
-        },
-    };
-
+    let mut network_config = load_network_config(&persistence, &genesis, &pub_key).await?;
     apply_genesis_overrides(&mut network_config, &genesis);
 
     // Override the builder URLs in the network config with the ones from the command line
@@ -358,13 +310,6 @@ where
 
     let version_upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
     tracing::warn!("setting version_upgrade={version_upgrade}");
-
-    // Save *after* the above updates. The orchestrator and peer fetched configs don't include
-    // epoch_height, drb_difficulty, etc. those come from genesis and are applied above.
-    // Saving before these updates would persist zeros for those values
-    if persist_config {
-        persistence.save_config(&network_config).await?;
-    }
 
     let (consensus_store, restored) = ConsensusStore::open(consensus_store_path, async || {
         import_state(&persistence).await
@@ -433,7 +378,7 @@ where
         }
     };
 
-    let mut ctx = SequencerContext::init(
+    let ctx = SequencerContext::init(
         network_config,
         version_upgrade,
         validator_config,
@@ -457,10 +402,6 @@ where
         consensus_api_addr,
     )
     .await?;
-
-    if let Some(peer_config) = orchestrator_peer_config {
-        ctx = ctx.wait_for_orchestrator(orchestrator_client, peer_config);
-    }
 
     Ok(ctx)
 }
@@ -524,9 +465,6 @@ async fn import_anchor<P: SequencerPersistence>(
 /// `p2p_addr` is the address peers dial, so it is only the configured advertise address. The
 /// bind address is not recorded: its default is `0.0.0.0`, which nobody can dial, and on real
 /// networks the dialable address lives in the stake table rather than in node config.
-///
-/// What is published into the stake table is decided separately by
-/// [`orchestrator_registration`].
 fn local_validator_config(
     staking_key: BLSPrivKey,
     state_key: StateSignKey,
@@ -547,49 +485,32 @@ fn local_validator_config(
     }
 }
 
-/// The config this node registers with the orchestrator. Its `public_config()` is also what
-/// `/ready` posts, since the orchestrator equality-checks that against `known_nodes_with_stake`.
-/// It carries the node's cliquenet `connect_info` so peers can dial us from the stake table, which
-/// requires an advertise address to be configured.
-fn orchestrator_registration(
-    validator_config: &ValidatorConfig<SeqTypes>,
-) -> anyhow::Result<ValidatorConfig<SeqTypes>> {
-    validator_config.p2p_addr.as_ref().context(
-        "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a Cliquenet \
-         network from the orchestrator",
-    )?;
-    Ok(validator_config.clone())
-}
-
-pub(crate) async fn load_or_fetch_network_config<P: SequencerPersistence>(
+/// The network config this node runs with.
+///
+/// A network started by an orchestrator ordered its genesis committee by registration, and only
+/// the config the node stored back then records that order, so it comes first. Otherwise the
+/// config is built from the genesis stake table.
+pub(crate) async fn load_network_config<P: SequencerPersistence>(
     persistence: &P,
-    config_peers: Option<Vec<Url>>,
-    validator_config: &ValidatorConfig<SeqTypes>,
-    backoff: BackoffParams,
-    base_timeout: Duration,
-) -> anyhow::Result<Option<LoadedNetworkConfig>> {
+    genesis: &Genesis,
+    node_key: &BLSPubKey,
+) -> anyhow::Result<NetworkConfig<SeqTypes>> {
     if let Some(config) = persistence.load_config().await? {
-        tracing::warn!("loaded network config from storage, rejoining existing network");
-        return Ok(Some(LoadedNetworkConfig::Persisted(config)));
+        tracing::warn!("using the network config from storage");
+        return Ok(config);
     }
-
-    let Some(peers) = config_peers else {
-        return Ok(None);
-    };
-    tracing::warn!(?peers, "loading network config from peers");
-    let peers =
-        StatePeers::<SequencerApiVersion>::from_urls(peers, backoff, base_timeout, &NoMetrics);
-    let config = peers.fetch_config(validator_config.clone()).await?;
-
+    let config = genesis.network_config(node_key).context(
+        "the genesis file has no stake table, and storage has no network config to take it from",
+    )?;
     tracing::warn!(
         node_id = config.node_index,
         stake_table = ?config.config.known_nodes_with_stake,
-        "loaded config",
+        "using the genesis stake table",
     );
-    Ok(Some(LoadedNetworkConfig::Fetched(config)))
+    Ok(config)
 }
 
-/// Orchestrator and peer-fetched configs carry none of these; run before the config is persisted.
+/// Applies the parameters that genesis decides to `network_config`.
 pub(crate) fn apply_genesis_overrides(
     network_config: &mut NetworkConfig<SeqTypes>,
     genesis: &Genesis,
@@ -1849,13 +1770,16 @@ mod test {
     use espresso_types::{Header, NamespaceId, TEST_UPGRADE, Transaction};
     use futures::StreamExt;
     use hotshot_types::{
-        PeerConnectInfo, addr::NetAddr, event::LeafInfo, traits::block_contents::BlockHeader,
+        PeerConnectInfo,
+        addr::NetAddr,
+        event::LeafInfo,
+        traits::{block_contents::BlockHeader, metrics::NoMetrics},
         x25519,
     };
     use test_utils::reserve_tcp_port;
     use testing::{TestConfigBuilder, decided_leaves, wait_for_decide_on_handle};
 
-    use super::{local_validator_config, orchestrator_registration};
+    use super::local_validator_config;
     use crate::api::{
         Options,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder},
@@ -1908,32 +1832,6 @@ mod test {
     }
 
     #[test]
-    fn orchestrator_registration_publishes_connect_info() {
-        let keys = test_keys();
-        let advertise: NetAddr = "node.example.com:9977".parse().unwrap();
-        let config = local_validator_config(
-            keys.staking.clone(),
-            keys.state.clone(),
-            &keys.x25519,
-            Some(advertise.clone()),
-            false,
-        );
-
-        let registration = orchestrator_registration(&config).unwrap();
-        assert_eq!(
-            registration
-                .public_config()
-                .connect_info
-                .map(|i| i.p2p_addr),
-            Some(advertise)
-        );
-
-        let unconfigured =
-            local_validator_config(keys.staking, keys.state, &keys.x25519, None, false);
-        assert!(orchestrator_registration(&unconfigured).is_err());
-    }
-
-    #[test]
     fn telemetry_endpoint_defaults_by_chain() {
         use super::{
             ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
@@ -1965,7 +1863,10 @@ mod test {
         let version = Version { major: 0, minor: 1 };
         let mut genesis = Genesis {
             chain_config: Default::default(),
-            stake_table: StakeTableConfig { capacity: 10 },
+            stake_table: StakeTableConfig {
+                capacity: 10,
+                genesis: Vec::new(),
+            },
             accounts: Default::default(),
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),

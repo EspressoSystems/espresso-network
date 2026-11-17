@@ -18,45 +18,13 @@ use tokio::time::sleep;
 
 use super::node_implementation::NodeType;
 use crate::{
-    data::{
-        DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
-        ViewNumber,
-    },
+    data::EpochNumber,
     drb::{DrbInput, DrbResult},
-    event::HotShotAction,
-    message::Proposal,
-    simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
 };
 
-/// Abstraction for storing a variety of consensus payload datum.
+/// Where membership keeps the DRB results and epoch roots it computes.
 #[async_trait]
 pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
-    /// Add a proposal to the stored VID proposals.
-    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()>;
-
-    /// Add a proposal to the stored DA proposals.
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<TYPES, DaProposal2<TYPES>>,
-        vid_commit: VidCommitment,
-    ) -> Result<()>;
-    /// Add a proposal we sent to the store
-    async fn append_proposal_wrapper(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    ) -> Result<()>;
-    /// Record a HotShotAction taken.
-    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> Result<()>;
-    /// Update the light client state update certificate in storage.
-    async fn update_state_cert(
-        &self,
-        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
-    ) -> Result<()>;
-    /// Upgrade the current decided upgrade certificate in storage.
-    async fn update_decided_upgrade_certificate(
-        &self,
-        decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-    ) -> Result<()>;
     /// Add a drb result
     async fn store_drb_result(&self, epoch: EpochNumber, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header

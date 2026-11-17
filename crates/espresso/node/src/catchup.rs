@@ -15,7 +15,6 @@ use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
     ValidatedState,
-    config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
@@ -28,16 +27,14 @@ use espresso_types::{
 };
 use futures::{
     StreamExt,
-    future::{Future, FutureExt, TryFuture, TryFutureExt},
+    future::{Future, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
-    ValidatorConfig,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{
         ValidatedState as ValidatedStateTrait,
@@ -249,32 +246,6 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
             backoff,
             base_timeout,
         }
-    }
-
-    #[tracing::instrument(skip(self, my_own_validator_config))]
-    pub async fn fetch_config(
-        &self,
-        my_own_validator_config: ValidatorConfig<SeqTypes>,
-    ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
-        self.backoff()
-            .retry(self, move |provider, retry| {
-                let my_own_validator_config = my_own_validator_config.clone();
-                async move {
-                    let cfg: PublicNetworkConfig = provider
-                        .fetch(retry, |client| {
-                            let url = client.url.join(&paths::config_hotshot()).unwrap();
-
-                            reqwest::get(url.clone())
-                        })
-                        .await?
-                        .json()
-                        .await?;
-                    cfg.into_network_config(my_own_validator_config)
-                        .context("fetched config, but failed to convert to private config")
-                }
-                .boxed()
-            })
-            .await
     }
 }
 

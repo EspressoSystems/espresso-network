@@ -24,7 +24,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
     simple_vote::HasEpoch,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey, storage::Storage as _},
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
     x25519::Keypair,
 };

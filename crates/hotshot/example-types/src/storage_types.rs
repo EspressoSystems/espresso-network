@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -16,31 +16,19 @@ use anyhow::{Result, anyhow, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    data::{
-        DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
-        ViewNumber,
-    },
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
     message::Proposal,
-    simple_certificate::{
-        Certificate2, LightClientStateUpdateCertificateV2, QuorumCertificate2, UpgradeCertificate,
-    },
+    simple_certificate::{Certificate2, QuorumCertificate2},
     simple_vote::LockView,
     traits::{node_implementation::NodeType, storage::Storage},
-    vote::HasViewNumber,
 };
 
 use crate::testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, TestableDelay};
 
-type VidShares<TYPES> = BTreeMap<
-    ViewNumber,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
->;
 #[derive(Clone, Debug)]
 pub struct TestStorageState<TYPES: NodeType> {
-    vids: VidShares<TYPES>,
-    da2s: HashMap<ViewNumber, Proposal<TYPES, DaProposal2<TYPES>>>,
     pub proposals_wrapper: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc2: Option<QuorumCertificate2<TYPES>>,
     /// The new protocol's latest epoch boundary block's own certificate.
@@ -49,7 +37,6 @@ pub struct TestStorageState<TYPES: NodeType> {
     action_log: Vec<(ViewNumber, HotShotAction)>,
     /// Where in `action_log` each restart of the node fell.
     restarts: Vec<usize>,
-    state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
     epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
@@ -61,15 +48,12 @@ pub struct TestStorageState<TYPES: NodeType> {
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
     fn default() -> Self {
         Self {
-            vids: BTreeMap::new(),
-            da2s: HashMap::new(),
             proposals_wrapper: BTreeMap::new(),
             high_qc2: None,
             boundary_qc2: None,
             action: ViewNumber::genesis(),
             action_log: Vec::new(),
             restarts: Vec::new(),
-            state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
@@ -86,7 +70,6 @@ pub struct TestStorage<TYPES: NodeType> {
     /// `should_return_err` is a testing utility to validate negative cases.
     pub should_return_err: Arc<AtomicBool>,
     pub delay_config: DelayConfig,
-    pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
 }
 
 impl<TYPES: NodeType> Default for TestStorage<TYPES> {
@@ -95,7 +78,6 @@ impl<TYPES: NodeType> Default for TestStorage<TYPES> {
             inner: Arc::new(RwLock::new(TestStorageState::default())),
             should_return_err: Arc::new(AtomicBool::new(false)),
             delay_config: DelayConfig::default(),
-            decided_upgrade_certificate: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -111,6 +93,45 @@ impl<TYPES: NodeType> TestableDelay for TestStorage<TYPES> {
 }
 
 impl<TYPES: NodeType> TestStorage<TYPES> {
+    pub async fn append_proposal_wrapper(
+        &self,
+        proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
+    ) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to append Quorum proposal (wrapped) to storage");
+        }
+        Self::run_delay_settings_from_config(&self.delay_config).await;
+        let mut inner = self.inner.write().await;
+        inner
+            .proposals_wrapper
+            .insert(proposal.data.view_number(), proposal.clone());
+        Ok(())
+    }
+
+    pub async fn record_action(
+        &self,
+        view: ViewNumber,
+        action: hotshot_types::event::HotShotAction,
+    ) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to append Action to storage");
+        }
+        let mut inner = self.inner.write().await;
+        inner.action_log.push((view, action));
+        if matches!(
+            action,
+            HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
+        ) && view > inner.action
+        {
+            inner.action = view;
+        }
+        if matches!(action, HotShotAction::Vote) {
+            inner.restart_view = view + 1;
+        }
+        Self::run_delay_settings_from_config(&self.delay_config).await;
+        Ok(())
+    }
+
     pub async fn proposals_cloned(
         &self,
     ) -> BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
@@ -158,10 +179,6 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
             inner.boundary_qc2 = Some(qc);
         }
         Ok(())
-    }
-
-    pub async fn decided_upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
-        self.decided_upgrade_certificate.read().await.clone()
     }
 
     pub async fn last_actioned_view(&self) -> ViewNumber {
@@ -228,118 +245,10 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     pub async fn cert2s(&self) -> Vec<Certificate2<TYPES>> {
         self.inner.read().await.cert2s.values().cloned().collect()
     }
-
-    pub async fn vids_cloned(&self) -> VidShares<TYPES> {
-        self.inner.read().await.vids.clone()
-    }
-
-    pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
-        self.inner
-            .read()
-            .await
-            .state_certs
-            .iter()
-            .next_back()
-            .map(|(_, cert)| cert.clone())
-    }
 }
 
 #[async_trait]
 impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
-    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append VID proposal to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .vids
-            .entry(proposal.data.view_number())
-            .or_default()
-            .insert(proposal.data.recipient_key().clone(), proposal.clone());
-        Ok(())
-    }
-
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<TYPES, DaProposal2<TYPES>>,
-        _vid_commit: VidCommitment,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append DA proposal (2) to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .da2s
-            .insert(proposal.data.view_number, proposal.clone());
-        Ok(())
-    }
-
-    async fn append_proposal_wrapper(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append Quorum proposal (wrapped) to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .proposals_wrapper
-            .insert(proposal.data.view_number(), proposal.clone());
-        Ok(())
-    }
-
-    async fn record_action(
-        &self,
-        view: ViewNumber,
-        action: hotshot_types::event::HotShotAction,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append Action to storage");
-        }
-        let mut inner = self.inner.write().await;
-        inner.action_log.push((view, action));
-        if matches!(
-            action,
-            HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
-        ) && view > inner.action
-        {
-            inner.action = view;
-        }
-        if matches!(action, HotShotAction::Vote) {
-            inner.restart_view = view + 1;
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        Ok(())
-    }
-
-    async fn update_state_cert(
-        &self,
-        state_cert: LightClientStateUpdateCertificateV2<TYPES>,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to update state_cert to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        self.inner
-            .write()
-            .await
-            .state_certs
-            .insert(state_cert.epoch, state_cert);
-        Ok(())
-    }
-
-    async fn update_decided_upgrade_certificate(
-        &self,
-        decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-    ) -> Result<()> {
-        *self.decided_upgrade_certificate.write().await = decided_upgrade_certificate;
-
-        Ok(())
-    }
-
     async fn store_drb_result(&self, epoch: EpochNumber, drb_result: DrbResult) -> Result<()> {
         let mut inner = self.inner.write().await;
 

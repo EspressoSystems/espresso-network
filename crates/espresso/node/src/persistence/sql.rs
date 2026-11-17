@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, future::Future, time::Instant};
+use std::{collections::BTreeMap, future::Future};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
 use espresso_types::{
-    AuthenticatedValidatorMap, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
-    RegisteredValidatorMap, StakeTableHash,
+    AuthenticatedValidatorMap, Header, Leaf, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{
@@ -22,28 +22,21 @@ use hotshot_query_service::{
         Transaction as _, VersionedDataSource,
         storage::{SerializableRetry, pruning::PrunerCfg, sql::StorageConnectionType},
     },
-    fetching::{
-        Provider,
-        request::{PayloadRequest, VidCommonRequest},
-    },
     serializable_retry,
 };
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    event::HotShotAction,
     initializer::InitializerEpochInfo,
     message::{Proposal, convert_proposal},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
-    simple_vote::LockView,
-    traits::{block_contents::BlockPayload, metrics::Metrics},
-    vote::HasViewNumber,
+    traits::metrics::Metrics,
 };
 use indexmap::IndexMap;
 use light_client::storage::LightClientDbOptions;
@@ -56,10 +49,7 @@ use super::{
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     api::options::Query,
-    persistence::{
-        migrate_network_config, persistence_metrics::PersistenceMetricsValue,
-        storage_probe::StorageProbe,
-    },
+    persistence::{migrate_network_config, storage_probe::StorageProbe},
 };
 
 /// Node setup that differs between the SQL backends.
@@ -149,22 +139,13 @@ impl TryFrom<SqlOptions> for Options {
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
 
-    fn set_consensus_only(&mut self) {
-        self.0.consensus_only = true;
-    }
-
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = Config::try_from(&self.0)?;
         let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
 
         let probe = Db::storage_probe(&db, &self.0).await?;
 
-        let persistence = Persistence {
-            db,
-            consensus_only: self.0.consensus_only,
-            internal_metrics: PersistenceMetricsValue::default(),
-            probe,
-        };
+        let persistence = Persistence { db, probe };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.0.pool = Some(persistence.db.pool().into());
 
@@ -183,9 +164,6 @@ impl PersistenceOptions for Options {
 #[derive(Clone, Debug)]
 pub struct Persistence {
     pub(super) db: SqlStorage,
-    consensus_only: bool,
-    /// A reference to the internal metrics
-    internal_metrics: PersistenceMetricsValue,
     /// Startup findings about the filesystem and SQLite pragmas backing `db`, on SQLite only.
     pub(super) probe: Option<StorageProbe>,
 }
@@ -472,143 +450,6 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
-    async fn append_vid(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let view = proposal.data.view_number().u64();
-        let payload_hash = proposal.data.payload_commitment();
-        let data_bytes = bincode::serialize(proposal).unwrap();
-
-        let now = Instant::now();
-        let res = serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "vid_share2",
-                ["view", "data", "payload_hash"],
-                ["view"],
-                [(view as i64, data_bytes.clone(), payload_hash.to_string())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await;
-        self.internal_metrics
-            .internal_append_vid_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-
-    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
-        // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
-        //
-        // A timeout vote counts: a restarted node must not vote2 at a view it
-        // sent a timeout vote for.
-        if !matches!(
-            action,
-            HotShotAction::Propose | HotShotAction::Vote | HotShotAction::TimeoutVote
-        ) {
-            return Ok(());
-        }
-
-        serializable_retry!(self, || async {
-            let stmt = format!(
-                "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
-                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, \
-                 excluded.view)",
-                MAX_FN = Db::MAX_FN,
-            );
-
-            let mut tx = self.db.write().await?;
-            tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
-
-            if matches!(action, HotShotAction::Vote) {
-                let restart_view = view + 1;
-                let stmt = format!(
-                    "INSERT INTO restart_view (id, view) VALUES (0, $1)
-                    ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, \
-                     excluded.view)",
-                    MAX_FN = Db::MAX_FN,
-                );
-                tx.execute(query(&stmt).bind(restart_view.u64() as i64))
-                    .await?;
-            }
-
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn append_quorum_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let view_number = proposal.data.view_number().u64();
-
-        let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
-        let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
-
-        // We also keep track of any QC we see in case we need it to recover our archival storage.
-        let justify_qc = proposal.data.justify_qc();
-        let justify_qc_bytes = bincode::serialize(&justify_qc).context("serializing QC")?;
-        let justify_qc_view = justify_qc.view_number.u64() as i64;
-        let justify_qc_leaf_commit = justify_qc.data.leaf_commit.to_string();
-
-        let now = Instant::now();
-        let res = serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "quorum_proposals2",
-                ["view", "leaf_hash", "data"],
-                ["view"],
-                [(
-                    view_number as i64,
-                    leaf_hash.to_string(),
-                    proposal_bytes.clone(),
-                )],
-            )
-            .await?;
-            tx.upsert(
-                "quorum_certificate2",
-                ["view", "leaf_hash", "data"],
-                ["view"],
-                [(
-                    justify_qc_view,
-                    justify_qc_leaf_commit.clone(),
-                    justify_qc_bytes.clone(),
-                )],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await;
-        self.internal_metrics
-            .internal_append_quorum2_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-
-    async fn append_cert2(
-        &self,
-        view: ViewNumber,
-        cert2: Certificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let data = bincode::serialize(&cert2).context("serializing cert2")?;
-        let view_i64 = view.u64() as i64;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "decided_cert2",
-                ["view", "data"],
-                ["view"],
-                [(view_i64, data.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
     async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let row = self
             .db
@@ -625,36 +466,6 @@ impl SequencerPersistence for Persistence {
         .transpose()
     }
 
-    async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        // Locks are ordered by epoch, then view.
-        let lock = LockView::of(&high_qc);
-        let data = bincode::serialize(&high_qc).context("serializing high_qc2")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            // Compare-and-set inside one write transaction so a stale
-            // concurrent write can never regress the stored view: under
-            // SERIALIZABLE a racing writer conflicts and retries; on SQLite
-            // writes are serialized.
-            let stored_view = query("SELECT data FROM high_qc2 WHERE id = true")
-                .fetch_optional(tx.as_mut())
-                .await?
-                .map(|row| {
-                    let bytes: Vec<u8> = row.get("data");
-                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
-                        .context("deserializing existing high_qc2")
-                        .map(|qc| LockView::of(&qc))
-                })
-                .transpose()?;
-            if stored_view.is_some_and(|stored| stored >= lock) {
-                return Ok(());
-            }
-            tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, data.clone())])
-                .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
     async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         let row = self
             .db
@@ -668,37 +479,6 @@ impl SequencerPersistence for Persistence {
                 .context("deserializing high_qc2")
         })
         .transpose()
-    }
-
-    async fn append_boundary_qc2(&self, qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        let lock = LockView::of(&qc);
-        let data = bincode::serialize(&qc).context("serializing boundary_qc2")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            // Compare-and-set inside one write transaction, as for `high_qc2`.
-            let stored = query("SELECT data FROM boundary_qc2 WHERE id = true")
-                .fetch_optional(tx.as_mut())
-                .await?
-                .map(|row| {
-                    let bytes: Vec<u8> = row.get("data");
-                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
-                        .context("deserializing existing boundary_qc2")
-                        .map(|qc| LockView::of(&qc))
-                })
-                .transpose()?;
-            if stored.is_some_and(|stored| stored >= lock) {
-                return Ok(());
-            }
-            tx.upsert(
-                "boundary_qc2",
-                ["id", "data"],
-                ["id"],
-                [(true, data.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
     }
 
     async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
@@ -782,37 +562,6 @@ impl SequencerPersistence for Persistence {
             .ok()?
     }
 
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        if self.consensus_only {
-            return Ok(());
-        }
-        let data = &proposal.data;
-        let view = data.view_number().u64();
-        let data_bytes = bincode::serialize(proposal).unwrap();
-
-        let now = Instant::now();
-        let res = serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "da_proposal2",
-                ["view", "data", "payload_hash"],
-                ["view"],
-                [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await;
-        self.internal_metrics
-            .internal_append_da2_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -883,28 +632,6 @@ impl SequencerPersistence for Persistence {
                 Ok(drb_input)
             },
         }
-    }
-
-    async fn add_state_cert(
-        &self,
-        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let view_number = state_cert.light_client_state.view_number as i64;
-        let state_cert_bytes = bincode::serialize(&state_cert)
-            .context("serializing light client state update certificate")?;
-
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "state_cert",
-                ["view", "state_cert"],
-                ["view"],
-                [(view_number, state_cert_bytes.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
     }
 
     async fn load_state_cert(
@@ -989,8 +716,6 @@ impl SequencerPersistence for Persistence {
     }
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
-        self.internal_metrics = PersistenceMetricsValue::new(metrics);
-
         if let Some(probe) = &self.probe {
             probe.register(&*metrics.subgroup("disk".into()));
         }
@@ -1540,93 +1265,6 @@ impl MembershipPersistence for Persistence {
     }
 }
 
-#[async_trait]
-impl Provider<SeqTypes, VidCommonRequest> for Persistence {
-    #[tracing::instrument(skip(self))]
-    async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
-        let mut tx = match self.db.read().await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::warn!("could not open transaction: {err:#}");
-                return None;
-            },
-        };
-
-        let bytes = match query_as::<(Vec<u8>,)>(
-            "SELECT data FROM vid_share2 WHERE payload_hash = $1 LIMIT 1",
-        )
-        .bind(req.0.to_string())
-        .fetch_optional(tx.as_mut())
-        .await
-        {
-            Ok(Some((bytes,))) => bytes,
-            Ok(None) => return None,
-            Err(err) => {
-                tracing::error!("error loading VID share: {err:#}");
-                return None;
-            },
-        };
-
-        let share: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-            match bincode::deserialize(&bytes) {
-                Ok(share) => share,
-                Err(err) => {
-                    tracing::warn!("error decoding VID share: {err:#}");
-                    return None;
-                },
-            };
-
-        match share.data {
-            VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
-            VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
-            VidDisperseShare::V2(vid) => Some(VidCommon::V2(vid.common)),
-        }
-    }
-}
-
-#[async_trait]
-impl Provider<SeqTypes, PayloadRequest> for Persistence {
-    #[tracing::instrument(skip(self))]
-    async fn fetch(&self, req: PayloadRequest) -> Option<Payload> {
-        let mut tx = match self.db.read().await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::warn!("could not open transaction: {err:#}");
-                return None;
-            },
-        };
-
-        let bytes = match query_as::<(Vec<u8>,)>(
-            "SELECT data FROM da_proposal2 WHERE payload_hash = $1 LIMIT 1",
-        )
-        .bind(req.0.to_string())
-        .fetch_optional(tx.as_mut())
-        .await
-        {
-            Ok(Some((bytes,))) => bytes,
-            Ok(None) => return None,
-            Err(err) => {
-                tracing::warn!("error loading DA proposal: {err:#}");
-                return None;
-            },
-        };
-
-        let proposal: Proposal<SeqTypes, DaProposal2<SeqTypes>> = match bincode::deserialize(&bytes)
-        {
-            Ok(proposal) => proposal,
-            Err(err) => {
-                tracing::error!("error decoding DA proposal: {err:#}");
-                return None;
-            },
-        };
-
-        Some(Payload::from_bytes(
-            &proposal.data.encoded_transactions,
-            &proposal.data.metadata,
-        ))
-    }
-}
-
 #[cfg(test)]
 mod testing {
     use std::sync::Arc;
@@ -1640,20 +1278,6 @@ mod testing {
 
         async fn tmp_storage() -> Self::Storage {
             Arc::new(TmpDb::init().await)
-        }
-
-        async fn insert_legacy_eqc(
-            &self,
-            high_qc: &QuorumCertificate2<SeqTypes>,
-            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
-        ) -> anyhow::Result<()> {
-            let mut tx = self.db.write().await?;
-            tx.execute(
-                query("INSERT INTO eqc (id, data) VALUES (true, $1)")
-                    .bind(bincode::serialize(&(high_qc, next_epoch_qc))?),
-            )
-            .await?;
-            tx.commit().await
         }
 
         #[allow(refining_impl_trait)]
@@ -1670,15 +1294,8 @@ mod test {
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
-        data::{
-            EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
-            vid_disperse::AvidMDisperseShare,
-        },
-        message::convert_proposal,
-        simple_certificate::QuorumCertificate,
-        traits::{EncodeBytes, signature_key::SignatureKey},
-        utils::EpochTransitionIndicator,
-        vid::avidm::{AvidMScheme, init_avidm_param},
+        data::EpochNumber, simple_certificate::QuorumCertificate,
+        traits::signature_key::SignatureKey,
     };
 
     use super::*;
@@ -1949,126 +1566,6 @@ mod test {
         assert!(
             !loaded_unauth.authenticated,
             "unauthenticated validator should remain unauthenticated"
-        );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetching_providers() {
-        let tmp = Persistence::tmp_storage().await;
-        let storage = Persistence::connect(&tmp).await;
-
-        // Mock up some data.
-        let leaf = Leaf2::genesis(
-            &ValidatedState::default(),
-            &NodeState::mock(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
-        let leaf_payload = leaf.block_payload().unwrap();
-        let leaf_payload_bytes_arc = leaf_payload.encode();
-
-        let avidm_param = init_avidm_param(2).unwrap();
-        let weights = vec![1u32; 2];
-
-        let ns_table = parse_ns_table(
-            leaf_payload.byte_len().as_usize(),
-            &leaf_payload.ns_table().encode(),
-        );
-        let (payload_commitment, shares) =
-            AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
-                .unwrap();
-        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let vid_share = convert_proposal(
-            AvidMDisperseShare::<SeqTypes> {
-                view_number: ViewNumber::new(0),
-                payload_commitment,
-                share: shares[0].clone(),
-                recipient_key: pubkey,
-                epoch: None,
-                target_epoch: None,
-                common: avidm_param.clone(),
-            }
-            .to_proposal(&privkey)
-            .unwrap()
-            .clone(),
-        );
-
-        let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
-            proposal: QuorumProposal2::<SeqTypes> {
-                block_header: leaf.block_header().clone(),
-                view_number: leaf.view_number(),
-                justify_qc: leaf.justify_qc().clone(),
-                upgrade_certificate: None,
-                view_change_evidence: None,
-                next_drb_result: None,
-                next_epoch_justify_qc: None,
-                epoch: None,
-                state_cert: None,
-            },
-        };
-        let quorum_proposal_signature =
-            BLSPubKey::sign(&privkey, &bincode::serialize(&quorum_proposal).unwrap())
-                .expect("Failed to sign quorum proposal");
-        let quorum_proposal = Proposal {
-            data: quorum_proposal,
-            signature: quorum_proposal_signature,
-            _pd: Default::default(),
-        };
-
-        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
-            .expect("Failed to sign block payload");
-        let da_proposal = Proposal {
-            data: DaProposal2::<SeqTypes> {
-                encoded_transactions: leaf_payload_bytes_arc,
-                metadata: leaf_payload.ns_table().clone(),
-                view_number: ViewNumber::new(0),
-                epoch: None,
-                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-            },
-            signature: block_payload_signature,
-            _pd: Default::default(),
-        };
-
-        let mut next_quorum_proposal = quorum_proposal.clone();
-        next_quorum_proposal.data.proposal.view_number += 1;
-        next_quorum_proposal.data.proposal.justify_qc.view_number += 1;
-        next_quorum_proposal
-            .data
-            .proposal
-            .justify_qc
-            .data
-            .leaf_commit = Committable::commit(&leaf.clone());
-
-        // Add to database.
-        storage
-            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
-            .await
-            .unwrap();
-        storage.append_vid(&vid_share).await.unwrap();
-        storage
-            .append_quorum_proposal2(&quorum_proposal)
-            .await
-            .unwrap();
-
-        // Add an extra quorum proposal so we have a QC pointing back at `leaf`.
-        storage
-            .append_quorum_proposal2(&next_quorum_proposal)
-            .await
-            .unwrap();
-
-        // Fetch it as if we were rebuilding an archive.
-        assert_eq!(
-            Some(VidCommon::V1(avidm_param)),
-            storage
-                .fetch(VidCommonRequest(vid_share.data.payload_commitment()))
-                .await
-        );
-        assert_eq!(
-            leaf_payload,
-            storage
-                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
-                .await
-                .unwrap()
         );
     }
 

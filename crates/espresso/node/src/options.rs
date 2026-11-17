@@ -56,16 +56,6 @@ use crate::{
 #[derivative(Debug(bound = ""))]
 #[command(version = build_version())]
 pub struct Options {
-    /// URL of the HotShot orchestrator.
-    #[clap(
-        short,
-        long,
-        env = "ESPRESSO_NODE_ORCHESTRATOR_URL",
-        default_value = "http://localhost:8080"
-    )]
-    #[derivative(Debug(format_with = "Display::fmt"))]
-    pub orchestrator_url: Url,
-
     /// The address to bind to for cliquenet (in `host:port` | `ip:port` form)
     #[clap(
         long,
@@ -77,8 +67,8 @@ pub struct Options {
 
     /// The address to advertise to other nodes for cliquenet (in `host:port` | `ip:port` form).
     ///
-    /// Only used for orchestrator-based setup (test networks). On real networks the address
-    /// must be registered in the stake table contract instead.
+    /// Reported by the node only. Other nodes dial the address registered in the stake table
+    /// contract, or, for the genesis committee, the one in the genesis file.
     #[clap(
         long,
         env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS",
@@ -157,16 +147,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
     pub state_peers: Vec<Url>,
-
-    /// Peer nodes use to fetch missing config
-    ///
-    /// Typically, the network-wide config is fetched from the orchestrator on startup and then
-    /// persisted and loaded from local storage each time the node restarts. However, if the
-    /// persisted config is missing when the node restarts (for example, the node is being migrated
-    /// to new persistent storage), it can instead be fetched directly from a peer.
-    #[clap(long, env = "ESPRESSO_NODE_CONFIG_PEERS", value_delimiter = ',')]
-    #[derivative(Debug(format_with = "fmt_opt_urls"))]
-    pub config_peers: Option<Vec<Url>>,
 
     /// Exponential backoff for fetching missing state from peers.
     #[clap(flatten)]
@@ -270,7 +250,6 @@ impl Options {
         };
         Ok(FollowerParams {
             upstreams: query.peers.clone(),
-            config_peers: self.config_peers.clone(),
             catchup: CatchupParams {
                 state_peers,
                 backoff: self.catchup_backoff,
@@ -374,23 +353,6 @@ fn fmt_urls(v: &[Url], fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Er
         "{:?}",
         v.iter().map(|i| i.to_string()).collect::<Vec<_>>()
     )
-}
-
-fn fmt_opt_urls(
-    v: &Option<Vec<Url>>,
-    fmt: &mut std::fmt::Formatter,
-) -> Result<(), std::fmt::Error> {
-    match v {
-        Some(urls) => {
-            write!(fmt, "Some(")?;
-            fmt_urls(urls, fmt)?;
-            write!(fmt, ")")?;
-        },
-        None => {
-            write!(fmt, "None")?;
-        },
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -616,8 +578,8 @@ enum SequencerModule {
     /// Follow the chain through the light client instead of running consensus.
     ///
     /// Every block served is verified against finality proofs from the query module's peers
-    /// (`--peers`, `ESPRESSO_NODE_API_PEERS`), which `--state-peers` and `--config-peers` default
-    /// to. The node never joins consensus and needs no staking keys, orchestrator or cliquenet.
+    /// (`--peers`, `ESPRESSO_NODE_API_PEERS`), which `--state-peers` defaults to. The node never
+    /// joins consensus and needs no staking keys or cliquenet.
     ///
     /// This module requires the storage-sql, http and query modules to be started.
     Follower(Module<Follower>),
@@ -656,22 +618,19 @@ pub struct Follower {
 
     /// TOML file with the light client genesis to trust.
     ///
-    /// Derived from the network config fetched from `--config-peers` when unset. Pin a reviewed
-    /// file to stop trusting those peers for the root of trust.
+    /// Derived from the genesis stake table when unset.
     #[clap(long, env = "ESPRESSO_NODE_LIGHT_CLIENT_GENESIS")]
     pub light_client_genesis: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PublicNodeConfig {
-    pub orchestrator_url: Url,
     pub cliquenet_bind_address: NetAddr,
     pub cliquenet_advertise_address: Option<NetAddr>,
     pub public_api_url: Option<Url>,
     pub builder_urls: Vec<Url>,
     pub state_relay_server_url: Url,
     pub state_peers: Vec<Url>,
-    pub config_peers: Option<Vec<Url>>,
     pub is_da: bool,
     pub genesis_file: GenesisSource,
     pub genesis: Genesis,
@@ -944,14 +903,12 @@ impl PublicNodeConfig {
         };
 
         Self {
-            orchestrator_url: opt.orchestrator_url.clone(),
             cliquenet_bind_address: opt.cliquenet_bind_address.clone(),
             cliquenet_advertise_address: opt.cliquenet_advertise_address.clone(),
             public_api_url: opt.public_api_url.clone(),
             builder_urls: opt.builder_urls.clone(),
             state_relay_server_url: opt.state_relay_server_url.clone(),
             state_peers: opt.state_peers.clone(),
-            config_peers: opt.config_peers.clone(),
             is_da: opt.is_da,
             genesis_file: opt.genesis_file.clone(),
             genesis: genesis.clone(),
@@ -1080,7 +1037,10 @@ pub(crate) mod tests {
             epoch_start_block: Some(10960201),
             stake_table_capacity: Some(200),
             chain_config,
-            stake_table: StakeTableConfig { capacity: 200 },
+            stake_table: StakeTableConfig {
+                capacity: 200,
+                genesis: Vec::new(),
+            },
             accounts: Default::default(),
             l1_finalized: L1Finalized::Block(L1BlockInfo {
                 number: 21116303,
@@ -1190,11 +1150,6 @@ pub(crate) mod tests {
             "expected no advertise address: {:?}",
             cfg.cliquenet_advertise_address
         );
-        assert!(
-            cfg.config_peers.is_none(),
-            "expected no config peers: {:?}",
-            cfg.config_peers
-        );
         assert_eq!(cfg.l1_ws_provider_count, 0);
         assert_eq!(cfg.storage.backend, StorageBackend::FsDefault);
         assert!(cfg.storage.fs.is_none());
@@ -1208,7 +1163,6 @@ pub(crate) mod tests {
             value["cliquenet_advertise_address"],
             serde_json::Value::Null
         );
-        assert_eq!(value["config_peers"], serde_json::Value::Null);
         assert_eq!(value["public_api_url"], serde_json::Value::Null);
     }
 
@@ -1227,17 +1181,8 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(params.upstreams, peers);
         assert_eq!(params.catchup.state_peers, peers);
-        assert!(
-            params.config_peers.is_none(),
-            "config peers are defaulted by init_follower_node"
-        );
 
-        let opt = parse_options_with(&[
-            "--state-peers",
-            "http://c.test",
-            "--config-peers",
-            "http://d.test",
-        ]);
+        let opt = parse_options_with(&["--state-peers", "http://c.test"]);
         let params = opt
             .follower_params(&follower, &query, Default::default())
             .unwrap();
@@ -1245,10 +1190,6 @@ pub(crate) mod tests {
         assert_eq!(
             params.catchup.state_peers,
             ["http://c.test".parse::<Url>().unwrap()]
-        );
-        assert_eq!(
-            params.config_peers,
-            Some(vec!["http://d.test".parse::<Url>().unwrap()])
         );
     }
 
@@ -1331,8 +1272,6 @@ pub(crate) mod tests {
     #[test]
     fn config_node_response_snapshot() {
         let opt = parse_options_with(&[
-            "--orchestrator-url",
-            "http://orchestrator.example:8080",
             "--cliquenet-bind-address",
             "0.0.0.0:9977",
             "--cliquenet-advertise-address",
@@ -1345,8 +1284,6 @@ pub(crate) mod tests {
             "http://relay.example:8083",
             "--state-peers",
             "https://peer1.example,https://peer2.example",
-            "--config-peers",
-            "https://peer1.example",
             "--is-da",
             "--genesis-file",
             "/path/to/genesis.toml",
