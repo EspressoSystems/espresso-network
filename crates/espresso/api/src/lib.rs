@@ -267,40 +267,7 @@ where
     .await
 }
 
-/// Serve the status-only API: no availability/node/token data source is available, so only
-/// status and the HotShot modules (submit, catchup, state-signature, config) can
-/// be served. State-signature is always on; the rest follow `Options`.
-pub async fn serve_axum_status<S>(
-    port: u16,
-    state: S,
-    modules: OptionalModules,
-    max_connections: Option<usize>,
-) -> anyhow::Result<()>
-where
-    S: v1::StatusApi
-        + v1::SubmitApi
-        + v1::CatchupApi
-        + v1::StateSignatureApi
-        + v1::ConfigApi
-        + Send
-        + Sync
-        + 'static,
-{
-    let listener = bind_api(port).await?;
-    let state = std::sync::Arc::new(state);
-    let router =
-        axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
-    let router = merge_hotshot_modules(router, &state, modules);
-    serve_router(
-        listener,
-        "status",
-        axum::finish_v1_docs(router),
-        max_connections,
-    )
-    .await
-}
-
-/// Serve the bare API (no query or status module): only the HotShot modules are available,
+/// Serve the bare API (no query module): only the HotShot modules are available,
 /// since the only app state is the HotShot handle. State-signature is always on; the rest follow
 /// `Options`, matching `Options::init_hotshot_modules`.
 pub async fn serve_axum_bare<S>(

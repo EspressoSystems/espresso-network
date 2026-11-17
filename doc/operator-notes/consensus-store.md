@@ -83,3 +83,12 @@ lists them.
 
 If the API service authenticates requests, set `ESPRESSO_NODE_API_PUBLIC_KEY` (or `--api-public-key`) to its Ed25519
 public key, base58. The record carries it, so clients learn which key to expect.
+
+### Status routes come from stored blocks
+
+Urgency: Low
+
+The API service no longer reads consensus metrics for its status routes. `status/time-since-last-decide` is now the time
+since the timestamp of the newest block the API service has stored, so it also grows while the ingester falls behind.
+`status/success-rate` (`/v1` and `/v2`) is gone, since it divided by the current view, which only consensus has. The
+`status` module now requires the `query` module.

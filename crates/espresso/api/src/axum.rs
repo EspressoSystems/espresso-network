@@ -6293,8 +6293,8 @@ mod tests {
     }
 
     /// Regression test: the docs routes must exist in the app a serve mode actually builds, not
-    /// only in `create_router_v1` (which the serve modes don't call). Assembles a router the way
-    /// `serve_axum_status` does, wrapped in the same top-level routes and legacy-URI rewrite
+    /// only in `create_router_v1` (which the serve modes don't call). Assembles a router the way the
+    /// serve modes do, wrapped in the same top-level routes and legacy-URI rewrite
     /// layers as `serve_router`, and checks the docs are reachable and the spec reflects only
     /// the mounted modules.
     #[tokio::test]

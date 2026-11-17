@@ -121,7 +121,7 @@ use crate::{
         WindowStart,
     },
     serializable_retry,
-    status::{HasMetrics, StatusDataSource},
+    status::{HasMetrics, StatusDataSource, data_source::seconds_since},
     task::BackgroundTask,
     types::HeightIndexed,
 };
@@ -609,8 +609,9 @@ impl<Types, S, P> StatusDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + HasMetrics + SerializableRetry + Send + Sync + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types> + AvailabilityStorage<Types>,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
@@ -621,6 +622,23 @@ where
             tx.block_height().await
         })
         .await
+    }
+
+    async fn elapsed_time_since_last_decide(&self) -> QueryResult<u64> {
+        let timestamp = serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            match tx.block_height().await? {
+                0 => QueryResult::Ok(0),
+                height => Ok(tx
+                    .get_header(BlockId::Number(height - 1))
+                    .await?
+                    .timestamp()),
+            }
+        })
+        .await?;
+        seconds_since(timestamp)
     }
 }
 

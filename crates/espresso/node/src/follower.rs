@@ -240,6 +240,13 @@ where
         .block_height()
         .await
         .context("reading the height the query database has reached")?;
+    if let Some(leaf) = sink
+        .last_leaf()
+        .await
+        .context("reading the newest stored block")?
+    {
+        view.resume(&leaf).await;
+    }
     let follower = Follower {
         source,
         sink: Arc::new(sink),

@@ -8,10 +8,7 @@ use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::v0::traits::NullEventConsumer;
 use futures::{channel::oneshot, future::BoxFuture};
-use hotshot_query_service::{
-    data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::HasMetrics,
-};
+use hotshot_query_service::{data_source::ExtensibleDataSource, status::HasMetrics};
 use hotshot_types::traits::metrics::{Metrics, NoMetrics};
 use process_metrics::ProcessMetrics;
 use url::Url;
@@ -150,8 +147,8 @@ impl Options {
         });
         let mut tasks = TaskList::default();
 
-        // The server state type depends on whether we are running a query or status API or not, so
-        // we handle the two cases differently.
+        // The server state type depends on whether we are running a query API or not, so we
+        // handle the two cases differently.
         #[allow(clippy::type_complexity)]
         let (registry, consumer, storage, ingest_sink): (
             Box<dyn Metrics>,
@@ -176,45 +173,8 @@ impl Options {
             } else {
                 bail!("query module requested but not storage provided");
             }
-        } else if self.status.is_some() {
-            // If a status API is requested but no availability API, we use the
-            // `MetricsDataSource`, which allows us to run the status API with no persistent
-            // storage.
-            let ds = MetricsDataSource::default();
-            let registry: Box<dyn Metrics> = Box::new(ds.metrics().clone());
-            telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
-            tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
-            let axum_ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
-
-            let port = self.http.port;
-            let env_vars = get_public_env_vars().unwrap_or_default();
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            let modules = espresso_api::OptionalModules {
-                submit: self.submit.is_some(),
-                catchup: self.catchup.is_some(),
-                config: self.config.is_some(),
-                ..Default::default()
-            };
-            let max_connections = self.http.max_connections;
-            tasks.spawn("API server", async move {
-                let state = NodeApiStateImpl::new(axum_ds)
-                    .with_env_vars(env_vars)
-                    .with_public_node_config(node_cfg);
-                if let Err(e) =
-                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
-                {
-                    tracing::error!("Axum server error: {}", e);
-                }
-                anyhow::Ok(())
-            });
-
-            if self.http.tonic_port.is_some() {
-                tracing::warn!("gRPC API not available in status-only mode");
-            }
-
-            (registry, Box::new(NullEventConsumer), None, None)
         } else {
-            // If no status or availability API is requested, we don't need metrics or a query
+            // Without an availability API, we don't need metrics or a query
             // service data source. The only app state is the HotShot handle, which we use to
             // submit transactions.
             //
@@ -251,7 +211,7 @@ impl Options {
         let ctx = init_context(metrics, consumer, storage.clone(), registry).await?;
         // The query service gets the chain from this node's consensus through the ingester.
         if let (Some(sink), Some(addr)) = (ingest_sink, ctx.consensus_api_addr()) {
-            let sink = ctx.ingest_sink(sink);
+            let sink = ctx.ingest_sink(sink).await?;
             tasks.spawn("ingester", async move { ingester::run(addr, &*sink).await });
         }
         send_ctx

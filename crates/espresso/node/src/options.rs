@@ -498,7 +498,7 @@ module!("storage-sql", persistence::sql::Options);
 module!("http", api::options::Http);
 module!("query", api::options::Query, requires: "http");
 module!("submit", api::options::Submit, requires: "http");
-module!("status", api::options::Status, requires: "http");
+module!("status", api::options::Status, requires: "http", "query");
 module!("catchup", api::options::Catchup, requires: "http");
 module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
@@ -568,7 +568,7 @@ enum SequencerModule {
     Submit(Module<api::options::Submit>),
     /// Run the status API module.
     ///
-    /// This module requires the http module to be started.
+    /// This module requires the http and query modules to be started.
     Status(Module<api::options::Status>),
     /// Run the state catchup API module.
     ///

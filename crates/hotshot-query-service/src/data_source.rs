@@ -1758,8 +1758,7 @@ pub mod status_tests {
         {
             // Check that block height is initially zero.
             assert_eq!(ds.block_height().await.unwrap(), 0);
-            // Since there is no block produced, "last_decided_time" metric is 0.
-            // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
+            // With no block decided, the elapsed time is the time since the Unix epoch.
             assert!(
                 (ds.elapsed_time_since_last_decide().await.unwrap() as i64
                     - chrono::Utc::now().timestamp())
@@ -1769,10 +1768,13 @@ pub mod status_tests {
             );
         }
 
-        // Decide genesis and a block with a transaction, recording what the coordinator records
-        // on decide. The decide happened 3 seconds ago.
+        // Decide genesis and a block with a transaction, proposed and decided 3 seconds ago,
+        // recording what the coordinator records on decide.
+        let decided_at = chrono::Utc::now().timestamp() as u64 - 3;
         let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
-        chain.push([mock_transaction(vec![1, 2, 3])]).await;
+        chain
+            .push_at([mock_transaction(vec![1, 2, 3])], decided_at)
+            .await;
         ds.handle_event(&chain.decide_event(0..=1, 0)).await;
         let tip = chain.tip().leaf.leaf();
         metrics.current_view.set(*tip.view_number() as usize + 1);
@@ -1780,12 +1782,10 @@ pub mod status_tests {
         metrics
             .last_synced_block_height
             .set(tip.block_header().block_number as usize);
-        metrics
-            .last_decided_time
-            .set(chrono::Utc::now().timestamp() as usize - 3);
+        metrics.last_decided_time.set(decided_at as usize);
 
-        // Asserting that the elapsed time since the last block is at least 3 seconds
-        assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);
+        let elapsed = ds.elapsed_time_since_last_decide().await.unwrap();
+        assert!((3..=4).contains(&elapsed), "{elapsed}");
     }
 }
 

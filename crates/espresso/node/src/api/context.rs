@@ -16,7 +16,7 @@ use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::{MembershipPersistence, SequencerPersistence, StateCertPersistence},
 };
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
     ValidatorConfig,
@@ -70,8 +70,11 @@ pub trait ApiContext: Send + Sync + 'static {
 
     /// What the ingester writes the blocks of this node's consensus to: `sink`, followed by
     /// whatever else the API service keeps up with the blocks it stores.
-    fn ingest_sink(&self, sink: Arc<dyn DecideSink>) -> Arc<dyn ingester::Sink<SeqTypes>> {
-        Arc::new(IngestSink(sink))
+    fn ingest_sink(
+        &self,
+        sink: Arc<dyn DecideSink>,
+    ) -> BoxFuture<'static, anyhow::Result<Arc<dyn ingester::Sink<SeqTypes>>>> {
+        async move { Ok(Arc::new(IngestSink(sink)) as Arc<dyn ingester::Sink<SeqTypes>>) }.boxed()
     }
 
     /// A light client the node already runs, for the query service to fetch through.
@@ -152,11 +155,20 @@ impl<P: SequencerPersistence> ApiContext for ValidatorApi<P> {
         Some(self.node.consensus_api_addr())
     }
 
-    fn ingest_sink(&self, sink: Arc<dyn DecideSink>) -> Arc<dyn ingester::Sink<SeqTypes>> {
-        Arc::new(TrackedSink {
-            sink,
-            view: self.view.clone(),
-        })
+    /// Continues the chain view from the newest stored block, so that it has a decided block
+    /// before the ingester stores the next.
+    fn ingest_sink(
+        &self,
+        sink: Arc<dyn DecideSink>,
+    ) -> BoxFuture<'static, anyhow::Result<Arc<dyn ingester::Sink<SeqTypes>>>> {
+        let view = self.view.clone();
+        async move {
+            if let Some(leaf) = sink.last_leaf().await? {
+                view.resume(&leaf).await;
+            }
+            Ok(Arc::new(TrackedSink { sink, view }) as Arc<dyn ingester::Sink<SeqTypes>>)
+        }
+        .boxed()
     }
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {

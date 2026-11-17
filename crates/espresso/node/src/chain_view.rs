@@ -68,6 +68,15 @@ impl<P: SequencerPersistence> ChainView<P> {
         Ok(())
     }
 
+    /// Continues from `leaf`, the newest block the API service stored before it restarted, which
+    /// it took in then.
+    pub(crate) async fn resume(&self, leaf: &LeafQueryData<SeqTypes>) {
+        self.track_chain_config(leaf.header()).await;
+        let last = (leaf.leaf().height(), leaf.leaf().view_number());
+        self.participation.lock().last = Some(last);
+        self.decided.send_replace(Some(leaf.clone()));
+    }
+
     fn track_participation(&self, leaf: &Leaf2) {
         let (height, view) = (leaf.height(), leaf.view_number());
         let mut participation = self.participation.lock();

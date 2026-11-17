@@ -33,21 +33,8 @@ pub trait StatusDataSource: HasMetrics {
             .map_err(metrics_err)
     }
 
-    async fn elapsed_time_since_last_decide(&self) -> QueryResult<u64> {
-        let current_ts = Utc::now().timestamp() as u64;
-
-        let last_decided_time = self
-            .consensus_metrics()?
-            .get_gauge("last_decided_time")
-            .map_err(metrics_err)?
-            .get() as u64;
-
-        current_ts
-            .checked_sub(last_decided_time)
-            .ok_or_else(|| QueryError::Error {
-                message: "last_decided_time is in future".into(),
-            })
-    }
+    /// Seconds since the newest decided block, or since the Unix epoch if there is none.
+    async fn elapsed_time_since_last_decide(&self) -> QueryResult<u64>;
 }
 
 pub trait UpdateStatusData {
@@ -60,7 +47,16 @@ impl<T: StatusDataSource> UpdateStatusData for T {
     }
 }
 
-fn metrics_err(err: MetricsError) -> QueryError {
+/// Seconds from `timestamp`, in seconds since the Unix epoch, to now.
+pub(crate) fn seconds_since(timestamp: u64) -> QueryResult<u64> {
+    (Utc::now().timestamp() as u64)
+        .checked_sub(timestamp)
+        .ok_or_else(|| QueryError::Error {
+            message: "the last decide is in the future".into(),
+        })
+}
+
+pub(crate) fn metrics_err(err: MetricsError) -> QueryError {
     QueryError::Error {
         message: err.to_string(),
     }

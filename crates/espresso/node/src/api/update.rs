@@ -8,7 +8,7 @@ use derivative::Derivative;
 use derive_more::From;
 use espresso_types::v0::traits::{NullEventConsumer, SequencerPersistence};
 use hotshot_query_service::{
-    availability::{BlockInfo, UpdateAvailabilityData},
+    availability::{AvailabilityDataSource, BlockInfo, LeafQueryData, UpdateAvailabilityData},
     data_source::UpdateDataSource,
     node::NodeDataSource,
     types::HeightIndexed,
@@ -34,6 +34,9 @@ pub trait DecideSink: Send + Sync + Debug {
 
     /// The first height a resuming node has to append.
     async fn block_height(&self) -> anyhow::Result<u64>;
+
+    /// The newest block stored, which a resuming node continues from.
+    async fn last_leaf(&self) -> anyhow::Result<Option<LeafQueryData<SeqTypes>>>;
 }
 
 #[async_trait]
@@ -51,6 +54,10 @@ where
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         (**self).block_height().await
+    }
+
+    async fn last_leaf(&self) -> anyhow::Result<Option<LeafQueryData<SeqTypes>>> {
+        (**self).last_leaf().await
     }
 }
 
@@ -75,6 +82,10 @@ impl DecideSink for NullEventConsumer {
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         Ok(0)
+    }
+
+    async fn last_leaf(&self) -> anyhow::Result<Option<LeafQueryData<SeqTypes>>> {
+        Ok(None)
     }
 }
 
@@ -121,6 +132,22 @@ where
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         Ok(NodeDataSource::block_height(&*self.inner).await? as u64)
+    }
+
+    async fn last_leaf(&self) -> anyhow::Result<Option<LeafQueryData<SeqTypes>>> {
+        let Some(last) = NodeDataSource::block_height(&*self.inner)
+            .await?
+            .checked_sub(1)
+        else {
+            return Ok(None);
+        };
+        match AvailabilityDataSource::get_leaf(&*self.inner, last)
+            .await
+            .try_resolve()
+        {
+            Ok(leaf) => Ok(Some(leaf)),
+            Err(_) => bail!("leaf {last} is counted in the block height but not stored"),
+        }
     }
 }
 
