@@ -6,6 +6,7 @@ mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
+mod chain_view;
 pub mod consensus_handle;
 pub mod context;
 pub mod follower;

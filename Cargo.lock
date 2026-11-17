@@ -2603,6 +2603,7 @@ dependencies = [
  "futures",
  "prost",
  "test-utils",
+ "thiserror 2.0.18",
  "tokio",
  "tonic",
  "tonic-prost",

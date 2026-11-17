@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package espresso.consensus.v1;
+
+// What a consensus node does for its API service apart from the decide log: what only consensus
+// can do and the chain does not record.
+service ConsensusNode {
+  // Hands a transaction to consensus, which puts it in a block it proposes or sends it to the
+  // upcoming leaders. Invalid argument if no block can take it, resource exhausted if consensus
+  // has no room for it now.
+  rpc SubmitTransaction(SubmitTransactionRequest) returns (SubmitTransactionResponse);
+}
+
+message SubmitTransactionRequest {
+  // The transaction, bincode-encoded as consensus nodes exchange it.
+  bytes transaction = 1;
+}
+
+message SubmitTransactionResponse {}

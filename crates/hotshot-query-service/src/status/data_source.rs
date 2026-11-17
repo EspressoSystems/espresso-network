@@ -48,16 +48,6 @@ pub trait StatusDataSource: HasMetrics {
                 message: "last_decided_time is in future".into(),
             })
     }
-
-    async fn success_rate(&self) -> QueryResult<f64> {
-        let total_views = self
-            .consensus_metrics()?
-            .get_gauge("current_view")
-            .map_err(metrics_err)?
-            .get() as f64;
-        // By definition, a successful view is any which committed a block.
-        Ok(self.block_height().await? as f64 / total_views)
-    }
 }
 
 pub trait UpdateStatusData {

@@ -243,6 +243,8 @@ where
             .external_tx(external_tx)
             .maybe_service_record(service_record)
             .make();
+        // The ingester API hands submitted transactions to the coordinator.
+        let coordinator_client = coordinator.client_api().clone();
 
         let consensus_handle = Arc::new(ConsensusHandle::new(
             coordinator,
@@ -312,9 +314,13 @@ where
         let mut tasks = TaskList::default();
         // A free port on localhost by default, for the API service in this process.
         let addr = consensus_api_addr.unwrap_or((std::net::Ipv4Addr::LOCALHOST, 0).into());
-        let (consensus_api_addr, server) =
-            hotshot_new_protocol::ingest::bind(consensus_store, epoch_height, addr)
-                .with_context(|| format!("binding the ingester API to {addr}"))?;
+        let (consensus_api_addr, server) = hotshot_new_protocol::ingest::bind(
+            consensus_store,
+            epoch_height,
+            coordinator_client,
+            addr,
+        )
+        .with_context(|| format!("binding the ingester API to {addr}"))?;
         info!(addr = %consensus_api_addr, "serving the ingester API");
         tasks.spawn("ingester API", server);
 

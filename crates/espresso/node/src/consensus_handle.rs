@@ -1,10 +1,9 @@
-use std::{collections::HashMap, mem, sync::Arc};
+use std::{mem, sync::Arc};
 
 use anyhow::bail;
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
-use committable::Commitment;
 use espresso_api::error::SubmitError;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
+use futures::{StreamExt, stream::BoxStream};
 use hotshot_new_protocol::{
     block,
     client::{ClientApi, QueryError},
@@ -14,22 +13,19 @@ use hotshot_new_protocol::{
         error::{CoordinatorError, Severity},
     },
     message::OpaqueMessage,
-    state::UpdateLeaf,
 };
 use hotshot_types::{
-    data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
+    data::{BlockNumber, EpochNumber, Leaf2, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::LeafInfo,
     initializer::HotShotInitializer,
-    message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
+    message::UpgradeLock,
     new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState,
         metrics::{Gauge, Metrics},
         node_implementation::NodeType,
-        signature_key::SignatureKey,
     },
-    utils::StateAndDelta,
 };
 use parking_lot::RwLock;
 use tokio::{select, spawn, sync::mpsc::UnboundedReceiver};
@@ -52,7 +48,6 @@ pub struct ConsensusHandle<T: NodeType> {
 /// What the readers serve once the coordinator has stopped: what it held when it stopped, written
 /// by its task on the way out, or the anchor if it never ran.
 struct Resting<T: NodeType> {
-    view: ViewNumber,
     leaf: Leaf2<T>,
     state: Arc<T::ValidatedState>,
 }
@@ -85,7 +80,7 @@ impl<T> ConsensusHandle<T>
 where
     T: NodeType,
 {
-    pub fn new(
+    pub(crate) fn new(
         coordinator: Coordinator<T>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         upgrade_lock: UpgradeLock<T>,
@@ -110,7 +105,6 @@ where
             upgrade_lock,
             membership_coordinator,
             resting: Arc::new(RwLock::new(Resting {
-                view: initializer.anchor_leaf().view_number(),
                 leaf: initializer.anchor_leaf().clone(),
                 state: initializer.anchor_state().clone(),
             })),
@@ -124,7 +118,7 @@ where
         }
     }
 
-    pub async fn start_consensus(&self) {
+    pub(crate) async fn start_consensus(&self) {
         if matches!(*self.coordinator.read(), CoordinatorState::Running { .. }) {
             return;
         }
@@ -158,31 +152,20 @@ where
         }
     }
 
-    pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
+    pub(crate) fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
         self.event_rx.activate_cloned().boxed()
     }
 
     /// Resolves once the coordinator task has ended, whether `shut_down` stopped it or it died
     /// on a critical error or a panic. Never resolves if consensus never started.
-    pub async fn stopped(&self) {
+    pub(crate) async fn stopped(&self) {
         self.exited.cancelled().await
     }
 
     /// Serves the resting state once the coordinator has been told to shut down, waiting for
     /// the state it leaves on the way out if a request fails meanwhile. Panics if the
     /// coordinator died instead: the node must not answer as if the chain had stopped.
-    pub async fn current_view(&self) -> ViewNumber {
-        let Some(client_api) = self.client_api().await else {
-            return self.resting.read().view;
-        };
-        match client_api.current_view().await {
-            Ok(view) => view,
-            Err(err) => self.resting_unless_dead(err).await.view,
-        }
-    }
-
-    /// See [`Self::current_view`].
-    pub async fn decided_leaf(&self) -> Leaf2<T> {
+    pub(crate) async fn decided_leaf(&self) -> Leaf2<T> {
         let Some(client_api) = self.client_api().await else {
             return self.resting.read().leaf.clone();
         };
@@ -192,8 +175,8 @@ where
         }
     }
 
-    /// See [`Self::current_view`].
-    pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
+    /// See [`Self::decided_leaf`].
+    pub(crate) async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         let Some(client_api) = self.client_api().await else {
             return Some(self.resting.read().state.clone());
         };
@@ -221,7 +204,7 @@ where
         self.resting.read()
     }
 
-    pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
+    pub(crate) async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         match self.client_api().await?.state(view).await {
             Ok(state) => state,
             Err(err) => {
@@ -231,33 +214,7 @@ where
         }
     }
 
-    pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
-        let Some(client_api) = self.client_api().await else {
-            return (None, None);
-        };
-        match client_api.state_and_delta(view).await {
-            Ok(state_and_delta) => state_and_delta,
-            Err(err) => {
-                warn!(%view, %err, "coordinator unavailable for state_and_delta");
-                (None, None)
-            },
-        }
-    }
-
-    pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
-        let Some(client_api) = self.client_api().await else {
-            return Vec::new();
-        };
-        match client_api.undecided_leaves().await {
-            Ok(leaves) => leaves,
-            Err(err) => {
-                warn!(%err, "coordinator unavailable for undecided_leaves");
-                Vec::new()
-            },
-        }
-    }
-
-    pub async fn current_epoch(&self) -> Option<EpochNumber> {
+    pub(crate) async fn current_epoch(&self) -> Option<EpochNumber> {
         let Some(client_api) = self.client_api().await else {
             return self.resting.read().leaf.epoch(*self.epoch_height);
         };
@@ -270,99 +227,19 @@ where
         }
     }
 
-    pub fn epoch_height(&self) -> BlockNumber {
+    pub(crate) fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
     }
 
-    pub fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
+    pub(crate) fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
         self.membership_coordinator.clone()
     }
 
-    pub fn upgrade_lock(&self) -> UpgradeLock<T> {
+    pub(crate) fn upgrade_lock(&self) -> UpgradeLock<T> {
         self.upgrade_lock.clone()
     }
 
-    pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
-        let Some(client_api) = self.client_api().await else {
-            return HashMap::new();
-        };
-        client_api
-            .proposal_participation(None)
-            .await
-            .inspect_err(|err| {
-                warn!(%err, "coordinator unavailable for current_proposal_participation");
-            })
-            .unwrap_or_default()
-    }
-
-    pub async fn proposal_participation(
-        &self,
-        epoch: EpochNumber,
-    ) -> HashMap<T::SignatureKey, f64> {
-        let Some(client_api) = self.client_api().await else {
-            return HashMap::new();
-        };
-        client_api
-            .proposal_participation(Some(epoch))
-            .await
-            .inspect_err(|err| {
-                warn!(%err, "coordinator unavailable for proposal_participation");
-            })
-            .unwrap_or_default()
-    }
-
-    pub async fn current_vote_participation(
-        &self,
-    ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        let Some(client_api) = self.client_api().await else {
-            return HashMap::new();
-        };
-        client_api
-            .vote_participation(None)
-            .await
-            .inspect_err(|err| {
-                warn!(%err, "coordinator unavailable for current_vote_participation");
-            })
-            .unwrap_or_default()
-    }
-
-    pub async fn vote_participation(
-        &self,
-        epoch: EpochNumber,
-    ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        let Some(client_api) = self.client_api().await else {
-            return HashMap::new();
-        };
-        client_api
-            .vote_participation(Some(epoch))
-            .await
-            .inspect_err(|err| {
-                warn!(%err, "coordinator unavailable for vote_participation");
-            })
-            .unwrap_or_default()
-    }
-
-    pub async fn request_proposal(
-        &self,
-        view: ViewNumber,
-        leaf_commitment: Commitment<Leaf2<T>>,
-    ) -> anyhow::Result<
-        BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
-    > {
-        let Some(client_api) = self.client_api().await else {
-            bail!("consensus is not running");
-        };
-        Ok(async move {
-            client_api
-                .request_proposal(view, leaf_commitment)
-                .await
-                .map(convert_proposal)
-                .map_err(anyhow::Error::new)
-        }
-        .boxed())
-    }
-
-    pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
+    pub(crate) async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
         let Some(client_api) = self.client_api().await else {
             bail!("consensus is not running");
         };
@@ -380,30 +257,9 @@ where
             })
     }
 
-    pub async fn update_leaf(
-        &self,
-        leaf: Leaf2<T>,
-        state: Arc<T::ValidatedState>,
-        delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
-    ) -> anyhow::Result<()> {
-        let view = leaf.view_number();
-        let Some(client_api) = self.client_api().await else {
-            bail!("consensus is not running");
-        };
-        client_api
-            .update_leaf(UpdateLeaf {
-                view,
-                leaf,
-                state,
-                delta,
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
     /// Stops the coordinator if it runs, and drops it if it never started so that nothing can
     /// start it afterwards; the readers serve the resting state from here on.
-    pub async fn shut_down(&self) {
+    pub(crate) async fn shut_down(&self) {
         self.membership_coordinator.cancel_all_drb();
         let running = match &*self.coordinator.read() {
             CoordinatorState::Running { shutdown, .. } => {
@@ -490,11 +346,7 @@ async fn run_coordinator<T>(
         .state(leaf.view_number())
         .map(|entry| entry.state.clone())
         .unwrap_or_else(|| Arc::new(T::ValidatedState::from_header(leaf.block_header())));
-    *resting.write() = Resting {
-        view: coord.current_view(),
-        leaf,
-        state,
-    };
+    *resting.write() = Resting { leaf, state };
     coord.stop().await;
 }
 

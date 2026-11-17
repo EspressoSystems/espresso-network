@@ -6,7 +6,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use espresso_types::v0::traits::NullEventConsumer;
+use espresso_types::v0::traits::{NullEventConsumer, SequencerPersistence};
 use hotshot_query_service::{
     availability::{BlockInfo, UpdateAvailabilityData},
     data_source::UpdateDataSource,
@@ -21,7 +21,7 @@ use super::{
     StorageState,
     data_source::{SequencerDataSource, StateCertDataSource},
 };
-use crate::{EventConsumer, SeqTypes};
+use crate::{EventConsumer, SeqTypes, chain_view::ChainView};
 
 #[async_trait]
 pub trait DecideSink: Send + Sync + Debug {
@@ -126,6 +126,29 @@ where
 
 /// A [`DecideSink`] as the ingester writes to it.
 pub(crate) struct IngestSink(pub Arc<dyn DecideSink>);
+
+/// Writes each block to the sink, then has the API service's [`ChainView`] take it in.
+pub(crate) struct TrackedSink<P> {
+    pub(crate) sink: Arc<dyn DecideSink>,
+    pub(crate) view: Arc<ChainView<P>>,
+}
+
+#[async_trait]
+impl<P: SequencerPersistence> ingester::Sink<SeqTypes> for TrackedSink<P> {
+    async fn append(
+        &self,
+        info: BlockInfo<SeqTypes>,
+        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        let leaf = info.leaf.clone();
+        self.sink.append(info, state_cert).await?;
+        self.view.track(&leaf).await
+    }
+
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        self.sink.block_height().await
+    }
+}
 
 #[async_trait]
 impl ingester::Sink<SeqTypes> for IngestSink {

@@ -1,8 +1,12 @@
-//! The interface between a consensus node and its ingester.
+//! The interface between a consensus node and its API service.
 //!
-//! A consensus node serves the [`DecideLog`](proto::decide_log_server::DecideLog) gRPC service
-//! from a [`Source`], its store, with [`server`]. An ingester connects with
-//! [`DecideLogClient`]. See `proto/espresso/consensus/v1/ingest.proto` for the service.
+//! A consensus node serves two gRPC services. The
+//! [`DecideLog`](proto::decide_log_server::DecideLog), served from a [`Source`], its store, with
+//! [`server`], gives the API service's ingester the decided chain; the ingester connects with
+//! [`DecideLogClient`]. The [`ConsensusNode`](proto::consensus_node_server::ConsensusNode), served
+//! from a [`Node`] with [`node_server`], takes what only consensus can act on, such as
+//! transactions; the API service connects with [`ConsensusNodeClient`]. See the proto files in
+//! `proto/espresso/consensus/v1/` for the services.
 
 use std::{pin::Pin, sync::Arc};
 
@@ -18,15 +22,16 @@ pub mod proto {
     tonic::include_proto!("espresso.consensus.v1");
 }
 
-pub use proto::decide_log_client::DecideLogClient;
 use proto::{
     AckRequest, AckResponse, Decided, GetPayloadRequest, PayloadChunk, PayloadReady,
-    PayloadsReadyRequest, ServiceRecordsRequest, ServiceRecordsResponse, Start, SubscribeRequest,
-    SubscribeResponse,
+    PayloadsReadyRequest, ServiceRecordsRequest, ServiceRecordsResponse, Start,
+    SubmitTransactionRequest, SubmitTransactionResponse, SubscribeRequest, SubscribeResponse,
+    consensus_node_server::{ConsensusNode, ConsensusNodeServer},
     decide_log_server::{DecideLog, DecideLogServer},
     get_payload_request::Key,
     subscribe_response::Event,
 };
+pub use proto::{consensus_node_client::ConsensusNodeClient, decide_log_client::DecideLogClient};
 
 /// The version of [`proto::Body`] this crate produces.
 pub const BODY_FORMAT: u32 = 1;
@@ -62,6 +67,29 @@ pub trait Source: Send + Sync + 'static {
     /// `None`, with the epoch they are for.
     async fn service_records(&self, epoch: Option<u64>)
     -> Result<Option<(u64, Vec<Bytes>)>, Error>;
+}
+
+/// What the [`ConsensusNode`](proto::consensus_node_server::ConsensusNode) service does: hand
+/// transactions to consensus.
+#[async_trait]
+pub trait Node: Send + Sync + 'static {
+    /// Hands an encoded transaction to consensus.
+    async fn submit_transaction(&self, transaction: Bytes) -> Result<(), SubmitError>;
+}
+
+/// Why [`Source::submit_transaction`] did not take a transaction.
+#[derive(Debug, thiserror::Error)]
+pub enum SubmitError {
+    /// No block can take it.
+    #[error("invalid transaction: {0}")]
+    Invalid(String),
+
+    /// Consensus has no room for it now; trying again later can succeed.
+    #[error("consensus is overloaded: {0}")]
+    Overloaded(String),
+
+    #[error(transparent)]
+    Internal(Error),
 }
 
 /// Which payload [`Source::payload`] returns.
@@ -174,6 +202,31 @@ impl<S: Source> DecideLog for Service<S> {
             epoch,
             records: records.into_iter().map(|r| r.to_vec()).collect(),
         }))
+    }
+}
+
+/// The [`ConsensusNode`](proto::consensus_node_server::ConsensusNode) gRPC service over `node`.
+pub fn node_server<N: Node>(node: Arc<N>) -> ConsensusNodeServer<NodeService<N>> {
+    ConsensusNodeServer::new(NodeService { node })
+}
+
+pub struct NodeService<N> {
+    node: Arc<N>,
+}
+
+#[async_trait]
+impl<N: Node> ConsensusNode for NodeService<N> {
+    async fn submit_transaction(
+        &self,
+        request: Request<SubmitTransactionRequest>,
+    ) -> Result<Response<SubmitTransactionResponse>, Status> {
+        let transaction = Bytes::from(request.into_inner().transaction);
+        match self.node.submit_transaction(transaction).await {
+            Ok(()) => Ok(Response::new(SubmitTransactionResponse {})),
+            Err(SubmitError::Invalid(reason)) => Err(Status::invalid_argument(reason)),
+            Err(SubmitError::Overloaded(reason)) => Err(Status::resource_exhausted(reason)),
+            Err(SubmitError::Internal(err)) => Err(internal(err)),
+        }
     }
 }
 

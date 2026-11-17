@@ -12,15 +12,6 @@ message BlockHeightResponse {
   uint64 height = 1;
 }
 
-message GetSuccessRateRequest {}
-
-message SuccessRateResponse {
-  // Fraction of views in which this node decided a block. Node-local, not a network measure.
-  // Zero before the node has seen any view, so a fresh node reports zero rather than an
-  // undefined ratio.
-  double rate = 1;
-}
-
 message GetTimeSinceLastDecideRequest {}
 
 message TimeSinceLastDecideResponse {
@@ -49,11 +40,6 @@ service StatusService {
   // Get the height of the latest decided block
   rpc GetBlockHeight(GetBlockHeightRequest) returns (BlockHeightResponse) {
     option (google.api.http) = {get: "/v2/status/block-height"};
-  }
-
-  // Get the fraction of views in which this node decided a block
-  rpc GetSuccessRate(GetSuccessRateRequest) returns (SuccessRateResponse) {
-    option (google.api.http) = {get: "/v2/status/success-rate"};
   }
 
   // Get the seconds elapsed since this node last decided a block

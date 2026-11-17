@@ -1,6 +1,6 @@
 [package]
 name        = "consensus-api"
-description = "The interface between a consensus node and its ingester"
+description = "The interface between a consensus node and its API service"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }
@@ -10,6 +10,7 @@ async-trait = { workspace = true }
 bytes       = { workspace = true }
 futures     = { workspace = true }
 prost       = { workspace = true }
+thiserror   = { workspace = true }
 tokio       = { workspace = true }
 tonic       = { workspace = true }
 tonic-prost = { workspace = true }

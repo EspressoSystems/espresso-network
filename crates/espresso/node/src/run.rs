@@ -16,8 +16,9 @@ use super::{
     persistence,
 };
 use crate::{
+    api::context::ValidatorApi,
     default_telemetry_endpoint,
-    follower::{FollowerContext, FollowerParams, init_follower_node},
+    follower::{FollowerContext, FollowerParams, SubmitTo, init_api_service, init_follower_node},
     keyset::KeySet,
 };
 
@@ -324,10 +325,21 @@ where
     let ctx = match modules.http.take() {
         Some(http_opt) => {
             let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
-            http_opt
+            // The API service keeps its own view of the chain, from L1 and the blocks it
+            // ingests, rather than asking consensus.
+            let api_persistence = storage_opt.create().await?;
+            let api_l1_params = L1Params {
+                urls: l1_params.urls.clone(),
+                options: l1_params.options.clone(),
+            };
+            let api_catchup = network_params.catchup.clone();
+            let bootstrap_timeout = network_params.bootstrap_epoch_catchup_timeout;
+            let api_genesis = genesis.clone();
+            let validator = http_opt
                 .serve(move |metrics, consumer, storage, _| {
                     async move {
-                        init_node(
+                        let api_metrics = metrics.subgroup("api".into());
+                        let node = init_node(
                             genesis,
                             network_params,
                             metrics,
@@ -343,11 +355,23 @@ where
                             consensus_api_addr,
                             decide_log_limit,
                         )
-                        .await
+                        .await?;
+                        let (api, view) = init_api_service(
+                            &api_genesis,
+                            api_catchup,
+                            bootstrap_timeout,
+                            &*api_metrics,
+                            api_persistence,
+                            api_l1_params,
+                            SubmitTo::Consensus(node.consensus_api_addr()),
+                        )
+                        .await?;
+                        Ok(ValidatorApi { node, api, view })
                     }
                     .boxed()
                 })
-                .await?
+                .await?;
+            validator.node
         },
         None => {
             init_node(

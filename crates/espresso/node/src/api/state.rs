@@ -1540,13 +1540,6 @@ where
         Ok(h as u64)
     }
 
-    async fn success_rate(&self) -> anyhow::Result<f64> {
-        let ds = &*self.data_source;
-        hotshot_query_service::status::StatusDataSource::success_rate(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
     async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         hotshot_query_service::status::StatusDataSource::elapsed_time_since_last_decide(ds)
@@ -1584,20 +1577,6 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockHeightResponse { height }))
-    }
-
-    async fn get_success_rate(
-        &self,
-        _request: tonic::Request<proto::GetSuccessRateRequest>,
-    ) -> Result<tonic::Response<proto::SuccessRateResponse>, tonic::Status> {
-        let rate = <Self as v1::StatusApi>::success_rate(self)
-            .await
-            .map_err(to_status)?;
-        // A fresh node computes 0/0 and a restarted one height/0 until its first view tick
-        // (the view gauge is in-memory, the height persisted). protoJSON cannot encode a
-        // non-finite double and the generated deserializer rejects `null`, so clamp to zero.
-        let rate = if rate.is_finite() { rate } else { 0. };
-        Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
     }
 
     async fn get_time_since_last_decide(

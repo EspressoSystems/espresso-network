@@ -1642,14 +1642,6 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
             .map_err(ApiError::Internal)
     };
 
-    let status_success_rate = |State(state): State<StatusState>| async move {
-        state
-            .success_rate()
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
     let status_time_since_last_decide = |State(state): State<StatusState>| async move {
         state
             .time_since_last_decide()
@@ -1686,13 +1678,6 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
             get_with(status_block_height, |op| {
                 op.summary("Get latest committed block height")
                     .description("Get the height of the latest committed block.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_SUCCESS_RATE_ROUTE,
-            get_with(status_success_rate, |op| {
-                op.summary("Get view success rate")
-                    .description("Get the fraction of views which resulted in a committed block.")
             }),
         )
         .api_route(
@@ -4307,9 +4292,6 @@ mod tests {
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
-        async fn success_rate(&self) -> anyhow::Result<f64> {
-            unimplemented!()
-        }
         async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -5058,7 +5040,6 @@ mod tests {
             "/v2/node/vid-share",
             "/v2/status/block-height",
             "/v2/status/keys",
-            "/v2/status/success-rate",
             "/v2/status/time-since-last-decide",
             "/v2/token/circulating-supply",
             "/v2/token/circulating-supply-ethereum",
@@ -5151,13 +5132,6 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetBlockHeightRequest>,
         ) -> Result<tonic::Response<crate::proto::BlockHeightResponse>, tonic::Status> {
-            Err(tonic::Status::internal("mock"))
-        }
-
-        async fn get_success_rate(
-            &self,
-            _request: tonic::Request<crate::proto::GetSuccessRateRequest>,
-        ) -> Result<tonic::Response<crate::proto::SuccessRateResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 

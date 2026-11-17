@@ -22,7 +22,7 @@ use super::{
     data_source::{DataSourceOptions, PruningDataSource, SequencerDataSource, provider},
     fs, sql,
     state::NodeApiStateImpl,
-    update::{ApiEventConsumer, ApiSink, DecideSink, IngestSink},
+    update::{ApiEventConsumer, ApiSink, DecideSink},
 };
 use crate::{
     catchup::CatchupStorage, context::TaskList, options::PublicNodeConfig, persistence,
@@ -251,9 +251,8 @@ impl Options {
         let ctx = init_context(metrics, consumer, storage.clone(), registry).await?;
         // The query service gets the chain from this node's consensus through the ingester.
         if let (Some(sink), Some(addr)) = (ingest_sink, ctx.consensus_api_addr()) {
-            tasks.spawn("ingester", async move {
-                ingester::run(addr, &IngestSink(sink)).await
-            });
+            let sink = ctx.ingest_sink(sink);
+            tasks.spawn("ingester", async move { ingester::run(addr, &*sink).await });
         }
         send_ctx
             .send(Box::new(ctx.clone()))

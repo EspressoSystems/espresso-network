@@ -34,7 +34,6 @@ use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
-    retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_3::{
@@ -84,13 +83,9 @@ use crate::{
         context::{ApiContext, ConsensusSource, NodeLightClient},
         data_source::TokenDataSource,
     },
-    catchup::{
-        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state,
-    },
+    catchup::CatchupStorage,
     request_response::{
         RequestResponseProtocol,
-        data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
     state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
@@ -885,33 +880,11 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        // Check if we have the desired state in memory.
-        match self
-            .as_ref()
-            .get_accounts(instance, height, view, accounts)
-            .await
-        {
-            Ok(accounts) => return Ok(accounts),
-            Err(err) => {
-                tracing::info!("accounts not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
-        let (tree, leaf) = self
+        let (tree, _) = self
             .inner()
             .get_accounts(instance, height, view, accounts)
             .await
-            .context("accounts not in memory, and could not fetch from storage")?;
-        // If we successfully fetched accounts from storage, try to add them back into the in-memory
-        // state.
-
-        let handle = self.as_ref().consensus().await;
-        if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
-        }
-        tracing::info!(?view, "updated with fetched account state");
-
+            .context("could not fetch accounts from storage")?;
         Ok(tree)
     }
 
@@ -922,15 +895,6 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        // Check if we have the desired state in memory.
-        match self.as_ref().get_frontier(instance, height, view).await {
-            Ok(frontier) => return Ok(frontier),
-            Err(err) => {
-                tracing::info!("frontier is not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
         self.inner().get_frontier(instance, height, view).await
     }
 
@@ -968,34 +932,11 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        // Check if we have the desired state in memory.
-        match self
-            .as_ref()
-            .get_reward_accounts_v2(instance, height, view, accounts)
-            .await
-        {
-            Ok(accounts) => return Ok(accounts),
-            Err(err) => {
-                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
-        let (tree, leaf) = self
+        let (tree, _) = self
             .inner()
             .get_reward_accounts_v2(instance, height, view, accounts)
             .await
-            .context("accounts not in memory, and could not fetch from storage")?;
-
-        // If we successfully fetched accounts from storage, try to add them back into the in-memory
-        // state.
-        let handle = self.as_ref().consensus().await;
-        if let Err(err) =
-            add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
-        }
-        tracing::info!(?view, "updated with fetched account state");
+            .context("could not fetch accounts from storage")?;
 
         Ok(tree)
     }
@@ -1008,34 +949,11 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        // Check if we have the desired state in memory.
-        match self
-            .as_ref()
-            .get_reward_accounts_v1(instance, height, view, accounts)
-            .await
-        {
-            Ok(accounts) => return Ok(accounts),
-            Err(err) => {
-                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
-        let (tree, leaf) = self
+        let (tree, _) = self
             .inner()
             .get_reward_accounts_v1(instance, height, view, accounts)
             .await
-            .context("accounts not in memory, and could not fetch from storage")?;
-
-        // If we successfully fetched accounts from storage, try to add them back into the in-memory
-        // state.
-        let handle = self.as_ref().consensus().await;
-        if let Err(err) =
-            add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
-        }
-        tracing::info!(?view, "updated with fetched account state");
+            .context("could not fetch accounts from storage")?;
 
         Ok(tree)
     }
@@ -1043,14 +961,8 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
     async fn get_reward_merkle_tree_v2(
         &self,
         height: u64,
-        view: ViewNumber,
+        _view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        match self.as_ref().get_reward_merkle_tree_v2(height, view).await {
-            Ok(tree) => return Ok(tree),
-            Err(err) => {
-                tracing::info!("reward merkle tree is not in memory, trying storage: {err:#}");
-            },
-        }
         self.inner()
             .load_serialized_reward_merkle_tree_v2(height)
             .await
@@ -1077,33 +989,23 @@ impl NodeStateDataSource for ApiState {
 }
 
 impl CatchupDataSource for ApiState {
-    #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[FeeAccount],
+        _height: u64,
+        _view: ViewNumber,
+        _accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        let state = self.consensus().await.state(view).await.context(format!(
-            "state not available for height {height}, view {view}"
-        ))?;
-        retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
+        bail!("the API service serves state only from storage")
     }
 
-    #[tracing::instrument(skip(self, _instance))]
     async fn get_frontier(
         &self,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
+        _height: u64,
+        _view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        let state = self.consensus().await.state(view).await.context(format!(
-            "state not available for height {height}, view {view}"
-        ))?;
-        let tree = &state.block_merkle_tree;
-        let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
-        Ok(frontier)
+        bail!("the API service serves state only from storage")
     }
 
     async fn get_chain_config(
@@ -1125,53 +1027,32 @@ impl CatchupDataSource for ApiState {
         }
     }
 
-    #[tracing::instrument(skip(self, _instance))]
     async fn get_reward_accounts_v2(
         &self,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV2],
+        _height: u64,
+        _view: ViewNumber,
+        _accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let state = self.consensus().await.state(view).await.context(format!(
-            "state not available for height {height}, view {view}"
-        ))?;
-
-        retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
+        bail!("the API service serves state only from storage")
     }
 
-    #[tracing::instrument(skip(self, _instance))]
     async fn get_reward_accounts_v1(
         &self,
         _instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        accounts: &[RewardAccountV1],
+        _height: u64,
+        _view: ViewNumber,
+        _accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        let state = self.consensus().await.state(view).await.context(format!(
-            "state not available for height {height}, view {view}"
-        ))?;
-
-        retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
+        bail!("the API service serves state only from storage")
     }
 
     async fn get_reward_merkle_tree_v2(
         &self,
-        height: u64,
-        view: ViewNumber,
+        _height: u64,
+        _view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        let state = self.consensus().await.state(view).await.context(format!(
-            "state not available for height {height}, view {view}"
-        ))?;
-
-        let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
-            .inspect_err(
-            |err| tracing::debug!(%err, height, %view, "cannot serve reward merkle tree"),
-        )?;
-        let merkle_tree_bytes = bincode::serialize(&tree_data)
-            .context("Merkle tree serialization failed; this should never happen.")?;
-
-        Ok(merkle_tree_bytes)
+        bail!("the API service serves state only from storage")
     }
 
     async fn get_state_cert(
@@ -1911,12 +1792,11 @@ pub mod test_helpers {
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
-        new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
+        light_client::LCV3StateSignatureRequestBody, new_protocol::CoordinatorEvent,
+        traits::metrics::NoMetrics,
     };
     use http_client::{Client, error::ClientErr};
     use itertools::izip;
-    use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use staking_cli::{
         Transaction as StakingTransaction,
         demo::{DelegationConfig, StakingTransactions},
@@ -1933,8 +1813,8 @@ pub mod test_helpers {
         catchup::{NullStateCatchup, ParallelStateCatchup, StatePeers},
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, decided_leaves, deploy_stake_table,
-            wait_for_decide_on_handle, wait_for_epochs,
+            TestConfig, TestConfigBuilder, deploy_stake_table, wait_for_decide_on_handle,
+            wait_for_epochs,
         },
     };
 
@@ -2280,7 +2160,7 @@ pub mod test_helpers {
                                 opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
-                                        Ok(cfg
+                                        let node = cfg
                                             .init_node(
                                                 0,
                                                 state,
@@ -2293,12 +2173,15 @@ pub mod test_helpers {
                                                 upgrade,
                                                 upgrades_map,
                                             )
-                                            .await)
+                                            .await;
+                                        crate::api::context::ValidatorApi::at_genesis(node, upgrade)
+                                            .await
                                     }
                                     .boxed()
                                 })
                                 .await
                                 .unwrap()
+                                .node
                             } else {
                                 let mut ctx = cfg
                                     .init_node(
@@ -2879,8 +2762,7 @@ pub mod test_helpers {
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
-        // that we set it up correctly. Wait for a (non-genesis) block to be sequenced and then
-        // check the success rate metrics.
+        // that we set it up correctly. Wait for a (non-genesis) block to be sequenced.
         while client
             .get::<u64>("status/block-height")
             .send()
@@ -2890,17 +2772,6 @@ pub mod test_helpers {
         {
             sleep(Duration::from_secs(1)).await;
         }
-        let success_rate = client
-            .get::<f64>("status/success-rate")
-            .send()
-            .await
-            .unwrap();
-        // If metrics are populating correctly, we should get a finite number. If not, we might get
-        // NaN or infinity due to division by 0.
-        assert!(success_rate.is_finite(), "{success_rate}");
-        // We know at least some views have been successful, since we finalized a block.
-        assert!(success_rate > 0.0, "{success_rate}");
-
         let keys: NodePublicKeys = client.get("status/keys").send().await.unwrap();
         let expected = network.server.validator_config();
         assert_eq!(keys.consensus_key, expected.public_key);
@@ -2998,101 +2869,6 @@ pub mod test_helpers {
             .await
             .unwrap();
     }
-
-    /// Test the catchup API with custom options.
-    ///
-    /// The `opt` function can be used to modify the [`Options`] which are used to start the server.
-    /// By default, the options are the minimal required to run this test (configuring a port and
-    /// enabling the catchup API). `opt` may add additional functionality (e.g. adding a query module
-    /// to test a different initialization path) but should not remove or modify the existing
-    /// functionality (e.g. removing the catchup module or changing the port).
-    pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
-
-        let options = opt(Options::with_port(port));
-        let network_config = TestConfigBuilder::default().build();
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config)
-            .build();
-        let network = TestNetwork::new(config, TEST_UPGRADE).await;
-        client.connect(None).await;
-
-        // Wait for a few blocks to be decided.
-        let mut events = network.server.event_stream();
-        loop {
-            if let Some(leaf_chain) = decided_leaves(&events.next().await.unwrap())
-                && leaf_chain
-                    .iter()
-                    .any(|LeafInfo { leaf, .. }| leaf.block_header().height() > 2)
-            {
-                break;
-            }
-        }
-
-        // Consensus keeps running: at 0.6 stopping it drops every in-memory state. So the
-        // leaf can be decided and garbage collected between reading its state and serving the
-        // request; retry on a fresh undecided leaf when that happens.
-        for attempt in 0.. {
-            assert!(attempt < 50, "never served catchup for an undecided state");
-            if try_undecided_catchup(&network, &client).await {
-                return;
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    /// Checks the catchup API against the newest undecided state, or returns `false` if there
-    /// is none or it went out of memory mid-check.
-    async fn try_undecided_catchup<P: PersistenceOptions, const NUM_NODES: usize>(
-        network: &TestNetwork<P, NUM_NODES>,
-        client: &Client<ClientErr, StaticVersion<0, 1>>,
-    ) -> bool {
-        let undecided = network.server.consensus_handle().undecided_leaves().await;
-        let Some(leaf) = undecided.iter().max_by_key(|leaf| leaf.height()) else {
-            return false;
-        };
-        let (height, view) = (leaf.height(), leaf.view_number());
-        let Some(state) = network.server.state(view).await else {
-            return false;
-        };
-
-        // Undecided fee state: absent account.
-        let Ok(res) = client
-            .get::<AccountQueryData>(&format!(
-                "catchup/{height}/{}/account/{:x}",
-                view.u64(),
-                Address::default()
-            ))
-            .send()
-            .await
-        else {
-            return false;
-        };
-        assert_eq!(res.balance, U256::ZERO);
-        assert_eq!(
-            res.proof
-                .verify(&state.fee_merkle_tree.commitment())
-                .unwrap(),
-            U256::ZERO,
-        );
-
-        // Undecided block state.
-        let Ok(res) = client
-            .get::<BlocksFrontier>(&format!("catchup/{height}/{}/blocks", view.u64()))
-            .send()
-            .await
-        else {
-            return false;
-        };
-        let root = &state.block_merkle_tree.commitment();
-        BlockMerkleTree::verify(root, root.size() - 1, res)
-            .unwrap()
-            .unwrap();
-        true
-    }
 }
 
 #[cfg(test)]
@@ -3106,8 +2882,8 @@ mod api_tests {
     use hotshot_query_service::availability::{BlockQueryData, VidCommonQueryData};
     use http_client::{Client, error::ClientErr};
     use test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
-        status_test_helper, submit_test_helper,
+        TestNetwork, TestNetworkConfigBuilder, state_signature_test_helper, status_test_helper,
+        submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
     use vbs::version::StaticVersion;
@@ -3297,14 +3073,6 @@ mod api_tests {
             assert_eq!(proof.transactions, &[]);
         }
     }
-
-    #[rstest_reuse::apply(testable_sequencer_data_source)]
-    pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>(
-        _d: PhantomData<D>,
-    ) {
-        let storage = D::create_storage().await;
-        catchup_test_helper(|opt| D::options(&storage, opt)).await
-    }
 }
 
 #[cfg(test)]
@@ -3398,8 +3166,8 @@ mod test {
         update_commission, update_network_config,
     };
     use test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, node_storage,
-        state_signature_test_helper, status_test_helper, submit_test_helper, wait_for_committee,
+        TestNetwork, TestNetworkConfigBuilder, node_storage, state_signature_test_helper,
+        status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
     use tokio::{
@@ -3498,11 +3266,6 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn state_signature_test_without_query_module() {
         state_signature_test_helper(|opt| opt).await
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn catchup_test_without_query_module() {
-        catchup_test_helper(|opt| opt).await
     }
 
     #[apply(sql_data_sources)]
@@ -4101,7 +3864,7 @@ mod test {
         let _late = api
             .serve(|metrics, consumer, storage, _| {
                 async move {
-                    Ok(cfg
+                    let node = cfg
                         .init_node(
                             LATE,
                             ValidatedState::default(),
@@ -4114,12 +3877,14 @@ mod test {
                             TEST_UPGRADE,
                             upgrades_map,
                         )
-                        .await)
+                        .await;
+                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
                 }
                 .boxed()
             })
             .await
-            .unwrap();
+            .unwrap()
+            .node;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{late_port}").parse().unwrap());
@@ -7069,7 +6834,7 @@ mod test {
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
                 async move {
-                    Ok(cfg
+                    let node = cfg
                         .init_node(
                             1,
                             state,
@@ -7087,12 +6852,14 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await)
+                        .await;
+                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
                 }
                 .boxed()
             })
             .await
-            .unwrap();
+            .unwrap()
+            .node;
         node_0.start_consensus().await;
 
         let mut events = network.peers[2].event_stream();
@@ -7112,7 +6879,7 @@ mod test {
             .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
-                    Ok(cfg
+                    let node = cfg
                         .init_node(
                             1,
                             state,
@@ -7130,12 +6897,14 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await)
+                        .await;
+                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
                 }
                 .boxed()
             })
             .await
-            .unwrap();
+            .unwrap()
+            .node;
         node_0.start_consensus().await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
@@ -7801,7 +7570,7 @@ mod test {
         let query_node = opt
             .serve(move |metrics, consumer, storage, _| {
                 async move {
-                    Ok(cfg
+                    let node = cfg
                         .init_node(
                             1,
                             genesis_state,
@@ -7814,12 +7583,14 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await)
+                        .await;
+                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
                 }
                 .boxed()
             })
             .await
-            .expect("query node should start");
+            .expect("query node should start")
+            .node;
         query_node.start_consensus().await;
         query_node
     }
@@ -8010,7 +7781,7 @@ mod test {
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
                 async move {
-                    Ok(cfg
+                    let node = cfg
                         .init_node(
                             1,
                             state,
@@ -8028,12 +7799,14 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await)
+                        .await;
+                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
                 }
                 .boxed()
             })
             .await
-            .unwrap();
+            .unwrap()
+            .node;
         node_0.start_consensus().await;
 
         let mut events = network.peers[2].event_stream();
@@ -12114,7 +11887,7 @@ mod test {
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();
                 async move {
-                    Ok(cfg
+                    let node = cfg
                         .init_node(
                             1,
                             state,
@@ -12132,12 +11905,14 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await)
+                        .await;
+                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
                 }
                 .boxed()
             })
             .await
-            .unwrap();
+            .unwrap()
+            .node;
         node_0.start_consensus().await;
 
         let mut events = node_0.event_stream();
@@ -13285,11 +13060,9 @@ mod test {
             )
             .await?;
 
-            // Status endpoints. Block height and success rate are stable since consensus is
-            // stopped; time-since-last-decide and metrics vary by wall-clock so we only
-            // check for a 2xx.
+            // Status endpoints. Block height is stable since consensus is stopped;
+            // time-since-last-decide and metrics vary by wall-clock so we only check for a 2xx.
             assert_json_endpoint(&http, api_port, "status/block-height").await?;
-            assert_json_endpoint(&http, api_port, "status/success-rate").await?;
             assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
             assert_endpoint_ok(&http, api_port, "status/metrics").await?;
 

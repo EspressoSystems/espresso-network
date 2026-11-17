@@ -1758,9 +1758,6 @@ pub mod status_tests {
         {
             // Check that block height is initially zero.
             assert_eq!(ds.block_height().await.unwrap(), 0);
-            // Before any view, check that the success rate returns NAN (since the block height,
-            // the numerator, is 0, and the view number, the denominator, is 0).
-            assert!(ds.success_rate().await.unwrap().is_nan());
             // Since there is no block produced, "last_decided_time" metric is 0.
             // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
             assert!(
@@ -1786,13 +1783,6 @@ pub mod status_tests {
         metrics
             .last_decided_time
             .set(chrono::Utc::now().timestamp() as usize - 3);
-
-        {
-            // Check that the success rate has been updated.
-            let success_rate = ds.success_rate().await.unwrap();
-            assert!(success_rate.is_finite(), "{success_rate}");
-            assert!(success_rate > 0.0, "{success_rate}");
-        }
 
         // Asserting that the elapsed time since the last block is at least 3 seconds
         assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);

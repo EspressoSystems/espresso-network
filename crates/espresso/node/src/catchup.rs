@@ -14,15 +14,14 @@ use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
-    ValidatedState,
     v0::traits::StateCatchup,
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
     v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
-        RewardMerkleCommitmentV2, RewardMerkleTreeV2, forgotten_accounts_include,
+        PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
+        forgotten_accounts_include,
     },
 };
 use futures::{
@@ -36,10 +35,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        ValidatedState as ValidatedStateTrait,
-        metrics::{Counter, CounterFamily, Metrics},
-    },
+    traits::metrics::{Counter, CounterFamily, Metrics},
     utils::verify_leaf_chain,
 };
 use http_client::{Request, error::ClientErr};
@@ -54,9 +50,7 @@ use url::Url;
 use vbs::version::StaticVersionType;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-use crate::api::{
-    BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data, context::ConsensusSource,
-};
+use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -1641,147 +1635,6 @@ impl StateCatchup for ParallelStateCatchup {
     }
 }
 
-/// Add accounts to the in-memory consensus state.
-/// We use this during catchup after receiving verified accounts.
-pub async fn add_fee_accounts_to_state(
-    consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
-    accounts: &[FeeAccount],
-    tree: &FeeMerkleTree,
-    leaf: Leaf2,
-) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
-    let (state, delta) = match existing_state {
-        Some(existing) => {
-            let mut state = (*existing).clone();
-            for account in accounts {
-                if let Some((proof, _)) = FeeAccountProof::prove(tree, (*account).into()) {
-                    if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
-                        tracing::warn!(
-                            ?view,
-                            %account,
-                            "cannot update fetched account state: {err:#}"
-                        );
-                    }
-                } else {
-                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-                };
-            }
-            (Arc::new(state), delta)
-        },
-        None => {
-            // If we don't already have a leaf for this view, or if we don't have the view
-            // at all, we can create a new view based on the recovered leaf and add it to
-            // our state map. In this case, we must also add the leaf to the saved leaves
-            // map to ensure consistency.
-            let mut state = ValidatedState::from_header(leaf.block_header());
-            state.fee_merkle_tree = tree.clone();
-            (Arc::new(state), None)
-        },
-    };
-
-    consensus_handle
-        .update_leaf(leaf, state, delta)
-        .await
-        .with_context(|| "failed to update leaf")?;
-
-    Ok(())
-}
-
-/// Add accounts to the in-memory consensus state.
-/// We use this during catchup after receiving verified accounts.
-pub async fn add_v2_reward_accounts_to_state(
-    consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
-    accounts: &[RewardAccountV2],
-    tree: &RewardMerkleTreeV2,
-    leaf: Leaf2,
-) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
-    let (state, delta) = match existing_state {
-        Some(existing) => {
-            let mut state = (*existing).clone();
-            for account in accounts {
-                if let Some((proof, _)) = RewardAccountProofV2::prove(tree, (*account).into()) {
-                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v2) {
-                        tracing::warn!(
-                            ?view,
-                            %account,
-                            "cannot update fetched account state: {err:#}"
-                        );
-                    }
-                } else {
-                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-                };
-            }
-            (Arc::new(state), delta)
-        },
-        None => {
-            // If we don't already have a leaf for this view, or if we don't have the view
-            // at all, we can create a new view based on the recovered leaf and add it to
-            // our state map. In this case, we must also add the leaf to the saved leaves
-            // map to ensure consistency.
-            let mut state = ValidatedState::from_header(leaf.block_header());
-            state.reward_merkle_tree_v2 = tree.clone();
-            (Arc::new(state), None)
-        },
-    };
-
-    consensus_handle
-        .update_leaf(leaf, state, delta)
-        .await
-        .with_context(|| "failed to update leaf")?;
-
-    Ok(())
-}
-
-/// Add accounts to the in-memory consensus state.
-/// We use this during catchup after receiving verified accounts.
-pub async fn add_v1_reward_accounts_to_state(
-    consensus_handle: &dyn ConsensusSource,
-    view: &ViewNumber,
-    accounts: &[RewardAccountV1],
-    tree: &RewardMerkleTreeV1,
-    leaf: Leaf2,
-) -> anyhow::Result<()> {
-    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
-    let (state, delta) = match existing_state {
-        Some(existing) => {
-            let mut state = (*existing).clone();
-            for account in accounts {
-                if let Some((proof, _)) = RewardAccountProofV1::prove(tree, (*account).into()) {
-                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v1) {
-                        tracing::warn!(
-                            ?view,
-                            %account,
-                            "cannot update fetched account state: {err:#}"
-                        );
-                    }
-                } else {
-                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-                };
-            }
-            (Arc::new(state), delta)
-        },
-        None => {
-            // If we don't already have a leaf for this view, or if we don't have the view
-            // at all, we can create a new view based on the recovered leaf and add it to
-            // our state map. In this case, we must also add the leaf to the saved leaves
-            // map to ensure consistency.
-            let mut state = ValidatedState::from_header(leaf.block_header());
-            state.reward_merkle_tree_v1 = tree.clone();
-            (Arc::new(state), None)
-        },
-    };
-
-    consensus_handle
-        .update_leaf(leaf, state, delta)
-        .await
-        .with_context(|| "failed to update leaf")?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
     use std::{
@@ -1789,6 +1642,7 @@ mod test {
         time::Instant,
     };
 
+    use espresso_types::ValidatedState;
     use hotshot_types::traits::metrics::NoMetrics;
     use test_utils::reserve_tcp_port;
 

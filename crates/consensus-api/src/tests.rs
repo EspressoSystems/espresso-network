@@ -272,3 +272,44 @@ async fn service_records_by_epoch() {
         .await;
     assert_eq!(missing.err().map(|s| s.code()), Some(Code::NotFound));
 }
+
+/// A node that takes no transactions now.
+struct FullNode;
+
+#[async_trait]
+impl Node for FullNode {
+    async fn submit_transaction(&self, _transaction: Bytes) -> Result<(), SubmitError> {
+        Err(SubmitError::Overloaded("not taking transactions".into()))
+    }
+}
+
+/// A transaction the node cannot take now comes back as resource exhausted, so the caller can
+/// tell it from an invalid one.
+#[tokio::test]
+async fn submit_reports_an_overloaded_node() {
+    let port = test_utils::reserve_tcp_port().unwrap();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    tokio::spawn(
+        Server::builder()
+            .add_service(node_server(Arc::new(FullNode)))
+            .serve(addr),
+    );
+    let mut client = None;
+    for _ in 0..100 {
+        if let Ok(connected) = ConsensusNodeClient::connect(format!("http://{addr}")).await {
+            client = Some(connected);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut client = client.expect("server did not start");
+    let refused = client
+        .submit_transaction(crate::proto::SubmitTransactionRequest {
+            transaction: vec![1, 2, 3],
+        })
+        .await;
+    assert_eq!(
+        refused.err().map(|s| s.code()),
+        Some(Code::ResourceExhausted)
+    );
+}

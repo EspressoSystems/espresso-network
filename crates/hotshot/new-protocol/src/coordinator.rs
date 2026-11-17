@@ -11,7 +11,7 @@ use std::{
 use bon::{Builder, bon};
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    consensus::{ConsensusMetricsValue, ParticipationTracker},
+    consensus::ConsensusMetricsValue,
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     initializer::HotShotInitializer,
@@ -33,17 +33,14 @@ use hotshot_types::{
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
-use tokio::{
-    select,
-    sync::{mpsc, oneshot},
-};
+use tokio::{select, sync::mpsc};
 use tracing::{debug, error, info, warn};
 use versions::Version;
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
-    client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
+    client::{ClientApi, ClientRequest, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
@@ -144,8 +141,6 @@ pub struct Coordinator<T: NodeType, S = DiskStore> {
     node_id: KeyPrefix,
     timer: Timer,
     #[builder(skip)]
-    pending_proposal_fetches: PendingProposalFetches<T>,
-    #[builder(skip)]
     /// Proposals asked for, with the view this node was in when it last asked.
     requested_missing_proposals: HashMap<ProposalFetchKey<T>, ViewNumber>,
     #[builder(default = Fetcher::new(public_key.clone()))]
@@ -158,13 +153,10 @@ pub struct Coordinator<T: NodeType, S = DiskStore> {
     #[builder(skip)]
     built_dispersals: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), BuiltDispersal<T>>,
     metrics: Option<metrics::Metrics>,
-    #[builder(default)]
-    participation: ParticipationTracker<T>,
     #[builder(skip)]
     voted_view: Option<ViewNumber>,
-    /// View of the last timer fire that counted towards participation and
-    /// timeout metrics, so a re-fire for the same (stuck) view doesn't
-    /// double-count it.
+    /// View of the last timer fire that counted towards the timeout metrics, so a re-fire for
+    /// the same (stuck) view doesn't double-count it.
     #[builder(skip)]
     last_timeout_view: Option<ViewNumber>,
     #[builder(skip)]
@@ -358,8 +350,6 @@ where
             consensus.seed_state_cert(state_cert);
         }
 
-        let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
-
         let mut vid_disperser = VidDisperser::new(
             membership_coordinator.clone(),
             network.sender().clone(),
@@ -475,7 +465,6 @@ where
             .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
-            .participation(participation)
             .external_tx(external_tx)
             .service_book(service_book)
             .maybe_service_record(service_record)
@@ -586,9 +575,6 @@ where
                     if self.last_timeout_view != Some(view) {
                         self.last_timeout_view = Some(view);
                         let leader = self.leader(view, epoch);
-                        if let Some(leader) = leader.clone() {
-                            self.participation.leader_missed(leader, epoch);
-                        }
                         if let Some(m) = &self.metrics {
                             m.consensus.number_of_timeouts.add(1);
                             if leader.as_ref() == Some(&self.public_key) {
@@ -946,8 +932,6 @@ where
                     }
                 }
                 for leaf in leaves.into_iter().rev() {
-                    self.participation
-                        .on_leaf_decided(&leaf, &self.membership_coordinator);
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
             },
@@ -1145,11 +1129,6 @@ where
                     "send vote1"
                 );
                 self.record_voted_view(view);
-                if let Some(epoch) = vote1.vote.data.epoch
-                    && let Some(leader) = self.leader(view, epoch)
-                {
-                    self.participation.leader_proposed(leader, epoch);
-                }
                 crate::trace_leader_event!(
                     self.consensus.tracer,
                     view,
@@ -1284,7 +1263,6 @@ where
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
                 let resend = self.block_builder.on_view_changed(view);
-                self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
                 if let Some(resend) = resend {
                     self.send_transactions(resend, epoch)?;
@@ -1895,7 +1873,6 @@ where
                     view = %proposal.data.view_number,
                     "recv proposal fetch response"
                 );
-                self.pending_proposal_fetches.resolve(&proposal);
                 self.maybe_validate_fetched_proposal(*proposal);
                 None
             },
@@ -2115,9 +2092,6 @@ where
 
     fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
         match request {
-            ClientRequest::CurrentView(tx) => {
-                let _ = tx.send(self.consensus.current_view());
-            },
             ClientRequest::CurrentEpoch(tx) => {
                 let _ = tx.send(self.consensus.current_epoch());
             },
@@ -2128,29 +2102,8 @@ where
                 let view = self.consensus.last_decided_leaf().view_number();
                 let _ = tx.send(self.state(view).map(|s| s.state.clone()));
             },
-            ClientRequest::UndecidedLeaves(tx) => {
-                let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
-            },
             ClientRequest::GetState { view, respond } => {
                 let _ = respond.send(self.state(view).map(|s| s.state.clone()));
-            },
-            ClientRequest::GetStateAndDelta { view, respond } => {
-                let _ = respond.send(match self.state(view) {
-                    Some(s) => (Some(s.state.clone()), s.delta.clone()),
-                    None => (None, None),
-                });
-            },
-            ClientRequest::ProposalParticipation { epoch, respond } => {
-                let _ = respond.send(match epoch {
-                    Some(epoch) => self.participation.proposal_participation(epoch),
-                    None => self.participation.current_proposal_participation(),
-                });
-            },
-            ClientRequest::VoteParticipation { epoch, respond } => {
-                let _ = respond.send(match epoch {
-                    Some(epoch) => self.participation.vote_participation(epoch),
-                    None => self.participation.current_vote_participation(),
-                });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 let forward = match self.block_builder.on_submit_transaction(tx) {
@@ -2166,28 +2119,6 @@ where
                 if let Some(forward) = forward {
                     self.send_transactions(forward, self.consensus.current_epoch())?;
                 }
-            },
-            ClientRequest::UpdateLeaf { update, respond } => {
-                self.state_manager.update_state(update);
-                let _ = respond.send(());
-            },
-            ClientRequest::RequestProposal {
-                view,
-                leaf_commitment,
-                respond,
-            } => {
-                if let Some(proposal) = self.consensus.signed_proposal(view, leaf_commitment) {
-                    let _ = respond.send(Ok(proposal.clone()));
-                    return Ok(());
-                }
-                if !self
-                    .pending_proposal_fetches
-                    .contains_request(view, leaf_commitment)
-                {
-                    self.broadcast_proposal_fetch(view)?;
-                }
-                self.pending_proposal_fetches
-                    .push(view, leaf_commitment, respond);
             },
             ClientRequest::SendExternalMessage {
                 payload,
@@ -2420,7 +2351,6 @@ where
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view);
                 self.cert_verifiers.gc(decide_floor, epoch);
-                self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key, _| key.view > view);
                 self.fetcher.gc(view);
@@ -2725,9 +2655,6 @@ struct PendingDa<T: NodeType> {
     hashes: Vec<Commitment<T::Transaction>>,
 }
 
-type ProposalFetchResponseSender<T> =
-    oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>;
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct ProposalFetchKey<T: NodeType> {
     view: ViewNumber,
@@ -2739,62 +2666,6 @@ impl<T: NodeType> ProposalFetchKey<T> {
         Self {
             view,
             leaf_commitment,
-        }
-    }
-}
-
-#[derive(Default)]
-struct PendingProposalFetches<T: NodeType> {
-    pending: HashMap<ProposalFetchKey<T>, Vec<ProposalFetchResponseSender<T>>>,
-}
-
-impl<T: NodeType> PendingProposalFetches<T> {
-    fn prune_closed(&mut self) {
-        self.pending.retain(|_, responders| {
-            responders.retain(|respond| !respond.is_closed());
-            !responders.is_empty()
-        });
-    }
-
-    fn contains_request(
-        &mut self,
-        view: ViewNumber,
-        leaf_commitment: Commitment<Leaf2<T>>,
-    ) -> bool {
-        self.prune_closed();
-        self.pending
-            .contains_key(&ProposalFetchKey::new(view, leaf_commitment))
-    }
-
-    fn push(
-        &mut self,
-        view: ViewNumber,
-        leaf_commitment: Commitment<Leaf2<T>>,
-        respond: ProposalFetchResponseSender<T>,
-    ) {
-        self.pending
-            .entry(ProposalFetchKey::new(view, leaf_commitment))
-            .or_default()
-            .push(respond);
-    }
-
-    fn gc(&mut self, view: ViewNumber) {
-        self.pending.retain(|key, responders| {
-            responders.retain(|respond| !respond.is_closed());
-            key.view >= view && !responders.is_empty()
-        });
-    }
-
-    fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {
-        self.prune_closed();
-        let view = proposal.data.view_number;
-        let leaf_commitment = proposal_commitment(&proposal.data);
-        let key = ProposalFetchKey::new(view, leaf_commitment);
-
-        if let Some(responders) = self.pending.remove(&key) {
-            for respond in responders {
-                let _ = respond.send(Ok(proposal.clone()));
-            }
         }
     }
 }
