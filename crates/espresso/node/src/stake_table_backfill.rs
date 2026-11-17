@@ -43,8 +43,8 @@ const ERROR_FROM_ATTEMPT: usize = 8;
 /// 1)` for an answer, 10 s by default at this cap; a request-response provider ignores the index.
 const MAX_REQUEST_RETRY: usize = 4;
 
-/// Bound on storing one table: its storage reads and writes and, on a deployment with unknown
-/// initial supply, an L1 read.
+/// Bound on listing the stored epochs and on storing one table: its storage reads and writes
+/// and, on a deployment with unknown initial supply, an L1 read.
 const EPOCH_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Stores the stake table of every epoch below the highest stored one that storage lacks, from
@@ -149,10 +149,10 @@ impl StakeTableBackfill {
         mismatched: &mut BTreeSet<EpochNumber>,
         request_retry: usize,
     ) -> anyhow::Result<()> {
-        let stored = sources
-            .store
-            .stored_stake_epochs()
+        // Bounded: the listing holds the persistence lock the live path stores under.
+        let stored = timeout(EPOCH_DEADLINE, sources.store.stored_stake_epochs())
             .await
+            .with_context(|| format!("listing the stored epochs exceeded {EPOCH_DEADLINE:?}"))?
             .context("listing the epochs with a stored stake table")?;
         let missing = missing_epochs(sources.layout, &stored);
         self.missing.set(missing.len());
@@ -476,6 +476,8 @@ mod tests {
         failing: BTreeSet<u64>,
         /// Epochs whose store never returns.
         hanging: BTreeSet<u64>,
+        /// Listings, counted from the first, that never return.
+        hanging_listings: usize,
         lc_contract_state: LcContractFinalizedState,
     }
 
@@ -488,6 +490,7 @@ mod tests {
                 mismatched: BTreeSet::new(),
                 failing: BTreeSet::new(),
                 hanging: BTreeSet::new(),
+                hanging_listings: 0,
                 lc_contract_state,
             }
         }
@@ -507,7 +510,14 @@ mod tests {
     #[async_trait]
     impl StakeTableStore for MockStakeTableStore {
         async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
-            self.listings.lock().push(Instant::now());
+            let listing = {
+                let mut listings = self.listings.lock();
+                listings.push(Instant::now());
+                listings.len()
+            };
+            if listing <= self.hanging_listings {
+                std::future::pending::<()>().await;
+            }
             Ok(self.stored.lock().clone())
         }
 
@@ -832,6 +842,55 @@ mod tests {
         assert_eq!(store.calls_of(8), 0);
         assert_eq!(store.listings.lock().len(), 1);
         assert_eq!(metric(&metrics, "stake_table_backfill_missing_epochs"), 1);
+    }
+
+    /// An epoch is provable when its next root is below the LC contract height; epoch 8's next
+    /// root is at height 65.
+    #[rstest]
+    #[case::next_root_at_the_height(65, 0)]
+    #[case::next_root_below_the_height(66, 1)]
+    #[tokio::test(start_paused = true)]
+    async fn epoch_is_provable_below_the_lc_contract_height(
+        #[case] lc_contract_height: usize,
+        #[case] stores_of_epoch_8: usize,
+    ) {
+        let (peers, lc_contract_state) =
+            mock_with_headers_at_lc_height(&[5, 15, 25, 35, 45, 55, 65], lc_contract_height).await;
+        let backfill = StakeTableBackfill::new(&PrometheusMetrics::default());
+        let store = MockStakeTableStore::new(&[9], lc_contract_state);
+
+        serve_while(&backfill, &store, &peers, async {
+            wait_until(|| store.is_stored(&[3, 4, 5, 6, 7])).await;
+            sleep(MAX_BACKOFF).await;
+        })
+        .await;
+
+        assert_eq!(store.calls_of(8), stores_of_epoch_8);
+    }
+
+    /// A listing that does not return fails the attempt at the deadline; the fill retries.
+    #[tokio::test(start_paused = true)]
+    async fn listing_past_the_deadline_fails_the_attempt() {
+        let (peers, lc_contract_state) = peers().await;
+        let metrics = PrometheusMetrics::default();
+        let backfill = StakeTableBackfill::new(&metrics);
+        let mut store = MockStakeTableStore::new(&[4], lc_contract_state);
+        store.hanging_listings = 1;
+
+        serve_while(&backfill, &store, &peers, async {
+            wait_until(|| metric(&metrics, "stake_table_backfill_failed_attempts") == 1).await;
+            assert!(!store.is_stored(&[3]));
+
+            wait_until(|| store.is_stored(&[3])).await;
+            assert_eq!(metric(&metrics, "stake_table_backfill_failed_attempts"), 0);
+        })
+        .await;
+
+        let listings = store.listings.lock();
+        assert_eq!(
+            (listings[1] - listings[0]).as_secs(),
+            (EPOCH_DEADLINE + FIRST_BACKOFF).as_secs()
+        );
     }
 
     /// A store that does not return fails its epoch at the deadline and not the others.
