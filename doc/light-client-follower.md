@@ -41,8 +41,8 @@ Tuning, as options of the `follower` module (the first two) and top-level option
   [Cold start](#cold-start)). Stake tables for epoch roots skipped this way, and at start, are caught up before
   following on: the LC contract supplies the commitment, and the stake tables come from L1 events at epoch roots
   proven against it.
-  The tables of the epochs a seed skipped are stored afterwards by a background task (see
-  `doc/agents/architecture.md`), so the follower serves them from storage once it has finished.
+  The tables of the epochs a seed skipped are stored afterwards by a background task, which runs at start and after
+  each seed (see `doc/agents/architecture.md`).
 - `--light-client-genesis <file>` (`ESPRESSO_NODE_LIGHT_CLIENT_GENESIS`): pin the light client's root of trust to a
   reviewed TOML file (see `crates/light-client-query-service/genesis/`) instead of deriving it from the network config
   fetched from the peers.

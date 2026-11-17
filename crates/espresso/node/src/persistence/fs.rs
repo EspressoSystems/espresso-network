@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{self, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
@@ -1591,10 +1591,17 @@ impl MembershipPersistence for Persistence {
         let inner = self.inner.read().await;
         let path = inner.stake_table_dir_path();
         // The directory is created by the first `store_stake`.
-        if !path.exists() {
-            return Ok(BTreeSet::new());
+        match epoch_files(path) {
+            Ok(files) => Ok(files.map(|(epoch, _)| epoch).collect()),
+            Err(err)
+                if err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|err| err.kind() == ErrorKind::NotFound) =>
+            {
+                Ok(BTreeSet::new())
+            },
+            Err(err) => Err(err),
         }
-        Ok(epoch_files(path)?.map(|(epoch, _)| epoch).collect())
     }
 
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
@@ -1707,6 +1714,17 @@ impl MembershipPersistence for Persistence {
         fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        // A write without a reward keeps the stored one.
+        let block_reward = match block_reward {
+            Some(reward) => Some(reward),
+            None if file_path.is_file() => {
+                let bytes = fs::read(&file_path)
+                    .with_context(|| format!("reading stake table {}", file_path.display()))?;
+                deserialize_stake_table(&bytes)?.0.1
+            },
+            None => None,
+        };
 
         inner.replace(
             &file_path,

@@ -88,16 +88,20 @@ An error from the seed (no answering peer, a timeout) is logged and the walk run
 tables are present and skipped.
 
 After a seed, the epochs below its window have no stored stake table. The `StakeTableBackfill` task
-(`crates/espresso/node/src/stake_table_backfill.rs`) stores them: a pass lists the epochs with a stored table, takes
-the missing ones between the first epoch that a root defines and the highest stored epoch, fetches their root headers
-with proofs against the LC contract state (only roots below `F`; later epochs wait for the next pass), derives each
-table (`EpochCommittees::store_derived_stake_table`) and writes it to storage, ascending, in chunks. Nothing is put in
-memory. It runs at start, after each seed that installed tables, and every 10 minutes while epochs are missing, so an
-interrupted fill continues after a restart. An epoch is retried like a seed request, then logged with `error!` and
-left for the next pass. A table whose hash differs from the one the next root decides is logged with `error!` and not
-stored; the process continues. Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge, set at the
-start and end of each pass), `stake_table_backfill_stored`, `stake_table_backfill_hash_mismatches`,
-`stake_table_backfill_failed` (counters).
+(`crates/espresso/node/src/stake_table_backfill.rs`) stores them:
+
+- Runs: once at start, and after every return from the seed's install step, successful or not. Idle between fills.
+- Reads: the stored epochs first (nothing missing: no L1 read), then the LC contract state, one anchor header, and the
+  proven root headers of the missing epochs below `F`, one request at a time. Stake table events come from storage only.
+- Writes: per epoch, the root header, all validators and the stake table (`EpochCommittees::store_derived_stake_table`),
+  ascending, never to memory. A stored block reward is not overwritten by a missing one.
+- Failures: an epoch failure (missing header proof, events not stored up to its L1 block, 60 s deadline, storage error)
+  fails that epoch only. After an attempt that leaves such epochs, or fails to read the LC contract or the anchor, the
+  fill waits 5 s, doubling up to 10 minutes, and tries again; a trigger ends the wait. One `warn!` per failed attempt.
+  A table whose hash differs from the one the next root decides is not stored, logged once with `error!`, and not
+  retried until restart.
+- Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge, includes mismatched epochs),
+  `stake_table_backfill_stored`, `stake_table_backfill_hash_mismatches`, `stake_table_backfill_failed` (counters).
 
 ## Consensus upgrades
 

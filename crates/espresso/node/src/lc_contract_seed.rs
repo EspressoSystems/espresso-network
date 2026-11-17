@@ -1,16 +1,9 @@
 //! Seeds the post-start epoch catchup from the LC contract.
 
-use std::{
-    future::Future,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::sync::Arc;
 
-use anyhow::Context;
 use espresso_types::{
-    BackoffParams, ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::StateCatchup,
+    ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::StateCatchup,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use hotshot_types::{
@@ -19,13 +12,13 @@ use hotshot_types::{
     traits::metrics::{Counter, Metrics},
 };
 
-use crate::stake_table_backfill::StakeTableBackfill;
+use crate::{
+    lc_contract_headers::{fetch_anchor_root, fetch_proven_header},
+    stake_table_backfill::StakeTableBackfill,
+};
 
 /// Most requests of one seed in flight; peers answer 4 requests per key at a time.
 const MAX_CONCURRENT_REQUESTS: usize = 3;
-
-/// Retries of one seed request after its first attempt.
-pub(crate) const SEED_REQUEST_RETRIES: u32 = 4;
 
 /// The LC-contract seed of the catchup, behind `CatchupSeedFn`; steps in
 /// `doc/agents/architecture.md`.
@@ -37,32 +30,34 @@ pub(crate) const SEED_REQUEST_RETRIES: u32 = 4;
 pub struct LcContractSeed {
     /// Seed attempts that installed a window.
     seeded: Arc<dyn Counter>,
-    /// Asked for a pass after each install.
+    /// Asked to fill the epochs below the window after each install.
     backfill: StakeTableBackfill,
 }
 
 impl LcContractSeed {
     /// `None` when `chain_config` names no stake table contract to read the LC contract from.
-    pub fn new(chain_config: &ChainConfig, metrics: &dyn Metrics) -> Option<Self> {
+    /// `backfill` is asked for a fill after each install; the caller runs it.
+    pub fn new(
+        chain_config: &ChainConfig,
+        metrics: &dyn Metrics,
+        backfill: StakeTableBackfill,
+    ) -> Option<Self> {
         chain_config.stake_table_contract.map(|_| Self {
             seeded: metrics
                 .subgroup("catchup".into())
                 .create_counter("lc_contract_seeds".into(), None)
                 .into(),
-            backfill: StakeTableBackfill::new(metrics),
+            backfill,
         })
     }
 
-    /// Sets the catchup hook of `coordinator` to this seed. Returns the backfill that the seed
-    /// asks for a pass after it installs tables; the caller runs it.
-    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) -> StakeTableBackfill {
-        let backfill = self.backfill.clone();
+    /// Sets the catchup hook of `coordinator` to this seed.
+    pub fn install(self, coordinator: &EpochMembershipCoordinator<SeqTypes>) {
         let seed = Arc::new(self);
         coordinator.set_catchup_seed(Arc::new(move |target, start, coordinator| {
             let seed = Arc::clone(&seed);
             async move { seed.run(target, start, coordinator).await }.boxed()
         }));
-        backfill
     }
 
     /// One seed attempt for `catchup(target)` with held pair top `start`: the walk start, `start`
@@ -108,46 +103,42 @@ impl LcContractSeed {
             heights,
         )
         .await?;
-        coordinator
-            .membership()
-            .install_epoch_roots(preceding, roots, &coordinator)
-            .await?;
+        self.install_roots(&coordinator, preceding, roots).await?;
 
         self.seeded.add(1);
-        self.backfill.request_pass();
         log("seeded");
         Ok(*window.epochs.end())
+    }
+
+    /// Installs `roots`, then asks for a fill whether or not the install failed: a failed batch
+    /// keeps the tables it installed.
+    async fn install_roots(
+        &self,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        preceding: Option<Header>,
+        roots: Vec<Header>,
+    ) -> anyhow::Result<()> {
+        let installed = coordinator
+            .membership()
+            .install_epoch_roots(preceding, roots, coordinator)
+            .await;
+        self.backfill.request_fill();
+        Ok(installed?)
     }
 }
 
 /// The preceding root (the block time source of the lowest installed reward) split off, and the
 /// headers at `proven_heights`, ascending, proven against the root of the header at `F`.
-pub(crate) async fn fetch_headers(
+async fn fetch_headers(
     peers: &dyn StateCatchup,
     lc_contract_state: &LcContractFinalizedState,
     preceding_height: Option<u64>,
     proven_heights: Vec<u64>,
 ) -> anyhow::Result<(Option<Header>, Vec<Header>)> {
-    let root = retry_request(|retry| {
-        peers.try_fetch_lc_contract_block_merkle_root(retry, lc_contract_state)
-    })
-    .await
-    .with_context(|| {
-        format!(
-            "fetching the LC contract header at height {}",
-            lc_contract_state.height
-        )
-    })?;
+    let anchor = fetch_anchor_root(peers, lc_contract_state).await?;
     let heights = preceding_height.into_iter().chain(proven_heights);
     let mut headers: Vec<Header> = stream::iter(heights)
-        .map(|height| {
-            retry_request(move |retry| {
-                peers.try_fetch_proven_header(retry, lc_contract_state.height, root, height)
-            })
-            .map(move |result| {
-                result.with_context(|| format!("fetching the header proof at height {height}"))
-            })
-        })
+        .map(|height| fetch_proven_header(peers, lc_contract_state, anchor, height))
         .buffered(MAX_CONCURRENT_REQUESTS)
         .try_collect()
         .await?;
@@ -155,56 +146,16 @@ pub(crate) async fn fetch_headers(
     Ok((preceding, headers))
 }
 
-/// `request` with up to `SEED_REQUEST_RETRIES` retries; attempt `n` (0-based) is called with `n`.
-pub(crate) async fn retry_request<T, Fut>(request: impl Fn(usize) -> Fut) -> anyhow::Result<T>
-where
-    Fut: Future<Output = anyhow::Result<T>>,
-{
-    let attempts = AtomicUsize::new(0);
-    // Not `peers.backoff()`: disabled on `ParallelStateCatchup`, unreachable on request-response.
-    BackoffParams::default()
-        .retry_if(
-            SEED_REQUEST_RETRIES,
-            |_| true,
-            || request(attempts.fetch_add(1, Ordering::SeqCst)),
-        )
-        .await
-}
-
 #[cfg(test)]
-pub(crate) mod tests {
-    use espresso_types::v0::mock::MockStateCatchup;
-    use hotshot_types::{data::ViewNumber, traits::block_contents::BlockHeader};
+mod tests {
+    use alloy::primitives::Address;
+    use espresso_types::{EpochCommittees, v0_3::Fetcher};
+    use hotshot_example_types::storage_types::TestStorage;
+    use hotshot_types::traits::metrics::NoMetrics;
     use light_client::testing::TestClient;
-    use rstest::rstest;
 
     use super::*;
-
-    pub(crate) const EPOCH_HEIGHT: u64 = 10;
-
-    /// The mock serving the headers of `heights` and of `F = 62`, and the contract state at `F`.
-    pub(crate) async fn mock_with_headers(
-        heights: &[usize],
-    ) -> (MockStateCatchup, LcContractFinalizedState) {
-        let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
-        let mut headers = Vec::new();
-        for height in heights.iter().copied().chain([62]) {
-            headers.push(client.leaf(height).await.leaf().block_header().clone());
-        }
-        let lc_contract_state = LcContractFinalizedState {
-            height: 62,
-            block_comm_root: headers
-                .last()
-                .unwrap()
-                .get_light_client_state(ViewNumber::new(0))
-                .unwrap()
-                .block_comm_root,
-        };
-        (
-            MockStateCatchup::default().with_headers(headers),
-            lc_contract_state,
-        )
-    }
+    use crate::lc_contract_headers::testing::{EPOCH_HEIGHT, mock_with_headers};
 
     /// The preceding root is split off and the roots come back in the order asked.
     #[tokio::test(start_paused = true)]
@@ -225,30 +176,39 @@ pub(crate) mod tests {
         assert_eq!(preceding.map(|root| root.height()), Some(5));
     }
 
-    /// A request is retried up to `SEED_REQUEST_RETRIES` times, then the error surfaces.
-    #[rstest]
-    #[case::retried_ok(2, 3, true)]
-    #[case::bounded_fails(usize::MAX, SEED_REQUEST_RETRIES as usize + 1, false)]
-    #[tokio::test(start_paused = true)]
-    async fn fetch_headers_retries_failed_request(
-        #[case] failing_calls: usize,
-        #[case] expected_calls: usize,
-        #[case] expect_ok: bool,
-    ) {
-        let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
-        let peers = peers.with_failing_seed_calls(failing_calls);
+    /// A failed install asks for a fill and returns its error.
+    #[tokio::test]
+    async fn failed_install_requests_a_fill() {
+        let backfill = StakeTableBackfill::new(&NoMetrics);
+        let chain_config = ChainConfig {
+            stake_table_contract: Some(Address::ZERO),
+            ..Default::default()
+        };
+        let seed = LcContractSeed::new(&chain_config, &NoMetrics, backfill.clone()).unwrap();
+        let committees = EpochCommittees::new(
+            vec![],
+            vec![],
+            None,
+            Fetcher::mock(),
+            EPOCH_HEIGHT,
+            EpochNumber::new(1),
+        )
+        .unwrap();
+        let coordinator =
+            EpochMembershipCoordinator::new(committees, EPOCH_HEIGHT, &TestStorage::default());
+        let not_a_root = TestClient::with_epoch_height(EPOCH_HEIGHT)
+            .leaf(3)
+            .await
+            .leaf()
+            .block_header()
+            .clone();
+        assert!(!backfill.fill_requested());
 
-        let result = fetch_headers(&peers, &lc_contract_state, None, vec![15]).await;
+        let result = seed
+            .install_roots(&coordinator, None, vec![not_a_root])
+            .await;
 
-        assert_eq!(result.is_ok(), expect_ok, "{result:?}");
-        if let Err(err) = result {
-            assert!(
-                format!("{err:#}").contains("the header proof at height 15"),
-                "{err:#}"
-            );
-        }
-        assert_eq!(peers.proven_header_calls(), expected_calls);
-        let attempts: Vec<usize> = (0..expected_calls).collect();
-        assert_eq!(peers.proven_header_retries(), attempts);
+        assert!(result.is_err());
+        assert!(backfill.fill_requested());
     }
 }

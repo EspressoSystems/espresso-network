@@ -73,6 +73,7 @@ use crate::{
     init_node_state,
     lc_contract_seed::LcContractSeed,
     load_or_fetch_network_config,
+    stake_table_backfill::StakeTableBackfill,
     state_signature::StateSignatureMemStorage,
 };
 
@@ -272,12 +273,15 @@ where
     let coordinator = node_state.coordinator.clone();
 
     // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
-    let stake_table_backfill = if params.upstreams.is_empty() {
-        None
-    } else {
-        LcContractSeed::new(&node_state.chain_config, &*metrics)
-            .map(|seed| seed.install(&coordinator))
-    };
+    let backfill = StakeTableBackfill::new(&*metrics);
+    let mut stake_table_backfill = None;
+    if !params.upstreams.is_empty()
+        && let Some(seed) =
+            LcContractSeed::new(&node_state.chain_config, &*metrics, backfill.clone())
+    {
+        seed.install(&coordinator);
+        stake_table_backfill = Some(backfill);
+    }
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
         #[cfg(any(test, feature = "testing"))]

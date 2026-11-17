@@ -6025,10 +6025,11 @@ mod test {
     ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
-        const EPOCHS_TO_FOLLOW: u64 = 10;
-        /// Inside epoch 8, which starts at height 71.
-        const LC_CONTRACT_HEIGHT: u64 = 72;
-        const EPOCHS_BEFORE_START: u64 = 8;
+        const EPOCHS_TO_FOLLOW: u64 = 12;
+        /// Inside epoch 10, which starts at height 91. The seed installs epochs 7 to 11, so the
+        /// backfill stores epoch 6, whose block reward reads the root below its own.
+        const LC_CONTRACT_HEIGHT: u64 = 92;
+        const EPOCHS_BEFORE_START: u64 = 10;
         const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
         let network_config = TestConfigBuilder::default()
@@ -6082,7 +6083,7 @@ mod test {
             "node 0 query API did not come up"
         );
 
-        // The mock LC contract is finalized in epoch 8 while the follower holds only the genesis pair.
+        // The mock LC contract is finalized in epoch 10 while the follower holds only the genesis pair.
         let mut events = network.server.event_stream();
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_START).await;
         let lc_contract_header: Header = api_client
@@ -6182,7 +6183,7 @@ mod test {
                 .text()
                 .await?;
                 if metric_value(&export, "consensus_catchup_stake_table_backfill_stored")
-                    >= Some(1.0)
+                    >= Some(4.0)
                     && metric_value(
                         &export,
                         "consensus_catchup_stake_table_backfill_missing_epochs",

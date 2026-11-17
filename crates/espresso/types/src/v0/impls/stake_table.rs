@@ -1899,8 +1899,15 @@ impl Fetcher {
         Ok(())
     }
 
+    /// The validator set of `epoch` at the L1 block that its root `header` names, with events from
+    /// `source`.
     #[cfg(feature = "node")]
-    pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
+    pub async fn fetch(
+        &self,
+        epoch: EpochNumber,
+        header: &Header,
+        source: EventSource,
+    ) -> anyhow::Result<ValidatorSet> {
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
             bail!(
                 "The epoch root for epoch {epoch} is missing the L1 finalized block info. This is \
@@ -1912,11 +1919,18 @@ impl Fetcher {
         // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
         // so events spanning an upgrade are intentionally evaluated under the root's rules rather
         // than each event's wall-clock version.
-        self.validator_set_at(l1_finalized_block_info.number(), header.version())
-            .await
+        let l1_block = l1_finalized_block_info.number();
+        match source {
+            EventSource::L1Fetch => self.validator_set_at(l1_block, header.version()).await,
+            EventSource::StoredOnly => {
+                self.validator_set_from_stored_events(l1_block, header.version())
+                    .await
+            },
+        }
     }
 
     /// The validator set from stake table events up to `l1_block`, selected under `version`.
+    /// Events missing from storage are fetched from L1 and stored.
     #[cfg(feature = "node")]
     pub async fn validator_set_at(
         &self,
@@ -1939,9 +1953,29 @@ impl Fetcher {
             },
         };
 
-        // The source error stays in the chain so callers can downcast to `StakeTableError`.
-        ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version)
-            .context("failed to construct stake table")
+        validator_set_from_events(events, version)
+    }
+
+    /// The validator set from the stored stake table events up to `l1_block`, selected under
+    /// `version`. Makes no L1 request; errors when storage does not hold the events up to
+    /// `l1_block`.
+    #[cfg(feature = "node")]
+    pub async fn validator_set_from_stored_events(
+        &self,
+        l1_block: u64,
+        version: Version,
+    ) -> anyhow::Result<ValidatorSet> {
+        let (read, events) = self
+            .persistence
+            .lock()
+            .await
+            .load_events(0, l1_block)
+            .await?;
+        ensure!(
+            read == Some(EventsPersistenceRead::Complete),
+            "stored stake table events do not cover L1 block {l1_block} ({read:?})"
+        );
+        validator_set_from_events(events, version)
     }
 
     /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
@@ -2036,6 +2070,26 @@ impl Fetcher {
             chain_config,
         )
     }
+}
+
+/// Where the stake table events of a derived table come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventSource {
+    /// Storage, then L1 for what storage lacks; fetched events are stored.
+    L1Fetch,
+    /// Storage only; an error when it does not cover the L1 block.
+    StoredOnly,
+}
+
+/// The validator set that `events`, ordered by L1 position, select under `version`.
+#[cfg(feature = "node")]
+fn validator_set_from_events(
+    events: Vec<(EventKey, StakeTableEvent)>,
+    version: Version,
+) -> anyhow::Result<ValidatorSet> {
+    // The source error stays in the chain so callers can downcast to `StakeTableError`.
+    ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version)
+        .context("failed to construct stake table")
 }
 
 #[cfg_attr(not(feature = "node"), allow(dead_code))]

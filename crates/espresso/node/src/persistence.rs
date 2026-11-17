@@ -237,7 +237,10 @@ mod tests {
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
-        v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
+        v0_3::{
+            AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, RewardAmount,
+            StakeTableEvent,
+        },
     };
     use futures::{StreamExt, TryStreamExt, future::join_all};
     use hotshot_contract_adapter::{
@@ -2816,6 +2819,14 @@ mod tests {
         storage
             .store_drb_result(EpochNumber::new(1), [1; 32])
             .await?;
+        let instance_state = NodeState::mock();
+        let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
+        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
+            .await
+            .into();
+        storage
+            .store_epoch_root(EpochNumber::new(9), leaf.block_header().clone())
+            .await?;
         for epoch in [7, 3, 5] {
             storage
                 .store_stake(EpochNumber::new(epoch), stake.clone(), None, None)
@@ -2824,6 +2835,35 @@ mod tests {
 
         let expected: BTreeSet<_> = [3, 5, 7].into_iter().map(EpochNumber::new).collect();
         assert_eq!(storage.stored_stake_epochs().await?, expected);
+        Ok(())
+    }
+
+    /// A write without a block reward keeps the stored one; a write with one replaces `None`.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_store_stake_keeps_block_reward<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        let validator = AuthenticatedValidator::mock();
+        let mut stake = IndexMap::new();
+        stake.insert(validator.account, validator);
+        let reward = RewardAmount::from(7u64);
+        let epoch = EpochNumber::new(4);
+
+        storage
+            .store_stake(epoch, stake.clone(), None, None)
+            .await?;
+        storage
+            .store_stake(epoch, stake.clone(), Some(reward), None)
+            .await?;
+        assert_eq!(storage.load_stake(epoch).await?.unwrap().1, Some(reward));
+
+        storage
+            .store_stake(epoch, stake.clone(), None, None)
+            .await?;
+        assert_eq!(storage.load_stake(epoch).await?.unwrap().1, Some(reward));
         Ok(())
     }
 
