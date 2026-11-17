@@ -72,25 +72,27 @@ fn every_name_the_checker_reads_is_one_the_recorder_writes() {
 
 #[test]
 fn the_checker_copies_the_transition_window() {
-    let window: u64 = PROMPT_CHECK_LEAN
-        .split("def transitionWindow : Nat := ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .and_then(|n| n.parse().ok())
-        .expect("PromptCheck.lean no longer defines transitionWindow as a number");
-    // The crate's rule subtracts the window from the height, so it has no
-    // answer for epochs shorter than the window.
-    for height in window..=12 {
-        for block in 0..=3 * height {
+    let window = lean_number("transitionWindow");
+    let root = lean_number("rootDistance");
+    for height in 0..=12 {
+        for block in 0..=3 * height + 1 {
             assert_eq!(
                 is_epoch_transition(block, height),
-                block != 0 && (block % height >= height - window || block % height == 0),
+                block != 0
+                    && height > root
+                    && (block % height >= height - window || block % height == 0),
                 "block {block} of epochs of {height} blocks"
             );
         }
     }
-    assert!(
-        !is_epoch_transition(7, 0),
-        "with no epochs, no block is in a transition"
-    );
+}
+
+/// The value of the checker's numeric constant `name` in `PromptCheck.lean`.
+fn lean_number(name: &str) -> u64 {
+    PROMPT_CHECK_LEAN
+        .split(&format!("def {name} : Nat := "))
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("PromptCheck.lean no longer defines {name} as a number"))
 }
