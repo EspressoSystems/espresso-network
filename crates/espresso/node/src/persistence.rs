@@ -2838,9 +2838,9 @@ mod tests {
         Ok(())
     }
 
-    /// A write without a block reward keeps the stored one; a write with one replaces `None`.
+    /// A write without a block reward or stake table hash keeps the stored one; `Some` replaces it.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_store_stake_keeps_block_reward<P: TestablePersistence>(
+    pub async fn test_store_stake_keeps_block_reward_and_hash<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
         let tmp = P::tmp_storage().await;
@@ -2850,20 +2850,31 @@ mod tests {
         let mut stake = IndexMap::new();
         stake.insert(validator.account, validator);
         let reward = RewardAmount::from(7u64);
+        let hash = Commitment::from_raw([7; 32]);
         let epoch = EpochNumber::new(4);
 
         storage
             .store_stake(epoch, stake.clone(), None, None)
             .await?;
         storage
-            .store_stake(epoch, stake.clone(), Some(reward), None)
+            .store_stake(epoch, stake.clone(), Some(reward), Some(hash))
             .await?;
-        assert_eq!(storage.load_stake(epoch).await?.unwrap().1, Some(reward));
+        let loaded = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!((loaded.1, loaded.2), (Some(reward), Some(hash)));
 
         storage
             .store_stake(epoch, stake.clone(), None, None)
             .await?;
-        assert_eq!(storage.load_stake(epoch).await?.unwrap().1, Some(reward));
+        let loaded = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!((loaded.1, loaded.2), (Some(reward), Some(hash)));
+
+        let new_reward = RewardAmount::from(9u64);
+        let new_hash = Commitment::from_raw([9; 32]);
+        storage
+            .store_stake(epoch, stake.clone(), Some(new_reward), Some(new_hash))
+            .await?;
+        let loaded = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!((loaded.1, loaded.2), (Some(new_reward), Some(new_hash)));
         Ok(())
     }
 

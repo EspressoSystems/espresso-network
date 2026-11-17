@@ -2010,7 +2010,7 @@ impl MembershipPersistence for Persistence {
             .transpose()?;
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
-            // A write without a reward keeps the stored one.
+            // A write without a reward or hash keeps the stored one.
             tx.execute(
                 query(
                     "INSERT INTO epoch_drb_and_root (epoch, stake, block_reward, stake_table_hash)
@@ -2019,7 +2019,8 @@ impl MembershipPersistence for Persistence {
                         stake = excluded.stake,
                         block_reward = COALESCE(
                             excluded.block_reward, epoch_drb_and_root.block_reward),
-                        stake_table_hash = excluded.stake_table_hash",
+                        stake_table_hash = COALESCE(
+                            excluded.stake_table_hash, epoch_drb_and_root.stake_table_hash)",
                 )
                 .bind(epoch_i64)
                 .bind(stake_table_bytes.clone())

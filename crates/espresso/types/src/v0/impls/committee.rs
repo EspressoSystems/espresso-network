@@ -593,6 +593,14 @@ impl EpochCommittees {
             .await
             .map_err(EpochCommitteesError::Fetcher)?;
 
+        // Runs before the early return below, so a complete committee still fills the cache.
+        // `derive_stake_table` calls it again; it is cached after the first success.
+        if block_header.version() == EPOCH_VERSION {
+            self.fetch_and_update_fixed_block_reward(epoch)
+                .await
+                .map_err(EpochCommitteesError::Fetcher)?;
+        }
+
         let held = self
             .load_stake_table(epoch)
             .await
@@ -3619,6 +3627,50 @@ mod tests {
             },
             other => panic!("expected a V4 header, got {other:?}"),
         }
+    }
+
+    /// A complete held committee does not skip the fixed block reward fetch for an `EPOCH_VERSION`
+    /// root.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn add_epoch_root_fetches_fixed_reward_for_complete_committee() {
+        let fetcher = Fetcher::mock();
+        *fetcher.initial_supply.write().await = Some(U256::from(1_000_000u64));
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
+        let header = {
+            let mut instance = NodeState::mock_v2();
+            instance.genesis_version = EPOCH_VERSION;
+            let (payload, metadata) =
+                Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                    .await
+                    .expect("payload");
+            match Header::genesis(&instance, payload, &metadata, MOCK_UPGRADE.base) {
+                Header::V3(mut h) => {
+                    h.height = 95;
+                    Header::V3(h)
+                },
+                other => panic!("expected a V3 header, got {other:?}"),
+            }
+        };
+        put_committee_with_header(
+            &committees,
+            3,
+            Some(StakeTableState::default().commit()),
+            Some(RewardAmount::default()),
+            Some(header.clone()),
+        );
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees.clone(),
+            *committees.epoch_height(),
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        assert_eq!(committees.fixed_block_reward(), None);
+
+        committees
+            .add_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        assert!(committees.fixed_block_reward().is_some());
     }
 
     fn mismatch_setup() -> (EpochCommittees, EpochMembershipCoordinator<SeqTypes>) {

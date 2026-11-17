@@ -194,6 +194,8 @@ impl StakeTableBackfill {
                     failures.push((epoch, err));
                 }
             }
+            // Deliberate: a chunk that stores nothing also blocks the epochs above it. Epochs that
+            // cannot be stored need investigation, which the failed-attempts gauge and error log call for.
             if !chunk_stored && failures.len() > failed_before {
                 break;
             }

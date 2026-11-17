@@ -587,7 +587,8 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         block_header: Header,
     ) -> anyhow::Result<()>;
 
-    /// Store stake table at `epoch` in the persistence layer
+    /// Store stake table at `epoch` in the persistence layer. A `None` reward or hash keeps the
+    /// stored value.
     async fn store_stake(
         &self,
         epoch: EpochNumber,

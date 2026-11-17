@@ -1708,16 +1708,21 @@ impl MembershipPersistence for Persistence {
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
 
-        // A write without a reward keeps the stored one.
-        let block_reward = match block_reward {
-            Some(reward) => Some(reward),
-            None if file_path.is_file() => {
-                let bytes = fs::read(&file_path)
-                    .with_context(|| format!("reading stake table {}", file_path.display()))?;
-                deserialize_stake_table(&bytes)?.0.1
-            },
-            None => None,
-        };
+        // A write without a reward or hash keeps the stored one. An unreadable file is overwritten.
+        let (block_reward, stake_table_hash) =
+            if block_reward.is_some() && stake_table_hash.is_some() || !file_path.is_file() {
+                (block_reward, stake_table_hash)
+            } else {
+                let (_, stored_reward, stored_hash) = fs::read(&file_path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| Ok(deserialize_stake_table(&bytes)?.0))
+                    .inspect_err(|err| tracing::warn!(%epoch, "unreadable stake file: {err:#}"))
+                    .unwrap_or_default();
+                (
+                    block_reward.or(stored_reward),
+                    stake_table_hash.or(stored_hash),
+                )
+            };
 
         inner.replace(
             &file_path,
@@ -2527,6 +2532,25 @@ mod test {
         let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
         assert!(epochs.contains(&EpochNumber::new(1)));
         assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    /// An unreadable stake file does not fail a write without a reward or hash.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_stake_replaces_unreadable_file() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::options(&tmp).create().await.unwrap();
+        let path = storage.inner.read().await.stake_table_dir_path();
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("5.txt"), b"not a stake table").unwrap();
+
+        let validator = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let mut stake = indexmap::IndexMap::new();
+        stake.insert(validator.account, validator);
+        let epoch = EpochNumber::new(5);
+        storage.store_stake(epoch, stake, None, None).await.unwrap();
+
+        let (loaded, reward, hash) = storage.load_stake(epoch).await.unwrap().unwrap();
+        assert_eq!((loaded.len(), reward, hash), (1, None, None));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
