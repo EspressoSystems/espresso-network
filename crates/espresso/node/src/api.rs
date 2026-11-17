@@ -12084,6 +12084,8 @@ mod test {
     ) -> anyhow::Result<()> {
         // Peers switch to a validator's new key and address as soon as the update lands, and none
         // can reach the updated one at its made-up address, so the others must keep a quorum.
+        // The updated validator is cut off from then on, so it is the last node: the test reads
+        // the API of node 0 and the events of node 1.
         const NUM_NODES: usize = 4;
         const EPOCH_HEIGHT: u64 = 10;
 
@@ -12115,7 +12117,7 @@ mod test {
         let (validator, validator_provider) = network_config
             .validator_providers()
             .into_iter()
-            .next()
+            .next_back()
             .unwrap();
         let x25519_key = x25519::Keypair::generate().unwrap().public_key();
         let p2p_addr: NetAddr = "127.0.0.1:9000".parse().unwrap();

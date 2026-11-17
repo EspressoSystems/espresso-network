@@ -166,6 +166,9 @@ else
     "espresso-dev-node")
       cargo_cmd_line="cargo build -p espresso-dev-node $cargo_extra_args"
       ;;
+    "new-protocol-bench-node")
+      cargo_cmd_line="cargo build -p hotshot-new-protocol-bench --bin new-protocol-bench-node $cargo_extra_args"
+      ;;
     "espresso-node")
       cargo_cmd_line="cargo build \
         --bin espresso-node \

@@ -8,8 +8,8 @@ public import NewProtocolImpl.Steps
 
 The rules `NewProtocol.ProtocolHistory` adds to the signing rules, decided on a
 recorded trace: when a node may time out, and what it may propose. That it answers
-its timers in time is checked with the obligations (`NewProtocolDiff.PromptCheck`).
-Unlike the signing rules, these read the node's view, epoch and lock, which the
+its timers in the step it owes them in is checked with the obligations
+(`NewProtocolDiff.PromptCheck`). Unlike the signing rules, these read the node's view, epoch and lock, which the
 specification derives from the history as the latest each has grounds for. Here
 each ground is collected into a list, and the latest is the largest element.
 
