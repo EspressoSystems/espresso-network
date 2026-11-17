@@ -2103,9 +2103,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(2)).await;
             let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
                 committees.clone(),
-                std::num::NonZeroU64::new(*committees.epoch_height())
-                    .unwrap()
-                    .into(),
+                std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
                 &hotshot_example_types::storage_types::TestStorage::default(),
             );
             coordinator
@@ -2177,7 +2175,7 @@ mod tests {
 
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            std::num::NonZeroU64::new(epoch_height).unwrap().into(),
+            std::num::NonZeroU64::new(epoch_height).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator, epoch, fail_next_store)
@@ -2768,7 +2766,7 @@ mod tests {
         let committees = committees_from_first_epoch(first_epoch, Fetcher::mock());
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees,
-            std::num::NonZeroU64::new(100).unwrap().into(),
+            std::num::NonZeroU64::new(100).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
 
@@ -2839,7 +2837,7 @@ mod tests {
     fn coordinator_for(committees: EpochCommittees) -> EpochMembershipCoordinator<SeqTypes> {
         EpochMembershipCoordinator::<SeqTypes>::new(
             committees,
-            std::num::NonZeroU64::new(100).unwrap().into(),
+            std::num::NonZeroU64::new(100).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         )
     }

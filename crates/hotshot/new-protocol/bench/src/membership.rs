@@ -52,7 +52,7 @@ pub async fn make_membership(
 
     let coordinator = EpochMembershipCoordinator::new(
         membership,
-        std::num::NonZeroU64::MAX.into(),
+        std::num::NonZeroU64::MAX,
         &TestStorage::<TestTypes>::default(),
     );
     (coordinator, client)

@@ -122,9 +122,10 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
 }
 
 impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
-    pub fn new<M, S>(membership: M, epoch_length: EpochLength, storage: &S) -> Self
+    pub fn new<M, L, S>(membership: M, epoch_length: L, storage: &S) -> Self
     where
         M: Into<Arc<TYPES::Membership>>,
+        L: Into<EpochLength>,
         S: Storage<TYPES>,
     {
         Self {
@@ -132,7 +133,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             catchup_map: Attempts::default(),
             stake_table_map: Attempts::default(),
             drb_computations: Arc::default(),
-            epoch_length,
+            epoch_length: epoch_length.into(),
             catchup_timeout: DEFAULT_CATCHUP_TIMEOUT,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
