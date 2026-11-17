@@ -91,9 +91,6 @@ identity:
 catchup_base_timeout:
   secs: 2
   nanos: 0
-local_catchup_timeout:
-  secs: 5
-  nanos: 0
 http_catchup_delay:
   secs: 2
   nanos: 0

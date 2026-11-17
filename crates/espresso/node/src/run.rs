@@ -299,7 +299,6 @@ where
             state_peers: opt.state_peers,
             backoff: opt.catchup_backoff,
             base_timeout: opt.catchup_base_timeout,
-            local_timeout: opt.local_catchup_timeout,
             http_delay: opt.http_catchup_delay,
         },
         bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,

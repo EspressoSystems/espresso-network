@@ -23,11 +23,13 @@ full, because the ingester is down or falls behind, the node keeps running but s
 and resumes once the ingester frees entries. Alert on `consensus_storage_decide_log_bytes` well before
 `consensus_storage_decide_log_limit`, and make room for the limit on the disk of the consensus store directory.
 
-### Removed settings: consensus storage pruning and the proposal fetcher
+### Removed settings: consensus storage pruning, the proposal fetcher and local catchup
 
 Urgency: Medium
 
 The old consensus storage no longer receives new data, so its pruning settings are gone, and so is the proposal fetcher.
+Consensus restarts from the decided state in the consensus store and no longer reads state from the node's database, so
+the timeout for those reads is gone too.
 Remove these from the node's configuration:
 
 - `--consensus-view-retention` / `ESPRESSO_NODE_CONSENSUS_VIEW_RETENTION`
@@ -37,6 +39,7 @@ Remove these from the node's configuration:
 - `--consensus-storage-usage-check-interval` / `ESPRESSO_NODE_CONSENSUS_STORAGE_USAGE_CHECK_INTERVAL`
 - `--proposal-fetcher-num-workers` / `ESPRESSO_NODE_PROPOSAL_FETCHER_NUM_WORKERS`
 - `--proposal-fetcher-fetch-timeout` / `ESPRESSO_NODE_PROPOSAL_FETCHER_FETCH_TIMEOUT`
+- `--local-catchup-timeout` / `ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT`
 
 A node started with one of the flags refuses to start; the environment variables are ignored. The config endpoints no
 longer report these settings, and the `decide_processor_*`, `proposal_fetcher_*` and

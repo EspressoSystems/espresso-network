@@ -2435,7 +2435,7 @@ pub mod test_helpers {
                 &NoMetrics,
             )));
         }
-        ParallelStateCatchup::new(&providers, Duration::from_secs(5))
+        ParallelStateCatchup::new(&providers)
     }
 
     /// Deploys the stake table (with a mock light client) sized to the
@@ -5613,7 +5613,6 @@ mod test {
                 state_peers: vec![api_url.clone()],
                 backoff: Default::default(),
                 base_timeout: Duration::from_secs(2),
-                local_timeout: Duration::from_secs(5),
                 http_delay: Duration::ZERO,
             },
             bootstrap_epoch_catchup_timeout: Duration::from_secs(30),

@@ -126,7 +126,6 @@ pub struct CatchupParams {
     pub state_peers: Vec<Url>,
     pub backoff: BackoffParams,
     pub base_timeout: Duration,
-    pub local_timeout: Duration,
     pub http_delay: Duration,
 }
 
@@ -683,8 +682,8 @@ where
         genesis_state.prefund_account(*address, *amount);
     }
 
-    let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout)
-        .with_fallback_delay(catchup.http_delay);
+    let state_catchup_providers =
+        ParallelStateCatchup::new(&[]).with_fallback_delay(catchup.http_delay);
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
         catchup.state_peers,
         catchup.backoff,
@@ -1596,7 +1595,7 @@ pub mod testing {
             let chain_config = state.chain_config.resolve().unwrap_or_default();
 
             // Create an empty list of catchup providers
-            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(5));
+            let catchup_providers = ParallelStateCatchup::new(&[]);
 
             // If we have the state peers, add them
             if let Some(state_peers) = state_peers {
@@ -2090,7 +2089,6 @@ mod test {
             state_peers: vec![],
             backoff: Default::default(),
             base_timeout: Duration::from_secs(2),
-            local_timeout: Duration::from_secs(5),
             http_delay: Duration::ZERO,
         };
         let tmp = tempfile::TempDir::new().unwrap();

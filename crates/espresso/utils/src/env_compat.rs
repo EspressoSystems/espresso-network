@@ -248,11 +248,6 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         ),
         // Builder URLs for submitting transactions
         ("ESPRESSO_BUILDER_URLS", "ESPRESSO_SEQUENCER_BUILDER_URLS"),
-        // Remote providers fallback timeout
-        (
-            "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT",
-            "ESPRESSO_SEQUENCER_LOCAL_CATCHUP_TIMEOUT",
-        ),
         // ── crates/espresso/node/src/persistence/sql.rs ──
         // Minimum delay between active fetches in a stream
         (

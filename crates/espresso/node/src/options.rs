@@ -178,13 +178,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CATCHUP_BASE_TIMEOUT", default_value = "2s", value_parser = parse_duration)]
     pub catchup_base_timeout: Duration,
 
-    /// Timeout for local catchup provider requests.
-    ///
-    /// Remote providers are queried concurrently; this bounds the wait on a slow local provider
-    /// (e.g. database) once remote providers have failed.
-    #[clap(long, env = "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT", default_value = "5s", value_parser = parse_duration)]
-    pub local_catchup_timeout: Duration,
-
     /// HTTP catchup starts this long after request-response, if request-response is registered.
     #[clap(long, env = "ESPRESSO_NODE_HTTP_CATCHUP_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub http_catchup_delay: Duration,
@@ -282,7 +275,6 @@ impl Options {
                 state_peers,
                 backoff: self.catchup_backoff,
                 base_timeout: self.catchup_base_timeout,
-                local_timeout: self.local_catchup_timeout,
                 http_delay: self.http_catchup_delay,
             },
             bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
@@ -685,7 +677,6 @@ pub struct PublicNodeConfig {
     pub genesis: Genesis,
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
-    pub local_catchup_timeout: Duration,
     pub http_catchup_delay: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
@@ -966,7 +957,6 @@ impl PublicNodeConfig {
             genesis: genesis.clone(),
             identity: opt.identity.clone(),
             catchup_base_timeout: opt.catchup_base_timeout,
-            local_catchup_timeout: opt.local_catchup_timeout,
             http_catchup_delay: opt.http_catchup_delay,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,

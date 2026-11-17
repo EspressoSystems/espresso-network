@@ -1273,14 +1273,14 @@ struct Provider {
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Provider>>>,
     backoff: BackoffParams,
-    /// Timeout for local provider requests
-    local_timeout: Duration,
+    /// How long a request may take on a local provider, if bounded.
+    local_timeout: Option<Duration>,
     fallback_delay: Duration,
 }
 
 impl ParallelStateCatchup {
-    /// Create a new [`ParallelStateCatchup`] with the given providers and local timeout.
-    pub fn new(providers: &[Arc<dyn StateCatchup>], local_timeout: Duration) -> Self {
+    /// Create a new [`ParallelStateCatchup`] with the given providers.
+    pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
         Self {
             providers: Arc::new(Mutex::new(
                 providers
@@ -1292,9 +1292,15 @@ impl ParallelStateCatchup {
                     .collect(),
             )),
             backoff: BackoffParams::disabled(),
-            local_timeout,
+            local_timeout: None,
             fallback_delay: Duration::ZERO,
         }
+    }
+
+    /// Bounds how long a request may take on a local provider.
+    pub fn with_local_timeout(mut self, timeout: Duration) -> Self {
+        self.local_timeout = Some(timeout);
+        self
     }
 
     /// Delay before fallback providers start; see [`Provider::fallback`].
@@ -1341,13 +1347,16 @@ impl ParallelStateCatchup {
             let name = catchup.name();
             futures.push(AbortOnDropHandle::new(tokio::spawn(async move {
                 let result = if catchup.is_local() {
-                    timeout(local_timeout, closure(catchup))
-                        .await
-                        .unwrap_or_else(|_| {
-                            let err = format!("{name} timed out after {local_timeout:?}");
-                            tracing::warn!("{err}");
-                            Err(anyhow::anyhow!(err))
-                        })
+                    match local_timeout {
+                        Some(local_timeout) => timeout(local_timeout, closure(catchup))
+                            .await
+                            .unwrap_or_else(|_| {
+                                let err = format!("{name} timed out after {local_timeout:?}");
+                                tracing::warn!("{err}");
+                                Err(anyhow::anyhow!(err))
+                            }),
+                        None => closure(catchup).await,
+                    }
                 } else {
                     if fallback && has_primary_remote {
                         sleep(fallback_delay).await;
@@ -1828,7 +1837,7 @@ mod test {
             Duration::from_secs(1),
             &NoMetrics,
         );
-        let peers = ParallelStateCatchup::new(&[Arc::new(peer)], Duration::from_secs(1));
+        let peers = ParallelStateCatchup::new(&[Arc::new(peer)]);
         let chain_config = ChainConfig::default().commit();
         assert!(
             timeout(
@@ -1890,7 +1899,7 @@ mod test {
             BASE_TIMEOUT,
             &NoMetrics,
         );
-        let peers = ParallelStateCatchup::new(&[Arc::new(peer)], Duration::from_secs(1));
+        let peers = ParallelStateCatchup::new(&[Arc::new(peer)]);
 
         let start = Instant::now();
         let res = SingleAttemptCatchup::new(peers, 4)
@@ -2042,7 +2051,8 @@ mod test {
     async fn test_remote_result_does_not_wait_for_local() {
         let local = DelayedCatchup::provider(true, Duration::from_secs(60));
         let remote = DelayedCatchup::provider(false, Duration::ZERO);
-        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
+        let catchup =
+            ParallelStateCatchup::new(&[local, remote]).with_local_timeout(Duration::from_secs(30));
 
         let config = ChainConfig::default();
         timeout(
@@ -2058,7 +2068,8 @@ mod test {
     async fn test_local_result_does_not_wait_for_remote() {
         let local = DelayedCatchup::provider(true, Duration::ZERO);
         let remote = DelayedCatchup::provider(false, Duration::from_secs(60));
-        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
+        let catchup =
+            ParallelStateCatchup::new(&[local, remote]).with_local_timeout(Duration::from_secs(30));
 
         let config = ChainConfig::default();
         timeout(
@@ -2074,7 +2085,8 @@ mod test {
     async fn test_all_providers_failing_reports_every_error() {
         let local = DelayedCatchup::provider(true, Duration::ZERO);
         let remote = DelayedCatchup::provider(false, Duration::ZERO);
-        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
+        let catchup =
+            ParallelStateCatchup::new(&[local, remote]).with_local_timeout(Duration::from_secs(30));
 
         let err = format!("{:#}", catchup.fetch_state_cert(1).await.unwrap_err());
         assert_eq!(err.matches("unsupported").count(), 2, "{err}");
@@ -2088,8 +2100,7 @@ mod test {
         primary: Arc<dyn StateCatchup>,
         fallback: Arc<dyn StateCatchup>,
     ) -> ParallelStateCatchup {
-        let catchup = ParallelStateCatchup::new(&[primary], Duration::from_secs(30))
-            .with_fallback_delay(FALLBACK_DELAY);
+        let catchup = ParallelStateCatchup::new(&[primary]).with_fallback_delay(FALLBACK_DELAY);
         catchup.add_fallback_provider(fallback);
         catchup
     }
@@ -2141,8 +2152,7 @@ mod test {
     #[tokio::test(start_paused = true)]
     async fn test_fallback_delay_is_decided_per_call() {
         let (fallback, fallback_calls) = DelayedCatchup::counted(false, Duration::ZERO);
-        let catchup = ParallelStateCatchup::new(&[], Duration::from_secs(30))
-            .with_fallback_delay(FALLBACK_DELAY);
+        let catchup = ParallelStateCatchup::new(&[]).with_fallback_delay(FALLBACK_DELAY);
         catchup.add_fallback_provider(fallback);
         let config = ChainConfig::default();
 

@@ -395,13 +395,11 @@ where
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
     // The loop reads its own database first, as only it may still hold the loop's head once peers
     // have pruned it, and then the node's catchup providers.
-    let catchup = ParallelStateCatchup::new(
-        &[Arc::new(SqlStateCatchup::new(
-            storage.clone(),
-            BackoffParams::disabled(),
-        ))],
-        LOCAL_CATCHUP_TIMEOUT,
-    );
+    let catchup = ParallelStateCatchup::new(&[Arc::new(SqlStateCatchup::new(
+        storage.clone(),
+        BackoffParams::disabled(),
+    ))])
+    .with_local_timeout(LOCAL_CATCHUP_TIMEOUT);
     catchup.add_provider(instance.state_catchup.clone());
     instance.state_catchup = Arc::new(catchup);
 
