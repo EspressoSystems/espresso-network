@@ -91,18 +91,21 @@ After a seed, the epochs below its window have no stored stake table. The `Stake
 (`crates/espresso/node/src/stake_table_backfill.rs`) stores them:
 
 - Runs: once at start, and after every return from the seed's install step, successful or not. Idle between fills.
-- Reads: the stored epochs first (nothing missing: no L1 read), then the LC contract state, one anchor header, and the
-  proven root headers of the missing epochs below `F`, one request at a time. Stake table events come from storage only.
+- Reads: the stored epochs first (nothing missing: no L1 read), then the LC contract state, one anchor header, the
+  initial token supply (an L1 read only on a deployment where it is neither hardcoded nor cached, outside the 60 s
+  per-epoch deadline), and the proven root headers of the missing epochs below `F`, one request at a time. Stake table
+  events come from storage only.
 - Writes: per epoch, the root header, all validators and the stake table (`EpochCommittees::store_derived_stake_table`),
-  ascending, never to memory. A stored block reward or stake table hash is not overwritten by a missing one.
+  never to memory, newest first: when no peer has the oldest roots, the epochs next to the seeded window are still
+  stored. A stored block reward or stake table hash is not overwritten by a missing one.
 - Failures: an epoch failure (missing header proof, events not stored up to its L1 block, 60 s deadline, storage error)
   fails that epoch only. An attempt ends as failed when a read before the epochs fails, or when a chunk of 20 epochs
   stores nothing and has a failure; later chunks are not tried in that attempt. After a failed attempt the fill waits
   5 s, doubling up to 10 minutes, and tries again; a trigger ends the wait and restarts the backoff at 5 s. A table
   whose hash differs from the one the next root decides is not stored, logged once with `error!`, and not retried until
-  restart. A chunk that stores nothing deliberately blocks the epochs above it: epochs that cannot be stored need
+  restart. A chunk that stores nothing deliberately blocks the epochs below it: epochs that cannot be stored need
   investigation, which the failed-attempts gauge and the error log call for.
-- Logs: one `info!` per stored epoch. A failed attempt logs one line with the failing epoch count, the lowest failing
+- Logs: one `info!` per stored epoch. A failed attempt logs one line with the failing epoch count, the highest failing
   epoch and one error: `warn!` for the first 7 consecutive failed attempts of a fill, `error!` from the 8th, when the
   wait has reached 10 minutes. Each header request is sent once per attempt, with a retry index (at most 4) that scales
   the peers' timeout; the fill's backoff is the only retry.

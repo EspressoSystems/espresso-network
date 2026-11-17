@@ -7414,6 +7414,24 @@ mod test {
             },
         }
 
+        // A fresh node holds only the seeded window; the backfill stores the epochs below it.
+        if fresh_storage && seeds >= Some(1.0) && seed_epoch > 7 {
+            timeout(Duration::from_secs(60), async {
+                loop {
+                    let export = metrics.export().unwrap();
+                    if metric_value(&export, "catchup_stake_table_backfill_stored") >= Some(1.0)
+                        && metric_value(&export, "catchup_stake_table_backfill_missing_epochs")
+                            == Some(0.0)
+                    {
+                        return;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
+            })
+            .await
+            .expect("the stake table backfill did not store the skipped epochs");
+        }
+
         let coordinator = node.node_state().coordinator;
         // A fresh node's whole window has rewards; a stale one holds older epochs it already had.
         let first_rewarded = if fresh_storage {
