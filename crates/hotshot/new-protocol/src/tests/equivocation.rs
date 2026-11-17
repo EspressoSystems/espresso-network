@@ -234,7 +234,7 @@ async fn refused_rival_has_none_of_its_certificates_recorded() {
     let (proposal, share) = rival(a, &key);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(a.epoch_number))
+        .membership_for_epoch(a.epoch_number)
         .unwrap();
     let tc = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         ViewNumber::genesis(),

@@ -48,7 +48,7 @@ async fn trace_of_a_timeout_certificate(epoch: EpochNumber) -> (String, bool) {
     // can sign it. The mock membership has none for a later epoch.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(EpochNumber::new(2)))
+        .membership_for_epoch(EpochNumber::new(2))
         .unwrap();
     let tc = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         ViewNumber::new(25),
@@ -97,7 +97,7 @@ async fn trace_of_a_revote(epoch: EpochNumber) -> String {
     harness.set_view(ViewNumber::new(1), epoch);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(EpochNumber::new(1)))
+        .membership_for_epoch(EpochNumber::new(1))
         .unwrap();
     let revote = ReVote {
         view: ViewNumber::new(3),
@@ -176,7 +176,7 @@ async fn taken_proposal_has_its_timeout_certificate_recorded() {
     let (proposal, share) = test_data.views[0].proposal_input_consensus(&node_key);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(EpochNumber::new(1)))
+        .membership_for_epoch(EpochNumber::new(1))
         .unwrap();
     let tc = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         ViewNumber::genesis(),
