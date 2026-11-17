@@ -4,7 +4,6 @@ description = "The interface between a consensus node and its ingester"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }
-license     = "MIT"
 
 [dependencies]
 async-trait = { workspace = true }

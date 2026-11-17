@@ -33,6 +33,7 @@ members = [
     "crates/hotshot/utils",
     "crates/http-client",
     "crates/http-wire",
+    "crates/ingester",
     "crates/light-client",
     "crates/light-client-query-service",
     "crates/node-metrics",
@@ -84,6 +85,7 @@ default-members = [
     "crates/hotshot/orchestrator",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/ingester",
     "crates/light-client",
     "crates/light-client-query-service",
     "crates/node-metrics",
@@ -220,6 +222,7 @@ http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }
+ingester = { path = "crates/ingester" }
 insta = { version = "1.43", features = ["yaml"] }
 itertools = "0.14"
 jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = [

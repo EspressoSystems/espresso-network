@@ -4,7 +4,6 @@ description = "Byte-centric storage interface for consensus"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-license = "MIT"
 
 [features]
 # In-memory store and the conformance suite that every backend runs.

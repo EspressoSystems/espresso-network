@@ -213,7 +213,7 @@ where
 
 /// The VID data of the genesis block, which consensus does not disperse: its payload is always
 /// empty, so it is computed from the well-known genesis commitment.
-pub(crate) fn genesis_vid<Types: NodeType>(
+pub fn genesis_vid<Types: NodeType>(
     leaf: &Leaf2<Types>,
 ) -> anyhow::Result<(VidCommonQueryData<Types>, VidShare)> {
     let payload = Payload::<Types>::empty().0;

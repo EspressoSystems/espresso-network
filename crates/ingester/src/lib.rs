@@ -18,6 +18,14 @@ use consensus_api::{
     },
 };
 use futures::StreamExt;
+use hotshot_query_service::{
+    Header, Payload,
+    availability::{
+        BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
+        VidCommonQueryData,
+    },
+    data_source::genesis_vid,
+};
 use hotshot_types::{
     data::{Leaf2, VidCommon, ViewNumber},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
@@ -28,15 +36,6 @@ use hotshot_types::{
     vid::avidm_gf2::AvidmGf2Common,
 };
 use tonic::transport::Channel;
-
-use crate::{
-    Header, Payload,
-    availability::{
-        BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-        VidCommonQueryData,
-    },
-    data_source::update::genesis_vid,
-};
 
 /// How long the ingester waits before reconnecting after the connection fails.
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);

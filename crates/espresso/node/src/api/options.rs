@@ -252,7 +252,7 @@ impl Options {
         // The query service gets the chain from this node's consensus through the ingester.
         if let (Some(sink), Some(addr)) = (ingest_sink, ctx.consensus_api_addr()) {
             tasks.spawn("ingester", async move {
-                hotshot_query_service::ingest::run(addr, &IngestSink(sink)).await
+                ingester::run(addr, &IngestSink(sink)).await
             });
         }
         send_ctx

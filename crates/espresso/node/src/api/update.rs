@@ -128,7 +128,7 @@ where
 pub(crate) struct IngestSink(pub Arc<dyn DecideSink>);
 
 #[async_trait]
-impl hotshot_query_service::ingest::Sink<SeqTypes> for IngestSink {
+impl ingester::Sink<SeqTypes> for IngestSink {
     async fn append(
         &self,
         info: BlockInfo<SeqTypes>,

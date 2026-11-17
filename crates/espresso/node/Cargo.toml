@@ -65,6 +65,7 @@ http-client = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
+ingester = { workspace = true }
 itertools = { workspace = true }
 jf-advz = { workspace = true }
 jf-crhf = { workspace = true }

@@ -11,6 +11,11 @@ use consensus_api::{
     Error as ApiError, PayloadKey, Source,
     proto::{Body, PayloadReady},
 };
+use hotshot_query_service::{
+    availability::BlockInfo,
+    testing::{chain::MockChain, mocks::MockTypes},
+    types::HeightIndexed,
+};
 use hotshot_types::{data::VidCommon, traits::block_contents::EncodeBytes};
 use tokio::{
     sync::{broadcast, watch},
@@ -18,11 +23,6 @@ use tokio::{
 };
 
 use super::*;
-use crate::{
-    availability::BlockInfo,
-    testing::{chain::MockChain, mocks::MockTypes},
-    types::HeightIndexed,
-};
 
 /// A decide log in memory, served over the real ingester API.
 struct FakeLog {
@@ -69,7 +69,11 @@ impl FakeLog {
     }
 }
 
-fn entry(chain: &MockChain, block: &crate::testing::chain::MockBlock, newest: bool) -> Decided {
+fn entry(
+    chain: &MockChain,
+    block: &hotshot_query_service::testing::chain::MockBlock,
+    newest: bool,
+) -> Decided {
     let leaf = block.leaf.leaf();
     let vid_common = match block.vid_common.common() {
         VidCommon::V2(common) => bincode::serialize(common).unwrap(),
@@ -356,7 +360,9 @@ async fn chain_with_other_parent(chain: &MockChain) -> Decided {
     // Diverge at height 1, so the leaf at height 2 names a different parent.
     let mut other = MockChain::new(4, 100).await;
     other
-        .push(vec![crate::testing::mocks::MockTransaction::new(vec![7])])
+        .push(vec![
+            hotshot_query_service::testing::mocks::MockTransaction::new(vec![7]),
+        ])
         .await;
     other.push_empty(1).await;
     let block = &other.blocks()[2];

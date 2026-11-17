@@ -4,7 +4,6 @@ description = "redb backend of consensus-store"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
-license = "MIT"
 
 [dependencies]
 bytes = { workspace = true }

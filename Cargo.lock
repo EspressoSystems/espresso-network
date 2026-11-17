@@ -3892,6 +3892,7 @@ dependencies = [
  "http-wire",
  "include_dir",
  "indexmap 2.14.0",
+ "ingester",
  "insta",
  "itertools 0.14.0",
  "jf-advz",
@@ -5014,10 +5015,8 @@ dependencies = [
  "backon",
  "backtrace-on-stack-overflow",
  "bincode",
- "bytes",
  "chrono",
  "committable",
- "consensus-api",
  "custom_debug",
  "derivative",
  "derive_more 2.1.1",
@@ -5057,7 +5056,6 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
- "tonic",
  "tracing",
  "tracing-subscriber 0.3.23",
  "trait-variant",
@@ -5659,6 +5657,27 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "ingester"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "committable",
+ "consensus-api",
+ "futures",
+ "hotshot-query-service",
+ "hotshot-types",
+ "serde",
+ "test-utils",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tracing",
 ]
 
 [[package]]

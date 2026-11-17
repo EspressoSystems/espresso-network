@@ -287,7 +287,6 @@ pub mod data_source;
 mod error;
 pub mod explorer;
 pub mod fetching;
-pub mod ingest;
 pub mod merklized_state;
 pub mod metrics;
 pub mod node;

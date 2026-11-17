@@ -2392,7 +2392,7 @@ pub mod test_helpers {
     fn ingest_and_discard<P: SequencerPersistence>(ctx: &mut SequencerContext<P>) {
         let addr = ctx.consensus_api_addr();
         ctx.spawn("ingester", async move {
-            hotshot_query_service::ingest::run::<SeqTypes>(addr, &DiscardSink::default()).await
+            ingester::run::<SeqTypes>(addr, &DiscardSink::default()).await
         });
     }
 
@@ -2401,7 +2401,7 @@ pub mod test_helpers {
     struct DiscardSink(std::sync::atomic::AtomicU64);
 
     #[async_trait]
-    impl hotshot_query_service::ingest::Sink<SeqTypes> for DiscardSink {
+    impl ingester::Sink<SeqTypes> for DiscardSink {
         async fn append(
             &self,
             info: hotshot_query_service::availability::BlockInfo<SeqTypes>,

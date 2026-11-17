@@ -1,0 +1,29 @@
+[package]
+name        = "ingester"
+description = "Moves the chain a consensus node decides into the query service"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+anyhow                = { workspace = true }
+async-trait           = { workspace = true }
+bincode               = { workspace = true }
+committable           = { workspace = true }
+consensus-api         = { workspace = true }
+futures               = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-types         = { workspace = true }
+serde                 = { workspace = true }
+thiserror             = { workspace = true }
+tokio                 = { workspace = true }
+tonic                 = { workspace = true }
+tracing               = { workspace = true }
+
+[dev-dependencies]
+bytes                 = { workspace = true }
+hotshot-query-service = { workspace = true, features = ["testing"] }
+test-utils            = { workspace = true }
+
+[lints]
+workspace = true

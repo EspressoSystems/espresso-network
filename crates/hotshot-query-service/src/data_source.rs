@@ -46,7 +46,7 @@ pub use fetching::{AvailabilityProvider, FetchingDataSource};
 pub use fs::FileSystemDataSource;
 #[cfg(feature = "metrics-data-source")]
 pub use metrics::MetricsDataSource;
-pub use update::{Transaction, UpdateDataSource, VersionedDataSource};
+pub use update::{Transaction, UpdateDataSource, VersionedDataSource, genesis_vid};
 
 #[cfg(any(test, feature = "testing"))]
 mod test_helpers {
