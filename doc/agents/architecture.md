@@ -105,12 +105,11 @@ After a seed, the epochs below its window have no stored stake table. The `Stake
 - Logs: one `info!` per stored epoch. A failed attempt logs one line with the failing epoch count, the lowest failing
   epoch and one error: `warn!` for the first 7 consecutive failed attempts of a fill, `error!` from the 8th, when the
   wait has reached 10 minutes. Each header request is sent once per attempt, with a retry index (at most 4) that scales
-  the peers' timeout; the fill's backoff is the only retry. Epochs the LC contract does not prove yet are logged at
-  `debug!`.
-- Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge; includes mismatched epochs and epochs not
-  yet provable under the LC contract state, which wait for the next trigger), `stake_table_backfill_failed_attempts`
+  the peers' timeout; the fill's backoff is the only retry.
+- Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge; includes mismatched epochs),
+  `stake_table_backfill_failed_attempts`
   (gauge, consecutive failed attempts of the current fill, 0 when it completes), `stake_table_backfill_stored`,
-  `stake_table_backfill_hash_mismatches`, `stake_table_backfill_failed_epochs` (counters).
+  `stake_table_backfill_hash_mismatches` (counters).
 
 ## Consensus upgrades
 

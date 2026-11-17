@@ -882,14 +882,16 @@ impl EpochCommittees {
                 EventSource::StoredOnly,
             )
             .await?;
-        match (next_root.next_stake_table_hash(), derived.stake_table_hash) {
-            (Some(decided), Some(derived)) if decided != derived => {
-                return Ok(StakeTableStoreOutcome::HashMismatch { decided, derived });
-            },
-            (None, _) | (Some(_), None) => {
-                debug!(%epoch, "no decided or derived stake table hash; stored without comparison")
-            },
-            _ => {},
+        // Headers of old versions carry no decided hash: stored without comparison.
+        if let Some((decided, derived_hash)) = next_root
+            .next_stake_table_hash()
+            .zip(derived.stake_table_hash)
+            && decided != derived_hash
+        {
+            return Ok(StakeTableStoreOutcome::HashMismatch {
+                decided,
+                derived: derived_hash,
+            });
         }
 
         let persistence = self.fetcher.persistence.lock().await;

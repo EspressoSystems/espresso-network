@@ -55,8 +55,7 @@ pub struct StakeTableBackfill {
     /// Starts a fill. A request during a fill or a backoff starts the next attempt at once and
     /// restarts the backoff at `FIRST_BACKOFF`.
     requested: Arc<Notify>,
-    /// Epochs without a stored table: failed ones, those with a hash mismatch and those the LC
-    /// contract state does not prove yet, which wait for the next trigger.
+    /// Epochs without a stored table: failed ones and those with a hash mismatch.
     missing: Arc<dyn Gauge>,
     /// Consecutive failed attempts of the current fill; 0 when it completes.
     failed_attempts: Arc<dyn Gauge>,
@@ -64,8 +63,6 @@ pub struct StakeTableBackfill {
     stored: Arc<dyn Counter>,
     /// Epochs not stored because the derived hash differs from the decided one.
     hash_mismatches: Arc<dyn Counter>,
-    /// Epoch failures that a later attempt retries, counted per attempt.
-    failed_epochs: Arc<dyn Counter>,
 }
 
 impl StakeTableBackfill {
@@ -85,9 +82,6 @@ impl StakeTableBackfill {
                 .into(),
             hash_mismatches: catchup
                 .create_counter("stake_table_backfill_hash_mismatches".into(), None)
-                .into(),
-            failed_epochs: catchup
-                .create_counter("stake_table_backfill_failed_epochs".into(), None)
                 .into(),
         }
     }
@@ -140,8 +134,13 @@ impl StakeTableBackfill {
         self.failed_attempts.set(0);
     }
 
-    /// One attempt: stores the missing tables that the LC contract proves, requesting each header
-    /// once with `request_retry`. Errors when a read before the epochs failed, or when a chunk of
+    /// One attempt: stores the missing tables, requesting each header once with `request_retry`.
+    ///
+    /// Every missing epoch is below a seeded window, which ends at the LC contract epoch plus one,
+    /// so its roots are below the LC contract height and provable. An epoch above it would mean an
+    /// out-of-order install and fails its header request, which reports through the failed attempts.
+    ///
+    /// Errors when a read before the epochs failed, or when a chunk of
     /// epochs stored nothing and had a failure; a retry can fix those.
     async fn store_missing(
         &self,
@@ -169,19 +168,10 @@ impl StakeTableBackfill {
             .lc_contract_finalized_state()
             .await
             .context("reading the LC contract state")?;
-        let (provable, unprovable): (Vec<_>, Vec<_>) = retryable
-            .into_iter()
-            .partition(|epoch| sources.layout.root_heights(*epoch).next < lc_contract_state.height);
-        if !unprovable.is_empty() {
-            tracing::debug!(count = unprovable.len(), "epochs not provable yet");
-        }
-        if provable.is_empty() {
-            return Ok(());
-        }
         let anchor = fetch_anchor_root(sources.peers, &lc_contract_state, request_retry).await?;
 
         let mut failures = Vec::new();
-        for chunk in provable.chunks(CHUNK_EPOCHS) {
+        for chunk in retryable.chunks(CHUNK_EPOCHS) {
             let failed_before = failures.len();
             let mut chunk_stored = false;
             let headers = sources
@@ -216,13 +206,13 @@ impl StakeTableBackfill {
         outcome: anyhow::Result<StakeTableStoreOutcome>,
         mismatched: &mut BTreeSet<EpochNumber>,
     ) -> anyhow::Result<()> {
-        match outcome {
-            Ok(StakeTableStoreOutcome::Stored) => {
+        match outcome? {
+            StakeTableStoreOutcome::Stored => {
                 tracing::info!(target: "announce::catchup", %epoch, "stored stake table");
                 self.stored.add(1);
                 self.missing.update(-1);
             },
-            Ok(StakeTableStoreOutcome::HashMismatch { decided, derived }) => {
+            StakeTableStoreOutcome::HashMismatch { decided, derived } => {
                 tracing::error!(
                     %epoch,
                     ?decided,
@@ -231,10 +221,6 @@ impl StakeTableBackfill {
                 );
                 mismatched.insert(epoch);
                 self.hash_mismatches.add(1);
-            },
-            Err(err) => {
-                self.failed_epochs.add(1);
-                return Err(err);
             },
         }
         Ok(())
@@ -264,6 +250,10 @@ impl FillSources<'_> {
     /// The root headers of `chunk` by height, each requested once and one at a time, so that the
     /// requests of a backfill and a concurrent seed stay within the peers' limit per key. A
     /// header that cannot be fetched fails only the epochs that need it.
+    ///
+    /// Each header is requested once per attempt, so with peers that answer only part of the
+    /// requests a chunk that needed all its headers would rarely complete; failing only the
+    /// dependent epochs keeps progress.
     async fn fetch_chunk_headers(
         &self,
         lc_contract_state: &LcContractFinalizedState,
@@ -385,13 +375,13 @@ struct EpochRootHeights {
 }
 
 /// The epochs from the first one an epoch root defines up to the highest in `stored` that are
-/// not in `stored`, ascending. Pure.
+/// not in `stored`, ascending. `first_epoch` is at least 1, so `first_epoch + 2` is that first
+/// epoch. Pure.
 fn missing_epochs(layout: EpochLayout, stored: &BTreeSet<EpochNumber>) -> Vec<EpochNumber> {
     let Some(highest) = stored.last() else {
         return Vec::new();
     };
-    // Epoch 3 is the first table an epoch root defines; the first two epochs are genesis tables.
-    let lowest = (*layout.first_epoch + 2).max(3);
+    let lowest = *layout.first_epoch + 2;
     (lowest..=**highest)
         .map(EpochNumber::new)
         .filter(|epoch| !stored.contains(epoch))
@@ -639,7 +629,6 @@ mod tests {
         serve_while(&backfill, &store, &peers, async {
             wait_until(|| store.is_stored(&[5, 6])).await;
             assert!(!store.is_stored(&[3]) && !store.is_stored(&[4]));
-            assert_eq!(metric(&metrics, "stake_table_backfill_failed_epochs"), 2);
             assert_eq!(metric(&metrics, "stake_table_backfill_missing_epochs"), 2);
 
             peers.set_unavailable_heights([]);
@@ -714,7 +703,6 @@ mod tests {
         assert_eq!(store.calls_of(4), 1);
         assert_eq!(metric(&metrics, "stake_table_backfill_hash_mismatches"), 1);
         assert_eq!(metric(&metrics, "stake_table_backfill_missing_epochs"), 1);
-        assert_eq!(metric(&metrics, "stake_table_backfill_failed_epochs"), 0);
     }
 
     /// The wait between attempts doubles from `FIRST_BACKOFF` up to `MAX_BACKOFF`.
@@ -779,10 +767,6 @@ mod tests {
 
             // Epochs 3 to 22 are the first chunk: the roots at heights 5 to 205.
             assert_eq!(peers.proven_header_calls(), 21);
-            assert_eq!(
-                metric(&metrics, "stake_table_backfill_failed_epochs"),
-                CHUNK_EPOCHS
-            );
         })
         .await;
     }
@@ -826,50 +810,6 @@ mod tests {
         .await;
     }
 
-    /// Epochs whose next root the LC contract does not prove yet are not stored; the fill ends
-    /// and they stay in the gauge.
-    #[tokio::test(start_paused = true)]
-    async fn unprovable_epoch_is_left_missing() {
-        let (peers, lc_contract_state) = peers().await;
-        let metrics = PrometheusMetrics::default();
-        let backfill = StakeTableBackfill::new(&metrics);
-        let store = MockStakeTableStore::new(&[9], lc_contract_state);
-
-        serve_while(&backfill, &store, &peers, async {
-            wait_until(|| store.is_stored(&[3, 4, 5, 6, 7])).await;
-            sleep(MAX_BACKOFF * 2).await;
-        })
-        .await;
-
-        assert_eq!(store.calls_of(8), 0);
-        assert_eq!(store.listings.lock().len(), 1);
-        assert_eq!(metric(&metrics, "stake_table_backfill_missing_epochs"), 1);
-    }
-
-    /// An epoch is provable when its next root is below the LC contract height; epoch 8's next
-    /// root is at height 65.
-    #[rstest]
-    #[case::next_root_at_the_height(65, 0)]
-    #[case::next_root_below_the_height(66, 1)]
-    #[tokio::test(start_paused = true)]
-    async fn epoch_is_provable_below_the_lc_contract_height(
-        #[case] lc_contract_height: usize,
-        #[case] stores_of_epoch_8: usize,
-    ) {
-        let (peers, lc_contract_state) =
-            mock_with_headers_at_lc_height(&[5, 15, 25, 35, 45, 55, 65], lc_contract_height).await;
-        let backfill = StakeTableBackfill::new(&PrometheusMetrics::default());
-        let store = MockStakeTableStore::new(&[9], lc_contract_state);
-
-        serve_while(&backfill, &store, &peers, async {
-            wait_until(|| store.is_stored(&[3, 4, 5, 6, 7])).await;
-            sleep(MAX_BACKOFF).await;
-        })
-        .await;
-
-        assert_eq!(store.calls_of(8), stores_of_epoch_8);
-    }
-
     /// A listing that does not return fails the attempt at the deadline; the fill retries.
     #[tokio::test(start_paused = true)]
     async fn listing_past_the_deadline_fails_the_attempt() {
@@ -911,6 +851,5 @@ mod tests {
         .await;
 
         assert!(!store.is_stored(&[4]));
-        assert_eq!(metric(&metrics, "stake_table_backfill_failed_epochs"), 1);
     }
 }

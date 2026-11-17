@@ -588,7 +588,8 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
 
     /// Store stake table at `epoch` in the persistence layer. A `None` reward or hash keeps the
-    /// stored value.
+    /// stored value: the live path can store a table derived without a block reward after the
+    /// backfill stored it with one.
     async fn store_stake(
         &self,
         epoch: EpochNumber,
