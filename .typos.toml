@@ -1,6 +1,5 @@
 [files]
 extend-exclude = [
-  "data/initial_stake_table.toml",
   ".env",
   "*.json",
   "**/*.pdf",
@@ -18,11 +17,9 @@ extend-exclude = [
   "crates/espresso/node/src/genesis.rs",
   "*.snap",
   "data/insta_snapshots",
-  "data/initial_stake_table.toml",
-  "data/initial_staging_stake_table.toml",
-  "data/genesis/staging.toml",
-  "data/genesis/staging-new.toml",
-  "data/genesis/demo-da-committees.toml",
+  "data/genesis/**/*.toml",
+  "scripts/network-bench/genesis.toml",
+  "scripts/network-bench/bench-keys.jsonl",
   "tests/proof_of_stake.rs",
 ]
 
