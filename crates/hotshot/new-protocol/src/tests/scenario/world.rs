@@ -202,7 +202,7 @@ impl World {
     pub fn leader(&self, epoch: u64, view: u64) -> (BLSPubKey, BLSPrivKey) {
         let leader = self
             .membership
-            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .membership_for_epoch(EpochNumber::new(epoch))
             .expect("the epoch's committee is known")
             .leader(ViewNumber::new(view))
             .expect("every view has a leader");
@@ -220,7 +220,7 @@ impl World {
     pub fn block_leader(&self, id: u64) -> Option<BLSPubKey> {
         let def = self.defs.get(&id)?;
         self.membership
-            .membership_for_epoch(Some(EpochNumber::new(self.epoch_of(def))))
+            .membership_for_epoch(EpochNumber::new(self.epoch_of(def)))
             .ok()?
             .leader(ViewNumber::new(def.view))
             .ok()
@@ -465,7 +465,7 @@ impl World {
 
     fn committee(&self, epoch: u64) -> hotshot_types::epoch_membership::EpochMembership<TestTypes> {
         self.membership
-            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .membership_for_epoch(EpochNumber::new(epoch))
             .unwrap_or_else(|e| panic!("the committee of epoch {epoch} is known: {e}"))
     }
 
@@ -487,7 +487,7 @@ impl World {
             payload,
             &self.membership,
             ViewNumber::new(view),
-            Some(epoch),
+            epoch,
             Some(epoch),
             metadata,
         )

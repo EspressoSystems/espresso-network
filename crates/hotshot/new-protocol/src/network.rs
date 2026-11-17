@@ -59,6 +59,25 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
+impl<K> Shared<K> {
+    /// The network parties of `removed` that no peer uses any more.
+    ///
+    /// A validator that rotates its signing key keeps its x25519 key, so its
+    /// old and its new signing key are two peers of one network party. A peer
+    /// whose address alone changed still uses its x25519 key.
+    fn unused_x25519_keys(
+        &self,
+        removed: impl IntoIterator<Item = x25519::PublicKey>,
+    ) -> Vec<PublicKey> {
+        let used: HashSet<_> = self.peers.values().map(|info| info.x25519_key).collect();
+        removed
+            .into_iter()
+            .filter(|key| !used.contains(key))
+            .map(Into::into)
+            .collect()
+    }
+}
+
 /// Lower bound of `message_limit`.
 pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
     NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
@@ -227,15 +246,15 @@ impl<T: NodeType> Cliquenet<T> {
     }
 
     pub fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError> {
-        let mut targets = Vec::new();
-        {
+        let targets = {
             let mut shared = self.inner.shared.write();
-            for k in ps {
-                if let Some(info) = shared.peers.remove(k) {
-                    targets.push(info.x25519_key.into())
-                }
-            }
-        }
+            let removed: Vec<_> = ps
+                .into_iter()
+                .filter_map(|k| shared.peers.remove(k))
+                .map(|info| info.x25519_key)
+                .collect();
+            shared.unused_x25519_keys(removed)
+        };
         self.inner.sender.remove_peers(targets)?;
         Ok(())
     }
@@ -273,14 +292,14 @@ impl<T: NodeType> Cliquenet<T> {
         }
 
         // Validators of the new epoch.
-        let Some(curr_infos) = coord.epoch_peers(Some(epoch)) else {
+        let Some(curr_infos) = coord.epoch_peers(epoch) else {
             error!(%epoch, "no stake table available");
             return Ok(());
         };
 
         // Validators leaving are retained as peers for one additional epoch.
         let prev_infos = if *epoch > 0 {
-            coord.epoch_peers(Some(epoch - 1)).unwrap_or_else(|| {
+            coord.epoch_peers(epoch - 1).unwrap_or_else(|| {
                 info!(%epoch, "previous epoch's stake table unavailable");
                 HashMap::new()
             })
@@ -289,7 +308,7 @@ impl<T: NodeType> Cliquenet<T> {
         };
 
         // Validators joining in the next epoch are connected to early.
-        let next_infos = coord.epoch_peers(Some(epoch + 1)).unwrap_or_else(|| {
+        let next_infos = coord.epoch_peers(epoch + 1).unwrap_or_else(|| {
             info!(%epoch, "next epoch's stake table not available");
             HashMap::new()
         });
@@ -337,21 +356,25 @@ impl<T: NodeType> Cliquenet<T> {
             }
         }
 
-        {
-            let peers = &mut self.inner.shared.write().peers;
+        let del_targets = {
+            let mut shared = self.inner.shared.write();
+            let mut dropped: Vec<_> = to_del.iter().map(|(_, i)| i.x25519_key).collect();
             for (k, _) in &to_del {
-                peers.remove(k);
+                shared.peers.remove(k);
             }
             for (k, info) in &to_add {
-                peers.insert(k.clone(), info.clone());
+                // A peer that changed its x25519 key leaves its old party behind.
+                if let Some(old) = shared.peers.insert(k.clone(), info.clone()) {
+                    dropped.push(old.x25519_key);
+                }
             }
-        }
+            shared.unused_x25519_keys(dropped)
+        };
 
         let add_targets: Vec<(PublicKey, NetAddr)> = to_add
             .iter()
             .map(|(_, i)| (i.x25519_key.into(), i.p2p_addr.clone()))
             .collect();
-        let del_targets: Vec<PublicKey> = to_del.iter().map(|(_, i)| i.x25519_key.into()).collect();
 
         if let Err(err) = self.inner.sender.add_peers(Role::Active, add_targets) {
             error!(%epoch, %err, "network down; could not add peers to network");

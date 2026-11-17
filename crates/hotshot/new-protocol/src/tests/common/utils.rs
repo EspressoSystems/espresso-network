@@ -497,7 +497,7 @@ impl TestData {
         let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
             if let Some((target_view, ref data)) = upgrade_at_view {
                 let epoch_membership = membership
-                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .membership_for_epoch(EpochNumber::genesis())
                     .unwrap();
                 let (leader_pk, leader_priv_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
@@ -562,7 +562,7 @@ impl TestData {
             };
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
-                .membership_for_epoch(Some(EpochNumber::genesis()))
+                .membership_for_epoch(EpochNumber::genesis())
                 .unwrap();
 
             // ---- epoch-aware patching ----
@@ -1068,7 +1068,7 @@ impl MockBlock {
         membership: &EpochMembershipCoordinator<TestTypes>,
         epoch: EpochNumber,
     ) -> Self {
-        match membership.stake_table_for_epoch(Some(epoch)) {
+        match membership.stake_table_for_epoch(epoch) {
             Ok(committee) => Self::with_total_weight(vid_total_weight::<TestTypes, _>(
                 committee.stake_table(),
                 Some(epoch),
@@ -1708,7 +1708,7 @@ impl ConsensusHarness {
                     payload,
                     &self.membership_coordinator,
                     *view,
-                    Some(*epoch),
+                    *epoch,
                     Some(*epoch),
                     metadata,
                 )
@@ -2073,7 +2073,7 @@ pub(crate) fn timeout_cert_of(
 ) -> TimeoutEvidence<TestTypes> {
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch))
+        .membership_for_epoch(epoch)
         .expect("the epoch resolves");
     TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         timed_out,

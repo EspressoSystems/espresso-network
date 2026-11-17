@@ -220,7 +220,7 @@ async fn late_certificate1_at_the_boundary_is_committed_by_a_revote() {
     // The re-vote's Certificate1 locks the node at view 12, and it votes2 there.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -494,7 +494,7 @@ async fn revote_lock_over_a_decided_last_block_fetches_no_payload() {
 
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -555,7 +555,7 @@ async fn fetched_lock_block_decided_by_a_revote_fetches_no_payload() {
         node_before_the_boundary_block(node, &test_data, test_timeout_epoch_lock()).await;
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -635,7 +635,7 @@ async fn own_certificate1_advancing_the_view_decides_a_revoted_block() {
         node_before_the_boundary_certificate(0, &test_data, test_timeout_epoch_lock()).await;
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -755,7 +755,7 @@ async fn revote_behind_its_timeout_certificates_lock_gets_no_vote1() {
     // A lock at view 11 over another last block of epoch 1.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
@@ -1287,7 +1287,7 @@ fn revote_certs(
     let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(1)))
+        .membership_for_epoch(epoch(1))
         .unwrap();
     let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
     (
@@ -1813,7 +1813,7 @@ async fn late_lock_of_the_next_epoch_does_not_refuse_an_admitted_first_block() {
     // View 11 timed out under epoch 2 with the boundary block as the lock.
     let membership = harness
         .membership_coordinator
-        .membership_for_epoch(Some(epoch(2)))
+        .membership_for_epoch(epoch(2))
         .unwrap();
     let tc = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
         view(11),
