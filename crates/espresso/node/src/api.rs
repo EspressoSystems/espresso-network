@@ -1,8 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     pin::Pin,
     sync::{Arc, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ::light_client::{
@@ -16,6 +16,7 @@ use anyhow::{Context, bail, ensure};
 use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
+use consensus_api::{DecideLogClient, proto::ServiceRecordsRequest};
 use data_source::{
     CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StateCertDataSource,
     StateCertFetchingDataSource, SubmitDataSource,
@@ -46,6 +47,7 @@ use espresso_types::{
 };
 use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_new_protocol::discovery::{RETAINED_EPOCHS, SignedServiceRecord};
 use hotshot_query_service::{
     availability::VidCommonQueryData,
     data_source::ExtensibleDataSource,
@@ -129,6 +131,48 @@ struct ApiState {
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
+
+    service_records: ServiceRecordCache,
+}
+
+/// The records the validators signed about their API services, per epoch, as consensus last
+/// served them.
+///
+/// Records of the latest epoch can still change, so they are fetched again once older than
+/// [`LATEST_RECORDS_TTL`]; those of earlier epochs are kept. The cache holds the latest
+/// [`RETAINED_EPOCHS`] epochs, as consensus does.
+#[derive(Clone, Debug, Default)]
+struct ServiceRecordCache {
+    /// Per epoch, when the records were fetched, and the records.
+    epochs: Arc<parking_lot::Mutex<BTreeMap<EpochNumber, FetchedRecords>>>,
+}
+
+type FetchedRecords = (Instant, Vec<SignedServiceRecord<SeqTypes>>);
+
+/// How long the records of the latest epoch are served from the cache.
+const LATEST_RECORDS_TTL: Duration = Duration::from_secs(10);
+
+impl ServiceRecordCache {
+    /// The cached records of `epoch`, or of the latest cached epoch, if still fresh.
+    fn get(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)> {
+        let epochs = self.epochs.lock();
+        let (latest, _) = epochs.last_key_value()?;
+        let epoch = epoch.unwrap_or(*latest);
+        let (fetched, records) = epochs.get(&epoch)?;
+        (epoch < *latest || fetched.elapsed() < LATEST_RECORDS_TTL)
+            .then(|| (epoch, records.clone()))
+    }
+
+    fn insert(&self, epoch: EpochNumber, records: Vec<SignedServiceRecord<SeqTypes>>) {
+        let mut epochs = self.epochs.lock();
+        epochs.insert(epoch, (Instant::now(), records));
+        while epochs.len() as u64 > RETAINED_EPOCHS {
+            epochs.pop_first();
+        }
+    }
 }
 
 impl ApiState {
@@ -139,6 +183,7 @@ impl ApiState {
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
                 .build(),
+            service_records: ServiceRecordCache::default(),
         }
     }
 
@@ -238,6 +283,13 @@ impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     ) -> anyhow::Result<Option<RewardAmount>> {
         self.as_ref().get_block_reward(epoch).await
     }
+    async fn service_records(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)>> {
+        self.as_ref().service_records(epoch).await
+    }
+
     /// Get all the validator participation for the current epoch
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_proposal_participation().await
@@ -422,6 +474,46 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
             .snapshot()
             .validators()
             .clone())
+    }
+
+    async fn service_records(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)>> {
+        let cache = &self.service_records;
+        if let Some(found) = cache.get(epoch) {
+            return Ok(Some(found));
+        }
+        // A follower runs no consensus and so has no records.
+        let Some(addr) = self.context().await.consensus_api_addr() else {
+            return Ok(None);
+        };
+        let mut client = DecideLogClient::connect(format!("http://{addr}"))
+            .await
+            .context("connecting to the consensus API")?;
+        let response = match client
+            .get_service_records(ServiceRecordsRequest {
+                epoch: epoch.map(|e| *e),
+            })
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
+            Err(status) => return Err(anyhow::anyhow!("fetching service records: {status}")),
+        };
+        let records = response
+            .records
+            .iter()
+            .filter_map(|bytes| {
+                bincode::deserialize::<SignedServiceRecord<SeqTypes>>(bytes)
+                    .inspect_err(|err| tracing::warn!(%err, "undecodable service record"))
+                    .ok()
+            })
+            .filter(SignedServiceRecord::is_valid)
+            .collect::<Vec<_>>();
+        let epoch = EpochNumber::new(response.epoch);
+        cache.insert(epoch, records.clone());
+        Ok(Some((epoch, records)))
     }
 
     /// Get the current proposal participation.

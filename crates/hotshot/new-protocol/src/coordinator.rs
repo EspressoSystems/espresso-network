@@ -49,6 +49,7 @@ use crate::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
+    discovery::{RETAINED_EPOCHS, ServiceBook, ServiceRecord},
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
     helpers::{ViewEpoch, proposal_commitment, validated_state_cert},
@@ -174,6 +175,15 @@ pub struct Coordinator<T: NodeType, S = DiskStore> {
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
+    /// The newest record of each staked validator's API service.
+    #[builder(default)]
+    service_book: ServiceBook<T>,
+    /// What this node's records say about its API service, with the key to sign one for each
+    /// epoch.
+    service_record: Option<(ServiceRecord, <T::SignatureKey as SignatureKey>::PrivateKey)>,
+    /// The epoch this node last sent its record for.
+    #[builder(skip)]
+    service_record_epoch: Option<EpochNumber>,
 }
 
 #[bon]
@@ -211,6 +221,8 @@ where
         decided_state: Option<Box<dyn DecidedState<T>>>,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
+        /// What this node's records say about its API service; the epoch is set per record.
+        service_record: Option<ServiceRecord>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -366,6 +378,9 @@ where
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
 
+        let service_book = ServiceBook::new(restored.service_records);
+        let service_record = service_record.map(|record| (record, private_key.clone()));
+
         Self::builder()
             .consensus(consensus)
             .network(network)
@@ -462,6 +477,8 @@ where
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
             .external_tx(external_tx)
+            .service_book(service_book)
+            .maybe_service_record(service_record)
             .build()
     }
 
@@ -1273,6 +1290,37 @@ where
                     self.send_transactions(resend, epoch)?;
                 }
 
+                // Each epoch can bring committee members that do not have this node's record yet,
+                // and drops an epoch out of the retained window.
+                if self.service_record_epoch.is_none_or(|sent| sent < epoch) {
+                    self.service_record_epoch = Some(epoch);
+                    if let Some((template, private_key)) = &self.service_record {
+                        let record = ServiceRecord {
+                            epoch,
+                            ..template.clone()
+                        };
+                        match record.sign::<T>(self.public_key.clone(), private_key) {
+                            Ok(signed) => {
+                                self.storage.append_service_record(&signed);
+                                self.service_book.insert(signed.clone());
+                                if let Err(err) = self.broadcast_in(
+                                    self.slot_for(view),
+                                    MessageType::ServiceRecord(signed),
+                                    "service record",
+                                ) {
+                                    warn!(%node, %err, "failed to send the service record");
+                                }
+                            },
+                            Err(err) => error!(%node, %err, "failed to sign the service record"),
+                        }
+                    }
+                    if let Some(oldest) = epoch.checked_sub(RETAINED_EPOCHS - 1) {
+                        let oldest = EpochNumber::new(oldest);
+                        self.service_book.drop_before(oldest);
+                        self.storage.drop_service_records(oldest);
+                    }
+                }
+
                 // Proactively fetch the DRB for the next epoch so
                 // late-starting nodes have it before they need it
                 let next_epoch = epoch + 1;
@@ -1891,6 +1939,23 @@ where
                     {
                         warn!(%node, %sender, %view, %err, "failed to send payload request");
                     }
+                }
+                None
+            },
+            MessageType::ServiceRecord(record) => {
+                let epoch = record.record.epoch;
+                let staked = is_epoch_admissible(epoch, self.consensus.current_epoch())
+                    && self
+                        .membership_coordinator
+                        .stake_table_for_epoch(epoch)
+                        .is_ok_and(|members| members.has_stake(&record.signer));
+                if !staked {
+                    debug!(%node, %sender, signer = %record.signer, "service record of an unstaked key");
+                    return None;
+                }
+                if self.service_book.insert(record.clone()) {
+                    debug!(%node, signer = %record.signer, url = %record.record.api_url, "recv service record");
+                    self.storage.append_service_record(&record);
                 }
                 None
             },

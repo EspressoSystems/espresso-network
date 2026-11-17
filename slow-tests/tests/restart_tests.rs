@@ -345,6 +345,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &network.genesis_file.display().to_string(),
             "--builder-urls",
             &format!("http://localhost:{}", network.builder_port),
+            "--public-api-url",
+            &format!("http://localhost:{}", node.api_port),
             "--cliquenet-bind-address",
             &format!("0.0.0.0:{}", node.cliquenet_port),
             "--cliquenet-advertise-address",

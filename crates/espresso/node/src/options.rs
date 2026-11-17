@@ -76,10 +76,18 @@ pub struct Options {
     )]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
-    /// The URL we advertise to other nodes as being for our public API.
-    /// Should be supplied in `http://host:port` form.
+    /// The URL of this node's API service, in `http://host:port` form.
+    ///
+    /// Required for a validator: it signs a record with this URL and sends it to the other
+    /// nodes, so that clients find its API service.
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
     pub public_api_url: Option<Url>,
+
+    /// The Ed25519 public key, base58, the API service authenticates requests with, if it does.
+    ///
+    /// It goes into the record a validator sends about its API service.
+    #[clap(long, env = "ESPRESSO_NODE_API_PUBLIC_KEY", value_parser = parse_ed25519_public_key)]
+    pub api_public_key: Option<[u8; 32]>,
 
     /// The URL of the builders to use for submitting transactions
     #[clap(long, env = "ESPRESSO_BUILDER_URLS", value_delimiter = ',')]
@@ -274,6 +282,13 @@ fn parse_bind_addr(s: &str) -> Result<NetAddr, String> {
     let addr = s.parse::<NetAddr>().map_err(|e| e.to_string())?;
     addr.validate().map_err(|e| e.to_string())?;
     Ok(addr)
+}
+
+fn parse_ed25519_public_key(s: &str) -> Result<[u8; 32], String> {
+    let bytes = bs58::decode(s).into_vec().map_err(|e| e.to_string())?;
+    bytes
+        .try_into()
+        .map_err(|bytes: Vec<u8>| format!("expected 32 bytes, got {}", bytes.len()))
 }
 
 /// As [`parse_bind_addr`], and the port has to be one a peer can connect to. A listener

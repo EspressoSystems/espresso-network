@@ -2579,6 +2579,7 @@ def render_node_env(
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
         "ESPRESSO_NODE_CONSENSUS_STORE_PATH": "/store/consensus",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
+        "ESPRESSO_NODE_PUBLIC_API_URL": _node_url(self_info),
     }
     if consensus_storage == "journal":
         env["ESPRESSO_NODE_JOURNAL_MAX_BYTES"] = str(_journal_max_bytes(host))

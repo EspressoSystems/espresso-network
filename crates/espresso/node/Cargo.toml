@@ -39,9 +39,11 @@ bincode = { workspace = true }
 blake3 = { workspace = true }
 byteorder = { workspace = true }
 chrono = { workspace = true }
+bs58 = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
 committable = { workspace = true }
+consensus-api = { workspace = true }
 csv = { workspace = true, optional = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
@@ -112,7 +114,6 @@ vergen = { workspace = true }
 
 [dev-dependencies]
 bitvec = { workspace = true }
-bs58 = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Keep in sync with `[features] testing`.

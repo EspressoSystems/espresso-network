@@ -27,6 +27,7 @@ use crate::{
     client::CoordinatorClient,
     consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
+    discovery::{ServiceBook, ServiceRecord},
     epoch::EpochManager,
     helpers::test_upgrade_lock,
     message::{Certificate1, OpaqueMessage, Proposal},
@@ -262,6 +263,14 @@ pub async fn build_test_coordinator(
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
+    let service_record = ServiceRecord {
+        epoch: EpochNumber::genesis(),
+        api_url: format!("http://node{node_index}.test:24000"),
+        api_key: None,
+        sequence: 1,
+    };
+    let service_book = ServiceBook::new(store.load().expect("load").service_records);
+
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
         .network(network)
@@ -294,6 +303,8 @@ pub async fn build_test_coordinator(
         .external_tx(external_tx)
         .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
+        .service_book(service_book)
+        .service_record((service_record, private_key.clone()))
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).

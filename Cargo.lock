@@ -3866,6 +3866,7 @@ dependencies = [
  "clap",
  "client",
  "committable",
+ "consensus-api",
  "csv",
  "derivative",
  "derive_more 2.1.1",

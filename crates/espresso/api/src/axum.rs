@@ -5050,6 +5050,7 @@ mod tests {
             "/v2/node/participation/proposal",
             "/v2/node/participation/vote",
             "/v2/node/payload-size",
+            "/v2/node/peers",
             "/v2/node/stake-table",
             "/v2/node/sync-status",
             "/v2/node/transaction-count",
@@ -5310,6 +5311,13 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
         ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_peers(
+            &self,
+            _request: tonic::Request<crate::proto::GetPeersRequest>,
+        ) -> Result<tonic::Response<crate::proto::PeersResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

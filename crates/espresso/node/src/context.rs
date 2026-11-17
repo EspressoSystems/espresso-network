@@ -22,6 +22,7 @@ use futures::{
 };
 use hotshot_new_protocol::{
     coordinator::Coordinator,
+    discovery::ServiceRecord,
     leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::{Cliquenet, NetworkError},
     store::{ConsensusStore, Restored},
@@ -139,6 +140,7 @@ where
         restored: Restored<SeqTypes>,
         decide_log_limit: u64,
         consensus_api_addr: Option<SocketAddr>,
+        service_record: Option<ServiceRecord>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -239,6 +241,7 @@ where
                 stop_voting_time: config.stop_voting_time,
             })
             .external_tx(external_tx)
+            .maybe_service_record(service_record)
             .make();
 
         let consensus_handle = Arc::new(ConsensusHandle::new(

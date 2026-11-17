@@ -139,6 +139,13 @@ impl Source for FakeLog {
     fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady> {
         self.ready.subscribe()
     }
+
+    async fn service_records(
+        &self,
+        _epoch: Option<u64>,
+    ) -> Result<Option<(u64, Vec<Bytes>)>, ApiError> {
+        Ok(None)
+    }
 }
 
 /// A sink in memory, holding the blocks from `start` on.

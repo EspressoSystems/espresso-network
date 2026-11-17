@@ -291,6 +291,7 @@ where
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
+        api_public_key: opt.api_public_key,
         private_staking_key: staking,
         private_state_key: state,
         catchup: CatchupParams {
@@ -563,6 +564,8 @@ mod test {
             &genesis_file.display().to_string(),
             "--consensus-store-path",
             &tmp.path().join("consensus").display().to_string(),
+            "--public-api-url",
+            &format!("http://localhost:{port1}"),
         ]);
 
         // Start the sequencer in a background task. This process will not complete, because no L1

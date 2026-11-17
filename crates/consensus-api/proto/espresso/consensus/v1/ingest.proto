@@ -24,6 +24,10 @@ service DecideLog {
   // Payloads as they are stored, before their block is decided. Best effort: a slow reader
   // misses notifications, and finds the payload through the decided entry instead.
   rpc PayloadsReady(PayloadsReadyRequest) returns (stream PayloadReady);
+
+  // The records the validators signed about their API services for an epoch, newest per
+  // validator. Not found if the node holds none for the epoch.
+  rpc GetServiceRecords(ServiceRecordsRequest) returns (ServiceRecordsResponse);
 }
 
 message SubscribeRequest {
@@ -108,4 +112,15 @@ message PayloadReady {
   uint64 view = 1;
   string payload_commitment = 2;
   uint64 size = 3;
+}
+
+message ServiceRecordsRequest {
+  // The latest epoch with records when absent.
+  optional uint64 epoch = 1;
+}
+
+message ServiceRecordsResponse {
+  uint64 epoch = 1;
+  // Each a signed record, bincode-encoded as consensus nodes exchange it.
+  repeated bytes records = 2;
 }

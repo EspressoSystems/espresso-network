@@ -28,6 +28,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     coordinator::metrics::Measurement,
+    discovery::SignedServiceRecord,
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
     state::StateEntry,
@@ -331,6 +332,18 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             },
             Err(err) => error!(%err, %view, "failed to encode state certificate"),
         }
+    }
+
+    /// Persists the newest record of a validator's API service. Nothing waits on it.
+    pub fn append_service_record(&mut self, record: &SignedServiceRecord<T>) {
+        if let Err(err) = store::put_service_record(&mut self.pending.batch, record) {
+            error!(%err, signer = %record.signer, "failed to encode service record");
+        }
+    }
+
+    /// Deletes the records of the epochs before `epoch`.
+    pub fn drop_service_records(&mut self, epoch: EpochNumber) {
+        store::drop_service_records(&mut self.pending.batch, epoch);
     }
 
     pub fn update_decided_upgrade_certificate(&mut self, cert: UpgradeCertificate<T>) {

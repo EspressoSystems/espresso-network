@@ -16,18 +16,20 @@ use std::{
 use anyhow::{Context, bail};
 use consensus_store::{Batch, Bytes, KeyRange, Snapshot, Store, Table, key};
 use hotshot_types::{
-    data::{Leaf2, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
     simple_certificate::{
         Certificate1, Certificate2, LightClientStateUpdateCertificateV2, UpgradeCertificate,
     },
     simple_vote::LockView,
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vid::avidm_gf2::AvidmGf2Common,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::{broadcast, watch};
+
+use crate::discovery::SignedServiceRecord;
 
 /// Rows of which there is at most one, under fixed keys.
 static SAFETY: LazyLock<Table> = LazyLock::new(|| table("safety"));
@@ -49,6 +51,9 @@ static PENDING_STATE_CERTS: LazyLock<Table> = LazyLock::new(|| table("pending-st
 
 /// Epoch to the light client state certificate of its root, once decided.
 static STATE_CERTS: LazyLock<Table> = LazyLock::new(|| table("state-certs"));
+
+/// `(epoch, validator key)` to the newest record of the validator's API service in the epoch.
+static SERVICE_RECORDS: LazyLock<Table> = LazyLock::new(|| table("service-records"));
 
 /// The latest view this node voted, proposed or sent a timeout vote in.
 const ACTED_VIEW: &[u8] = b"acted-view";
@@ -166,6 +171,9 @@ pub struct Restored<T: NodeType> {
 
     /// The latest decided leaf.
     pub anchor: Option<Anchor<T>>,
+
+    /// The newest record of each validator's API service.
+    pub service_records: Vec<SignedServiceRecord<T>>,
 }
 
 impl<T: NodeType> Default for Restored<T> {
@@ -180,6 +188,7 @@ impl<T: NodeType> Default for Restored<T> {
             state_cert: None,
             payloads: BTreeSet::new(),
             anchor: None,
+            service_records: Vec::new(),
         }
     }
 }
@@ -335,6 +344,10 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             Some((_, v)) => Some(decode(&v).context("state certificate")?),
             None => None,
         };
+        let service_records = snap
+            .range(&SERVICE_RECORDS, &KeyRange::all())?
+            .map(|entry| decode(&entry?.1).context("service record"))
+            .collect::<anyhow::Result<_>>()?;
         Ok(Restored {
             proposals,
             locked_qc: get(&snap, &SAFETY, LOCKED_QC)?,
@@ -345,6 +358,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             state_cert,
             payloads,
             anchor: get(&snap, &SAFETY, ANCHOR)?,
+            service_records,
         })
     }
 
@@ -380,6 +394,39 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     pub fn decided_payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
         let snap = self.store.snapshot()?;
         Ok(snap.get(&DECIDED_PAYLOADS, &key::u64(height))?)
+    }
+
+    /// The encoded records of `epoch`, or of the latest epoch with records if `epoch` is `None`,
+    /// with the epoch they are for.
+    pub fn service_records(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Option<(EpochNumber, Vec<Bytes>)>> {
+        let snap = self.store.snapshot()?;
+        let epoch = match epoch {
+            Some(epoch) => epoch,
+            None => match snap
+                .range(&SERVICE_RECORDS, &KeyRange::all())?
+                .last()
+                .transpose()?
+            {
+                Some((k, _)) => EpochNumber::new(
+                    k.get(..8)
+                        .and_then(key::decode_u64)
+                        .context("service record key does not start with an epoch")?,
+                ),
+                None => return Ok(None),
+            },
+        };
+        let range = KeyRange::between(
+            Bytes::copy_from_slice(&key::u64(*epoch)),
+            Bytes::copy_from_slice(&key::u64(*epoch + 1)),
+        );
+        let records = snap
+            .range(&SERVICE_RECORDS, &range)?
+            .map(|entry| Ok(entry?.1))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(Some((epoch, records)))
     }
 
     /// The payload of the block with `commitment` proposed in `view`, if stored.
@@ -670,6 +717,25 @@ pub fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
     batch
         .delete_range(&PROPOSALS, before())
         .delete_range(&PAYLOADS, before());
+}
+
+/// Replaces the stored record of the record's signer in its epoch.
+pub fn put_service_record<T: NodeType>(
+    batch: &mut Batch,
+    record: &SignedServiceRecord<T>,
+) -> anyhow::Result<()> {
+    let mut k = key::u64(*record.record.epoch).to_vec();
+    k.extend(record.signer.to_bytes());
+    batch.put(&SERVICE_RECORDS, k, encode(record)?);
+    Ok(())
+}
+
+/// Deletes the records of the epochs before `epoch`.
+pub fn drop_service_records(batch: &mut Batch, epoch: EpochNumber) {
+    batch.delete_range(
+        &SERVICE_RECORDS,
+        KeyRange::before(Bytes::copy_from_slice(&key::u64(*epoch))),
+    );
 }
 
 /// Queues `writes` to the application's tables in `batch`.

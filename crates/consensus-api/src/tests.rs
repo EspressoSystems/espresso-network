@@ -19,6 +19,7 @@ struct MemSource {
     next: watch::Sender<u64>,
     ready: broadcast::Sender<PayloadReady>,
     acked: Mutex<Vec<u64>>,
+    records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
 }
 
 impl MemSource {
@@ -29,6 +30,7 @@ impl MemSource {
             next: watch::channel(0).0,
             ready: broadcast::channel(4).0,
             acked: Mutex::default(),
+            records: Mutex::default(),
         })
     }
 
@@ -79,6 +81,18 @@ impl Source for MemSource {
 
     fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady> {
         self.ready.subscribe()
+    }
+
+    async fn service_records(
+        &self,
+        epoch: Option<u64>,
+    ) -> Result<Option<(u64, Vec<Bytes>)>, Error> {
+        let records = self.records.lock().unwrap();
+        let found = match epoch {
+            Some(epoch) => records.get_key_value(&epoch),
+            None => records.last_key_value(),
+        };
+        Ok(found.map(|(epoch, records)| (*epoch, records.clone())))
     }
 }
 
@@ -222,4 +236,39 @@ async fn payloads_ready_are_announced() {
         .unwrap()
         .unwrap();
     assert_eq!(got, ready);
+}
+
+/// Records come back for the epoch asked for, or for the latest one, and an epoch without any is
+/// not found.
+#[tokio::test]
+async fn service_records_by_epoch() {
+    let source = MemSource::new();
+    source.records.lock().unwrap().extend([
+        (
+            3,
+            vec![Bytes::from_static(b"a3"), Bytes::from_static(b"b3")],
+        ),
+        (4, vec![Bytes::from_static(b"a4")]),
+    ]);
+    let mut client = serve(source.clone()).await;
+
+    let response = client
+        .get_service_records(ServiceRecordsRequest { epoch: Some(3) })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.epoch, 3);
+    assert_eq!(response.records, vec![b"a3".to_vec(), b"b3".to_vec()]);
+
+    let latest = client
+        .get_service_records(ServiceRecordsRequest { epoch: None })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(latest.epoch, 4);
+
+    let missing = client
+        .get_service_records(ServiceRecordsRequest { epoch: Some(5) })
+        .await;
+    assert_eq!(missing.err().map(|s| s.code()), Some(Code::NotFound));
 }

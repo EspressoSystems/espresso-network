@@ -21,7 +21,8 @@ pub mod proto {
 pub use proto::decide_log_client::DecideLogClient;
 use proto::{
     AckRequest, AckResponse, Decided, GetPayloadRequest, PayloadChunk, PayloadReady,
-    PayloadsReadyRequest, Start, SubscribeRequest, SubscribeResponse,
+    PayloadsReadyRequest, ServiceRecordsRequest, ServiceRecordsResponse, Start, SubscribeRequest,
+    SubscribeResponse,
     decide_log_server::{DecideLog, DecideLogServer},
     get_payload_request::Key,
     subscribe_response::Event,
@@ -56,6 +57,11 @@ pub trait Source: Send + Sync + 'static {
 
     /// Payloads as they are stored, before their block is decided.
     fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady>;
+
+    /// The encoded service records of `epoch`, or of the latest epoch with records if `epoch` is
+    /// `None`, with the epoch they are for.
+    async fn service_records(&self, epoch: Option<u64>)
+    -> Result<Option<(u64, Vec<Bytes>)>, Error>;
 }
 
 /// Which payload [`Source::payload`] returns.
@@ -152,6 +158,22 @@ impl<S: Source> DecideLog for Service<S> {
             }
         });
         Ok(Response::new(Box::pin(ready)))
+    }
+
+    async fn get_service_records(
+        &self,
+        request: Request<ServiceRecordsRequest>,
+    ) -> Result<Response<ServiceRecordsResponse>, Status> {
+        let (epoch, records) = self
+            .source
+            .service_records(request.into_inner().epoch)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| Status::not_found("no service records"))?;
+        Ok(Response::new(ServiceRecordsResponse {
+            epoch,
+            records: records.into_iter().map(|r| r.to_vec()).collect(),
+        }))
     }
 }
 

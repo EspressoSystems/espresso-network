@@ -59,13 +59,14 @@ pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot_new_protocol::{
+    discovery::ServiceRecord,
     network::{Cliquenet, message_limit},
     store::{Anchor, ConsensusStore, Import},
 };
 use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
-    data::{VidCommitment, ViewNumber},
+    data::{EpochNumber, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
@@ -103,6 +104,8 @@ pub struct NetworkParams {
     pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
+    /// The Ed25519 public key the API service authenticates requests with, if it does.
+    pub api_public_key: Option<[u8; 32]>,
     /// Cliquenet network address.
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
@@ -151,6 +154,24 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
+    // A restart replaces the record sent before it, as the clock has moved on.
+    // The epoch is set per record.
+    let service_record = ServiceRecord {
+        epoch: EpochNumber::genesis(),
+        api_url: network_params
+            .public_api_url
+            .clone()
+            .context(
+                "a validator needs ESPRESSO_NODE_PUBLIC_API_URL: it tells the other nodes the \
+                 URL, so that clients find its API service",
+            )?
+            .to_string(),
+        api_key: network_params.api_public_key,
+        sequence: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as u64,
+    };
+
     // Expose genesis version fields via the status API.
     metrics
         .text_family(
@@ -400,6 +421,7 @@ where
         restored,
         decide_log_limit,
         consensus_api_addr,
+        Some(service_record),
     )
     .await?;
 
@@ -1646,6 +1668,7 @@ pub mod testing {
                 consensus_store,
                 restored,
                 hotshot_new_protocol::storage::DEFAULT_DECIDE_LOG_LIMIT,
+                None,
                 None,
             )
             .await

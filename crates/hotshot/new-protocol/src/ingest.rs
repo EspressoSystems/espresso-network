@@ -10,7 +10,7 @@ use consensus_api::{
 };
 use consensus_store::{Bytes, Store};
 use hotshot_types::{
-    data::{VidCommitment, ViewNumber},
+    data::{EpochNumber, VidCommitment, ViewNumber},
     traits::node_implementation::NodeType,
 };
 use tokio::sync::{broadcast, watch};
@@ -128,6 +128,16 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
 
     fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady> {
         self.ready.subscribe()
+    }
+
+    async fn service_records(
+        &self,
+        epoch: Option<u64>,
+    ) -> Result<Option<(u64, Vec<Bytes>)>, Error> {
+        let found = self
+            .blocking(move |s| s.service_records(epoch.map(EpochNumber::new)))
+            .await?;
+        Ok(found.map(|(epoch, records)| (*epoch, records)))
     }
 }
 

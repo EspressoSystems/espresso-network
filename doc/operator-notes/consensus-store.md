@@ -69,3 +69,17 @@ A network with its own genesis file must add its stake table to that file before
 with each node's staking key, state key, stake and DA membership, in the order of the network's genesis committee, as
 `/config/hotshot` of a running node lists them. A follower derives the root of trust of its light client from the same
 table unless `--light-client-genesis` pins one.
+
+### Validators announce their API service
+
+Urgency: High
+
+A validator now needs `ESPRESSO_NODE_PUBLIC_API_URL` (or `--public-api-url`): the URL clients reach its API service at.
+A validator without it refuses to start. The node signs a record with this URL and its staking key and sends it to every
+consensus node at the start of each epoch, as the record for that epoch. Consensus keeps the records of the latest 20
+epochs. The API service fetches them from consensus and serves them at `/v2/node/peers` (latest epoch, or `?epoch=`),
+where a client checks each signature against the stake table of the record's epoch instead of trusting the node that
+lists them.
+
+If the API service authenticates requests, set `ESPRESSO_NODE_API_PUBLIC_KEY` (or `--api-public-key`) to its Ed25519
+public key, base58. The record carries it, so clients learn which key to expect.

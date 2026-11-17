@@ -2150,6 +2150,40 @@ where
         .map_err(to_status)?;
         Ok(tonic::Response::new(fractions.into()))
     }
+
+    async fn get_peers(
+        &self,
+        request: tonic::Request<proto::GetPeersRequest>,
+    ) -> Result<tonic::Response<proto::PeersResponse>, tonic::Status> {
+        let epoch = request
+            .into_inner()
+            .epoch
+            .map(hotshot_types::data::EpochNumber::new);
+        let (epoch, records) = self
+            .data_source
+            .service_records(epoch)
+            .await
+            .map_err(to_status)?
+            .ok_or_else(|| tonic::Status::not_found("no service records for the epoch"))?;
+        let peers = records
+            .into_iter()
+            .map(|signed| proto::ServiceRecord {
+                signer: Some(proto::BlsPublicKey {
+                    key: signed.signer.to_string(),
+                }),
+                epoch: *signed.record.epoch,
+                signed_message: signed.record.signed_bytes(),
+                api_url: signed.record.api_url,
+                api_key: signed.record.api_key.map(|key| key.to_vec()),
+                sequence: signed.record.sequence,
+                signature: TaggedBase64::from(signed.signature).to_string(),
+            })
+            .collect();
+        Ok(tonic::Response::new(proto::PeersResponse {
+            peers,
+            epoch: *epoch,
+        }))
+    }
 }
 
 // These stay here rather than in the api crate's `render` for the same reason as the stake table
