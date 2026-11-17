@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check that no test-only crate ships in a production binary
+      - name: Check that no test-only crate or test feature ships in a production binary
         run: scripts/check-production-deps
 
   python:

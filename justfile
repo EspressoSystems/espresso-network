@@ -296,7 +296,7 @@ check-features-ci *args:
         --exclude vid \
         {{args}}
 
-# check that no workspace default member has a test-only crate as a normal dependency
+# check that no test-only crate or test feature reaches the default-member build
 check-production-deps:
     scripts/check-production-deps
 
