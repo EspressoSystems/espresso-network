@@ -6030,6 +6030,8 @@ mod test {
         /// backfill stores epoch 6, whose block reward reads the root below its own.
         const LC_CONTRACT_HEIGHT: u64 = 92;
         const EPOCHS_BEFORE_START: u64 = 10;
+        /// The backfilled epoch whose block reward reads the root below its own.
+        const BACKFILLED_EPOCH_WITH_PRECEDING_ROOT: u64 = 6;
         const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
         let network_config = TestConfigBuilder::default()
@@ -6196,6 +6198,12 @@ mod test {
         })
         .await
         .context("the stake table backfill did not store the skipped epochs")??;
+        assert_same_stored_stake(
+            &*network.server.persistence(),
+            &*follower.handle().membership(),
+            EpochNumber::new(BACKFILLED_EPOCH_WITH_PRECEDING_ROOT),
+        )
+        .await?;
 
         let finalized_height = latest_cert2_height(&api_client, tip)
             .await
@@ -6450,6 +6458,32 @@ mod test {
                 assert_same_response(api_client, follower_client, &state_cert).await?;
             }
         }
+        Ok(())
+    }
+
+    /// The stored stake table of `epoch`, with its block reward and hash, is the same in both
+    /// storages.
+    async fn assert_same_stored_stake(
+        validator: &dyn MembershipPersistence,
+        follower: &dyn MembershipPersistence,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<()> {
+        let expected = validator
+            .load_stake(epoch)
+            .await?
+            .with_context(|| format!("node 0 stores no stake table for epoch {epoch}"))?;
+        let actual = follower
+            .load_stake(epoch)
+            .await?
+            .with_context(|| format!("follower stores no stake table for epoch {epoch}"))?;
+        ensure!(
+            expected.1.is_some(),
+            "node 0 stores no block reward for epoch {epoch}"
+        );
+        ensure!(
+            actual == expected,
+            "epoch {epoch}: follower stored {actual:?}, node 0 stored {expected:?}"
+        );
         Ok(())
     }
 

@@ -279,13 +279,13 @@ impl EpochCommittees {
     /// - If `p <= 0.01`: R(p) = 0.03 / sqrt(2 * 0.01)
     /// - Else: R(p) = 0.03 / sqrt(2 * p)
     ///
-    /// `previous_root` is where the timestamp of the epoch root below `header` comes from.
+    /// `preceding_root` is where the timestamp of the epoch root below `header` comes from.
     async fn calculate_dynamic_block_reward(
         &self,
         epoch: EpochNumber,
         header: &Header,
         validators: &AuthenticatedValidatorMap,
-        previous_root: PreviousRoot<'_>,
+        preceding_root: PrecedingRoot<'_>,
     ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
         let current_epoch = epoch_from_block_number(header.height(), *epoch_height);
@@ -298,7 +298,7 @@ impl EpochCommittees {
 
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
-        if matches!(previous_root, PreviousRoot::Peers(_))
+        if matches!(preceding_root, PrecedingRoot::Peers(_))
             && previous_epoch > first_epoch + 1
             && self.snapshot(previous_epoch.into()).is_none()
         {
@@ -321,7 +321,7 @@ impl EpochCommittees {
         let curr_ts = header.timestamp_millis_internal();
         debug!(?epoch, "curr_ts={curr_ts:?}");
 
-        // If the node starts from epoch version V4, there is no previous epoch root available.
+        // If the node starts from epoch version V4, there is no preceding epoch root available.
         // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
         // for the first epoch in which reward id distributed
         let average_block_time_ms = if previous_epoch <= first_epoch + 1 {
@@ -329,27 +329,27 @@ impl EpochCommittees {
         } else {
             // We are calculating rewards for epoch `epoch`, so the current epoch should be `epoch - 2`.
             // We need to calculate the average block time for the current epoch, so we need to know
-            // the previous epoch root which is stored with epoch `epoch - 1`, i.e. the next epoch.
+            // the preceding epoch root which is stored with epoch `epoch - 1`, i.e. the next epoch.
             let next_epoch = epoch
                 .checked_sub(1)
                 .context("underflow: cannot get next epoch when epoch is 0")?;
             let root_height = header.height().checked_sub(*epoch_height).context(
-                "Epoch height is greater than block height. cannot compute previous epoch root \
+                "Epoch height is greater than block height. cannot compute preceding epoch root \
                  height",
             )?;
-            let prev_ts = match previous_root {
-                PreviousRoot::Seed(Some(previous_root)) => {
+            let prev_ts = match preceding_root {
+                PrecedingRoot::Seed(Some(preceding_root)) => {
                     ensure!(
-                        previous_root.height() == root_height,
-                        "previous epoch root is at height {}, expected {root_height}",
-                        previous_root.height()
+                        preceding_root.height() == root_height,
+                        "preceding epoch root is at height {}, expected {root_height}",
+                        preceding_root.height()
                     );
-                    previous_root.timestamp_millis_internal()
+                    preceding_root.timestamp_millis_internal()
                 },
-                PreviousRoot::Seed(None) => {
-                    bail!("no previous epoch root for the block reward of epoch {epoch}")
+                PrecedingRoot::Seed(None) => {
+                    bail!("no preceding epoch root for the block reward of epoch {epoch}")
                 },
-                PreviousRoot::Peers(coordinator) => {
+                PrecedingRoot::Peers(coordinator) => {
                     match self.map_header(next_epoch, |h| h.timestamp_millis_internal()) {
                         Some(ts) => ts,
                         None => {
@@ -546,12 +546,12 @@ impl EpochCommittees {
     /// either by fetching from L1 or using local state if available.
     /// It also calculates and stores the block reward based on header version.
     ///
-    /// `previous_root` is the source of the timestamp for the block reward.
+    /// `preceding_root` is the source of the timestamp for the block reward.
     #[cfg(feature = "node")]
     async fn install_root(
         &self,
         block_header: Header,
-        previous_root: PreviousRoot<'_>,
+        preceding_root: PrecedingRoot<'_>,
     ) -> Result<(), EpochCommitteesError> {
         let block_number = block_header.block_number();
 
@@ -621,8 +621,8 @@ impl EpochCommittees {
                 epoch,
                 &block_header,
                 held.as_deref(),
-                previous_root,
-                EventSource::L1Fetch,
+                preceding_root,
+                EventSource::StoredThenL1,
             )
             .await?;
 
@@ -697,11 +697,11 @@ impl EpochCommittees {
         Ok(())
     }
 
-    /// The table of `epoch` that its root `header` defines, with events from `events`. `held` is
+    /// The table of `epoch` that its root `header` defines, with events from `source`. `held` is
     /// the committee in memory for `epoch`: its reward and validators are reused.
     ///
     /// Writes no committee and no stored table. It sets the cached fixed block reward and, for an
-    /// unknown deployment, the cached initial supply; with `EventSource::L1Fetch` it also stores
+    /// unknown deployment, the cached initial supply; with `EventSource::StoredThenL1` it also stores
     /// the events it fetches from L1.
     #[cfg(feature = "node")]
     async fn derive_stake_table(
@@ -709,8 +709,8 @@ impl EpochCommittees {
         epoch: EpochNumber,
         header: &Header,
         held: Option<&EpochCommittee>,
-        previous_root: PreviousRoot<'_>,
-        events: EventSource,
+        preceding_root: PrecedingRoot<'_>,
+        source: EventSource,
     ) -> Result<DerivedStakeTable, EpochCommitteesError> {
         let version = header.version();
         let mut block_reward = None;
@@ -742,7 +742,7 @@ impl EpochCommittees {
                     info!("Stake table hash missing for epoch {epoch}. recalculating from events.");
                     let set = self
                         .fetcher
-                        .fetch(epoch, header, events)
+                        .fetch(epoch, header, source)
                         .await
                         .map_err(EpochCommitteesError::Fetcher)?;
                     (
@@ -757,7 +757,7 @@ impl EpochCommittees {
                 debug!("Stake table missing for epoch {epoch}. Deriving it from events.");
                 let set = self
                     .fetcher
-                    .fetch(epoch, header, events)
+                    .fetch(epoch, header, source)
                     .await
                     .map_err(EpochCommitteesError::Fetcher)?;
                 (
@@ -774,7 +774,7 @@ impl EpochCommittees {
         if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
             debug!(?epoch, "calculating dynamic block reward");
             let reward = self
-                .calculate_dynamic_block_reward(epoch, header, &active_validators, previous_root)
+                .calculate_dynamic_block_reward(epoch, header, &active_validators, preceding_root)
                 .await
                 .map_err(EpochCommitteesError::Reward)?;
 
@@ -783,7 +783,7 @@ impl EpochCommittees {
         }
 
         // A seeded table without a reward is not persisted.
-        if previous_root.is_seed() && block_reward.is_none() {
+        if preceding_root.is_seed() && block_reward.is_none() {
             return Err(EpochCommitteesError::Reward(anyhow::anyhow!(
                 "no block reward for the table of epoch {epoch}"
             )));
@@ -807,12 +807,12 @@ impl EpochCommittees {
         roots: Vec<Header>,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), EpochCommitteesError> {
-        let mut previous = preceding_root;
+        let mut preceding = preceding_root;
         for header in roots {
             let height = header.height();
             tokio::time::timeout(
                 coordinator.catchup_timeout(),
-                self.install_root(header.clone(), PreviousRoot::Seed(previous.as_ref())),
+                self.install_root(header.clone(), PrecedingRoot::Seed(preceding.as_ref())),
             )
             .await
             .map_err(|_| {
@@ -821,7 +821,7 @@ impl EpochCommittees {
                     coordinator.catchup_timeout()
                 ))
             })??;
-            previous = Some(header);
+            preceding = Some(header);
         }
         Ok(())
     }
@@ -838,7 +838,7 @@ impl EpochCommittees {
 
     /// Derives the table of the epoch `root` defines from the stored stake table events and
     /// writes it to storage, without putting it in memory or touching the chain config.
-    /// `previous_root` is the root one epoch below `root` (read by the dynamic block reward) and
+    /// `preceding_root` is the root one epoch below `root` (read by the dynamic block reward) and
     /// `next_root` the root one epoch above it, whose `next_stake_table_hash` decides the table's
     /// hash. A table that differs from the decided hash is not stored. Makes no L1 event request:
     /// events that storage lacks are an error.
@@ -849,7 +849,7 @@ impl EpochCommittees {
     pub async fn store_derived_stake_table(
         &self,
         root: &Header,
-        previous_root: Option<&Header>,
+        preceding_root: Option<&Header>,
         next_root: &Header,
     ) -> Result<StakeTableStoreOutcome, EpochCommitteesError> {
         let epoch_height = *self.epoch_height;
@@ -870,7 +870,7 @@ impl EpochCommittees {
                 epoch,
                 root,
                 None,
-                PreviousRoot::Seed(previous_root),
+                PrecedingRoot::Seed(preceding_root),
                 EventSource::StoredOnly,
             )
             .await?;
@@ -878,7 +878,9 @@ impl EpochCommittees {
             (Some(decided), Some(derived)) if decided != derived => {
                 return Ok(StakeTableStoreOutcome::HashMismatch { decided, derived });
             },
-            (None, _) => debug!(%epoch, "next root decides no stake table hash; stored unchecked"),
+            (None, _) | (Some(_), None) => {
+                debug!(%epoch, "no decided or derived stake table hash; stored without comparison")
+            },
             _ => {},
         }
 
@@ -1096,7 +1098,7 @@ pub async fn fetch_and_calculate_block_reward(
             current_epoch,
             &header,
             &committee.validators,
-            PreviousRoot::Peers(&coordinator),
+            PrecedingRoot::Peers(&coordinator),
         )
         .await
         .with_context(|| {
@@ -1252,7 +1254,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), Self::Error> {
-        self.install_root(block_header, PreviousRoot::Peers(coordinator))
+        self.install_root(block_header, PrecedingRoot::Peers(coordinator))
             .await
     }
 
@@ -1453,7 +1455,7 @@ pub enum EpochCommitteesError {
 /// Where the block reward of an installed table takes the timestamp of the root below its header.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Clone, Copy)]
-enum PreviousRoot<'a> {
+enum PrecedingRoot<'a> {
     /// The held committee below, else a leaf through the coordinator; a missing reward is stored
     /// as such.
     Peers(&'a EpochMembershipCoordinator<SeqTypes>),
@@ -1463,7 +1465,7 @@ enum PreviousRoot<'a> {
 }
 
 #[cfg(feature = "node")]
-impl PreviousRoot<'_> {
+impl PrecedingRoot<'_> {
     /// Whether this is a seed install.
     fn is_seed(self) -> bool {
         matches!(self, Self::Seed(_))
@@ -3974,7 +3976,7 @@ mod tests {
         }
     }
 
-    /// Roots that skip an epoch fail the previous root check, and the table after the gap gets no
+    /// Roots that skip an epoch fail the preceding root check, and the table after the gap gets no
     /// reward.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_skipping_an_epoch_fails() {
@@ -3989,7 +3991,7 @@ mod tests {
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
         assert!(
-            format!("{err:#}").contains("previous epoch root is at height"),
+            format!("{err:#}").contains("preceding epoch root is at height"),
             "{err:#}"
         );
         let snapshot = committees.snapshot(EpochNumber::new(63)).unwrap();
@@ -4011,7 +4013,7 @@ mod tests {
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
         assert!(
-            format!("{err:#}").contains("previous epoch root is at height"),
+            format!("{err:#}").contains("preceding epoch root is at height"),
             "{err:#}"
         );
         let snapshot = committees.snapshot(EpochNumber::new(60)).unwrap();
@@ -4032,7 +4034,7 @@ mod tests {
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
         assert!(
-            format!("{err:#}").contains("no previous epoch root"),
+            format!("{err:#}").contains("no preceding epoch root"),
             "{err:#}"
         );
         let snapshot = committees.snapshot(EpochNumber::new(20)).unwrap();
@@ -4384,13 +4386,13 @@ mod tests {
         let skipped_next_root = timed_root(100 * 21 - 5).await;
 
         let committees = &setup.committees;
-        let previous = Some(&setup.preceding);
+        let preceding = Some(&setup.preceding);
         let errors = [
             committees
-                .store_derived_stake_table(&not_a_root, previous, &next_root)
+                .store_derived_stake_table(&not_a_root, preceding, &next_root)
                 .await,
             committees
-                .store_derived_stake_table(&setup.root, previous, &skipped_next_root)
+                .store_derived_stake_table(&setup.root, preceding, &skipped_next_root)
                 .await,
             committees
                 .store_derived_stake_table(&setup.root, None, &next_root)

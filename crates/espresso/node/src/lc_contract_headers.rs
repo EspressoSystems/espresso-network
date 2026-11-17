@@ -12,7 +12,7 @@ use espresso_types::{
 };
 
 /// Retries of one request after its first attempt.
-const REQUEST_RETRIES: u32 = 4;
+pub(crate) const REQUEST_RETRIES: u32 = 4;
 
 /// The block Merkle root of the header at `lc_contract_state.height`, which `verify_header`
 /// accepted.
@@ -72,13 +72,22 @@ pub(crate) mod testing {
     pub(crate) async fn mock_with_headers(
         heights: &[usize],
     ) -> (MockStateCatchup, LcContractFinalizedState) {
+        mock_with_headers_at_lc_height(heights, 62).await
+    }
+
+    /// The mock serving the headers of `heights` and of `lc_contract_height`, and the contract
+    /// state at `lc_contract_height`.
+    pub(crate) async fn mock_with_headers_at_lc_height(
+        heights: &[usize],
+        lc_contract_height: usize,
+    ) -> (MockStateCatchup, LcContractFinalizedState) {
         let client = TestClient::with_epoch_height(EPOCH_HEIGHT);
         let mut headers = Vec::new();
-        for height in heights.iter().copied().chain([62]) {
+        for height in heights.iter().copied().chain([lc_contract_height]) {
             headers.push(client.leaf(height).await.leaf().block_header().clone());
         }
         let lc_contract_state = LcContractFinalizedState {
-            height: 62,
+            height: lc_contract_height as u64,
             block_comm_root: headers
                 .last()
                 .unwrap()
@@ -108,7 +117,7 @@ mod tests {
         #[case] expect_ok: bool,
     ) {
         let (peers, lc_contract_state) = mock_with_headers(&[15]).await;
-        let peers = peers.with_failing_seed_calls(failing_calls);
+        let peers = peers.with_failing_header_calls(failing_calls);
         let anchor = fetch_anchor_root(&peers, &lc_contract_state).await.unwrap();
 
         let result = fetch_proven_header(&peers, &lc_contract_state, anchor, 15).await;

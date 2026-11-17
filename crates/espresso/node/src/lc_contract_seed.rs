@@ -176,9 +176,9 @@ mod tests {
         assert_eq!(preceding.map(|root| root.height()), Some(5));
     }
 
-    /// A failed install asks for a fill and returns its error.
+    /// A failed install returns its error and asks for a fill.
     #[tokio::test]
-    async fn failed_install_requests_a_fill() {
+    async fn install_roots_error_is_returned_and_requests_a_fill() {
         let backfill = StakeTableBackfill::new(&NoMetrics);
         let chain_config = ChainConfig {
             stake_table_contract: Some(Address::ZERO),

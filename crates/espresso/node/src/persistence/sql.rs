@@ -2017,8 +2017,8 @@ impl MembershipPersistence for Persistence {
                     VALUES ($1, $2, $3, $4)
                     ON CONFLICT (epoch) DO UPDATE SET
                         stake = excluded.stake,
-                        block_reward = COALESCE(excluded.block_reward, \
-                     epoch_drb_and_root.block_reward),
+                        block_reward = COALESCE(
+                            excluded.block_reward, epoch_drb_and_root.block_reward),
                         stake_table_hash = excluded.stake_table_hash",
                 )
                 .bind(epoch_i64)

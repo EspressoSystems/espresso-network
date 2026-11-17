@@ -644,10 +644,10 @@ pub mod mock {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
         delay: std::time::Duration,
-        /// Headers served to the seed requests, by height.
+        /// Headers served to the proven-header and anchor requests, by height.
         headers: BTreeMap<u64, Header>,
         /// Calls of `try_fetch_proven_header` that fail before the first success.
-        failing_seed_calls: usize,
+        failing_header_calls: usize,
         /// Calls made to `try_fetch_proven_header`.
         proven_header_calls: Arc<AtomicUsize>,
         /// The `retry` argument of each call to `try_fetch_proven_header`, in call order.
@@ -675,8 +675,8 @@ pub mod mock {
             self
         }
 
-        /// Serves the two seed requests from `headers`, keyed by height; the root answer is the
-        /// block Merkle root of the header at `lc_contract_state.height`.
+        /// Serves the proven-header and anchor requests from `headers`, keyed by height; the root
+        /// answer is the block Merkle root of the header at `lc_contract_state.height`.
         pub fn with_headers(mut self, headers: impl IntoIterator<Item = Header>) -> Self {
             self.headers = headers
                 .into_iter()
@@ -686,8 +686,8 @@ pub mod mock {
         }
 
         /// Fails the first `calls` calls of `try_fetch_proven_header`; the root request never fails.
-        pub fn with_failing_seed_calls(mut self, calls: usize) -> Self {
-            self.failing_seed_calls = calls;
+        pub fn with_failing_header_calls(mut self, calls: usize) -> Self {
+            self.failing_header_calls = calls;
             self
         }
 
@@ -875,7 +875,10 @@ pub mod mock {
                 "root is not the block Merkle root of the header at height {root_height}"
             );
             let call = self.proven_header_calls.fetch_add(1, Ordering::SeqCst);
-            anyhow::ensure!(call >= self.failing_seed_calls, "seed call {call} fails");
+            anyhow::ensure!(
+                call >= self.failing_header_calls,
+                "header call {call} fails"
+            );
             anyhow::ensure!(
                 !self.unavailable_heights.lock().unwrap().contains(&height),
                 "no proof at height {height}"

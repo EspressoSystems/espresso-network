@@ -1921,7 +1921,7 @@ impl Fetcher {
         // than each event's wall-clock version.
         let l1_block = l1_finalized_block_info.number();
         match source {
-            EventSource::L1Fetch => self.validator_set_at(l1_block, header.version()).await,
+            EventSource::StoredThenL1 => self.validator_set_at(l1_block, header.version()).await,
             EventSource::StoredOnly => {
                 self.validator_set_from_stored_events(l1_block, header.version())
                     .await
@@ -1960,7 +1960,7 @@ impl Fetcher {
     /// `version`. Makes no L1 request; errors when storage does not hold the events up to
     /// `l1_block`.
     #[cfg(feature = "node")]
-    pub async fn validator_set_from_stored_events(
+    pub(crate) async fn validator_set_from_stored_events(
         &self,
         l1_block: u64,
         version: Version,
@@ -2074,9 +2074,10 @@ impl Fetcher {
 
 /// Where the stake table events of a derived table come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(feature = "node")]
 pub enum EventSource {
     /// Storage, then L1 for what storage lacks; fetched events are stored.
-    L1Fetch,
+    StoredThenL1,
     /// Storage only; an error when it does not cover the L1 block.
     StoredOnly,
 }

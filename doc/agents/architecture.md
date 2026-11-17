@@ -96,11 +96,17 @@ After a seed, the epochs below its window have no stored stake table. The `Stake
 - Writes: per epoch, the root header, all validators and the stake table (`EpochCommittees::store_derived_stake_table`),
   ascending, never to memory. A stored block reward is not overwritten by a missing one.
 - Failures: an epoch failure (missing header proof, events not stored up to its L1 block, 60 s deadline, storage error)
-  fails that epoch only. After an attempt that leaves such epochs, or fails to read the LC contract or the anchor, the
-  fill waits 5 s, doubling up to 10 minutes, and tries again; a trigger ends the wait. One `warn!` per failed attempt.
-  A table whose hash differs from the one the next root decides is not stored, logged once with `error!`, and not
-  retried until restart.
+  fails that epoch only. An attempt ends as failed when a read before the epochs fails, or when a chunk of 20 epochs
+  stores nothing and has a failure; later chunks are not tried in that attempt. After a failed attempt the fill waits
+  5 s, doubling up to 10 minutes, and tries again; a trigger ends the wait and restarts the backoff at 5 s. A table
+  whose hash differs from the one the next root decides is not stored, logged once with `error!`, and not retried until
+  restart.
+- Logs: one `info!` per fill that did work; none for a fill that stored nothing and needed one attempt. Each retry of a
+  single header request logs a `warn!` (shared retry helper), bounded by the early exit. A failed attempt logs a
+  `warn!` with the failing epoch count, the lowest failing epoch and one error; once the wait is 10 minutes it logs an
+  `error!` instead, so a stuck fill logs an `error!` every 10 minutes.
 - Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge, includes mismatched epochs),
+  `stake_table_backfill_failed_attempts` (gauge, consecutive failed attempts of the current fill, 0 when it completes),
   `stake_table_backfill_stored`, `stake_table_backfill_hash_mismatches`, `stake_table_backfill_failed` (counters).
 
 ## Consensus upgrades
