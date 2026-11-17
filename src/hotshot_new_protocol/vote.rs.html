@@ -397,7 +397,7 @@
 <a href=#397 id=397 data-nosnippet>397</a>                        <span class="kw-2">&amp;</span>cert,
 <a href=#398 id=398 data-nosnippet>398</a>                        <span class="kw-2">&amp;</span>entries,
 <a href=#399 id=399 data-nosnippet>399</a>                        threshold,
-<a href=#400 id=400 data-nosnippet>400</a>                        <span class="kw-2">*</span><span class="self">self</span>.membership.coordinator.epoch_height(),
+<a href=#400 id=400 data-nosnippet>400</a>                        <span class="self">self</span>.membership.coordinator.epoch_length(),
 <a href=#401 id=401 data-nosnippet>401</a>                        <span class="kw-2">&amp;</span><span class="self">self</span>.upgrade_lock,
 <a href=#402 id=402 data-nosnippet>402</a>                        <span class="kw-2">&amp;</span><span class="self">self</span>.membership.coordinator,
 <a href=#403 id=403 data-nosnippet>403</a>                    )<span class="question-mark">?</span>;
@@ -453,7 +453,7 @@
 <a href=#453 id=453 data-nosnippet>453</a>        };
 <a href=#454 id=454 data-nosnippet>454</a>        <span class="kw">if </span>!cert
 <a href=#455 id=455 data-nosnippet>455</a>            .data
-<a href=#456 id=456 data-nosnippet>456</a>            .is_well_formed(<span class="kw-2">*</span><span class="self">self</span>.membership.coordinator.epoch_height())
+<a href=#456 id=456 data-nosnippet>456</a>            .is_well_formed(<span class="self">self</span>.membership.coordinator.epoch_length())
 <a href=#457 id=457 data-nosnippet>457</a>        {
 <a href=#458 id=458 data-nosnippet>458</a>            <span class="kw">return </span><span class="bool-val">false</span>;
 <a href=#459 id=459 data-nosnippet>459</a>        }
@@ -1459,7 +1459,7 @@
 <a href=#1459 id=1459 data-nosnippet>1459</a>                <span class="kw-2">&amp;</span>tc,
 <a href=#1460 id=1460 data-nosnippet>1460</a>                <span class="kw-2">&amp;</span>entries,
 <a href=#1461 id=1461 data-nosnippet>1461</a>                membership.success_threshold(),
-<a href=#1462 id=1462 data-nosnippet>1462</a>                <span class="kw-2">*</span>coordinator.epoch_height(),
+<a href=#1462 id=1462 data-nosnippet>1462</a>                coordinator.epoch_length(),
 <a href=#1463 id=1463 data-nosnippet>1463</a>                <span class="kw-2">&amp;</span>lock,
 <a href=#1464 id=1464 data-nosnippet>1464</a>                <span class="kw-2">&amp;</span>coordinator,
 <a href=#1465 id=1465 data-nosnippet>1465</a>            )

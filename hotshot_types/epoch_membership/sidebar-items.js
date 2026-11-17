@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CATCHUP_TIMEOUT"],"struct":["AttemptEntry","Attempts","DrbStateGuard","EpochMembership","EpochMembershipCoordinator"],"type":["Attempt","DrbComputations","Result","Snapshot","SnapshotStakeTableHash"]};
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CATCHUP_TIMEOUT"],"enum":["ResidentEpochReadiness"],"struct":["AttemptEntry","Attempts","DrbStateGuard","EpochMembership","EpochMembershipCoordinator","LeaderMembership"],"type":["Attempt","DrbComputations","Result","Snapshot","SnapshotStakeTableHash"]};
