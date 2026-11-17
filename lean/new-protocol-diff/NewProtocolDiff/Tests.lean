@@ -535,6 +535,7 @@ private def epochs : Config := { cfg with epochHeight := 10 }
 #guard inTransition ⟨17⟩ 10
 #guard inTransition ⟨20⟩ 10
 #guard !inTransition ⟨21⟩ 10
+#guard !inTransition ⟨5⟩ 5
 #guard waitsForDrb epochs .vote1 ⟨2⟩ (some ⟨18⟩) ⟨3⟩
 #guard !waitsForDrb epochs .vote1 ⟨2⟩ (some ⟨18⟩) ⟨4⟩
 #guard !waitsForDrb epochs .vote1 ⟨2⟩ (some ⟨13⟩) ⟨3⟩

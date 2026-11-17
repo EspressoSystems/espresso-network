@@ -254,9 +254,15 @@ DRB result (its `is_epoch_transition`).
 -/
 def transitionWindow : Nat := 3
 
+/--
+How many blocks before an epoch's last is its root. An epoch of this many blocks
+or fewer holds no root, and so no transition.
+-/
+def rootDistance : Nat := 5
+
 /-- Whether block `b` is in the transition of its epoch, of `height` blocks. -/
 def inTransition (b : BlockNumber) (height : Nat) : Bool :=
-  b.toNat != 0 && height != 0
+  b.toNat != 0 && decide (rootDistance < height)
     && (decide (height - transitionWindow ≤ b.toNat % height) || b.toNat % height == 0)
 
 /--
