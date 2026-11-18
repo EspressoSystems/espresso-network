@@ -27,6 +27,9 @@ type QueryService interface {
 	FetchVidCommonByHeight(ctx context.Context, blockHeight uint64) (types.VidCommon, error)
 	// Get the transaction by its hash from the explorer.
 	FetchExplorerTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.ExplorerTransactionQueryData, error)
+	// Get block summaries returning up to `limit` entries in descending order.
+	// If `from` is nil, starts from the latest block; otherwise starts from the given height.
+	FetchBlockSummaries(ctx context.Context, from *uint64, limit uint64) (types.BlockSummaryResponse, error)
 	// Stream payloads starting from the given height
 	StreamPayloads(ctx context.Context, height uint64) (Stream[types.PayloadQueryData], error)
 	// Stream transactions starting from the given height.
