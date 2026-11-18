@@ -43,7 +43,7 @@ use versions::CANONICAL_STAKE_TABLE_ORDER_VERSION;
 
 use super::{
     super::{
-        compute_block_reward, parse_x25519_key, select_active_validator_set,
+        ValidatorSet, compute_block_reward, parse_x25519_key, select_active_validator_set,
         sort_stake_table_events, testing::TestValidator,
     },
     case::{Case, Event, KeyUpdateKeys, RegistrationKeys, Selection, State, Validator},
@@ -191,6 +191,90 @@ pub fn selections() -> Result<Vec<Case>> {
     Ok(cases)
 }
 
+/// Logs read as the node reads them from L1: those up to a block, without the ones it
+/// drops when it fetches them, in L1 order, replayed and selected from.
+///
+/// Every read holds key updates the node drops: ones whose keys do not decode, and ones
+/// whose signatures do not verify, which the contract can emit and a replay would stop
+/// on. Every other read is of validators with stake, so that it gives a committee.
+///
+/// Fails if no read with a dropped key update gave a committee.
+pub fn committees() -> Result<Vec<Case>> {
+    let mut rng = StdRng::seed_from_u64(7);
+    let pool = Pool::new(&mut rng, 8);
+    let usable: Vec<String> = pool
+        .addrs
+        .iter()
+        .filter_map(|a| a.parse::<NetAddr>().ok())
+        .filter(|a| a.validate().is_ok())
+        .map(|a| a.to_string())
+        .collect();
+    let mut cases = Vec::new();
+    let mut committees = 0;
+    for round in 0..150 {
+        let mut events = if round % 2 == 0 {
+            let len = rng.gen_range(1..60);
+            pool.sequence(&mut rng, len, None)?
+        } else {
+            pool.staked(&mut rng)
+        };
+        for _ in 0..rng.gen_range(1..4) {
+            let dropped = loop {
+                if let StakeTableEvent::KeyUpdateV2(update) = pool.key_update(&mut rng)
+                    && !matches!(key_update_keys(&update), KeyUpdateKeys::Verified { .. })
+                {
+                    break StakeTableEvent::KeyUpdateV2(update);
+                }
+            };
+            let at = rng.gen_range(0..=events.len());
+            events.insert(at, dropped);
+        }
+        let (mut block, mut index) = (0, 0);
+        let mut logs: Vec<(EventKey, StakeTableEvent)> = events
+            .into_iter()
+            .map(|event| {
+                if rng.gen_bool(0.5) {
+                    block += rng.gen_range(1..4);
+                    index = 0;
+                } else {
+                    index += 1;
+                }
+                ((block, index), event)
+            })
+            .collect();
+        // Half the reads stop at a block before the last log's.
+        let up_to = if rng.gen_bool(0.5) {
+            block
+        } else {
+            rng.gen_range(0..=block)
+        };
+        let drops = logs.iter().any(|((block, _), event)| {
+            *block <= up_to
+                && matches!(event, StakeTableEvent::KeyUpdateV2(update)
+                    if !matches!(key_update_keys(update), KeyUpdateKeys::Verified { .. }))
+        });
+        logs.shuffle(&mut rng);
+        let case = committee_case(
+            format!("committee round {round}"),
+            &logs,
+            up_to,
+            usable.clone(),
+        )?;
+        if let Case::Committee {
+            active: Some(_), ..
+        } = &case
+        {
+            committees += usize::from(drops);
+        }
+        cases.push(case);
+    }
+    ensure!(
+        committees > 0,
+        "no read with a dropped key update gave a committee"
+    );
+    Ok(cases)
+}
+
 /// Whether the committee `active` was cut off at `MAX_VALIDATORS` with a candidate left
 /// out whose stake equals the smallest a member holds.
 fn cut_among_ties(state: &StakeTableState, active: &AuthenticatedValidatorMap) -> bool {
@@ -232,6 +316,16 @@ pub fn rewards() -> Vec<Case> {
         (
             U256::from(2_628_000_000u64),
             U256::from(1_314_000_000u64),
+            2000,
+        ),
+        // The reward is exactly a half here as well, but the staked share has no finite
+        // decimal expansion and the node's arithmetic does not land on the half: with 8/9
+        // staked it gives a little more than 0.5 and rounds to 1, not to the even 0, and
+        // with 2/9 staked a little less than 1.5 and rounds to 1, not to the even 2.
+        (U256::from(394_200_000u64), U256::from(350_400_000u64), 2000),
+        (
+            U256::from(2_365_200_000u64),
+            U256::from(525_600_000u64),
             2000,
         ),
     ];
@@ -486,6 +580,89 @@ fn selections_of(name: &str, state: &StakeTableState) -> Result<Vec<Selection>> 
     Ok(vec![Selection { usable, active }])
 }
 
+/// Read `logs` up to block `up_to` as the node reads them from L1.
+///
+/// The node decodes the logs it fetched and drops those `validate_event` does not keep,
+/// sorts the rest into L1 order, replays them and selects the active validators under
+/// the canonical order. Decoding from bytes is left out: the logs carry their events.
+fn committee_case(
+    name: String,
+    logs: &[(EventKey, StakeTableEvent)],
+    up_to: u64,
+    usable: Vec<String>,
+) -> Result<Case> {
+    let kept: Result<Vec<_>, StakeTableError> = logs
+        .iter()
+        .filter(|((block, _), _)| *block <= up_to)
+        .filter_map(|((block, index), event)| {
+            let event = contract_event(event);
+            let log = Log {
+                block_number: Some(*block),
+                log_index: Some(*index),
+                ..Default::default()
+            };
+            match Fetcher::validate_event(&event, &log) {
+                Ok(true) => Some(Ok((event, log))),
+                Ok(false) => None,
+                Err(err) => Some(Err(err)),
+            }
+        })
+        .collect();
+    let version = CANONICAL_STAKE_TABLE_ORDER_VERSION;
+    let selected = match kept {
+        Ok(kept) => ValidatorSet::from_l1_events(
+            sort_stake_table_events(kept)?.into_iter().map(|(_, e)| e),
+            version,
+        ),
+        Err(err) => Err(err),
+    };
+    let (finished, active) = match selected {
+        Ok(set) => (
+            true,
+            Some(set.active_validators().keys().map(address).collect()),
+        ),
+        Err(StakeTableError::NoValidValidators) => (true, None),
+        Err(err) => {
+            let result = Err(err);
+            ensure!(
+                outcome(&result).is_some(),
+                "{name}: an error Lean does not model: {result:?}"
+            );
+            (false, None)
+        },
+    };
+    Ok(Case::Committee {
+        logs: logs
+            .iter()
+            .map(|(key, event)| (*key, abstract_event(event)))
+            .collect(),
+        block: up_to,
+        usable,
+        finished,
+        active,
+        name,
+    })
+}
+
+/// The contract event a stake table event is read from.
+fn contract_event(event: &StakeTableEvent) -> StakeTableV3Events {
+    match event.clone() {
+        StakeTableEvent::Register(e) => StakeTableV3Events::ValidatorRegistered(e),
+        StakeTableEvent::RegisterV2(e) => StakeTableV3Events::ValidatorRegisteredV2(e),
+        StakeTableEvent::RegisterV3(e) => StakeTableV3Events::ValidatorRegisteredV3(e),
+        StakeTableEvent::Deregister(e) => StakeTableV3Events::ValidatorExit(e),
+        StakeTableEvent::DeregisterV2(e) => StakeTableV3Events::ValidatorExitV2(e),
+        StakeTableEvent::Delegate(e) => StakeTableV3Events::Delegated(e),
+        StakeTableEvent::Undelegate(e) => StakeTableV3Events::Undelegated(e),
+        StakeTableEvent::UndelegateV2(e) => StakeTableV3Events::UndelegatedV2(e),
+        StakeTableEvent::KeyUpdate(e) => StakeTableV3Events::ConsensusKeysUpdated(e),
+        StakeTableEvent::KeyUpdateV2(e) => StakeTableV3Events::ConsensusKeysUpdatedV2(e),
+        StakeTableEvent::CommissionUpdate(e) => StakeTableV3Events::CommissionUpdated(e),
+        StakeTableEvent::X25519KeyUpdate(e) => StakeTableV3Events::X25519KeyUpdated(e),
+        StakeTableEvent::P2pAddrUpdate(e) => StakeTableV3Events::P2pAddrUpdated(e),
+    }
+}
+
 /// Sort logs with these keys in the node.
 fn order_case(keys: Vec<EventKey>) -> Result<Case> {
     let logs: Vec<_> = keys
@@ -652,6 +829,29 @@ impl Pool {
             }
         }
         Ok(events)
+    }
+
+    /// Every validator of the pool registered with a network key and a usable address,
+    /// and delegated to.
+    fn staked(&self, rng: &mut StdRng) -> Vec<StakeTableEvent> {
+        self.validators
+            .iter()
+            .enumerate()
+            .flat_map(|(i, v)| {
+                let v = v
+                    .clone()
+                    .with_x25519_key(x25519_key(i as u64))
+                    .with_p2p_addr("example.com:80");
+                [
+                    StakeTableEvent::RegisterV3(ValidatorRegisteredV3::from(&v)),
+                    StakeTableEvent::Delegate(Delegated {
+                        delegator: *self.delegators.choose(rng).unwrap(),
+                        validator: v.account,
+                        amount: U256::from(rng.gen_range(1u64..1000)),
+                    }),
+                ]
+            })
+            .collect()
     }
 
     /// An event drawn from the pool: a registration, an exit or a change of stake, a key

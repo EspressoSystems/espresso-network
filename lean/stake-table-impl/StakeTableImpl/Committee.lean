@@ -7,8 +7,9 @@ public import StakeTableImpl.Events
 # Reading an epoch's committee
 
 `StakeTable.committeeAt` reads a committee as the node does: it keeps the logs up to
-the epoch root's finalized L1 block, sorts them into L1 order, replays their events
-on the indexed state and selects the active validators. Where the replay finishes,
+the epoch root's finalized L1 block, sorts them into L1 order, drops the events the
+node drops when it fetches (`StakeTable.Event.fetched`), replays the others on the
+indexed state and selects the active validators. Where the replay finishes,
 the result is the specification's committee (`StakeTable.committeeAt_spec`).
 -/
 
@@ -19,10 +20,13 @@ namespace StakeTable
 /--
 The committee read from `logs` up to L1 block `B`, or `none` if the replay stops on an
 event the contract should never emit.
+
+The events the node drops when it fetches (`StakeTable.Event.fetched`) are not replayed.
 -/
 def committeeAt (usable : NetAddr → Bool) (logs : List (LogKey × Event)) (B : Nat) :
     Option (Option (List Member)) :=
-  let events := (orderLogs (logs.filter fun l => decide (l.1.1 ≤ B))).map (·.2)
+  let events :=
+    ((orderLogs (logs.filter fun l => decide (l.1.1 ≤ B))).map (·.2)).filter Event.fetched
   (Indexed.applyAll Indexed.State.empty events).toOption.map fun is =>
     select usable is.summaries
 
@@ -34,10 +38,11 @@ theorem committeeAt_spec {usable : NetAddr → Bool}
   simp only [committeeAt, Option.map_eq_some_iff] at h
   obtain ⟨is, his, rfl⟩ := h
   have his : Indexed.applyAll Indexed.State.empty
-      ((orderLogs (logs.filter fun l => decide (l.1.1 ≤ B))).map (·.2)) = .ok is := by
+      (((orderLogs (logs.filter fun l => decide (l.1.1 ≤ B))).map (·.2)).filter Event.fetched)
+      = .ok is := by
     revert his
     cases Indexed.applyAll Indexed.State.empty
-      ((orderLogs (logs.filter fun l => decide (l.1.1 ≤ B))).map (·.2)) <;>
+      (((orderLogs (logs.filter fun l => decide (l.1.1 ≤ B))).map (·.2)).filter Event.fetched) <;>
       simp [Except.toOption]
   obtain ⟨hist, hr, hs⟩ := Indexed.summaries_table his
   refine ⟨_, hist, orderLogs_inL1Order ((List.filter_sublist.map _).nodup hk), hr, ?_⟩

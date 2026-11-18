@@ -80,8 +80,10 @@ lowers the block reward.
 
 Whether a key decodes and whether a signature verifies are decided before a change is
 made of an event, and whether a network address is usable before the committee is
-selected; all are taken as given. So are the hash that draws a view's leader, which
-header is an epoch's root, and which logs L1 holds.
+selected; all are taken as given. The node's decimal arithmetic is not modelled
+either: where the exact block reward is a half-integer or within the arithmetic's
+error of one, the specification admits both integers next to it. So are the hash
+that draws a view's leader, which header is an epoch's root, and which logs L1 holds.
 
 The rules are those of protocol version 0.7. Earlier versions broke ties in stake by
 registration order, listed the committee in that order, and before 0.6 did not ask
@@ -297,7 +299,8 @@ did not decode, or a `StakeTable` registration or a key update that the table wo
 take but for a light client key admitted before.
 
 A key update emitted by `StakeTableV2` or later whose signatures do not verify is not
-passed over: the node stops on it.
+passed over: a replay stops on it. A node that fetches the logs itself has dropped it
+before (`StakeTable.Event.fetched`), so only a replay of events from elsewhere meets it.
 -/
 def Passes (h : History) : Event → Prop
   | .register a bls (some k) c =>
@@ -329,6 +332,12 @@ order (`StakeTable.InL1Order`). It reads them in chunks of blocks
 the blocks after the last one it kept, appends what it fetched to what it kept, and
 drops a log that directly repeats the one before it (`StakeTable.resume`).
 
+When it fetches logs, the node drops a key update emitted by `StakeTableV2` or later
+whose keys do not decode or whose signatures do not verify (`StakeTable.Event.fetched`).
+The contract checks only the BLS signature of such an update, so it can emit one whose
+Schnorr signature does not verify. A dropped event is not kept and never reaches the
+replay, so the events a node serves to others are without it.
+
 Which logs exist, and that every read returns all of a range's logs, is the L1
 client's part, not modelled here.
 -/
@@ -340,6 +349,15 @@ The logs carry any payload `α`; only their keys are read.
 -/
 def InL1Order {α : Type} (logs out : List (LogKey × α)) : Prop :=
   out.Perm logs ∧ out.Pairwise fun a b => a.1.before b.1 = true
+
+/--
+The node keeps event `e` when it fetches the logs: every event but a key update
+emitted by `StakeTableV2` or later that is not verified.
+-/
+def Event.fetched : Event → Bool
+  | .keyUpdateV2 _ (.verified ..) => true
+  | .keyUpdateV2 .. => false
+  | _ => true
 
 /--
 The block ranges a read is split into: `[first, last]` in order, each range at most
@@ -444,12 +462,13 @@ def IsCommittee (usable : NetAddr → Bool) (h : History) (as : List Member) : P
 
 /--
 `r` is the committee of the stake table read from `logs`, the contract's logs on L1,
-up to block `B`: the logs up to `B`, in L1 order, make a history, and `r` is the
-committee of its table.
+up to block `B`: the logs up to `B`, in L1 order, without the events the node drops
+when it fetches, make a history, and `r` is the committee of its table.
 -/
 def CommitteeAt (usable : NetAddr → Bool) (logs : List (LogKey × Event)) (B : Nat)
     (r : Option (List Member)) : Prop :=
-  ∃ out h, InL1Order (logs.filter fun l => decide (l.1.1 ≤ B)) out ∧ Reads (out.map (·.2)) h
+  ∃ out h, InL1Order (logs.filter fun l => decide (l.1.1 ≤ B)) out
+    ∧ Reads ((out.map (·.2)).filter Event.fetched) h
     ∧ IsActiveSet usable (table h) r
 
 /-!
@@ -529,8 +548,13 @@ over the blocks of a year, the reward of one block is
 rounded to the nearest integer, a half to the even one. The value is the square root
 of a fraction, so it is stated through its square (`StakeTable.rewardSquare`).
 
-The node computes it in decimal arithmetic to 100 significant digits, which agrees
-with the exact value except within about `10⁻⁷⁹` of a half-integer.
+The node computes it in decimal arithmetic to 100 significant digits. Its value
+before rounding is within one part in `rewardPrecision` of the exact one, so the
+node's reward is the exact one unless the exact value is that close to a half-integer;
+there it is one of the two integers next to it (`StakeTable.AdmittedBlockReward`).
+Which of the two is not modelled. With 8/9 of a supply of 394200000 staked and a
+block every 2000 ms the exact value is 0.5, which rounds to 0, and the node's
+arithmetic gives a little more, which rounds to 1.
 -/
 
 /-- Milliseconds in a year of 365 days. The node's `MILLISECONDS_PER_YEAR`. -/
@@ -574,6 +598,36 @@ def BlockReward (supply stake avgMs r : Nat) : Prop :=
   RewardDefined supply stake avgMs
     ∧ NearestRoot (rewardSquare supply stake (blocksPerYear avgMs)).1
         (rewardSquare supply stake (blocksPerYear avgMs)).2 r
+
+/--
+How close the node's decimal arithmetic stays to the exact block reward: within one
+part in this many.
+
+The node keeps 100 significant digits in each step. The steps together lose less than
+a few units in the last of them, which this bound leaves room for.
+-/
+def rewardPrecision : Nat := 10 ^ 98
+
+/--
+`n` is a rounding of some value within one part in `rewardPrecision` of the square root
+of `num / den`: the root, a little enlarged, is at least `n - 1/2`, and a little
+reduced, at most `n + 1/2`.
+-/
+def NearRoot (num den n : Nat) : Prop :=
+  0 < den
+    ∧ (2 * n - 1) * (2 * n - 1) * (rewardPrecision * rewardPrecision) * den
+        ≤ 4 * ((rewardPrecision + 1) * (rewardPrecision + 1)) * num
+    ∧ 4 * ((rewardPrecision - 1) * (rewardPrecision - 1)) * num
+        ≤ (2 * n + 1) * (2 * n + 1) * (rewardPrecision * rewardPrecision) * den
+
+/--
+`n` is a block reward the node's arithmetic can give for this supply, stake and average
+block time: a rounding of a value within one part in `rewardPrecision` of the exact one.
+-/
+def AdmittedBlockReward (supply stake avgMs n : Nat) : Prop :=
+  RewardDefined supply stake avgMs
+    ∧ NearRoot (rewardSquare supply stake (blocksPerYear avgMs)).1
+        (rewardSquare supply stake (blocksPerYear avgMs)).2 n
 
 /-!
 ## Paying the block reward
@@ -786,6 +840,19 @@ The yearly inflation is largest with the whole supply staked, where it is
 def IssuanceBounded : Prop :=
   ∀ supply stake avgMs r, BlockReward supply stake avgMs r →
     10000 * (r * blocksPerYear avgMs) ≤ 213 * supply + 5000 * blocksPerYear avgMs
+
+/-- The exact block reward is one the node's arithmetic can give. -/
+def ExactRewardAdmitted : Prop :=
+  ∀ supply stake avgMs r, BlockReward supply stake avgMs r → AdmittedBlockReward supply stake avgMs r
+
+/--
+A block reward the node's arithmetic can give is the exact one or an integer next to
+it, for a supply that fits in 256 bits.
+-/
+def AdmittedRewardNearExact : Prop :=
+  ∀ supply stake avgMs n r, supply < U256 →
+    AdmittedBlockReward supply stake avgMs n → BlockReward supply stake avgMs r →
+    n ≤ r + 1 ∧ r ≤ n + 1
 
 /-- More stake never lowers the block reward. -/
 def RewardMonotone : Prop :=

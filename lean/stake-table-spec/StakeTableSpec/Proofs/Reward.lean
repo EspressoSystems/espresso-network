@@ -16,6 +16,13 @@ the squared reward does not decrease with stake (`StakeTable.rewardSquare_mono`)
 more stake never lowers the block reward (`StakeTable.blockReward_mono`). The square
 is largest with the whole supply staked, which bounds the rewards of a year
 (`StakeTable.issuance_bounded`).
+
+The nearest integer is also a rounding of a value close to the root
+(`StakeTable.nearestRoot_nearRoot`), so the exact reward is one the node's arithmetic
+can give (`StakeTable.blockReward_admitted`). Below `rewardPrecision` such a rounding
+is the nearest integer or one next to it (`StakeTable.nearRoot_near`), and the issuance
+bound keeps the reward of a 256-bit supply below it
+(`StakeTable.admittedBlockReward_near`).
 -/
 
 @[expose] public section
@@ -83,10 +90,87 @@ theorem nearestRoot_mono {num den num' den' r r' : Nat} (hle : num * den' ≤ nu
   have := ht' (Nat.eq_of_mul_eq_mul_right hd (by rw [Nat.mul_assoc 4]; omega))
   omega
 
+/-- The integer nearest a square root is a rounding of a value close to the root. -/
+theorem nearestRoot_nearRoot {num den r : Nat} (h : NearestRoot num den r) :
+    NearRoot num den r := by
+  obtain ⟨hd, hl, hu, -, -⟩ := h
+  unfold NearRoot
+  generalize rewardPrecision = P
+  refine ⟨hd, ?_, ?_⟩
+  · calc (2 * r - 1) * (2 * r - 1) * (P * P) * den
+        = P * P * ((2 * r - 1) * (2 * r - 1) * den) := by ac_rfl
+      _ ≤ P * P * (4 * num) := Nat.mul_le_mul_left _ hl
+      _ ≤ (P + 1) * (P + 1) * (4 * num) :=
+          Nat.mul_le_mul_right _ (Nat.mul_le_mul (Nat.le_succ P) (Nat.le_succ P))
+      _ = 4 * ((P + 1) * (P + 1)) * num := by ac_rfl
+  · calc 4 * ((P - 1) * (P - 1)) * num
+        = (P - 1) * (P - 1) * (4 * num) := by ac_rfl
+      _ ≤ P * P * (4 * num) :=
+          Nat.mul_le_mul_right _ (Nat.mul_le_mul (Nat.sub_le P 1) (Nat.sub_le P 1))
+      _ ≤ P * P * ((2 * r + 1) * (2 * r + 1) * den) := Nat.mul_le_mul_left _ hu
+      _ = (2 * r + 1) * (2 * r + 1) * (P * P) * den := by ac_rfl
+
+/--
+A rounding of a value close to a square root is the integer nearest the root or one
+next to it, where that integer is below `rewardPrecision`.
+
+The closeness is relative, one part in `rewardPrecision`, so it moves a root below
+`rewardPrecision` by less than one.
+-/
+theorem nearRoot_near {num den n r : Nat} (hn : NearRoot num den n)
+    (hr : NearestRoot num den r) (hlt : 2 * r + 1 < 2 * rewardPrecision) :
+    n ≤ r + 1 ∧ r ≤ n + 1 := by
+  obtain ⟨hd, hnl, hnu⟩ := hn
+  obtain ⟨-, hrl, hru, -, -⟩ := hr
+  generalize rewardPrecision = P at *
+  constructor
+  · -- The lower end of `n`'s interval, taken without squares.
+    have h : (2 * n - 1) * P ≤ (P + 1) * (2 * r + 1) := by
+      refine Nat.le_of_not_lt fun hgt => ?_
+      have := sq_lt hgt hd
+      have := Nat.mul_le_mul_left ((P + 1) * (P + 1)) hru
+      have : (2 * n - 1) * P * ((2 * n - 1) * P) * den
+          = (2 * n - 1) * (2 * n - 1) * (P * P) * den := by ac_rfl
+      have : (P + 1) * (2 * r + 1) * ((P + 1) * (2 * r + 1)) * den
+          = (P + 1) * (P + 1) * ((2 * r + 1) * (2 * r + 1) * den) := by ac_rfl
+      have : 4 * ((P + 1) * (P + 1)) * num = (P + 1) * (P + 1) * (4 * num) := by ac_rfl
+      omega
+    refine Nat.le_of_not_lt fun hgt => ?_
+    have := Nat.mul_le_mul_right P (show 2 * r + 1 + 2 ≤ 2 * n - 1 by omega)
+    have : (P + 1) * (2 * r + 1) = (2 * r + 1) * P + (2 * r + 1) := by
+      rw [Nat.add_mul, Nat.one_mul, Nat.mul_comm]
+    have : (2 * r + 1 + 2) * P = (2 * r + 1) * P + 2 * P := Nat.add_mul ..
+    omega
+  · obtain ⟨Q, rfl⟩ : ∃ Q, P = Q + 1 := ⟨P - 1, by omega⟩
+    rw [Nat.add_sub_cancel] at hnu
+    -- The upper end of `n`'s interval, taken without squares.
+    have h : Q * (2 * r - 1) ≤ (2 * n + 1) * (Q + 1) := by
+      refine Nat.le_of_not_lt fun hgt => ?_
+      have := sq_lt hgt hd
+      have := Nat.mul_le_mul_left (Q * Q) hrl
+      have : (2 * n + 1) * (Q + 1) * ((2 * n + 1) * (Q + 1)) * den
+          = (2 * n + 1) * (2 * n + 1) * ((Q + 1) * (Q + 1)) * den := by ac_rfl
+      have : Q * (2 * r - 1) * (Q * (2 * r - 1)) * den
+          = Q * Q * ((2 * r - 1) * (2 * r - 1) * den) := by ac_rfl
+      have : 4 * (Q * Q) * num = Q * Q * (4 * num) := by ac_rfl
+      omega
+    refine Nat.le_of_not_lt fun hgt => ?_
+    have := Nat.mul_le_mul_left Q (show 2 * n + 1 + 2 ≤ 2 * r - 1 by omega)
+    have : (2 * n + 1) * (Q + 1) = Q * (2 * n + 1) + (2 * n + 1) := by
+      rw [Nat.mul_add, Nat.mul_one, Nat.mul_comm]
+    have : Q * (2 * n + 1 + 2) = Q * (2 * n + 1) + 2 * Q := by
+      rw [Nat.mul_add, Nat.mul_comm Q 2]
+    omega
+
 /-- The inputs fix the block reward. -/
 theorem blockReward_unique {supply stake avgMs r r' : Nat} (h : BlockReward supply stake avgMs r)
     (h' : BlockReward supply stake avgMs r') : r = r' :=
   nearestRoot_unique h.2 h'.2
+
+/-- The exact block reward is one the node's arithmetic can give. -/
+theorem blockReward_admitted {supply stake avgMs r : Nat} (h : BlockReward supply stake avgMs r) :
+    AdmittedBlockReward supply stake avgMs r :=
+  ⟨h.1, nearestRoot_nearRoot h.2⟩
 
 /-- The squared reward does not decrease with stake, the fractions compared cross-multiplied. -/
 theorem rewardSquare_mono (supply blocks : Nat) {stake stake' : Nat} (h : stake ≤ stake') :
@@ -216,6 +300,31 @@ theorem issuance_bounded {supply stake avgMs r : Nat} (h : BlockReward supply st
   have hr : 2 * (r * blocks) ≤ (2 * r - 1) * blocks + blocks := by
     have := Nat.mul_le_mul_right blocks (show 2 * r ≤ 2 * r - 1 + 1 by omega)
     rwa [Nat.add_mul, Nat.one_mul, Nat.mul_assoc] at this
+  omega
+
+/--
+A block reward the node's arithmetic can give is the exact one or an integer next to
+it, for a supply that fits in 256 bits.
+
+The issuance bound puts the exact reward at no more than the supply, which is below
+`rewardPrecision`.
+-/
+theorem admittedBlockReward_near {supply stake avgMs n r : Nat} (hs : supply < U256)
+    (hn : AdmittedBlockReward supply stake avgMs n) (hr : BlockReward supply stake avgMs r) :
+    n ≤ r + 1 ∧ r ≤ n + 1 := by
+  refine nearRoot_near hn.2 hr.2 ?_
+  have hb := issuance_bounded hr
+  have hpos : 0 < blocksPerYear avgMs := hr.1.2.2.2
+  have hsup : 0 < supply := hr.1.1
+  have hP : U256 < rewardPrecision := by decide
+  generalize blocksPerYear avgMs = blocks at hb hpos
+  have hle : r ≤ supply := by
+    cases r with
+    | zero => omega
+    | succ k =>
+      have := Nat.le_mul_of_pos_right k hpos
+      rw [Nat.add_mul k 1 blocks, Nat.one_mul] at hb
+      omega
   omega
 
 end StakeTable

@@ -24,6 +24,18 @@ pub enum Case {
         state: Option<State>,
         selections: Vec<Selection>,
     },
+    /// Logs with their place on L1 (block, index), read up to `block` as the node reads
+    /// them from L1: whether it could build the stake table, and the active validators
+    /// it selected from it, by account, or none if there is no candidate.
+    Committee {
+        name: String,
+        logs: Vec<((u64, u64), Event)>,
+        block: u64,
+        /// The network addresses the node takes as usable.
+        usable: Vec<String>,
+        finished: bool,
+        active: Option<Vec<String>>,
+    },
     /// The block reward for a supply, a stake and an average block time, if any.
     Reward {
         supply: String,

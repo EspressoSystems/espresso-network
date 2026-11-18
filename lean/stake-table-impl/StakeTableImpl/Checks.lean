@@ -11,6 +11,7 @@ meta import StakeTableImpl.Indexed.Refines
 meta import StakeTableImpl.Reward
 meta import StakeTableImpl.Events
 meta import StakeTableImpl.Schedule
+meta import StakeTableImpl.Committee
 meta import Lean.Elab.Command
 
 /-!
@@ -90,11 +91,22 @@ private def mixed : List Event :=
 #guard blockReward (10 ^ 27) (10 ^ 25) 2000 == some 134533253650408585
 #guard blockReward 100 101 2000 == none
 #guard blockReward 100 1 0 == none
+-- An exact half rounds to the even neighbour; the node's arithmetic may give the other.
+#guard blockReward 394200000 350400000 2000 == some 0
+#guard rewardAdmitted 394200000 350400000 2000 0 && rewardAdmitted 394200000 350400000 2000 1
+#guard !rewardAdmitted 394200000 350400000 2000 2
+#guard !rewardAdmitted (10 ^ 27) (10 ^ 25) 2000 134533253650408586
 
 -- Logs in L1 order, and a read split into chunks.
 #guard (orderLogs [((2, 0), 0), ((1, 5), 1), ((1, 2), 2)]).map (·.2) == [2, 1, 0]
 #guard chunks 0 25 10 == [(0, 9), (10, 19), (20, 25)]
 #guard chunks 5 4 10 == []
+
+-- A key update whose signatures do not verify is dropped when the logs are fetched, so
+-- the read finishes; one after the block read up to is not read at all.
+#guard committeeAt (fun _ => true) [((1, 0), .keyUpdateV2 alice .failed)] 1 == some none
+#guard committeeAt (fun _ => true) [((1, 0), .commissionUpdate alice 1)] 1 == none
+#guard committeeAt (fun _ => true) [((2, 0), .commissionUpdate alice 1)] 1 == some none
 
 -- A breakpoint picks the validator whose share contains it.
 #guard (List.range 6).map (pickIndex [⟨[1], 2⟩, ⟨[2], 3⟩, ⟨[3], 1⟩]) ==

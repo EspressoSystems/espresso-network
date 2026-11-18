@@ -11,9 +11,16 @@ the two agree.
 
 Events replay on the indexed state (`StakeTable.Indexed.apply`), the implementation
 that is proved to refine the specification; the active validators are selected from
-it (`StakeTable.Indexed.select`). The rest is compared function by function:
+it (`StakeTable.Indexed.select`). Logs are read into a committee as the node reads them
+from L1 (`StakeTable.committeeAt`). The rest is compared function by function:
 `StakeTable.blockReward`, `StakeTable.payout`, `StakeTable.orderLogs`,
 `StakeTable.chunks`, and `StakeTable.scheduleOrder` with `StakeTable.leader`.
+
+All results are compared for equality but the block reward. The node computes it in
+decimal arithmetic, which the implementation does not model, and where the exact
+value is within the arithmetic's error of a half-integer the node may round to either
+neighbour. The node's reward agrees if it is one the specification admits
+(`StakeTable.rewardAdmitted`): the exact reward everywhere else.
 -/
 
 @[expose] public section
@@ -86,13 +93,31 @@ def checkReplay (j : Json) : Except String (List String) := do
       diffs := diffs ++ differ "active validators" nodeActive leanActive
     return diffs
 
+def checkCommittee (j : Json) : Except String (List String) := do
+  let logs ← arr j "logs" (pair (pair Json.getNat? Json.getNat?) event)
+  let block ← num j "block"
+  let usable ← arr j "usable" Json.getStr?
+  let active ← opt j "active" fun a => do (← a.getArr?).toList.mapM ident
+  let node := if ← bool j "finished" then some active else none
+  let lean := (committeeAt (fun a => usable.contains a.toString) logs block).map
+    (·.map (·.map (·.account.toNat)))
+  return differ s!"committee up to block {block}" node lean
+
+/--
+The node reports an error exactly where the implementation gives no reward, and
+otherwise gives a reward the specification admits.
+-/
 def checkReward (j : Json) : Except String (List String) := do
   let supply ← amount j "supply"
   let stake ← amount j "stake"
   let avgMs ← num j "avgMs"
   let node ← opt j "reward" decimalJ
-  return differ s!"reward for supply {supply}, stake {stake}, {avgMs} ms" node
-    (blockReward supply stake avgMs)
+  let exact := blockReward supply stake avgMs
+  let agree := match node with
+    | none => exact.isNone
+    | some n => rewardAdmitted supply stake avgMs n
+  let what := s!"reward for supply {supply}, stake {stake}, {avgMs} ms"
+  return if agree then [] else [s!"{what}: node {repr node}, exact {repr exact}"]
 
 /-- What each account is credited, summed over its credits, by account. -/
 def credits (cs : List (Nat × Nat)) : List (Nat × Nat) :=
@@ -145,6 +170,7 @@ def checkSchedule (j : Json) : Except String (List String) := do
 def checkCase (j : Json) : Except String (List String) := do
   match ← str j "kind" with
   | "replay" => checkReplay j
+  | "committee" => checkCommittee j
   | "reward" => checkReward j
   | "payout" => checkPayout j
   | "order" => checkOrder j

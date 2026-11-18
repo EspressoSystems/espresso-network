@@ -106,6 +106,11 @@ theorem rewardFunctional : RewardFunctional := fun _ _ _ hd =>
 
 theorem issuanceBounded : IssuanceBounded := fun _ _ _ _ h => issuance_bounded h
 
+theorem exactRewardAdmitted : ExactRewardAdmitted := fun _ _ _ _ h => blockReward_admitted h
+
+theorem admittedRewardNearExact : AdmittedRewardNearExact := fun _ _ _ _ _ hs hn hr =>
+  admittedBlockReward_near hs hn hr
+
 theorem rewardMonotone : RewardMonotone := fun _ _ _ _ _ _ hs h h' => blockReward_mono hs h h'
 
 theorem payoutAddsUp : PayoutAddsUp := fun _ a r hv => payout_adds_up hv a r

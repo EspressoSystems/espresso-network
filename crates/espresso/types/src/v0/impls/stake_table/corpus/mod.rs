@@ -6,8 +6,8 @@
 //!
 //! Writes one `<kind>.jsonl` file per kind of case into the directory (by default
 //! `stake-table-corpus` under the system's temporary directory): events replayed
-//! and the validators selected from them, block rewards, payouts, log orders, block
-//! range chunks and leader schedules. Each line is a [`case::Case`]: an input and
+//! and the validators selected from them, committees read from logs, block rewards,
+//! payouts, log orders, block range chunks and leader schedules. Each line is a [`case::Case`]: an input and
 //! the node's result. `lake exe check <directory>` in `lean/stake-table-diff` runs the
 //! Lean implementation on every input and compares.
 //!
@@ -44,6 +44,7 @@ fn stake_table_corpus() -> Result<()> {
     }
     write(&dir, "replay", &replays)?;
     write(&dir, "schedule", &schedules)?;
+    write(&dir, "committee", &generate::committees()?)?;
     write(&dir, "reward", &generate::rewards())?;
     write(&dir, "payout", &generate::payouts()?)?;
     write(&dir, "order", &generate::orders()?)?;

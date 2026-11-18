@@ -36,7 +36,8 @@ node's own to the one to run:
 And the rest of the logic, each proved to meet the specification:
 `StakeTable.select` (`StakeTable.select_spec`), which the node's own selection from its
 state agrees with (`StakeTable.State.select_eq`), `StakeTable.blockReward`
-(`StakeTable.blockReward_eq_some_iff`), `StakeTable.orderLogs` and
+(`StakeTable.blockReward_eq_some_iff`), `StakeTable.rewardAdmitted`
+(`StakeTable.rewardAdmitted_iff`), `StakeTable.orderLogs` and
 `StakeTable.chunks` (`StakeTable.orderLogs_inL1Order`, `StakeTable.chunks_chunked`),
 `StakeTable.scheduleOrder` and `StakeTable.leader`, together `StakeTable.committeeLeader`
 (`StakeTable.scheduleOrder_spec`, `StakeTable.leader_eq_some_iff`,
