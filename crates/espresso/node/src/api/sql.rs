@@ -782,7 +782,9 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 ///
 /// A leaf at or below the data pruned height counts as V5+, so that a pruned node, which has no
 /// leaves below its first block, can serve the proofs for the L1-finalized height that claims ask
-/// for. Proofs are garbage collected a few epochs back, so every proof still stored is V5+.
+/// for. Proofs are garbage collected about 5 epochs back, and this binary runs only chains at 0.6
+/// or later, so a stored proof at a pruned height can be V4 only if the chain upgraded from 0.4
+/// within that window.
 async fn reward_proof_height<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
