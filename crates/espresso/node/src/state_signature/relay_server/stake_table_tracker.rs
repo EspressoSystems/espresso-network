@@ -154,20 +154,15 @@ impl StakeTableTracker {
         if let Some(stake_table_info) = read_guard.stake_table_infos.get(&epoch) {
             return Ok(stake_table_info.clone());
         }
+        let sequencer_url = read_guard.sequencer_url.clone();
         tracing::trace!("Drop read lock for stake table info");
         drop(read_guard);
-        tracing::trace!("Acquire write lock for stake table info");
-        let mut write_guard = self.inner.write().await;
-        if let Some(stake_table_info) = write_guard.stake_table_infos.get(&epoch) {
-            return Ok(stake_table_info.clone());
-        }
 
+        // Fetch without the lock: the height comes from an unauthenticated request, and an epoch
+        // the sequencer cannot serve takes the whole retry budget to fail.
         tracing::debug!("Fetching stake table for epoch {} from sequencer", epoch);
-        let stake_table = fetch_stake_table_from_sequencer(
-            &write_guard.sequencer_url,
-            Some(EpochNumber::new(epoch)),
-        )
-        .await?;
+        let stake_table =
+            fetch_stake_table_from_sequencer(&sequencer_url, Some(EpochNumber::new(epoch))).await?;
         let total_stake = stake_table.total_stakes();
 
         let stake_table_info = Arc::new(StakeTableInfo {
@@ -178,6 +173,8 @@ impl StakeTableTracker {
                 .collect(),
         });
 
+        tracing::trace!("Acquire write lock for stake table info");
+        let mut write_guard = self.inner.write().await;
         write_guard
             .stake_table_infos
             .insert(epoch, stake_table_info.clone());
