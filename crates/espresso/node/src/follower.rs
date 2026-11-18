@@ -783,8 +783,9 @@ impl<P: SequencerPersistence> Follower<P> {
 
     /// Holds the stake tables that following from `height` needs, waiting until `deadline`. Far
     /// behind, the coordinator seeds. A failure or timeout is not an error while the table is
-    /// held: the DRB step after the install can fail or run long, and a follower supplies DRB
-    /// results itself from the next transition block on.
+    /// held: the walk runs on in its own task and can install the table as the wait ends. The
+    /// wait is for the table alone; a follower supplies DRB results itself from the next
+    /// transition block on.
     async fn require_stake_table(&self, height: u64, deadline: Instant) -> anyhow::Result<()> {
         let needed = needed_stake_table_epoch(height, self.epoch_height);
         if needed <= self.coordinator.membership().first_epoch() + 1 {

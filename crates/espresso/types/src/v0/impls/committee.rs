@@ -4655,6 +4655,41 @@ mod tests {
         assert!(snapshot.inner.committee.header.is_some());
     }
 
+    /// `wait_for_stake_table` returns a stored table whose DRB result cannot be acquired: storage
+    /// holds none for epoch 8, no peer serves one, and the coordinator has no difficulty selector
+    /// to compute one with.
+    #[tokio::test]
+    async fn wait_for_stake_table_does_not_wait_for_the_drb() {
+        use hotshot_types::epoch_membership::ResidentEpochReadiness;
+
+        let store = MockStakeStore {
+            header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
+            fail_next_store: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        // Epochs 6 and 7 are seeded, so the walk to epoch 8 is one storage read.
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::new(6));
+        let coordinator = coordinator_for(committees);
+        let epoch = EpochNumber::new(8);
+
+        coordinator
+            .wait_for_stake_table(epoch)
+            .await
+            .expect("the stake table of epoch 8 is stored");
+
+        assert_eq!(
+            coordinator.resident_readiness(epoch),
+            ResidentEpochReadiness::StakeTable
+        );
+    }
+
     /// A prune below the cutoff keeps a table until the table above it is held, which is when it
     /// is stored, however far another install stream is ahead.
     #[test]
