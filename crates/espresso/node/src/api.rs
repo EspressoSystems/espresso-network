@@ -6025,10 +6025,12 @@ mod test {
     ) -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
-        const EPOCHS_TO_FOLLOW: u64 = 10;
-        /// Inside epoch 8, which starts at height 71.
-        const LC_CONTRACT_HEIGHT: u64 = 72;
-        const EPOCHS_BEFORE_START: u64 = 8;
+        const EPOCHS_TO_FOLLOW: u64 = 12;
+        /// Inside epoch 10, which starts at height 91. The seed installs epochs 7 to 11.
+        const LC_CONTRACT_HEIGHT: u64 = 92;
+        const EPOCHS_BEFORE_START: u64 = 10;
+        /// The backfilled epoch whose block reward reads the root below its own.
+        const BACKFILLED_EPOCH_WITH_PRECEDING_ROOT: u64 = 6;
         const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
         let network_config = TestConfigBuilder::default()
@@ -6082,7 +6084,7 @@ mod test {
             "node 0 query API did not come up"
         );
 
-        // The mock LC contract is finalized in epoch 8 while the follower holds only the genesis pair.
+        // The mock LC contract is finalized in epoch 10 while the follower holds only the genesis pair.
         let mut events = network.server.event_stream();
         wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_START).await;
         let lc_contract_header: Header = api_client
@@ -6171,6 +6173,36 @@ mod test {
             Some(0.0),
             "{export}"
         );
+
+        // The seed skipped the epochs below its window; the backfill stores them.
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let export = reqwest::get(format!(
+                    "http://localhost:{follower_port}/v1/status/metrics"
+                ))
+                .await?
+                .text()
+                .await?;
+                if metric_value(&export, "consensus_catchup_stake_table_backfill_stored")
+                    >= Some(4.0)
+                    && metric_value(
+                        &export,
+                        "consensus_catchup_stake_table_backfill_missing_epochs",
+                    ) == Some(0.0)
+                {
+                    return anyhow::Ok(());
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .context("the stake table backfill did not store the skipped epochs")??;
+        assert_same_stored_stake(
+            &*network.server.persistence(),
+            &*follower.handle().membership(),
+            EpochNumber::new(BACKFILLED_EPOCH_WITH_PRECEDING_ROOT),
+        )
+        .await?;
 
         let finalized_height = latest_cert2_height(&api_client, tip)
             .await
@@ -6425,6 +6457,32 @@ mod test {
                 assert_same_response(api_client, follower_client, &state_cert).await?;
             }
         }
+        Ok(())
+    }
+
+    /// The stored stake table of `epoch`, with its block reward and hash, is the same in both
+    /// storages.
+    async fn assert_same_stored_stake(
+        validator: &dyn MembershipPersistence,
+        follower: &dyn MembershipPersistence,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<()> {
+        let expected = validator
+            .load_stake(epoch)
+            .await?
+            .with_context(|| format!("node 0 stores no stake table for epoch {epoch}"))?;
+        let actual = follower
+            .load_stake(epoch)
+            .await?
+            .with_context(|| format!("follower stores no stake table for epoch {epoch}"))?;
+        ensure!(
+            expected.1.is_some(),
+            "node 0 stores no block reward for epoch {epoch}"
+        );
+        ensure!(
+            actual == expected,
+            "epoch {epoch}: follower stored {actual:?}, node 0 stored {expected:?}"
+        );
         Ok(())
     }
 
@@ -7354,6 +7412,24 @@ mod test {
             LcContractAt::Height { .. } | LcContractAt::NetworkTip => {
                 assert!(seeds >= Some(1.0), "no seed ran:\n{export}")
             },
+        }
+
+        // A fresh node holds only the seeded window; the backfill stores the epochs below it.
+        if fresh_storage && seeds >= Some(1.0) && seed_epoch > 7 {
+            timeout(Duration::from_secs(60), async {
+                loop {
+                    let export = metrics.export().unwrap();
+                    if metric_value(&export, "catchup_stake_table_backfill_stored") >= Some(1.0)
+                        && metric_value(&export, "catchup_stake_table_backfill_missing_epochs")
+                            == Some(0.0)
+                    {
+                        return;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
+            })
+            .await
+            .expect("the stake table backfill did not store the skipped epochs");
         }
 
         let coordinator = node.node_state().coordinator;

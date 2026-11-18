@@ -1,8 +1,10 @@
 mod external_event_handler;
+mod lc_contract_headers;
 mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
+mod stake_table_backfill;
 
 pub mod api;
 pub mod catchup;

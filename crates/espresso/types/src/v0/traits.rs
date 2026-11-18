@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
 use std::{cmp::max, collections::BTreeMap};
-use std::{fmt::Debug, ops::Range, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, fmt::Debug, ops::Range, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
@@ -571,6 +571,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
+    /// The epochs that have a stored stake table.
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>>;
+
     /// Load the DRB result for `epoch`.
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>>;
 
@@ -584,7 +587,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         block_header: Header,
     ) -> anyhow::Result<()>;
 
-    /// Store stake table at `epoch` in the persistence layer
+    /// Store stake table at `epoch` in the persistence layer. A `None` reward or hash keeps the
+    /// stored value: the live path can store a table derived without a block reward after the
+    /// backfill stored it with one.
     async fn store_stake(
         &self,
         epoch: EpochNumber,

@@ -1,6 +1,9 @@
 #[cfg(feature = "node")]
 use std::time::Duration;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
@@ -221,6 +224,10 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        Ok(BTreeSet::new())
     }
 
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
@@ -653,14 +660,20 @@ pub mod mock {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
         delay: std::time::Duration,
-        /// Headers served to the seed requests, by height.
+        /// Headers served to the proven-header and anchor requests, by height.
         headers: BTreeMap<u64, Header>,
         /// Calls of `try_fetch_proven_header` that fail before the first success.
-        failing_seed_calls: usize,
+        failing_header_calls: usize,
         /// Calls made to `try_fetch_proven_header`.
         proven_header_calls: Arc<AtomicUsize>,
         /// The `retry` argument of each call to `try_fetch_proven_header`, in call order.
         proven_header_retries: Arc<StdMutex<Vec<usize>>>,
+        /// Heights whose `try_fetch_proven_header` calls fail.
+        unavailable_heights: Arc<StdMutex<BTreeSet<u64>>>,
+        /// Calls of `try_fetch_lc_contract_block_merkle_root` that fail before the first success.
+        failing_anchor_calls: usize,
+        /// Calls made to `try_fetch_lc_contract_block_merkle_root`.
+        anchor_calls: Arc<AtomicUsize>,
     }
 
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
@@ -678,8 +691,8 @@ pub mod mock {
             self
         }
 
-        /// Serves the two seed requests from `headers`, keyed by height; the root answer is the
-        /// block Merkle root of the header at `lc_contract_state.height`.
+        /// Serves the proven-header and anchor requests from `headers`, keyed by height; the root
+        /// answer is the block Merkle root of the header at `lc_contract_state.height`.
         pub fn with_headers(mut self, headers: impl IntoIterator<Item = Header>) -> Self {
             self.headers = headers
                 .into_iter()
@@ -689,9 +702,25 @@ pub mod mock {
         }
 
         /// Fails the first `calls` calls of `try_fetch_proven_header`; the root request never fails.
-        pub fn with_failing_seed_calls(mut self, calls: usize) -> Self {
-            self.failing_seed_calls = calls;
+        pub fn with_failing_header_calls(mut self, calls: usize) -> Self {
+            self.failing_header_calls = calls;
             self
+        }
+
+        /// Fails the first `calls` calls of `try_fetch_lc_contract_block_merkle_root`.
+        pub fn with_failing_anchor_calls(mut self, calls: usize) -> Self {
+            self.failing_anchor_calls = calls;
+            self
+        }
+
+        /// Makes `try_fetch_proven_header` fail at exactly `heights` from now on; shared by clones.
+        pub fn set_unavailable_heights(&self, heights: impl IntoIterator<Item = u64>) {
+            *self.unavailable_heights.lock().unwrap() = heights.into_iter().collect();
+        }
+
+        /// Calls made to `try_fetch_lc_contract_block_merkle_root` so far.
+        pub fn anchor_calls(&self) -> usize {
+            self.anchor_calls.load(Ordering::SeqCst)
         }
 
         /// Calls made to `try_fetch_proven_header` so far.
@@ -833,6 +862,11 @@ pub mod mock {
             _retry: usize,
             lc_contract_state: &LcContractFinalizedState,
         ) -> anyhow::Result<BlockMerkleCommitment> {
+            let call = self.anchor_calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::ensure!(
+                call >= self.failing_anchor_calls,
+                "anchor call {call} fails"
+            );
             let header = self
                 .headers
                 .get(&lc_contract_state.height)
@@ -857,7 +891,14 @@ pub mod mock {
                 "root is not the block Merkle root of the header at height {root_height}"
             );
             let call = self.proven_header_calls.fetch_add(1, Ordering::SeqCst);
-            anyhow::ensure!(call >= self.failing_seed_calls, "seed call {call} fails");
+            anyhow::ensure!(
+                call >= self.failing_header_calls,
+                "header call {call} fails"
+            );
+            anyhow::ensure!(
+                !self.unavailable_heights.lock().unwrap().contains(&height),
+                "no proof at height {height}"
+            );
             self.headers
                 .get(&height)
                 .cloned()

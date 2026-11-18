@@ -13,6 +13,8 @@ mod stake_table;
 mod state;
 mod transaction;
 
+#[cfg(feature = "node")]
+pub use committee::StakeTableStoreOutcome;
 pub use committee::{
     EpochCommittees, EpochCommitteesError, EpochSnapshot, RECENT_STAKE_TABLES_LIMIT,
     fetch_and_calculate_block_reward,

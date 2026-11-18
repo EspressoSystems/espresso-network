@@ -37,7 +37,7 @@
 //! actually involved — by making the storage bound too large to help.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -146,6 +146,10 @@ impl MembershipPersistence for StalledStakeStore {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        Ok(BTreeSet::new())
     }
 
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
@@ -286,6 +290,10 @@ impl MembershipPersistence for StoreHandle {
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         self.0.load_latest_stake(limit).await
     }
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        self.0.stored_stake_epochs().await
+    }
+
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         self.0.load_drb_result(epoch).await
     }

@@ -180,8 +180,9 @@ where
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         // Before the anchor `apply_epoch` in `connect_startup_peers`, which can start a catchup.
+        let mut stake_table_backfill = None;
         if let Some(seed) = LcContractSeed::new(&instance_state.chain_config, metrics) {
-            seed.install(&membership_coordinator);
+            stake_table_backfill = Some(seed.install(&membership_coordinator));
         }
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
@@ -325,6 +326,13 @@ where
 
         // Create the external event handler
         let mut tasks = TaskList::default();
+        // After `add_provider`: the backfill fetches through the complete catchup provider.
+        if let Some(backfill) = stake_table_backfill {
+            tasks.spawn(
+                "stake table backfill",
+                backfill.run(membership_coordinator.clone()),
+            );
+        }
         let external_event_handler = ExternalEventHandler::new(
             &mut tasks,
             request_response_sender,

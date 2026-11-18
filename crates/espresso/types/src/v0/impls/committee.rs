@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ops::Bound,
     sync::Arc,
     time::Duration,
@@ -35,6 +35,8 @@ use tracing::{debug, error, info, warn};
 use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 use versions::EPOCH_VERSION;
 
+#[cfg(feature = "node")]
+use super::EventSource;
 use super::{
     AuthenticatedValidatorMap, RegisteredValidatorMap, StakeTableHash, StakeTableState,
     compute_block_reward,
@@ -180,6 +182,17 @@ impl EpochCommittee {
     }
 }
 
+/// The table of one epoch as its root header defines it.
+#[cfg(feature = "node")]
+struct DerivedStakeTable {
+    /// The nodes eligible for leadership.
+    validators: AuthenticatedValidatorMap,
+    /// Every registered validator; empty when `validators` came from a held committee.
+    all_validators: RegisteredValidatorMap,
+    block_reward: Option<RewardAmount>,
+    stake_table_hash: Option<StakeTableHash>,
+}
+
 impl EpochCommittees {
     pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
@@ -266,14 +279,13 @@ impl EpochCommittees {
     /// - If `p <= 0.01`: R(p) = 0.03 / sqrt(2 * 0.01)
     /// - Else: R(p) = 0.03 / sqrt(2 * p)
     ///
-    /// `previous_root` is where the timestamp of the epoch root below `header` comes from.
+    /// `preceding_root` is where the timestamp of the epoch root below `header` comes from.
     async fn calculate_dynamic_block_reward(
         &self,
         epoch: EpochNumber,
         header: &Header,
         validators: &AuthenticatedValidatorMap,
-        previous_root: PreviousRoot<'_>,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        preceding_root: PrecedingRoot<'_>,
     ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
         let current_epoch = epoch_from_block_number(header.height(), *epoch_height);
@@ -286,7 +298,7 @@ impl EpochCommittees {
 
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
-        if matches!(previous_root, PreviousRoot::Peers)
+        if matches!(preceding_root, PrecedingRoot::Peers(_))
             && previous_epoch > first_epoch + 1
             && self.snapshot(previous_epoch.into()).is_none()
         {
@@ -309,7 +321,7 @@ impl EpochCommittees {
         let curr_ts = header.timestamp_millis_internal();
         debug!(?epoch, "curr_ts={curr_ts:?}");
 
-        // If the node starts from epoch version V4, there is no previous epoch root available.
+        // If the node starts from epoch version V4, there is no preceding epoch root available.
         // In this case, we assume a fixed average block time of 2000 milli seconds (2s)
         // for the first epoch in which reward id distributed
         let average_block_time_ms = if previous_epoch <= first_epoch + 1 {
@@ -317,46 +329,45 @@ impl EpochCommittees {
         } else {
             // We are calculating rewards for epoch `epoch`, so the current epoch should be `epoch - 2`.
             // We need to calculate the average block time for the current epoch, so we need to know
-            // the previous epoch root which is stored with epoch `epoch - 1`, i.e. the next epoch.
+            // the preceding epoch root which is stored with epoch `epoch - 1`, i.e. the next epoch.
             let next_epoch = epoch
                 .checked_sub(1)
                 .context("underflow: cannot get next epoch when epoch is 0")?;
             let root_height = header.height().checked_sub(*epoch_height).context(
-                "Epoch height is greater than block height. cannot compute previous epoch root \
+                "Epoch height is greater than block height. cannot compute preceding epoch root \
                  height",
             )?;
-            let held_ts = match previous_root {
-                PreviousRoot::Seed(Some(previous_root)) => {
+            let prev_ts = match preceding_root {
+                PrecedingRoot::Supplied(Some(preceding_root)) => {
                     ensure!(
-                        previous_root.height() == root_height,
-                        "previous epoch root is at height {}, expected {root_height}",
-                        previous_root.height()
+                        preceding_root.height() == root_height,
+                        "preceding epoch root is at height {}, expected {root_height}",
+                        preceding_root.height()
                     );
-                    Some(previous_root.timestamp_millis_internal())
+                    preceding_root.timestamp_millis_internal()
                 },
-                PreviousRoot::Seed(None) => {
-                    bail!("no previous epoch root for the block reward of epoch {epoch}")
+                PrecedingRoot::Supplied(None) => {
+                    bail!("no preceding epoch root for the block reward of epoch {epoch}")
                 },
-                PreviousRoot::Peers => {
-                    self.map_header(next_epoch, |h| h.timestamp_millis_internal())
-                },
-            };
-            let prev_ts = match held_ts {
-                Some(ts) => ts,
-                None => {
-                    info!(
-                        "Calculating rewards for epoch {}, we have no root leaf header for epoch \
-                         - 1. Fetching from peers",
-                        epoch
-                    );
+                PrecedingRoot::Peers(coordinator) => {
+                    match self.map_header(next_epoch, |h| h.timestamp_millis_internal()) {
+                        Some(ts) => ts,
+                        None => {
+                            info!(
+                                "Calculating rewards for epoch {}, we have no root leaf header \
+                                 for epoch - 1. Fetching from peers",
+                                epoch
+                            );
 
-                    self.fetcher
-                        .peers
-                        .fetch_leaf(coordinator.clone(), root_height)
-                        .await
-                        .context("Epoch root leaf not found")?
-                        .block_header()
-                        .timestamp_millis_internal()
+                            self.fetcher
+                                .peers
+                                .fetch_leaf(coordinator.clone(), root_height)
+                                .await
+                                .context("Epoch root leaf not found")?
+                                .block_header()
+                                .timestamp_millis_internal()
+                        },
+                    }
                 },
             };
 
@@ -368,7 +379,7 @@ impl EpochCommittees {
                 .checked_div(*epoch_height)
                 .context("Epoch height is zero. cannot compute average block time")?
         };
-        info!(?epoch, %total_supply, %total_stake, %average_block_time_ms,
+        debug!(?epoch, %total_supply, %total_stake, %average_block_time_ms,
                        "dynamic block reward parameters");
 
         let block_reward =
@@ -535,13 +546,12 @@ impl EpochCommittees {
     /// either by fetching from L1 or using local state if available.
     /// It also calculates and stores the block reward based on header version.
     ///
-    /// `previous_root` is the source of the timestamp for the block reward.
+    /// `preceding_root` is the source of the timestamp for the block reward.
     #[cfg(feature = "node")]
     async fn install_root(
         &self,
         block_header: Header,
-        previous_root: PreviousRoot<'_>,
-        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        preceding_root: PrecedingRoot<'_>,
     ) -> Result<(), EpochCommitteesError> {
         let block_number = block_header.block_number();
 
@@ -577,121 +587,55 @@ impl EpochCommittees {
             error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
         }
 
-        let version = block_header.version();
         // Update the chain config if the block header contains a newer one.
         self.fetcher
             .update_chain_config(&block_header)
             .await
             .map_err(EpochCommitteesError::Fetcher)?;
 
-        let mut block_reward = None;
-        // Even if the current header is the root of the epoch which falls in the post upgrade
-        // we use the fixed block reward
-        if version == EPOCH_VERSION {
-            let reward = self
-                .fetch_and_update_fixed_block_reward(epoch)
+        // Runs before the early return below, so a complete committee still fills the cache.
+        // `derive_stake_table` calls it again; it is cached after the first success.
+        if block_header.version() == EPOCH_VERSION {
+            self.fetch_and_update_fixed_block_reward(epoch)
                 .await
                 .map_err(EpochCommitteesError::Fetcher)?;
-            block_reward = Some(reward);
         }
 
-        let epoch_committee = self
+        let held = self
             .load_stake_table(epoch)
             .await
             .map(|snapshot| Arc::clone(&snapshot.inner.committee));
 
-        // TODO: If the stake table is missing should it be fetched by an unbounded
-        // number of tasks?
-
-        // If the epoch committee:
-        // - exists and has a header stake table hash and block reward, return early.
-        // - exists without a reward, reuse validators and update reward.
-        // and fetch from L1 if the stake table hash is missing.
-        // - doesn't exist, fetch it from L1.
-        let (active_validators, all_validators, stake_table_hash) = match epoch_committee {
-            Some(committee)
-                if committee.block_reward.is_some()
-                    && committee.header.is_some()
-                    && committee.stake_table_hash.is_some() =>
-            {
-                info!(
-                    ?epoch,
-                    "committee already has block reward, header, and stake table hash; skipping \
-                     add_epoch_root"
-                );
-                return Ok(());
-            },
-
-            Some(committee) => {
-                if let Some(reward) = committee.block_reward {
-                    block_reward = Some(reward);
-                }
-
-                if let Some(hash) = committee.stake_table_hash {
-                    (committee.validators.clone(), Default::default(), Some(hash))
-                } else {
-                    // if stake table hash is missing then recalculate from events
-                    info!(
-                        "Stake table hash missing for epoch {epoch}. recalculating by fetching \
-                         from l1."
-                    );
-                    let set = self
-                        .fetcher
-                        .fetch(epoch, &block_header)
-                        .await
-                        .map_err(EpochCommitteesError::Fetcher)?;
-                    (
-                        set.active_validators,
-                        set.all_validators,
-                        set.stake_table_hash,
-                    )
-                }
-            },
-
-            None => {
-                info!("Stake table missing for epoch {epoch}. Fetching from L1.");
-                let set = self
-                    .fetcher
-                    .fetch(epoch, &block_header)
-                    .await
-                    .map_err(EpochCommitteesError::Fetcher)?;
-                (
-                    set.active_validators,
-                    set.all_validators,
-                    set.stake_table_hash,
-                )
-            },
-        };
-
-        // If we are past the DRB+Header upgrade point,
-        // and don't have block reward
-        // calculate the dynamic block reward based on validator info and block header.
-        if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            info!(?epoch, "calculating dynamic block reward");
-            let reward = self
-                .calculate_dynamic_block_reward(
-                    epoch,
-                    &block_header,
-                    &active_validators,
-                    previous_root,
-                    coordinator,
-                )
-                .await
-                .map_err(EpochCommitteesError::Reward)?;
-
-            info!(?epoch, "calculated dynamic block reward = {reward:?}");
-            block_reward = reward;
+        if held.as_ref().is_some_and(|committee| {
+            committee.block_reward.is_some()
+                && committee.header.is_some()
+                && committee.stake_table_hash.is_some()
+        }) {
+            info!(
+                ?epoch,
+                "committee already has block reward, header, and stake table hash; skipping \
+                 add_epoch_root"
+            );
+            return Ok(());
         }
 
-        // A seeded table without a reward is not persisted.
-        if previous_root.is_seed() && block_reward.is_none() {
-            return Err(EpochCommitteesError::Reward(anyhow::anyhow!(
-                "no block reward for the table of epoch {epoch}"
-            )));
-        }
+        let DerivedStakeTable {
+            validators: active_validators,
+            all_validators,
+            block_reward,
+            stake_table_hash,
+        } = self
+            .derive_stake_table(
+                epoch,
+                &block_header,
+                held.as_deref(),
+                preceding_root,
+                EventSource::StoredThenL1,
+            )
+            .await?;
 
         let committee = EpochCommittee::new(
-            active_validators.clone(),
+            active_validators,
             block_reward,
             stake_table_hash,
             Some(block_header.clone()),
@@ -761,6 +705,106 @@ impl EpochCommittees {
         Ok(())
     }
 
+    /// The table of `epoch` that its root `header` defines, with events from `source`. `held` is
+    /// the committee in memory for `epoch`: its reward and validators are reused.
+    ///
+    /// Writes no committee and no stored table. It sets the cached fixed block reward and, for an
+    /// unknown deployment, the cached initial supply; with `EventSource::StoredThenL1` it also stores
+    /// the events it fetches from L1.
+    #[cfg(feature = "node")]
+    async fn derive_stake_table(
+        &self,
+        epoch: EpochNumber,
+        header: &Header,
+        held: Option<&EpochCommittee>,
+        preceding_root: PrecedingRoot<'_>,
+        source: EventSource,
+    ) -> Result<DerivedStakeTable, EpochCommitteesError> {
+        let version = header.version();
+        let mut block_reward = None;
+        // Even if the current header is the root of the epoch which falls in the post upgrade
+        // we use the fixed block reward
+        if version == EPOCH_VERSION {
+            let reward = self
+                .fetch_and_update_fixed_block_reward(epoch)
+                .await
+                .map_err(EpochCommitteesError::Fetcher)?;
+            block_reward = Some(reward);
+        }
+
+        // TODO: If the stake table is missing should it be fetched by an unbounded
+        // number of tasks?
+
+        // A held committee keeps its validators, and its hash unless that is missing; without a
+        // held committee, or without its hash, the validators are derived from events.
+        let (active_validators, all_validators, stake_table_hash) = match held {
+            Some(committee) => {
+                if let Some(reward) = committee.block_reward {
+                    block_reward = Some(reward);
+                }
+
+                if let Some(hash) = committee.stake_table_hash {
+                    (committee.validators.clone(), Default::default(), Some(hash))
+                } else {
+                    // if stake table hash is missing then recalculate from events
+                    info!("Stake table hash missing for epoch {epoch}. recalculating from events.");
+                    let set = self
+                        .fetcher
+                        .fetch(epoch, header, source)
+                        .await
+                        .map_err(EpochCommitteesError::Fetcher)?;
+                    (
+                        set.active_validators,
+                        set.all_validators,
+                        set.stake_table_hash,
+                    )
+                }
+            },
+
+            None => {
+                debug!("Stake table missing for epoch {epoch}. Deriving it from events.");
+                let set = self
+                    .fetcher
+                    .fetch(epoch, header, source)
+                    .await
+                    .map_err(EpochCommitteesError::Fetcher)?;
+                (
+                    set.active_validators,
+                    set.all_validators,
+                    set.stake_table_hash,
+                )
+            },
+        };
+
+        // If we are past the DRB+Header upgrade point,
+        // and don't have block reward
+        // calculate the dynamic block reward based on validator info and block header.
+        if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
+            debug!(?epoch, "calculating dynamic block reward");
+            let reward = self
+                .calculate_dynamic_block_reward(epoch, header, &active_validators, preceding_root)
+                .await
+                .map_err(EpochCommitteesError::Reward)?;
+
+            debug!(?epoch, "calculated dynamic block reward = {reward:?}");
+            block_reward = reward;
+        }
+
+        // A table from supplied roots (a seed or the backfill) without a reward is not stored.
+        if preceding_root.is_supplied() && block_reward.is_none() {
+            return Err(EpochCommitteesError::Reward(anyhow::anyhow!(
+                "no block reward for the table of epoch {epoch}"
+            )));
+        }
+
+        Ok(DerivedStakeTable {
+            validators: active_validators,
+            all_validators,
+            block_reward,
+            stake_table_hash,
+        })
+    }
+
     /// Installs `roots` in ascending order, each under the coordinator's catchup timeout.
     /// `preceding_root` is the root below the first (`None` near genesis). A failed batch keeps the
     /// tables it installed.
@@ -771,16 +815,12 @@ impl EpochCommittees {
         roots: Vec<Header>,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), EpochCommitteesError> {
-        let mut previous = preceding_root;
+        let mut preceding = preceding_root;
         for header in roots {
             let height = header.height();
             tokio::time::timeout(
                 coordinator.catchup_timeout(),
-                self.install_root(
-                    header.clone(),
-                    PreviousRoot::Seed(previous.as_ref()),
-                    coordinator,
-                ),
+                self.install_root(header.clone(), PrecedingRoot::Supplied(preceding.as_ref())),
             )
             .await
             .map_err(|_| {
@@ -789,9 +829,92 @@ impl EpochCommittees {
                     coordinator.catchup_timeout()
                 ))
             })??;
-            previous = Some(header);
+            preceding = Some(header);
         }
         Ok(())
+    }
+
+    /// The epochs that have a stake table in storage.
+    pub async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        self.fetcher
+            .persistence
+            .lock()
+            .await
+            .stored_stake_epochs()
+            .await
+    }
+
+    /// Derives the table of the epoch `root` defines from the stored stake table events and
+    /// writes it to storage, without putting it in memory or touching the chain config.
+    /// `preceding_root` is the root one epoch below `root` (read by the dynamic block reward) and
+    /// `next_root` the root one epoch above it, whose `next_stake_table_hash` decides the table's
+    /// hash. A table that differs from the decided hash is not stored. Makes no L1 event request:
+    /// events that storage lacks are an error.
+    ///
+    /// The live path's later store of the same epoch overwrites the table, validators and hash,
+    /// and keeps this block reward when its own is missing.
+    #[cfg(feature = "node")]
+    pub async fn store_derived_stake_table(
+        &self,
+        root: &Header,
+        preceding_root: Option<&Header>,
+        next_root: &Header,
+    ) -> Result<StakeTableStoreOutcome, EpochCommitteesError> {
+        let epoch_height = *self.epoch_height;
+        if !is_epoch_root(root.height(), epoch_height) {
+            return Err(EpochCommitteesError::NoRootBlock(root.height().into()));
+        }
+        let epoch = EpochNumber::new(epoch_from_block_number(root.height(), epoch_height) + 2);
+        if next_root.height() != root.height() + epoch_height {
+            return Err(EpochCommitteesError::Message(format!(
+                "the next epoch root is at height {}, expected {}",
+                next_root.height(),
+                root.height() + epoch_height
+            )));
+        }
+
+        let derived = self
+            .derive_stake_table(
+                epoch,
+                root,
+                None,
+                PrecedingRoot::Supplied(preceding_root),
+                EventSource::StoredOnly,
+            )
+            .await?;
+        // Headers of old versions carry no decided hash: stored without comparison.
+        if let Some((decided, derived_hash)) = next_root
+            .next_stake_table_hash()
+            .zip(derived.stake_table_hash)
+            && decided != derived_hash
+        {
+            return Ok(StakeTableStoreOutcome::HashMismatch {
+                decided,
+                derived: derived_hash,
+            });
+        }
+
+        let persistence = self.fetcher.persistence.lock().await;
+        persistence
+            .store_epoch_root(epoch, root.clone())
+            .await
+            .map_err(EpochCommitteesError::Storage)?;
+        persistence
+            .store_all_validators(epoch, derived.all_validators)
+            .await
+            .map_err(EpochCommitteesError::Storage)?;
+        // Last: the epoch counts as stored once its stake table is, so an interrupted store is
+        // repeated.
+        persistence
+            .store_stake(
+                epoch,
+                derived.validators,
+                derived.block_reward,
+                derived.stake_table_hash,
+            )
+            .await
+            .map_err(EpochCommitteesError::Storage)?;
+        Ok(StakeTableStoreOutcome::Stored)
     }
 
     #[cfg(feature = "node")]
@@ -985,8 +1108,7 @@ pub async fn fetch_and_calculate_block_reward(
             current_epoch,
             &header,
             &committee.validators,
-            PreviousRoot::Peers,
-            &coordinator,
+            PrecedingRoot::Peers(&coordinator),
         )
         .await
         .with_context(|| {
@@ -1142,7 +1264,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<(), Self::Error> {
-        self.install_root(block_header, PreviousRoot::Peers, coordinator)
+        self.install_root(block_header, PrecedingRoot::Peers(coordinator))
             .await
     }
 
@@ -1302,6 +1424,19 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 }
 
+/// What `EpochCommittees::store_derived_stake_table` did.
+#[cfg(feature = "node")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StakeTableStoreOutcome {
+    /// The table was written to storage.
+    Stored,
+    /// The derived table's hash differs from the decided one; nothing was written.
+    HashMismatch {
+        decided: StakeTableHash,
+        derived: StakeTableHash,
+    },
+}
+
 #[derive(Error, Debug)]
 pub enum EpochCommitteesError {
     #[error("could not lookup leader")]
@@ -1330,19 +1465,20 @@ pub enum EpochCommitteesError {
 /// Where the block reward of an installed table takes the timestamp of the root below its header.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Clone, Copy)]
-enum PreviousRoot<'a> {
-    /// The held committee below, else a leaf from peers; a missing reward is stored as such.
-    Peers,
-    /// The given header (`None` where the reward assumes the block time): no held header, no peer
-    /// fetch; a missing reward is an error.
-    Seed(Option<&'a Header>),
+enum PrecedingRoot<'a> {
+    /// The held committee below, else a leaf through the coordinator; a missing reward is stored
+    /// as such.
+    Peers(&'a EpochMembershipCoordinator<SeqTypes>),
+    /// The given header (`None` where the reward assumes the block time), for a seed or the
+    /// backfill: no held header, no peer fetch; a missing reward is an error.
+    Supplied(Option<&'a Header>),
 }
 
 #[cfg(feature = "node")]
-impl PreviousRoot<'_> {
-    /// Whether this is a seed install.
-    fn is_seed(self) -> bool {
-        matches!(self, Self::Seed(_))
+impl PrecedingRoot<'_> {
+    /// Whether the root comes from the caller, as in a seed or the backfill.
+    fn is_supplied(self) -> bool {
+        matches!(self, Self::Supplied(_))
     }
 }
 
@@ -1681,7 +1817,10 @@ mod tests {
     use tokio::{task::JoinSet, time::Duration};
 
     use super::*;
-    use crate::{NodeState, Payload, Transaction, traits::MembershipPersistence};
+    use crate::{
+        NodeState, Payload, Transaction,
+        traits::{EventsPersistenceRead, MembershipPersistence},
+    };
 
     /// Wall-clock target each concurrency test runs for. Long enough to
     /// catch flaky races that one-shot tests would miss; short enough to
@@ -1738,6 +1877,10 @@ mod tests {
             _limit: u64,
         ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
             Ok(None)
+        }
+
+        async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+            Ok(BTreeSet::new())
         }
 
         async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
@@ -2797,6 +2940,10 @@ mod tests {
             Ok(Some(self.stakes.clone()))
         }
 
+        async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+            Ok(BTreeSet::new())
+        }
+
         async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
             Ok(None)
         }
@@ -3532,6 +3679,50 @@ mod tests {
         }
     }
 
+    /// A complete held committee does not skip the fixed block reward fetch for an `EPOCH_VERSION`
+    /// root.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn add_epoch_root_fetches_fixed_reward_for_complete_committee() {
+        let fetcher = Fetcher::mock();
+        *fetcher.initial_supply.write().await = Some(U256::from(1_000_000u64));
+        let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
+        let header = {
+            let mut instance = NodeState::mock_v2();
+            instance.genesis_version = EPOCH_VERSION;
+            let (payload, metadata) =
+                Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                    .await
+                    .expect("payload");
+            match Header::genesis(&instance, payload, &metadata, MOCK_UPGRADE.base) {
+                Header::V3(mut h) => {
+                    h.height = 95;
+                    Header::V3(h)
+                },
+                other => panic!("expected a V3 header, got {other:?}"),
+            }
+        };
+        put_committee_with_header(
+            &committees,
+            3,
+            Some(StakeTableState::default().commit()),
+            Some(RewardAmount::default()),
+            Some(header.clone()),
+        );
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees.clone(),
+            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        assert_eq!(committees.fixed_block_reward(), None);
+
+        committees
+            .add_epoch_root(header, &coordinator)
+            .await
+            .unwrap();
+
+        assert!(committees.fixed_block_reward().is_some());
+    }
+
     fn mismatch_setup() -> (EpochCommittees, EpochMembershipCoordinator<SeqTypes>) {
         let committees = build_committees(4);
         put_prefilled(&committees, 2, Some(StakeTableState::default().commit()));
@@ -3757,6 +3948,17 @@ mod tests {
         }
     }
 
+    /// A write to storage that `StalledStakeStore` completed.
+    #[derive(Clone, Debug, PartialEq)]
+    enum StoredWrite {
+        EpochRoot(u64),
+        AllValidators(
+            u64,
+            IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+        ),
+        Stake(u64, Option<RewardAmount>, Option<StakeTableHash>),
+    }
+
     /// Persistence of a seed test: `events` are the complete stake table events, `load_stake`
     /// counts its calls and finds nothing, and `store_stake` counts its entries, then waits while
     /// `stall_store_stake` is set, fails while `fail_store_stake` is set, else records its epoch.
@@ -3767,7 +3969,9 @@ mod tests {
         stall_store_stake: Arc<AtomicBool>,
         fail_store_stake: Arc<AtomicBool>,
         store_stake_entries: Arc<AtomicUsize>,
+        writes: Arc<parking_lot::Mutex<Vec<StoredWrite>>>,
         stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
+        events_read: Arc<parking_lot::Mutex<Option<crate::traits::EventsPersistenceRead>>>,
     }
 
     #[async_trait::async_trait]
@@ -3787,6 +3991,10 @@ mod tests {
             Ok(None)
         }
 
+        async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+            Ok(BTreeSet::new())
+        }
+
         async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
             Ok(None)
         }
@@ -3797,9 +4005,10 @@ mod tests {
 
         async fn store_epoch_root(
             &self,
-            _epoch: EpochNumber,
+            epoch: EpochNumber,
             _block_header: Header,
         ) -> anyhow::Result<()> {
+            self.writes.lock().push(StoredWrite::EpochRoot(*epoch));
             Ok(())
         }
 
@@ -3807,8 +4016,8 @@ mod tests {
             &self,
             epoch: EpochNumber,
             _stake: AuthenticatedValidatorMap,
-            _block_reward: Option<RewardAmount>,
-            _stake_table_hash: Option<StakeTableHash>,
+            block_reward: Option<RewardAmount>,
+            stake_table_hash: Option<StakeTableHash>,
         ) -> anyhow::Result<()> {
             self.store_stake_entries.fetch_add(1, Ordering::SeqCst);
             while self.stall_store_stake.load(Ordering::SeqCst) {
@@ -3819,6 +4028,9 @@ mod tests {
                 "injected store_stake failure"
             );
             self.stored_epochs.lock().push(*epoch);
+            self.writes
+                .lock()
+                .push(StoredWrite::Stake(*epoch, block_reward, stake_table_hash));
             Ok(())
         }
 
@@ -3838,10 +4050,7 @@ mod tests {
             Option<crate::traits::EventsPersistenceRead>,
             Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
         )> {
-            Ok((
-                Some(crate::traits::EventsPersistenceRead::Complete),
-                self.events.clone(),
-            ))
+            Ok((*self.events_read.lock(), self.events.clone()))
         }
 
         async fn delete_stake_tables(&self) -> anyhow::Result<()> {
@@ -3850,9 +4059,12 @@ mod tests {
 
         async fn store_all_validators(
             &self,
-            _epoch: EpochNumber,
-            _all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+            epoch: EpochNumber,
+            all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
         ) -> anyhow::Result<()> {
+            self.writes
+                .lock()
+                .push(StoredWrite::AllValidators(*epoch, all_validators));
             Ok(())
         }
 
@@ -3866,7 +4078,7 @@ mod tests {
         }
     }
 
-    /// Roots that skip an epoch fail the previous root check, and the table after the gap gets no
+    /// Roots that skip an epoch fail the preceding root check, and the table after the gap gets no
     /// reward.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn install_epoch_roots_skipping_an_epoch_fails() {
@@ -3881,7 +4093,7 @@ mod tests {
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
         assert!(
-            format!("{err:#}").contains("previous epoch root is at height"),
+            format!("{err:#}").contains("preceding epoch root is at height"),
             "{err:#}"
         );
         let snapshot = committees.snapshot(EpochNumber::new(63)).unwrap();
@@ -3903,7 +4115,7 @@ mod tests {
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
         assert!(
-            format!("{err:#}").contains("previous epoch root is at height"),
+            format!("{err:#}").contains("preceding epoch root is at height"),
             "{err:#}"
         );
         let snapshot = committees.snapshot(EpochNumber::new(60)).unwrap();
@@ -3924,7 +4136,7 @@ mod tests {
 
         assert!(matches!(err, EpochCommitteesError::Reward(_)), "{err:#}");
         assert!(
-            format!("{err:#}").contains("no previous epoch root"),
+            format!("{err:#}").contains("no preceding epoch root"),
             "{err:#}"
         );
         let snapshot = committees.snapshot(EpochNumber::new(20)).unwrap();
@@ -3951,6 +4163,26 @@ mod tests {
         store_stake_entries: Arc<AtomicUsize>,
         /// Epochs `store_stake` completed for, in order.
         stored_epochs: Arc<parking_lot::Mutex<Vec<u64>>>,
+        /// Every write storage completed, in order.
+        writes: Arc<parking_lot::Mutex<Vec<StoredWrite>>>,
+        /// What `load_events` reports about the stored events; complete at the start.
+        events_read: Arc<parking_lot::Mutex<Option<crate::traits::EventsPersistenceRead>>>,
+    }
+
+    /// The epoch root at `height` of the [`StalledInstall`] setup: it names the stake table
+    /// contract and an L1 block, so its table is derived from the store's events.
+    async fn events_root(height: u64) -> Header {
+        let mut root = timed_root(height).await;
+        *root.l1_finalized_mut() = Some(crate::L1BlockInfo::default());
+        let Header::V4(fields) = &mut root else {
+            unreachable!("timed_root builds V4 headers");
+        };
+        fields.chain_config = crate::ChainConfig {
+            stake_table_contract: Some(Address::ZERO),
+            ..Default::default()
+        }
+        .into();
+        root
     }
 
     /// The [`StalledInstall`] setup, with `catchup_timeout` on the coordinator.
@@ -3960,6 +4192,10 @@ mod tests {
         let fail_store_stake = Arc::<AtomicBool>::default();
         let store_stake_entries = Arc::<AtomicUsize>::default();
         let stored_epochs = Arc::<parking_lot::Mutex<Vec<u64>>>::default();
+        let writes = Arc::<parking_lot::Mutex<Vec<StoredWrite>>>::default();
+        let events_read = Arc::new(parking_lot::Mutex::new(Some(
+            crate::traits::EventsPersistenceRead::Complete,
+        )));
         let validator = super::super::stake_table::testing::TestValidator::random();
         let events = vec![
             (
@@ -3986,6 +4222,8 @@ mod tests {
                 fail_store_stake: Arc::clone(&fail_store_stake),
                 store_stake_entries: Arc::clone(&store_stake_entries),
                 stored_epochs: Arc::clone(&stored_epochs),
+                writes: Arc::clone(&writes),
+                events_read: Arc::clone(&events_read),
             })),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
@@ -4003,16 +4241,7 @@ mod tests {
             &hotshot_example_types::storage_types::TestStorage::default(),
         )
         .with_catchup_timeout(catchup_timeout);
-        let mut root = timed_root(100 * 19 - 5).await;
-        *root.l1_finalized_mut() = Some(crate::L1BlockInfo::default());
-        let Header::V4(fields) = &mut root else {
-            unreachable!("timed_root builds V4 headers");
-        };
-        fields.chain_config = crate::ChainConfig {
-            stake_table_contract: Some(Address::ZERO),
-            ..Default::default()
-        }
-        .into();
+        let root = events_root(100 * 19 - 5).await;
         let preceding = timed_root(100 * 18 - 5).await;
         StalledInstall {
             committees,
@@ -4024,6 +4253,8 @@ mod tests {
             fail_store_stake,
             store_stake_entries,
             stored_epochs,
+            writes,
+            events_read,
         }
     }
 
@@ -4099,6 +4330,218 @@ mod tests {
         setup.fail_store_stake.store(false, Ordering::SeqCst);
         install_setup_root(&setup).await.unwrap();
         assert_eq!(*setup.stored_epochs.lock(), vec![20]);
+    }
+
+    /// The [`StalledInstall`] setup with `store_stake` free. Its `root` defines epoch 21.
+    async fn derive_setup() -> StalledInstall {
+        let setup = stalled_install_setup(Duration::from_secs(60)).await;
+        setup.stall_store_stake.store(false, Ordering::SeqCst);
+        setup
+    }
+
+    /// The stake table hash that `setup.root` derives for epoch 21.
+    async fn derived_hash(setup: &StalledInstall) -> StakeTableHash {
+        let set = setup
+            .committees
+            .fetcher()
+            .fetch(EpochNumber::new(21), &setup.root, EventSource::StoredOnly)
+            .await
+            .unwrap();
+        set.stake_table_hash.expect("derived tables have a hash")
+    }
+
+    /// Complete storage gives the validator set that `validator_set_at` gives for the same block.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn validator_set_from_stored_events_equals_validator_set_at() {
+        let setup = derive_setup().await;
+        let fetcher = setup.committees.fetcher();
+        let version = setup.root.version();
+
+        let stored = fetcher
+            .validator_set_from_stored_events(1, version)
+            .await
+            .unwrap();
+        let fetched = fetcher.validator_set_at(1, version).await.unwrap();
+
+        assert!(!stored.active_validators.is_empty());
+        assert_eq!(stored.active_validators, fetched.active_validators);
+        assert_eq!(stored.all_validators, fetched.all_validators);
+        assert_eq!(stored.stake_table_hash, fetched.stake_table_hash);
+    }
+
+    /// Storage that does not cover the block is an error with no L1 request (the L1 client points
+    /// at an unroutable address), also through `store_derived_stake_table`, which stores nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stored_events_not_covering_the_block_fail_without_l1_request() {
+        let setup = derive_setup().await;
+        let next_root = timed_root(100 * 20 - 5).await;
+        let version = setup.root.version();
+        for read in [None, Some(EventsPersistenceRead::UntilL1Block(0))] {
+            *setup.events_read.lock() = read;
+
+            let set = tokio::time::timeout(
+                Duration::from_secs(5),
+                setup
+                    .committees
+                    .fetcher()
+                    .validator_set_from_stored_events(1, version),
+            )
+            .await
+            .expect("an L1 request was made");
+            assert!(
+                format!("{:#}", set.unwrap_err()).contains("do not cover L1 block 1"),
+                "{read:?}"
+            );
+
+            let stored = tokio::time::timeout(
+                Duration::from_secs(5),
+                setup.committees.store_derived_stake_table(
+                    &setup.root,
+                    Some(&setup.preceding),
+                    &next_root,
+                ),
+            )
+            .await
+            .expect("an L1 request was made");
+            assert!(matches!(stored, Err(EpochCommitteesError::Fetcher(_))));
+            assert!(setup.writes.lock().is_empty());
+        }
+    }
+
+    /// A table is written to storage and not put in memory; a next root without a hash is not a
+    /// mismatch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_stores_but_installs_nothing() {
+        let setup = derive_setup().await;
+        let next_root = timed_root(100 * 20 - 5).await;
+
+        let outcome = setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, StakeTableStoreOutcome::Stored);
+        let hash = derived_hash(&setup).await;
+        let writes = setup.writes.lock().clone();
+        assert!(
+            matches!(
+                writes.as_slice(),
+                [
+                    StoredWrite::EpochRoot(21),
+                    StoredWrite::AllValidators(21, _),
+                    StoredWrite::Stake(21, Some(_), Some(stored_hash)),
+                ] if *stored_hash == hash
+            ),
+            "{writes:?}"
+        );
+        let inner = setup.committees.inner.read();
+        assert!(inner.epoch_committee(EpochNumber::new(21)).is_none());
+        assert!(!inner.all_validators.contains_key(&EpochNumber::new(21)));
+    }
+
+    /// A next root deciding the derived hash lets the table be stored.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_stores_on_matching_hash() {
+        let setup = derive_setup().await;
+        let next_root = header_deciding(100 * 20 - 5, derived_hash(&setup).await).await;
+
+        let outcome = setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, StakeTableStoreOutcome::Stored);
+        assert_eq!(setup.writes.lock().len(), 3);
+    }
+
+    /// A next root deciding another hash stores nothing and does not end the process.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_skips_on_hash_mismatch() {
+        let setup = derive_setup().await;
+        let next_root = header_deciding(100 * 20 - 5, other_hash()).await;
+
+        let outcome = setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            StakeTableStoreOutcome::HashMismatch {
+                decided: other_hash(),
+                derived: derived_hash(&setup).await,
+            }
+        );
+        assert!(setup.writes.lock().is_empty());
+    }
+
+    /// Inputs that are not consecutive epoch roots, or lack the root the reward reads, are
+    /// errors and write nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_rejects_bad_inputs() {
+        let setup = derive_setup().await;
+        let next_root = timed_root(100 * 20 - 5).await;
+        let not_a_root = timed_root(100 * 19 - 4).await;
+        let skipped_next_root = timed_root(100 * 21 - 5).await;
+
+        let committees = &setup.committees;
+        let preceding = Some(&setup.preceding);
+        let errors = [
+            committees
+                .store_derived_stake_table(&not_a_root, preceding, &next_root)
+                .await,
+            committees
+                .store_derived_stake_table(&setup.root, preceding, &skipped_next_root)
+                .await,
+            committees
+                .store_derived_stake_table(&setup.root, None, &next_root)
+                .await,
+        ];
+
+        assert!(matches!(
+            errors[0],
+            Err(EpochCommitteesError::NoRootBlock(_))
+        ));
+        assert!(matches!(errors[1], Err(EpochCommitteesError::Message(_))));
+        assert!(matches!(errors[2], Err(EpochCommitteesError::Reward(_))));
+        assert!(setup.writes.lock().is_empty());
+    }
+
+    /// The table stored for epoch 21 equals the one the live installs store for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_derived_stake_table_equals_the_installed_table() {
+        let setup = derive_setup().await;
+        let next_root = events_root(100 * 20 - 5).await;
+        setup
+            .committees
+            .install_epoch_roots(
+                Some(setup.preceding.clone()),
+                vec![setup.root.clone(), next_root.clone()],
+                &setup.coordinator,
+            )
+            .await
+            .unwrap();
+        let live = setup.writes.lock().clone();
+
+        setup
+            .committees
+            .store_derived_stake_table(&setup.root, Some(&setup.preceding), &next_root)
+            .await
+            .unwrap();
+
+        let writes = setup.writes.lock().clone();
+        let backfilled = &writes[live.len()..];
+        for kind in [
+            |write: &&StoredWrite| matches!(write, StoredWrite::Stake(21, ..)),
+            |write: &&StoredWrite| matches!(write, StoredWrite::AllValidators(21, _)),
+        ] {
+            let live_write = live.iter().find(kind).expect("live path stored epoch 21");
+            let backfilled_write = backfilled.iter().find(kind).unwrap();
+            assert_eq!(live_write, backfilled_write);
+        }
     }
 
     /// Epoch 21 is held without a block reward, and `root` is installed by the walk while its

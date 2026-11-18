@@ -173,7 +173,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         let mut logs = vec!["Fetching failed.\n".to_string()];
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
-            tracing::info!("fetching from {}", client.url);
+            tracing::debug!("fetching from {}", client.url);
             match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone()))).await {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);

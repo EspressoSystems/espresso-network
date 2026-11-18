@@ -42,6 +42,16 @@ impl SeedWindow {
     }
 }
 
+/// Height of the epoch root below the one that defines the table of `epoch`, when the block reward
+/// of that table reads its timestamp; `None` near genesis.
+pub fn preceding_root_height(
+    epoch: EpochNumber,
+    first_epoch: EpochNumber,
+    epoch_height: u64,
+) -> Option<u64> {
+    (epoch > first_epoch + 4).then(|| root_block_in_epoch(*epoch - 3, epoch_height))
+}
+
 impl LcContractFinalizedState {
     /// The epoch of `F`.
     pub fn seed_epoch(&self, epoch_height: u64) -> EpochNumber {
@@ -67,9 +77,7 @@ impl LcContractFinalizedState {
         // Five tables cover the DRB and block rewards of the target; held tables are not
         // installed again; epoch 3 is the first table an epoch root defines.
         let first = EpochNumber::new(last.saturating_sub(4).max(*start + 1).max(3));
-        // The lowest block reward takes its block time from this root, except near genesis.
-        let preceding_root =
-            (first > first_epoch + 4).then(|| root_block_in_epoch(*first - 3, epoch_height));
+        let preceding_root = preceding_root_height(first, first_epoch, epoch_height);
         Some(SeedWindow {
             epochs: first..=last,
             preceding_root,

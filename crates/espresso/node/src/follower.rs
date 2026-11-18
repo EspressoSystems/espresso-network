@@ -272,10 +272,11 @@ where
     let coordinator = node_state.coordinator.clone();
 
     // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
+    let mut stake_table_backfill = None;
     if !params.upstreams.is_empty()
         && let Some(seed) = LcContractSeed::new(&node_state.chain_config, &*metrics)
     {
-        seed.install(&coordinator);
+        stake_table_backfill = Some(seed.install(&coordinator));
     }
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
@@ -333,6 +334,12 @@ where
     };
     let mut tasks = TaskList::default();
     follower.catch_up_at_startup().await;
+    if let Some(backfill) = stake_table_backfill {
+        tasks.spawn(
+            "stake table backfill",
+            backfill.run(follower.coordinator.clone()),
+        );
+    }
     tasks.spawn("light client follower", follower.run());
 
     Ok(FollowerHandle {
