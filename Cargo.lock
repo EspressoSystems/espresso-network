@@ -5250,6 +5250,7 @@ dependencies = [
  "tower-http",
  "url",
  "vbs",
+ "versions",
 ]
 
 [[package]]
