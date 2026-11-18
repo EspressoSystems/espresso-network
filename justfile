@@ -206,8 +206,7 @@ test-lean-check dir="":
     (cd lean/new-protocol-diff && lake build check) || exit 1
     # Given a directory, record nothing and check what is already there.
     if [ -n "{{dir}}" ]; then
-      lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
-      exit $?
+      exec lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
     fi
     # A fixed path, cleared first, so runs overwrite rather than accumulate.
     # Under `target` because it is build output: gitignored, and cleaned with it.
