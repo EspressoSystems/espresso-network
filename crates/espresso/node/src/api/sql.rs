@@ -793,10 +793,7 @@ async fn reward_proof_height<Mode: TransactionMode>(
     match tx.get_leaf(LeafId::<SeqTypes>::from(height as usize)).await {
         Ok(leaf) if leaf.header().version() < EPOCH_REWARD_VERSION => return Ok(height),
         Ok(_) => {},
-        Err(err) if !is_pruned(tx, height).await? => {
-            return Err(err).context(format!("leaf {height} not available"));
-        },
-        Err(_) => {},
+        Err(err) => ensure_pruned(tx, height, err, format!("leaf {height} not available")).await?,
     }
     let boundary = reward_proof_boundary(height, epoch_height)
         .with_context(|| format!("no reward proofs at {height}: it is in the first epoch"))?;
@@ -811,27 +808,37 @@ async fn reward_proof_height<Mode: TransactionMode>(
             leaf.header().version() >= EPOCH_REWARD_VERSION,
             "no epoch reward proofs available at boundary {boundary}"
         ),
-        Err(err) if !is_pruned(tx, boundary).await? => {
-            return Err(err).context(format!("leaf at epoch boundary {boundary} not available"));
+        Err(err) => {
+            let missing = format!("leaf at epoch boundary {boundary} not available");
+            ensure_pruned(tx, boundary, err, missing).await?
         },
-        Err(_) => {},
     }
     Ok(boundary)
 }
 
-/// Whether the data pruner has deleted the leaf at `height`, or a fresh pruned database never had
-/// it.
-async fn is_pruned<Mode: TransactionMode>(
+/// Succeeds when the leaf at `height`, whose read failed with `err`, is at or below the data
+/// pruned height: the data pruner deleted it, or a fresh pruned database never had it. Otherwise
+/// returns `err` with `missing` as context. Either error keeps the leaf error.
+async fn ensure_pruned<Mode, E>(
     tx: &mut Transaction<Mode>,
     height: u64,
-) -> anyhow::Result<bool> {
+    err: E,
+    missing: String,
+) -> anyhow::Result<()>
+where
+    Mode: TransactionMode,
+    E: std::error::Error + Send + Sync + 'static,
+{
     use hotshot_query_service::data_source::storage::pruning::PrunedHeightStorage as _;
 
-    let pruned = tx
-        .load_pruned_height()
-        .await
-        .context("loading the data pruned height")?;
-    Ok(pruned.is_some_and(|pruned| height <= pruned))
+    let pruned = tx.load_pruned_height().await.with_context(|| {
+        format!("{missing} ({err:#}), and loading the data pruned height failed")
+    })?;
+    if pruned.is_some_and(|pruned| height <= pruned) {
+        Ok(())
+    } else {
+        Err(err).context(missing)
+    }
 }
 
 impl CatchupStorage for SqlStorage {
