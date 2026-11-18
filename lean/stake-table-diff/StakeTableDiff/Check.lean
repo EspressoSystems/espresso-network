@@ -7,7 +7,8 @@ public import StakeTableDiff.Decode
 
 `StakeTableDiff.checkCase` runs the implementation on one case's input and compares
 with the node's result the case records. It returns the differences it found, none if
-the two agree.
+the two agree. `StakeTableDiff.kinds` are the kinds of case there is a check for, each
+of which a corpus must hold.
 
 Events replay on the indexed state (`StakeTable.Indexed.apply`), the implementation
 that is proved to refine the specification; the active validators are selected from
@@ -166,16 +167,20 @@ def checkSchedule (j : Json) : Except String (List String) := do
     diffs := diffs ++ differ s!"leader of view {view}" (some node) ((leader ordered h).map position)
   return diffs
 
-/-- The differences between the node and the implementation on one case. -/
-def checkCase (j : Json) : Except String (List String) := do
-  match ← str j "kind" with
-  | "replay" => checkReplay j
-  | "committee" => checkCommittee j
-  | "reward" => checkReward j
-  | "payout" => checkPayout j
-  | "order" => checkOrder j
-  | "chunks" => checkChunks j
-  | "schedule" => checkSchedule j
-  | k => throw s!"unknown kind {k}"
+/-- The check of each kind of case. -/
+def checks : List (String × (Json → Except String (List String))) :=
+  [("replay", checkReplay), ("committee", checkCommittee), ("reward", checkReward),
+    ("payout", checkPayout), ("order", checkOrder), ("chunks", checkChunks),
+    ("schedule", checkSchedule)]
+
+/-- The kinds of case a corpus must hold: those there is a check for. -/
+def kinds : List String := checks.map (·.1)
+
+/-- The kind of a case, and the differences between the node and the implementation on it. -/
+def checkCase (j : Json) : Except String (String × List String) := do
+  let kind ← str j "kind"
+  match checks.lookup kind with
+  | some check => return (kind, ← check j)
+  | none => throw s!"unknown kind {kind}"
 
 end StakeTableDiff

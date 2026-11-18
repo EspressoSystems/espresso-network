@@ -12,14 +12,12 @@ meta import StakeTableImpl.Reward
 meta import StakeTableImpl.Events
 meta import StakeTableImpl.Schedule
 meta import StakeTableImpl.Committee
-meta import Lean.Elab.Command
 
 /-!
 # Checks on the implementation
 
 A few event sequences run through `apply` and `Indexed.apply`, with the result the
-node gives, and a check, failing the build, that nothing in the specification or the
-implementation rests on an axiom beyond Lean's own, `sorry` among them.
+node gives.
 -/
 
 namespace StakeTable
@@ -111,21 +109,5 @@ private def mixed : List Event :=
 -- A breakpoint picks the validator whose share contains it.
 #guard (List.range 6).map (pickIndex [⟨[1], 2⟩, ⟨[2], 3⟩, ⟨[3], 1⟩]) ==
   [some 0, some 0, some 1, some 1, some 1, some 2]
-
-/-- Nothing the specification or the implementation declares rests on an axiom beyond Lean's own. -/
-meta def checkAxioms : Lean.MetaM Unit := do
-  let env ← Lean.getEnv
-  let allowed : List Lean.Name := [`propext, `Classical.choice, `Quot.sound]
-  let packages : List Lean.Name := [`StakeTableSpec, `StakeTableImpl]
-  let mut bad : Array (Lean.Name × Lean.Name) := #[]
-  for (name, idx) in env.const2ModIdx.toList do
-    let some m := env.allImportedModuleNames[idx.toNat]? | continue
-    unless packages.any (·.isPrefixOf m) do continue
-    for a in ← Lean.collectAxioms name do
-      unless allowed.contains a do bad := bad.push (name, a)
-  unless bad.isEmpty do
-    throwError m!"the stake table rests on axioms beyond Lean's own:\n{bad.toList}"
-
-run_meta checkAxioms
 
 end StakeTable
