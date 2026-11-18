@@ -174,6 +174,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         BlockNumber::new(self.epoch_length.get())
     }
 
+    /// The bound on a single catchup step.
+    pub fn catchup_timeout(&self) -> Duration {
+        self.catchup_timeout
+    }
+
     /// Override the bound on a single catchup step. Mostly for tests.
     pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
         self.catchup_timeout = timeout;
@@ -470,19 +475,33 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     /// The membership for `epoch`, if its stake table is in memory.
     fn epoch_membership(&self, epoch: EpochNumber) -> Option<EpochMembership<TYPES>> {
-        Some(EpochMembership {
+        Some(self.membership_of(epoch, self.membership.snapshot(epoch)?))
+    }
+
+    /// The membership for `epoch` over `snapshot`.
+    fn membership_of(
+        &self,
+        epoch: EpochNumber,
+        snapshot: Snapshot<TYPES>,
+    ) -> EpochMembership<TYPES> {
+        EpochMembership {
             epoch,
-            snapshot: self.membership.snapshot(epoch)?,
+            snapshot,
             coordinator: self.clone(),
-        })
+        }
     }
 
     /// Whether `epoch`'s stake table is in memory.
     ///
     /// It is read from storage if it is not already in RAM.
     async fn stake_table_present(&self, epoch: EpochNumber) -> Result<bool> {
-        if self.membership.snapshot(epoch).is_some() {
-            return Ok(true);
+        Ok(self.held_snapshot(epoch).await?.is_some())
+    }
+
+    /// The snapshot of `epoch`, read from storage if it is not already in RAM.
+    async fn held_snapshot(&self, epoch: EpochNumber) -> Result<Option<Snapshot<TYPES>>> {
+        if let Some(snapshot) = self.membership.snapshot(epoch) {
+            return Ok(Some(snapshot));
         }
         debug!(%epoch, "loading stake table from storage");
         timeout(
@@ -601,13 +620,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         // `stake_table_for_epoch`, which on a miss claims the root epoch and
         // spawns a nested catchup for it: that is how one step turns into a
         // cascade.
-        self.stake_table_present(root_epoch).await?;
-        let Some(root_membership) = self.epoch_membership(root_epoch) else {
+        let Some(root_snapshot) = self.held_snapshot(root_epoch).await? else {
             return Err(anytrace::error!(
                 "the stake table for epoch {epoch} is derived from epoch {root_epoch}, which is \
                  in neither memory nor local storage"
             ));
         };
+        let root_membership = self.membership_of(root_epoch, root_snapshot);
 
         // Verification of the root is handled in get_epoch_root_and_drb
         debug!(%epoch, %root_epoch, "fetching epoch root");
