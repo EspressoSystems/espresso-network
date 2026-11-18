@@ -305,8 +305,9 @@ message HttpModule {
 
   optional uint64 max_connections = 2;
 
-  // Absent unless the node also serves v2 over gRPC
-  optional uint32 tonic_port = 3;
+  // gRPC is served on `port` too
+  reserved 3;
+  reserved "tonic_port";
 }
 
 message LightClientModuleOptions {

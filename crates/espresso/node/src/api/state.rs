@@ -2146,17 +2146,7 @@ where
             .ok_or_else(|| tonic::Status::not_found("no service records for the epoch"))?;
         let peers = records
             .into_iter()
-            .map(|signed| proto::ServiceRecord {
-                signer: Some(proto::BlsPublicKey {
-                    key: signed.signer.to_string(),
-                }),
-                epoch: *signed.record.epoch,
-                signed_message: signed.record.signed_bytes(),
-                api_url: signed.record.api_url,
-                api_key: signed.record.api_key.map(|key| key.to_vec()),
-                sequence: signed.record.sequence,
-                signature: TaggedBase64::from(signed.signature).to_string(),
-            })
+            .map(crate::peers::listed_record)
             .collect();
         Ok(tonic::Response::new(proto::PeersResponse {
             peers,
@@ -2316,7 +2306,6 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
             http: modules.http.map(|http| proto::HttpModule {
                 port: http.port.into(),
                 max_connections: http.max_connections.map(|max| max as u64),
-                tonic_port: http.tonic_port.map(u32::from),
             }),
             query: modules.query.map(|query| proto::QueryModule {
                 peers: query.peers.iter().map(ToString::to_string).collect(),
@@ -6331,7 +6320,6 @@ mod tests {
                     http: Some(proto::HttpModule {
                         port: 24000,
                         max_connections: None,
-                        tonic_port: None,
                     }),
                     query: Some(proto::QueryModule {
                         peers: vec![

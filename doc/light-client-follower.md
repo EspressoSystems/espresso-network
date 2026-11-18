@@ -17,8 +17,12 @@ espresso-node \
   -- follower -- catchup -- config -- submit -- explorer
 ```
 
-The `follower` module selects follower mode. Its upstreams are the query module's `--peers` (`ESPRESSO_NODE_API_PEERS`),
-which must be set. The follower needs:
+The `follower` module selects follower mode. It starts from the query module's `--peers` (`ESPRESSO_NODE_API_PEERS`),
+which must be set, and finds the API services of the validators through them: every minute it asks the first that
+answers for the records of the epoch of its newest stored block (gRPC `NodeService/GetPeers`, on the HTTP port), keeps
+the records signed by validators staked in that epoch, and adds their URLs after the configured ones. Its upstreams are
+all of these. Only a validator's API service lists records; a follower configured with other followers alone keeps just
+those. The follower needs:
 
 - the `storage-sql`, `http` and `query` modules: merklized state, rewards and the explorer need SQL storage;
 - an L1 RPC, for fee deposits and the stake table, like any node;

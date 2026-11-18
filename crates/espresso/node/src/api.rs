@@ -4120,7 +4120,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -5602,7 +5601,7 @@ mod test {
 
         let genesis = follower_genesis(&network.cfg, &genesis_state, NEW_PROTOCOL);
         let params = FollowerParams {
-            upstreams: vec![api_url.clone()],
+            bootstrap: vec![api_url.clone()],
             catchup: CatchupParams {
                 state_peers: vec![api_url.clone()],
                 backoff: Default::default(),
@@ -5838,7 +5837,7 @@ mod test {
             .enable_query_module(
                 Options::with_port(port),
                 Query {
-                    peers: params.upstreams.clone(),
+                    peers: params.bootstrap.clone(),
                     ..Default::default()
                 },
             )

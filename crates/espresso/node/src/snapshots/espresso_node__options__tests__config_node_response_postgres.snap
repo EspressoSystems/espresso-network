@@ -191,7 +191,6 @@ modules:
   http:
     port: 24000
     max_connections: ~
-    tonic_port: ~
   query:
     peers:
       - "http://peer.example:24000/"

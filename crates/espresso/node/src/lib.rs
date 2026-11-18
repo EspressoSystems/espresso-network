@@ -3,6 +3,7 @@ mod lc_contract_headers;
 mod lc_contract_seed;
 pub mod membership_store;
 mod message_compat_tests;
+mod peers;
 mod request_response;
 mod stake_table_backfill;
 

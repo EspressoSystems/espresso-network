@@ -275,10 +275,6 @@ impl Options {
             anyhow::Ok(())
         });
 
-        if self.http.tonic_port.is_some() {
-            tracing::warn!("gRPC API not available with filesystem storage");
-        }
-
         let consumer = ApiEventConsumer::from(ds);
         Ok((
             registry,
@@ -306,10 +302,6 @@ pub struct Http {
     /// Leave unset for no connection limit.
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
-
-    /// Optional port for Tonic gRPC API server.
-    #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
-    pub tonic_port: Option<u16>,
 }
 
 impl Http {
@@ -318,7 +310,6 @@ impl Http {
         Self {
             port,
             max_connections: None,
-            tonic_port: None,
         }
     }
 }

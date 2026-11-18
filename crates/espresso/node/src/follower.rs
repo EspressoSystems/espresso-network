@@ -11,7 +11,7 @@ use std::{cmp::max, collections::HashMap, net::SocketAddr, sync::Arc, time::Dura
 
 use ::light_client::{
     LightClient, LightClientMetrics,
-    client::{FallbackClient, QueryServiceClient},
+    client::{ClientList, FallbackClient, QueryServiceClient},
     state::{Genesis as LightClientGenesis, LightClientOptions},
     storage::LightClientDbOptions,
 };
@@ -67,6 +67,7 @@ use crate::{
     init_node_state,
     lc_contract_seed::LcContractSeed,
     load_network_config,
+    peers::PeerSet,
     state_signature::StateSignatureMemStorage,
 };
 
@@ -99,7 +100,8 @@ impl FollowerOptions {
 
 #[derive(Clone, Debug)]
 pub struct FollowerParams {
-    pub upstreams: Vec<Url>,
+    /// The API services to start from. The follower finds the others through them.
+    pub bootstrap: Vec<Url>,
     pub catchup: CatchupParams,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub options: FollowerOptions,
@@ -210,17 +212,29 @@ where
     Arc<P>: Storage<SeqTypes>,
 {
     params.options.validate()?;
+    let peers = PeerSet::new(params.bootstrap.clone());
+    // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
+    let replay = params.bootstrap.is_empty();
     let (mut handle, view) = init_api_service(
         &genesis,
         params.catchup.clone(),
-        // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
-        !params.upstreams.is_empty(),
+        !replay,
         &*metrics,
         persistence,
         l1_params,
-        SubmitTo::Upstreams(params.upstreams.clone()),
+        SubmitTo::Peers(peers.clone()),
     )
     .await?;
+    if !replay {
+        handle.tasks.lock().spawn(
+            "peer set",
+            peers.clone().run(
+                view.coordinator.clone(),
+                view.decided.subscribe(),
+                view.epoch_height,
+            ),
+        );
+    }
 
     let source: Arc<dyn ChainSource> = match upstream {
         #[cfg(any(test, feature = "testing"))]
@@ -229,7 +243,7 @@ where
             let light_client = Arc::new(
                 connect_light_client(
                     &params.options,
-                    &params.upstreams,
+                    peers.clients(),
                     &handle.network_config,
                     genesis.chain_config.chain_id,
                     light_client_metrics,
@@ -515,7 +529,7 @@ struct ApiChain {
 /// Where an API service hands submitted transactions.
 pub(crate) enum SubmitTo {
     /// The API services of other nodes, for a follower.
-    Upstreams(Vec<Url>),
+    Peers(Arc<PeerSet>),
 
     /// The node's own consensus, at its consensus API.
     Consensus(SocketAddr),
@@ -559,7 +573,7 @@ impl ConsensusSource for ApiChain {
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let upstreams = match &self.submit {
-            SubmitTo::Upstreams(upstreams) => upstreams,
+            SubmitTo::Peers(peers) => peers.urls(),
             SubmitTo::Consensus(addr) => {
                 let commitment = tx.commit();
                 let mut client = ConsensusNodeClient::connect(format!("http://{addr}"))
@@ -583,7 +597,7 @@ impl ConsensusSource for ApiChain {
             },
         };
         let mut last_err = anyhow!("no upstream query nodes to forward the transaction to");
-        for upstream in upstreams {
+        for upstream in upstreams.iter() {
             let client = Client::<ClientErr, SequencerApiVersion>::new(upstream.clone());
             let result = client
                 .post::<Commitment<Transaction>>("submit/submit")
@@ -855,7 +869,7 @@ impl ChainSource for NodeLightClient {
 
 async fn connect_light_client(
     options: &FollowerOptions,
-    upstreams: &[Url],
+    clients: ClientList<QueryServiceClient>,
     network_config: &NetworkConfig<SeqTypes>,
     chain_id: ChainId,
     metrics: LightClientMetrics,
@@ -866,13 +880,7 @@ async fn connect_light_client(
         .connect()
         .await
         .context("opening the light client database")?;
-    let client = FallbackClient::new(
-        upstreams
-            .iter()
-            .cloned()
-            .map(QueryServiceClient::new)
-            .collect(),
-    )?;
+    let client = FallbackClient::shared(clients)?;
     let genesis = match options.light_client_genesis.clone() {
         Some(genesis) => genesis,
         None => light_client_genesis(network_config, chain_id),

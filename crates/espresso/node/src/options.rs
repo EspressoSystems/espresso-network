@@ -252,7 +252,7 @@ impl Options {
             self.state_peers.clone()
         };
         Ok(FollowerParams {
-            upstreams: query.peers.clone(),
+            bootstrap: query.peers.clone(),
             catchup: CatchupParams {
                 state_peers,
                 backoff: self.catchup_backoff,
@@ -733,7 +733,6 @@ pub struct ApiModulesConfig {
 pub struct HttpConfig {
     pub port: u16,
     pub max_connections: Option<usize>,
-    pub tonic_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -815,7 +814,6 @@ impl From<&api::options::Http> for HttpConfig {
         Self {
             port: o.port,
             max_connections: o.max_connections,
-            tonic_port: o.tonic_port,
         }
     }
 }
@@ -1189,14 +1187,14 @@ pub(crate) mod tests {
         let params = opt
             .follower_params(&follower, &query, Default::default())
             .unwrap();
-        assert_eq!(params.upstreams, peers);
+        assert_eq!(params.bootstrap, peers);
         assert_eq!(params.catchup.state_peers, peers);
 
         let opt = parse_options_with(&["--state-peers", "http://c.test"]);
         let params = opt
             .follower_params(&follower, &query, Default::default())
             .unwrap();
-        assert_eq!(params.upstreams, peers);
+        assert_eq!(params.bootstrap, peers);
         assert_eq!(
             params.catchup.state_peers,
             ["http://c.test".parse::<Url>().unwrap()]

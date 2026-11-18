@@ -141,7 +141,7 @@ async-lock = "3"
 async-once-cell = "0.5"
 async-trait = "0.1"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
-axum = { version = "0.8.8", features = ["ws"] }
+axum = { version = "0.8.8", features = ["http2", "ws"] }
 backon = "1.6"
 base64 = "0.22"
 base64-bytes = "0.1"

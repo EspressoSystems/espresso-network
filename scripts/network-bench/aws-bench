@@ -294,7 +294,6 @@ PROXY_ADDRESS_KEYS = (
     "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS",
 )
 NODE_API_PORT = 8080
-NODE_TONIC_PORT = 8081
 CLIQUENET_PORT = 9000
 # From .env; render_ctl_env asserts these still match the parsed file.
 # The bench's own postgres container, independent of .env.
@@ -2564,7 +2563,6 @@ def render_node_env(
         "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS": f"0.0.0.0:{CLIQUENET_PORT}",
         "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": _cliquenet_address(self_info),
         "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
-        "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
         # No builder runs in the bench; leaders build empty blocks themselves.
         "ESPRESSO_BUILDER_URLS": "http://localhost:1",
         "ESPRESSO_L1_PROVIDER": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_L1_PORT')}",

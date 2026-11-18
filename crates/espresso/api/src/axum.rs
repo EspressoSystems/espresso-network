@@ -4791,6 +4791,7 @@ mod tests {
             listener,
             "test",
             Router::new().route("/v1/status/block-height", get(|| async { "0" })),
+            None,
             Some(0),
         ));
 
@@ -4816,6 +4817,70 @@ mod tests {
             head.contains("access-control-allow-origin: *"),
             "no CORS header on 429: {head}"
         );
+    }
+
+    /// One port serves both protocols: a gRPC call, which the legacy URI rewrite would otherwise
+    /// move under `/v1`, and an HTTP request next to it.
+    #[tokio::test]
+    async fn serves_grpc_on_the_http_port() {
+        use tonic_reflection::pb::v1::{
+            ServerReflectionRequest, server_reflection_client::ServerReflectionClient,
+            server_reflection_request::MessageRequest, server_reflection_response::MessageResponse,
+        };
+
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(crate::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .unwrap();
+        let mut grpc = tonic::service::Routes::builder();
+        grpc.add_service(reflection);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(
+            listener,
+            "test",
+            Router::new().route("/v1/status/block-height", get(|| async { "7" })),
+            Some(grpc.routes().into_axum_router()),
+            None,
+        ));
+
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = ServerReflectionClient::new(channel);
+        let request = ServerReflectionRequest {
+            host: String::new(),
+            message_request: Some(MessageRequest::ListServices(String::new())),
+        };
+        let mut responses = client
+            .server_reflection_info(futures::stream::iter([request]))
+            .await
+            .unwrap()
+            .into_inner();
+        let response = responses.message().await.unwrap().unwrap();
+        let Some(MessageResponse::ListServicesResponse(list)) = response.message_response else {
+            panic!("not a service list: {response:?}");
+        };
+        assert!(
+            list.service
+                .iter()
+                .any(|service| service.name.ends_with("NodeService")),
+            "{list:?}"
+        );
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            b"GET /status/block-height HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        let mut response = Vec::new();
+        sock.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("7"), "{response}");
     }
 
     #[tokio::test]
@@ -6185,7 +6250,7 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(crate::serve_router(listener, "test", router, None));
+        tokio::spawn(crate::serve_router(listener, "test", router, None, None));
 
         let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
         sock.write_all(

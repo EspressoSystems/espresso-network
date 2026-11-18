@@ -224,21 +224,12 @@ pub(in crate::api) async fn init_query_module(
     if let Some(ranges_concurrency) = ranges_concurrency {
         api_state = api_state.with_ranges_concurrency(ranges_concurrency);
     }
-    let tonic_state = api_state.clone();
     tasks.spawn("API server", async move {
         if let Err(e) = espresso_api::serve_axum(port, api_state, modules, max_connections).await {
             tracing::error!("Axum server error: {}", e);
         }
         anyhow::Ok(())
     });
-
-    if let Some(tonic_port) = api.http.tonic_port {
-        tasks.spawn("Tonic gRPC server", async move {
-            if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
-                tracing::error!("Tonic gRPC server error: {}", e);
-            }
-        });
-    }
 
     let consumer = ApiEventConsumer::from(ds);
     Ok((
