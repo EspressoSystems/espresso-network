@@ -347,9 +347,9 @@ impl Config {
 /// The pause between two transactions of [`SqlStorage::delete_aggregates`].
 const AGGREGATE_DELETE_PAUSE: Duration = Duration::from_millis(250);
 
-/// `op`, retried with backoff, so that one failed transaction does not end a deletion of totals
-/// that takes hours.
-async fn retry_deleting_aggregates<T, F, Fut>(mut op: F) -> anyhow::Result<T>
+/// Run `op`, and retry it with backoff when it fails, so that one failed transaction does not end
+/// work that takes hours. `what` names it in the warnings.
+async fn with_retries<T, F, Fut>(what: &str, mut op: F) -> anyhow::Result<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = anyhow::Result<T>>,
@@ -360,7 +360,7 @@ where
             Ok(value) => return Ok(value),
             Err(err) => match backoff.next() {
                 Some(delay) => {
-                    tracing::warn!("retrying deleting transaction and payload totals: {err:#}");
+                    tracing::warn!("retrying {what}: {err:#}");
                     sleep(delay).await;
                 },
                 None => return Err(err),
@@ -722,13 +722,17 @@ impl SqlStorage {
     /// any point are the totals of every height from genesis up to some height, so an aggregator
     /// started later resumes from them.
     pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<bool> {
-        let Some(top) =
-            retry_deleting_aggregates(|| self.highest_aggregate_height(u64::MAX)).await?
+        let Some(top) = with_retries("reading the totals' heights", || {
+            self.highest_aggregate_height(u64::MAX)
+        })
+        .await?
         else {
             return Ok(false);
         };
         match Db::KIND {
-            DbKind::Postgres => retry_deleting_aggregates(|| self.truncate_aggregates()).await?,
+            DbKind::Postgres => {
+                with_retries("truncating the totals", || self.truncate_aggregates()).await?
+            },
             DbKind::Sqlite => self.delete_aggregates_from(top, heights.max(1)).await?,
         }
         Ok(true)
@@ -745,13 +749,18 @@ impl SqlStorage {
         let mut rows = 0;
         let mut batches = 0u64;
         while let Some(height) = top {
-            rows += retry_deleting_aggregates(|| self.delete_newest_aggregates(height, heights))
-                .await?;
-            retry_deleting_aggregates(|| self.vacuum(vacuum_pages)).await?;
+            rows += with_retries("deleting totals", || {
+                self.delete_newest_aggregates(height, heights)
+            })
+            .await?;
+            with_retries("vacuuming deleted totals", || self.vacuum(vacuum_pages)).await?;
             // Below the heights just deleted, which also skips any gap in the heights.
             top = match height.checked_sub(heights) {
                 Some(below) => {
-                    retry_deleting_aggregates(|| self.highest_aggregate_height(below)).await?
+                    with_retries("reading the totals' heights", || {
+                        self.highest_aggregate_height(below)
+                    })
+                    .await?
                 },
                 None => None,
             };
