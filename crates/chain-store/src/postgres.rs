@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS chain_floor (
     height BIGINT NOT NULL
 );
 INSERT INTO chain_floor (height) VALUES (0) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS chain_checked_epochs (
+    epoch BIGINT PRIMARY KEY
+);
 ";
 
 #[derive(Debug)]
@@ -151,12 +154,14 @@ impl Backend for PostgresBackend {
         self.commit(tx).await
     }
 
-    async fn put_part(&self, height: u64, part: Part, data: Bytes) -> anyhow::Result<()> {
+    async fn put_parts(&self, height: u64, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         if height < lock_floor(&mut tx).await? {
             return Ok(());
         }
-        insert_part(&mut tx, height, part, &data).await?;
+        for (part, data) in parts {
+            insert_part(&mut tx, height, part, &data).await?;
+        }
         self.commit(tx).await
     }
 
@@ -177,6 +182,22 @@ impl Backend for PostgresBackend {
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(data.map(Bytes::from))
+    }
+
+    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>> {
+        let rows =
+            sqlx::query("SELECT part, data FROM chain_parts WHERE height = $1 ORDER BY part")
+                .bind(height as i64)
+                .fetch_all(&self.pool)
+                .await?;
+        rows.iter()
+            .map(|row| {
+                let id: i16 = row.try_get("part")?;
+                let part = Part::from_id(id).ok_or_else(|| anyhow::anyhow!("unknown part {id}"))?;
+                let data: Vec<u8> = row.try_get("data")?;
+                Ok((part, data.into()))
+            })
+            .collect()
     }
 
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -248,6 +269,24 @@ impl Backend for PostgresBackend {
         .fetch_all(&self.pool)
         .await?;
         Ok(heights.into_iter().map(|h| h as u64).collect())
+    }
+
+    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool> {
+        let found: Option<i64> =
+            sqlx::query_scalar("SELECT epoch FROM chain_checked_epochs WHERE epoch = $1")
+                .bind(epoch as i64)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(found.is_some())
+    }
+
+    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO chain_checked_epochs (epoch) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(epoch as i64)
+            .execute(&mut *tx)
+            .await?;
+        self.commit(tx).await
     }
 
     async fn prune_below(&self, height: u64) -> anyhow::Result<()> {

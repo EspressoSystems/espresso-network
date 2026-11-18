@@ -56,6 +56,11 @@ pub async fn conformance(backend: &dyn Backend) {
     assert_eq!(backend.item(2).await.unwrap(), None);
     assert_eq!(backend.part(4, Payload).await.unwrap(), None);
     assert_eq!(backend.newest().await.unwrap(), Some(5));
+    assert_eq!(
+        backend.parts(1).await.unwrap(),
+        vec![(Payload, bytes("p1")), (VidCommon, bytes("v1"))]
+    );
+    assert_eq!(backend.parts(4).await.unwrap(), vec![]);
 
     // Lookups find the height; a commitment several rows share finds the earliest.
     assert_eq!(
@@ -94,9 +99,18 @@ pub async fn conformance(backend: &dyn Backend) {
         .unwrap();
     assert_eq!(backend.item(1).await.unwrap(), Some(bytes("item-1")));
     assert_eq!(backend.part(1, Payload).await.unwrap(), Some(bytes("p1")));
-    backend.put_part(4, Payload, bytes("p4")).await.unwrap();
-    backend.put_part(4, Payload, bytes("other")).await.unwrap();
-    backend.put_part(5, VidCommon, bytes("v5")).await.unwrap();
+    backend
+        .put_parts(4, vec![(Payload, bytes("p4"))])
+        .await
+        .unwrap();
+    backend
+        .put_parts(4, vec![(Payload, bytes("other"))])
+        .await
+        .unwrap();
+    backend
+        .put_parts(5, vec![(VidCommon, bytes("v5"))])
+        .await
+        .unwrap();
     assert_eq!(backend.part(4, Payload).await.unwrap(), Some(bytes("p4")));
     assert_eq!(backend.part(5, VidCommon).await.unwrap(), Some(bytes("v5")));
     assert!(
@@ -110,6 +124,13 @@ pub async fn conformance(backend: &dyn Backend) {
         backend.missing_parts(VidCommon, 0, 10).await.unwrap(),
         vec![4]
     );
+
+    // Epochs whose certificates are checked are recorded.
+    assert!(!backend.certs_checked(3).await.unwrap());
+    backend.mark_certs_checked(3).await.unwrap();
+    backend.mark_certs_checked(3).await.unwrap();
+    assert!(backend.certs_checked(3).await.unwrap());
+    assert!(!backend.certs_checked(4).await.unwrap());
 
     // A gap at the start counts, and `limit` bounds the answer.
     backend.put(row(8, "p"), Vec::new()).await.unwrap();
@@ -130,7 +151,10 @@ pub async fn conformance(backend: &dyn Backend) {
         .put(row(1, "p"), vec![(Payload, bytes("p"))])
         .await
         .unwrap();
-    backend.put_part(0, Payload, bytes("p")).await.unwrap();
+    backend
+        .put_parts(0, vec![(Payload, bytes("p"))])
+        .await
+        .unwrap();
     assert_eq!(backend.item(1).await.unwrap(), None);
     assert_eq!(backend.part(0, Payload).await.unwrap(), None);
     assert_eq!(

@@ -19,12 +19,15 @@ message GetRecordsRequest {
 
   // Height just past the last one (exclusive)
   optional uint64 until = 2;
+
+  // Leave out payloads and VID common data, for a client that wants only certificates
+  bool skip_payloads = 3;
 }
 
 message ChainRecord {
   uint64 height = 1;
 
-  // The item: leaf, certificates and state certificate, bincode-encoded after a format byte
+  // The item: the leaf and the certificate that certifies it, bincode-encoded after a format byte
   bytes item = 2;
 
   // The payload as the block encodes it; absent if the server does not have it
@@ -32,4 +35,12 @@ message ChainRecord {
 
   // The VID common data, encoded as the item is; absent if the server does not have it
   optional bytes vid_common = 4;
+
+  // The certificate that decided the block directly, encoded as the item is; absent if none did or
+  // the server does not have it
+  optional bytes cert2 = 5;
+
+  // The light client state certificate of an epoch root, encoded as the item is; absent if the
+  // block is no epoch root or the server does not have it
+  optional bytes state_cert = 6;
 }

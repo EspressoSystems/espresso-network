@@ -1,7 +1,7 @@
 //! The [`ChainStore`] as the ingester's sink.
 
 use async_trait::async_trait;
-use chain_store::{ChainStore, Item};
+use chain_store::{ChainStore, Item, Parts};
 use espresso_types::SeqTypes;
 
 use crate::{Block, Sink};
@@ -12,15 +12,14 @@ impl Sink<SeqTypes> for ChainStore {
         let item = Item {
             leaf: block.leaf,
             cert1: block.cert1,
+        };
+        let parts = Parts {
+            payload: block.payload.map(Into::into),
+            vid_common: block.vid_common,
             cert2: block.cert2,
             state_cert: block.state_cert,
         };
-        self.put(
-            &item,
-            block.payload.map(Into::into),
-            block.vid_common.as_ref(),
-        )
-        .await
+        self.put(&item, &parts).await
     }
 
     async fn block_height(&self) -> anyhow::Result<u64> {

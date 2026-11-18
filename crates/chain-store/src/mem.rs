@@ -1,6 +1,10 @@
 //! A backend in memory, for tests and for a single process that keeps nothing across restarts.
 
-use std::{collections::BTreeMap, ops::Range, sync::Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    sync::Mutex,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -18,6 +22,7 @@ pub struct MemBackend {
 struct State {
     rows: BTreeMap<u64, Row>,
     parts: BTreeMap<(u64, Part), Bytes>,
+    checked_epochs: BTreeSet<u64>,
     floor: u64,
 }
 
@@ -57,9 +62,12 @@ impl Backend for MemBackend {
         Ok(())
     }
 
-    async fn put_part(&self, height: u64, part: Part, data: Bytes) -> anyhow::Result<()> {
+    async fn put_parts(&self, height: u64, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
         self.write(|state| {
-            if height >= state.floor {
+            if height < state.floor {
+                return;
+            }
+            for (part, data) in parts {
                 state.parts.entry((height, part)).or_insert(data);
             }
         });
@@ -72,6 +80,15 @@ impl Backend for MemBackend {
 
     async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>> {
         Ok(self.read(|state| state.parts.get(&(height, part)).cloned()))
+    }
+
+    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>> {
+        Ok(self.read(|state| {
+            Part::ALL
+                .into_iter()
+                .filter_map(|part| Some((part, state.parts.get(&(height, part))?.clone())))
+                .collect()
+        }))
     }
 
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -126,6 +143,17 @@ impl Backend for MemBackend {
                 .take(limit)
                 .collect()
         }))
+    }
+
+    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool> {
+        Ok(self.read(|state| state.checked_epochs.contains(&epoch)))
+    }
+
+    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
+        self.write(|state| {
+            state.checked_epochs.insert(epoch);
+        });
+        Ok(())
     }
 
     async fn prune_below(&self, height: u64) -> anyhow::Result<()> {

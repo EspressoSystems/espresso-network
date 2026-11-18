@@ -2,7 +2,10 @@
 
 use std::{future::Future, ops::Range};
 
-use espresso_api::proto::{self, availability_service_server::AvailabilityService};
+use espresso_api::{
+    error::to_status,
+    proto::{self, availability_service_server::AvailabilityService},
+};
 use futures::stream::BoxStream;
 use hotshot_query_service_types::availability::PayloadQueryData;
 use tonic::{Request, Response, Status};
@@ -159,8 +162,9 @@ impl AvailabilityService for ApiService {
         request: Request<proto::GetCert2Request>,
     ) -> Result<Response<proto::Cert2Response>, Status> {
         let height = required(request.into_inner().height, "height")?;
-        let item = self.reader.item(height, Wait::Briefly).await?;
-        let cert2 = item.cert2.ok_or_else(|| {
+        self.reader.item(height, Wait::Briefly).await?;
+        let cert2 = self.reader.store().cert2(height).await.map_err(to_status)?;
+        let cert2 = cert2.ok_or_else(|| {
             Status::not_found(format!("no cert2 decided height {height} directly"))
         })?;
         Ok(Response::new(proto::Cert2Response {

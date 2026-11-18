@@ -14,12 +14,16 @@ pub trait Backend: Send + Sync + 'static {
     /// is written before the floor.
     async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()>;
 
-    /// Stores `part` of `height`, unless the height has it or is before the floor.
-    async fn put_part(&self, height: u64, part: Part, data: Bytes) -> anyhow::Result<()>;
+    /// Stores `parts` of `height` in one commit, each unless the height has it or is before the
+    /// floor.
+    async fn put_parts(&self, height: u64, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()>;
 
     async fn item(&self, height: u64) -> anyhow::Result<Option<Bytes>>;
 
     async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>>;
+
+    /// The parts `height` has, in [`Part`] order.
+    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>>;
 
     /// The height of the row whose `column` is `value`.
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>>;
@@ -33,6 +37,10 @@ pub trait Backend: Send + Sync + 'static {
 
     /// See [`ChainStore::missing_parts`](crate::ChainStore::missing_parts).
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
+
+    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool>;
+
+    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()>;
 
     /// Deletes rows and parts before `height`, and raises the floor to it.
     async fn prune_below(&self, height: u64) -> anyhow::Result<()>;
@@ -68,14 +76,24 @@ pub enum Column {
 pub enum Part {
     Payload,
     VidCommon,
+    Cert2,
+    StateCert,
 }
 
 impl Part {
+    pub const ALL: [Part; 4] = [Self::Payload, Self::VidCommon, Self::Cert2, Self::StateCert];
+
     /// The number a backend stores the part under.
     pub fn id(self) -> i16 {
         match self {
             Self::Payload => 0,
             Self::VidCommon => 1,
+            Self::Cert2 => 2,
+            Self::StateCert => 3,
         }
+    }
+
+    pub fn from_id(id: i16) -> Option<Self> {
+        Self::ALL.into_iter().find(|part| part.id() == id)
     }
 }

@@ -1,10 +1,12 @@
 //! The record of the chain an API service keeps.
 //!
-//! The store holds one [`Item`] per block height: the leaf, the certificates that decided it and,
-//! at an epoch root, the light client state certificate. The payload and the VID common data are
-//! kept apart, as [`Part`]s: a height can have its item without them, when consensus decided the
-//! block without them, and they are filled in later. The store also finds the height of a leaf, a
-//! block or a payload by its commitment.
+//! The store holds one [`Item`] per block height: the leaf and the certificate that certifies it,
+//! which the hash chain fixes. Everything else about a height is kept apart, as [`Parts`]: the
+//! payload, the VID common data, the `Certificate2` that decided the block directly and, at an
+//! epoch root, the light client state certificate. A height can have its item without them, and
+//! they are filled in later, each when it can be checked. The store also finds the height of a
+//! leaf, a block or a payload by its commitment, and records the epochs whose certificates have
+//! been checked.
 //!
 //! The ingester writes to the store, copying the decide log of its consensus node, and the API
 //! service writes the heights it fills from other API services. Writes are idempotent by height, so
@@ -20,10 +22,10 @@ use bytes::Bytes;
 use committable::{Commitment, Committable};
 use espresso_types::{Header, Leaf2, SeqTypes};
 use hotshot_types::{
-    data::{VidCommitment, VidCommon},
+    data::{EpochNumber, VidCommitment, VidCommon},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::watch;
 
 mod backend;
@@ -44,12 +46,6 @@ pub struct Item {
     /// The certificate that certifies the leaf: its own if it was the newest leaf of a decide,
     /// otherwise the justify QC of the leaf after it.
     pub cert1: Certificate1<SeqTypes>,
-
-    /// The certificate that decided the leaf directly, if one did.
-    pub cert2: Option<Certificate2<SeqTypes>>,
-
-    /// The light client state certificate of the epoch the block is the root of.
-    pub state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
 }
 
 impl Item {
@@ -58,13 +54,59 @@ impl Item {
     }
 }
 
+/// What the store keeps of a height apart from its item. Each is absent until it is known.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Parts {
+    /// The payload, as the block encodes it.
+    pub payload: Option<Bytes>,
+
+    pub vid_common: Option<VidCommon>,
+
+    /// The certificate that decided the block directly, if one did.
+    pub cert2: Option<Certificate2<SeqTypes>>,
+
+    /// The light client state certificate of the epoch the block is the root of.
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+}
+
+impl Parts {
+    fn encode(&self) -> anyhow::Result<Vec<(Part, Bytes)>> {
+        let mut parts = Vec::new();
+        if let Some(payload) = &self.payload {
+            parts.push((Part::Payload, payload.clone()));
+        }
+        if let Some(common) = &self.vid_common {
+            parts.push((Part::VidCommon, encode(common)?));
+        }
+        if let Some(cert2) = &self.cert2 {
+            parts.push((Part::Cert2, encode(cert2)?));
+        }
+        if let Some(cert) = &self.state_cert {
+            parts.push((Part::StateCert, encode(cert)?));
+        }
+        Ok(parts)
+    }
+
+    fn decode(parts: &[(Part, Bytes)]) -> anyhow::Result<Self> {
+        let mut decoded = Self::default();
+        for (part, bytes) in parts {
+            match part {
+                Part::Payload => decoded.payload = Some(bytes.clone()),
+                Part::VidCommon => decoded.vid_common = Some(decode(bytes)?),
+                Part::Cert2 => decoded.cert2 = Some(decode(bytes)?),
+                Part::StateCert => decoded.state_cert = Some(decode(bytes)?),
+            }
+        }
+        Ok(decoded)
+    }
+}
+
 /// A height as the store encodes it: the item, and the parts it has.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub height: u64,
     pub item: Bytes,
-    pub payload: Option<Bytes>,
-    pub vid_common: Option<Bytes>,
+    pub parts: Vec<(Part, Bytes)>,
 }
 
 impl Record {
@@ -72,8 +114,8 @@ impl Record {
         decode(&self.item)
     }
 
-    pub fn vid_common(&self) -> anyhow::Result<Option<VidCommon>> {
-        self.vid_common.as_deref().map(decode).transpose()
+    pub fn parts(&self) -> anyhow::Result<Parts> {
+        Parts::decode(&self.parts)
     }
 }
 
@@ -86,8 +128,8 @@ pub enum Lookup {
     Payload(VidCommitment),
 }
 
-/// The version of the encoding of an [`Item`] and of VID common data. A store refuses values of
-/// other versions.
+/// The version of the encoding of an [`Item`] and of each part but the payload. A store refuses
+/// values of other versions.
 const FORMAT: u8 = 1;
 
 /// A store over a [`Backend`]. Clones share the backend.
@@ -109,34 +151,15 @@ impl ChainStore {
         }
     }
 
-    /// Stores `item` with the parts given. An item or part already stored is kept, so a write
-    /// fills only what is missing. Heights the store has pruned are not written.
-    pub async fn put(
-        &self,
-        item: &Item,
-        payload: Option<Bytes>,
-        vid_common: Option<&VidCommon>,
-    ) -> anyhow::Result<()> {
-        let mut parts = Vec::new();
-        if let Some(payload) = payload {
-            parts.push((Part::Payload, payload));
-        }
-        if let Some(common) = vid_common {
-            parts.push((Part::VidCommon, encode(common)?));
-        }
-        self.backend.put(row(item)?, parts).await
+    /// Stores `item` with `parts`. An item or part already stored is kept, so a write fills only
+    /// what is missing. Heights the store has pruned are not written.
+    pub async fn put(&self, item: &Item, parts: &Parts) -> anyhow::Result<()> {
+        self.backend.put(row(item)?, parts.encode()?).await
     }
 
-    /// Stores the payload of `height`, unless the height has one or is pruned.
-    pub async fn put_payload(&self, height: u64, payload: Bytes) -> anyhow::Result<()> {
-        self.backend.put_part(height, Part::Payload, payload).await
-    }
-
-    /// Stores the VID common data of `height`, unless the height has it or is pruned.
-    pub async fn put_vid_common(&self, height: u64, common: &VidCommon) -> anyhow::Result<()> {
-        self.backend
-            .put_part(height, Part::VidCommon, encode(common)?)
-            .await
+    /// Stores `parts` of `height`, each unless the height has it or is pruned.
+    pub async fn put_parts(&self, height: u64, parts: &Parts) -> anyhow::Result<()> {
+        self.backend.put_parts(height, parts.encode()?).await
     }
 
     pub async fn item(&self, height: u64) -> anyhow::Result<Option<Item>> {
@@ -151,10 +174,18 @@ impl ChainStore {
     }
 
     pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {
-        match self.backend.part(height, Part::VidCommon).await? {
-            Some(bytes) => Ok(Some(decode(&bytes)?)),
-            None => Ok(None),
-        }
+        self.decoded_part(height, Part::VidCommon).await
+    }
+
+    pub async fn cert2(&self, height: u64) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        self.decoded_part(height, Part::Cert2).await
+    }
+
+    pub async fn state_cert(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        self.decoded_part(height, Part::StateCert).await
     }
 
     /// The item and parts of `height` as the store encodes them, for passing on to another store
@@ -166,8 +197,7 @@ impl ChainStore {
         Ok(Some(Record {
             height,
             item,
-            payload: self.backend.part(height, Part::Payload).await?,
-            vid_common: self.backend.part(height, Part::VidCommon).await?,
+            parts: self.backend.parts(height).await?,
         }))
     }
 
@@ -206,6 +236,16 @@ impl ChainStore {
         self.backend.missing_parts(part, from, limit).await
     }
 
+    /// Whether the certificates of every height of `epoch` have been checked and stored.
+    pub async fn certs_checked(&self, epoch: EpochNumber) -> anyhow::Result<bool> {
+        self.backend.certs_checked(*epoch).await
+    }
+
+    /// Records that the certificates of every height of `epoch` have been checked and stored.
+    pub async fn mark_certs_checked(&self, epoch: EpochNumber) -> anyhow::Result<()> {
+        self.backend.mark_certs_checked(*epoch).await
+    }
+
     /// Deletes everything before `height` and stops accepting writes there.
     pub async fn prune_below(&self, height: u64) -> anyhow::Result<()> {
         self.backend.prune_below(height).await
@@ -215,6 +255,17 @@ impl ChainStore {
     /// height looks again whenever it changes.
     pub fn changes(&self) -> watch::Receiver<u64> {
         self.backend.changes()
+    }
+
+    async fn decoded_part<T: DeserializeOwned>(
+        &self,
+        height: u64,
+        part: Part,
+    ) -> anyhow::Result<Option<T>> {
+        match self.backend.part(height, part).await? {
+            Some(bytes) => Ok(Some(decode(&bytes)?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -235,7 +286,7 @@ fn encode<T: Serialize>(value: &T) -> anyhow::Result<Bytes> {
     Ok(bytes.into())
 }
 
-fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
+fn decode<T: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
     match bytes.split_first() {
         Some((&FORMAT, rest)) => Ok(bincode::deserialize(rest)?),
         Some((format, _)) => anyhow::bail!("a value of format {format}, this store reads {FORMAT}"),
@@ -261,8 +312,13 @@ mod tests {
         Item {
             leaf: Leaf2::genesis(&state, &instance, NEW_PROTOCOL_VERSION).await,
             cert1: QuorumCertificate2::genesis(&state, &instance, upgrade).await,
-            cert2: None,
-            state_cert: None,
+        }
+    }
+
+    fn payload_only(payload: &'static [u8]) -> Parts {
+        Parts {
+            payload: Some(Bytes::from_static(payload)),
+            ..Default::default()
         }
     }
 
@@ -270,10 +326,7 @@ mod tests {
     async fn an_item_is_found_by_height_and_by_its_commitments() {
         let store = ChainStore::new(mem::MemBackend::default());
         let item = genesis().await;
-        store
-            .put(&item, Some(Bytes::from_static(b"payload")), None)
-            .await
-            .unwrap();
+        store.put(&item, &payload_only(b"payload")).await.unwrap();
 
         assert_eq!(store.item(0).await.unwrap(), Some(item.clone()));
         assert_eq!(
@@ -298,14 +351,10 @@ mod tests {
     async fn a_record_decodes_to_what_was_stored() {
         let store = ChainStore::new(mem::MemBackend::default());
         let item = genesis().await;
-        store
-            .put(&item, Some(Bytes::from_static(b"payload")), None)
-            .await
-            .unwrap();
+        store.put(&item, &payload_only(b"payload")).await.unwrap();
         let record = store.record(0).await.unwrap().unwrap();
         assert_eq!(record.item().unwrap(), item);
-        assert_eq!(record.payload, Some(Bytes::from_static(b"payload")));
-        assert_eq!(record.vid_common().unwrap(), None);
+        assert_eq!(record.parts().unwrap(), payload_only(b"payload"));
         assert_eq!(store.record(1).await.unwrap(), None);
     }
 

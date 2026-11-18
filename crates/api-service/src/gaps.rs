@@ -16,26 +16,23 @@
 use std::{collections::BTreeSet, net::SocketAddr, ops::Range, time::Duration};
 
 use anyhow::{Context, bail, ensure};
-use bytes::Bytes;
-use chain_store::{ChainStore, Item, Part, Record};
+use chain_store::{ChainStore, Item, Part, Parts, Record};
 use committable::Committable;
-use espresso_api::proto::{
-    ChainRecord, GetRecordsRequest, chain_service_client::ChainServiceClient,
-};
+use espresso_api::proto::{GetRecordsRequest, chain_service_client::ChainServiceClient};
 use espresso_types::{Header, Payload};
-use hotshot_types::{
-    data::VidCommon,
-    traits::{
-        EncodeBytes,
-        block_contents::{BlockHeader, BlockPayload},
-    },
+use hotshot_types::traits::{
+    EncodeBytes,
+    block_contents::{BlockHeader, BlockPayload},
 };
 use light_client::consensus::payload::PayloadProof;
 use tokio::time::{Instant, sleep};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use url::Url;
 
-use crate::{chain::RECORD_RANGE_LIMIT, node::service_records};
+use crate::{
+    chain::{RECORD_RANGE_LIMIT, from_proto},
+    node::service_records,
+};
 
 /// The least time between two passes.
 const PASS_INTERVAL: Duration = Duration::from_secs(1);
@@ -169,9 +166,8 @@ impl GapFiller {
             let item = checked_item(&record, &child)?;
             let parts = checked_parts(item.leaf.block_header(), &record)
                 .inspect_err(|err| tracing::debug!(%peer, "payload not taken: {err:#}"))
-                .ok();
-            let (payload, common) = parts.unzip();
-            self.store.put(&item, payload, common.as_ref()).await?;
+                .unwrap_or_default();
+            self.store.put(&item, &parts).await?;
             (end, child) = (record.height, item);
         }
         Ok((end, child))
@@ -191,9 +187,8 @@ impl GapFiller {
                 let Some(item) = self.store.item(record.height).await? else {
                     continue;
                 };
-                if let Ok((payload, common)) = checked_parts(item.leaf.block_header(), &record) {
-                    self.store.put_payload(record.height, payload).await?;
-                    self.store.put_vid_common(record.height, &common).await?;
+                if let Ok(parts) = checked_parts(item.leaf.block_header(), &record) {
+                    self.store.put_parts(record.height, &parts).await?;
                 }
             }
             if self.lacks_none(heights.clone()).await? {
@@ -228,6 +223,7 @@ async fn fetch(peer: &Url, heights: Range<u64>) -> anyhow::Result<Vec<Record>> {
         .get_records(GetRecordsRequest {
             from: Some(heights.start),
             until: Some(heights.end),
+            skip_payloads: false,
         })
         .await?
         .into_inner();
@@ -238,20 +234,11 @@ async fn fetch(peer: &Url, heights: Range<u64>) -> anyhow::Result<Vec<Record>> {
             "{peer} sent height {} for {heights:?}",
             record.height
         );
-        records.push(record_of(record));
+        records.push(from_proto(record));
     }
     records.sort_by_key(|record| record.height);
     records.dedup_by_key(|record| record.height);
     Ok(records)
-}
-
-fn record_of(record: ChainRecord) -> Record {
-    Record {
-        height: record.height,
-        item: record.item.into(),
-        payload: record.payload.map(Into::into),
-        vid_common: record.vid_common.map(Into::into),
-    }
 }
 
 /// The item of `record`, which must be the parent of `child`, certified by `child`'s justify QC
@@ -276,20 +263,23 @@ fn checked_item(record: &Record, child: &Item) -> anyhow::Result<Item> {
         child.height()
     );
     item.cert1 = qc.clone();
-    item.cert2 = None;
-    item.state_cert = None;
     Ok(item)
 }
 
 /// The payload and VID common data of `record`, if both are there and recompute the payload
 /// commitment of `header`. The payload is returned as encoded again after the check.
-fn checked_parts(header: &Header, record: &Record) -> anyhow::Result<(Bytes, VidCommon)> {
-    let (Some(payload), Some(common)) = (&record.payload, record.vid_common()?) else {
+fn checked_parts(header: &Header, record: &Record) -> anyhow::Result<Parts> {
+    let parts = record.parts()?;
+    let (Some(payload), Some(common)) = (parts.payload, parts.vid_common) else {
         bail!("the record of height {} lacks parts", record.height);
     };
-    let payload = Payload::from_bytes(payload, header.metadata());
+    let payload = Payload::from_bytes(&payload, header.metadata());
     let (payload, common) = PayloadProof::new(payload, common).verify_with_vid_common(header)?;
-    Ok((payload.encode().to_vec().into(), common))
+    Ok(Parts {
+        payload: Some(payload.encode().to_vec().into()),
+        vid_common: Some(common),
+        ..Default::default()
+    })
 }
 
 /// `heights` as runs of consecutive heights, each at most a record request long.
@@ -308,11 +298,12 @@ fn runs(heights: &BTreeSet<u64>) -> Vec<Range<u64>> {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use chain_store::mem::MemBackend;
     use espresso_types::{BlockMerkleTree, Leaf2, NodeState, ValidatedState};
     use hotshot_query_service::data_source::genesis_vid;
     use hotshot_types::{
-        data::{QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+        data::{QuorumProposal2, QuorumProposalWrapper, VidCommon, ViewNumber},
         simple_certificate::QuorumCertificate2,
     };
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleTreeScheme};
@@ -353,13 +344,16 @@ mod tests {
         });
         let mut qc1 = qc0.clone();
         qc1.data.leaf_commit = leaf1.commit();
-        let item = |leaf, cert1| Item {
-            leaf,
-            cert1,
-            cert2: None,
-            state_cert: None,
-        };
+        let item = |leaf, cert1| Item { leaf, cert1 };
         ((item(leaf0, qc0), payload, common), item(leaf1, qc1))
+    }
+
+    fn parts(payload: &Bytes, common: &VidCommon) -> Parts {
+        Parts {
+            payload: Some(payload.clone()),
+            vid_common: Some(common.clone()),
+            ..Default::default()
+        }
     }
 
     /// Serves `store`, returning its URL.
@@ -378,7 +372,7 @@ mod tests {
         let item1 = item1.clone();
         let writer = store.clone();
         tokio::spawn(async move {
-            writer.put(&item1, None, None).await.unwrap();
+            writer.put(&item1, &Parts::default()).await.unwrap();
             filler.run().await;
         });
         store
@@ -388,10 +382,8 @@ mod tests {
     async fn fills_a_missing_height_and_its_parts_from_a_peer() {
         let ((item0, payload, common), item1) = chain().await;
         let peer = ChainStore::new(MemBackend::default());
-        peer.put(&item0, Some(payload.clone()), Some(&common))
-            .await
-            .unwrap();
-        peer.put(&item1, None, None).await.unwrap();
+        peer.put(&item0, &parts(&payload, &common)).await.unwrap();
+        peer.put(&item1, &Parts::default()).await.unwrap();
         let store = filling(&item1, serve(peer).await);
 
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -417,10 +409,8 @@ mod tests {
         *item0.leaf.block_header_mut().block_merkle_tree_root_mut() = tree.commitment();
         assert_ne!(item0.leaf.commit(), item1.leaf.parent_commitment());
         let peer = ChainStore::new(MemBackend::default());
-        peer.put(&item0, Some(payload), Some(&common))
-            .await
-            .unwrap();
-        peer.put(&item1, None, None).await.unwrap();
+        peer.put(&item0, &parts(&payload, &common)).await.unwrap();
+        peer.put(&item1, &Parts::default()).await.unwrap();
         let store = filling(&item1, serve(peer).await);
 
         sleep(Duration::from_secs(2)).await;
