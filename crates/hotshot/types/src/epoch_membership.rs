@@ -392,6 +392,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Bring `epoch` to a usable membership: its stake table, then its DRB.
+    async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+        self.catchup_tables(epoch).await?;
+        self.drb_ready(epoch).await
+    }
+
+    /// Make `epoch`'s stake table present.
     ///
     /// Walks from the latest consecutive pair of stake tables this node holds
     /// to `epoch`, fetching what is missing one epoch at a time. `epoch` is
@@ -405,7 +411,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// epoch, so whichever reaches an epoch first fetches it while the others
     /// wait for its result. Every walk awaits attempts in increasing epoch
     /// order and an attempt awaits none, so no two can wait on each other.
-    async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+    async fn catchup_tables(&self, epoch: EpochNumber) -> Result<()> {
         let seeded = self.membership.first_epoch() + 1;
 
         if epoch <= seeded {
@@ -451,7 +457,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             try_epoch += 1;
         }
 
-        self.drb_ready(epoch).await
+        Ok(())
     }
 
     /// The top `start` of the highest consecutive held pair `(start-1, start)` with
