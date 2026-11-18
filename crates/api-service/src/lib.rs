@@ -20,8 +20,10 @@ use espresso_api::{
 use tokio::net::TcpListener;
 
 mod availability;
+mod certs;
 mod chain;
 mod gaps;
+mod membership;
 mod node;
 mod reader;
 mod request;
@@ -29,6 +31,7 @@ mod status;
 mod submit;
 
 pub use gaps::GapFiller;
+pub use membership::Membership;
 use reader::Reader;
 
 /// The services of the API, over one store and one consensus node.

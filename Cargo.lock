@@ -971,7 +971,9 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "api-service"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
+ "async-lock",
  "async-trait",
  "bincode",
  "bytes",
@@ -980,12 +982,14 @@ dependencies = [
  "committable",
  "consensus-api",
  "espresso-api",
+ "espresso-genesis",
  "espresso-types",
  "futures",
  "hotshot-new-protocol",
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
+ "indexmap 2.14.0",
  "jf-merkle-tree-compat",
  "light-client",
  "reqwest 0.12.28",

@@ -13,16 +13,19 @@
 //! The peers are the API services of the validators, from the discovery records consensus holds,
 //! and the bootstrap URLs the operator gives.
 
-use std::{collections::BTreeSet, net::SocketAddr, ops::Range, time::Duration};
+use std::{collections::BTreeSet, net::SocketAddr, ops::Range, sync::Mutex, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use chain_store::{ChainStore, Item, Part, Parts, Record};
 use committable::Committable;
 use espresso_api::proto::{GetRecordsRequest, chain_service_client::ChainServiceClient};
 use espresso_types::{Header, Payload};
-use hotshot_types::traits::{
-    EncodeBytes,
-    block_contents::{BlockHeader, BlockPayload},
+use hotshot_types::{
+    data::EpochNumber,
+    traits::{
+        EncodeBytes,
+        block_contents::{BlockHeader, BlockPayload},
+    },
 };
 use light_client::consensus::payload::PayloadProof;
 use tokio::time::{Instant, sleep};
@@ -30,6 +33,7 @@ use tonic::transport::{ClientTlsConfig, Endpoint};
 use url::Url;
 
 use crate::{
+    Membership,
     chain::{RECORD_RANGE_LIMIT, from_proto},
     node::service_records,
 };
@@ -47,17 +51,31 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RECORD_SIZE: usize = 64 << 20;
 
 pub struct GapFiller {
-    store: ChainStore,
+    pub(crate) store: ChainStore,
     consensus_api: SocketAddr,
     bootstrap: Vec<Url>,
+
+    /// The stake tables to check certificates against; without them certificates are not
+    /// filled.
+    membership: Option<Membership>,
+
+    /// The epochs the store records as checked, as far as this filler has seen.
+    pub(crate) checked_epochs: Mutex<BTreeSet<EpochNumber>>,
 }
 
 impl GapFiller {
-    pub fn new(store: ChainStore, consensus_api: SocketAddr, bootstrap: Vec<Url>) -> Self {
+    pub fn new(
+        store: ChainStore,
+        consensus_api: SocketAddr,
+        bootstrap: Vec<Url>,
+        membership: Option<Membership>,
+    ) -> Self {
         Self {
             store,
             consensus_api,
             bootstrap,
+            membership,
+            checked_epochs: Mutex::default(),
         }
     }
 
@@ -77,26 +95,33 @@ impl GapFiller {
         }
     }
 
-    /// Fills the first gaps of each kind, each from the first peer that has it.
+    /// Fills the first gaps of each kind, each from the first peer that has it, then derives the
+    /// stake tables of the stored epoch roots and checks the certificates they allow.
     async fn pass(&self) -> anyhow::Result<()> {
+        let peers = self.peers().await;
+        ensure!(!peers.is_empty(), "no API service to fill gaps from");
+        self.fill_gaps(&peers).await?;
+        if let Some(membership) = &self.membership {
+            self.follow_roots(membership).await?;
+            self.check_certs(membership, &peers).await?;
+        }
+        Ok(())
+    }
+
+    async fn fill_gaps(&self, peers: &[Url]) -> anyhow::Result<()> {
         let missing = self.store.missing_items(0, GAPS_PER_PASS).await?;
         let mut parts: BTreeSet<u64> = BTreeSet::new();
         for part in [Part::Payload, Part::VidCommon] {
             let limit = GAPS_PER_PASS * RECORD_RANGE_LIMIT as usize;
             parts.extend(self.store.missing_parts(part, 0, limit).await?);
         }
-        if missing.is_empty() && parts.is_empty() {
-            return Ok(());
-        }
-        let peers = self.peers().await;
-        ensure!(!peers.is_empty(), "no API service to fill gaps from");
         for gap in missing {
-            if let Err(err) = self.fill_items(gap.clone(), &peers).await {
+            if let Err(err) = self.fill_items(gap.clone(), peers).await {
                 tracing::warn!(?gap, "filling a gap failed: {err:#}");
             }
         }
         for heights in runs(&parts) {
-            if let Err(err) = self.fill_parts(heights.clone(), &peers).await {
+            if let Err(err) = self.fill_parts(heights.clone(), peers).await {
                 tracing::warn!(?heights, "filling payloads failed: {err:#}");
             }
         }
@@ -157,7 +182,7 @@ impl GapFiller {
         heights: Range<u64>,
         mut child: Item,
     ) -> anyhow::Result<(u64, Item)> {
-        let records = fetch(peer, heights.clone()).await?;
+        let records = fetch(peer, heights.clone(), false).await?;
         let mut end = heights.end;
         for record in records.into_iter().rev() {
             if record.height + 1 != end {
@@ -176,7 +201,7 @@ impl GapFiller {
     /// Fills the payloads and VID common data of the stored `heights` from the peers.
     async fn fill_parts(&self, heights: Range<u64>, peers: &[Url]) -> anyhow::Result<()> {
         for peer in peers {
-            let records = match fetch(peer, heights.clone()).await {
+            let records = match fetch(peer, heights.clone(), false).await {
                 Ok(records) => records,
                 Err(err) => {
                     tracing::debug!(%peer, "{err:#}");
@@ -209,8 +234,13 @@ impl GapFiller {
     }
 }
 
-/// The records of `heights` that `peer` has, in height order.
-async fn fetch(peer: &Url, heights: Range<u64>) -> anyhow::Result<Vec<Record>> {
+/// The records of `heights` that `peer` has, in height order, without payloads and VID common
+/// data if `skip_payloads`.
+pub(crate) async fn fetch(
+    peer: &Url,
+    heights: Range<u64>,
+    skip_payloads: bool,
+) -> anyhow::Result<Vec<Record>> {
     let mut endpoint = Endpoint::from_shared(peer.to_string())?
         .connect_timeout(REQUEST_TIMEOUT)
         .timeout(REQUEST_TIMEOUT);
@@ -223,7 +253,7 @@ async fn fetch(peer: &Url, heights: Range<u64>) -> anyhow::Result<Vec<Record>> {
         .get_records(GetRecordsRequest {
             from: Some(heights.start),
             until: Some(heights.end),
-            skip_payloads: false,
+            skip_payloads,
         })
         .await?
         .into_inner();
@@ -283,7 +313,7 @@ fn checked_parts(header: &Header, record: &Record) -> anyhow::Result<Parts> {
 }
 
 /// `heights` as runs of consecutive heights, each at most a record request long.
-fn runs(heights: &BTreeSet<u64>) -> Vec<Range<u64>> {
+pub(crate) fn runs(heights: &BTreeSet<u64>) -> Vec<Range<u64>> {
     let mut runs: Vec<Range<u64>> = Vec::new();
     for &height in heights {
         match runs.last_mut() {
@@ -368,7 +398,12 @@ mod tests {
     /// A store holding `item1` only, filling its gaps from `peer`.
     fn filling(item1: &Item, peer: Url) -> ChainStore {
         let store = ChainStore::new(MemBackend::default());
-        let filler = GapFiller::new(store.clone(), "127.0.0.1:1".parse().unwrap(), vec![peer]);
+        let filler = GapFiller::new(
+            store.clone(),
+            "127.0.0.1:1".parse().unwrap(),
+            vec![peer],
+            None,
+        );
         let item1 = item1.clone();
         let writer = store.clone();
         tokio::spawn(async move {

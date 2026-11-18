@@ -3,9 +3,10 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use api_service::{ApiService, GapFiller};
+use api_service::{ApiService, GapFiller, Membership};
 use chain_store::{ChainStore, postgres::PostgresBackend};
 use clap::Parser;
+use espresso_genesis::{Genesis, GenesisSource};
 use tokio::net::TcpListener;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
@@ -27,6 +28,14 @@ struct Options {
     /// API services to fill gaps from, besides those of the validators, comma-separated.
     #[arg(long, env = "ESPRESSO_API_SERVICE_BOOTSTRAP", value_delimiter = ',')]
     bootstrap: Vec<Url>,
+
+    /// The genesis file of the chain, a path or an HTTP URL.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_GENESIS_FILE")]
+    genesis_file: GenesisSource,
+
+    /// L1 RPC URLs to read the stake table contract from, comma-separated.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_L1_PROVIDER", value_delimiter = ',')]
+    l1_provider: Vec<Url>,
 }
 
 #[tokio::main]
@@ -40,7 +49,18 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("binding port {}", options.port))?;
     let store = ChainStore::new(backend);
-    let filler = GapFiller::new(store.clone(), options.consensus_api, options.bootstrap);
+    let genesis = Genesis::load(&options.genesis_file)
+        .await
+        .context("loading the genesis file")?;
+    let membership = Membership::new(&genesis, options.l1_provider)
+        .await
+        .context("building the membership")?;
+    let filler = GapFiller::new(
+        store.clone(),
+        options.consensus_api,
+        options.bootstrap,
+        Some(membership),
+    );
     tokio::spawn(filler.run());
     ApiService::new(store, options.consensus_api)
         .serve(listener)

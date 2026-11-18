@@ -6,7 +6,9 @@ authors     = { workspace = true }
 edition     = { workspace = true }
 
 [dependencies]
+alloy                       = { workspace = true }
 anyhow                      = { workspace = true }
+async-lock                  = { workspace = true }
 async-trait                 = { workspace = true }
 bincode                     = { workspace = true }
 bytes                       = { workspace = true }
@@ -15,11 +17,13 @@ clap                        = { workspace = true }
 committable                 = { workspace = true }
 consensus-api               = { workspace = true }
 espresso-api                = { workspace = true }
-espresso-types              = { workspace = true }
+espresso-genesis            = { workspace = true }
+espresso-types              = { workspace = true, features = ["node"] }
 futures                     = { workspace = true }
 hotshot-new-protocol        = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types               = { workspace = true }
+indexmap                    = { workspace = true }
 light-client                = { workspace = true }
 tagged-base64               = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
@@ -27,6 +31,7 @@ tonic                       = { workspace = true, features = ["tls-ring", "tls-w
 tracing                     = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
 url                         = { workspace = true }
+versions                    = { workspace = true }
 
 [dev-dependencies]
 chain-store    = { workspace = true, features = ["testing"] }

@@ -6,6 +6,8 @@ pub use v0::*;
 #[cfg(feature = "node")]
 pub mod decided_state;
 pub mod eth_signature_key;
+#[cfg(feature = "node")]
+pub mod null_catchup;
 mod reference_tests;
 #[cfg(feature = "node")]
 pub mod state_cert;
