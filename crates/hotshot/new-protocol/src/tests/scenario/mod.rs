@@ -224,7 +224,7 @@ async fn valid_proposal(
 ) -> bool {
     let mut validator = ProposalValidator::new(
         harness.membership_coordinator.clone(),
-        *harness.consensus.epoch_height,
+        harness.consensus.epoch_length,
         test_timeout_epoch_lock(),
         None,
     );

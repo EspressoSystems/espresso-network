@@ -17,8 +17,8 @@ use futures::{
     future::Future,
     stream::{BoxStream, StreamExt},
 };
-pub use hotshot_new_protocol::message::Certificate2;
 pub use hotshot_query_service_types::availability::{BlockId, LeafId};
+pub use hotshot_types::simple_certificate::Certificate2;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
 use super::{

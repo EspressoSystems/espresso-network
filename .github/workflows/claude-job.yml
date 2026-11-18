@@ -150,7 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           # Backport PRs use the branch name backport-<original>-to-<target>,
-          # created by both scripts/backport-dispatch and korthout/backport-action.
+          # created by scripts/backport-dispatch.
           if [[ ! "$HEAD_REF" =~ ^backport-([0-9]+)-to- ]]; then
             echo "not a backport branch ($HEAD_REF); skipping"
             exit 0
