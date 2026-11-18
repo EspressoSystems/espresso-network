@@ -23,23 +23,30 @@ which must be set. The follower needs:
 - the `storage-sql`, `http` and `query` modules: merklized state, rewards and the explorer need SQL storage;
 - an L1 RPC, for fee deposits and the stake table, like any node;
 - upstream query nodes with SQL storage that serve the `catchup`, `config` and (for `submit`) `submit` modules. Every
-  such node serves the light client API, though upstreams on older releases also need the `light-client` module.
+  such node serves the light client API, though upstreams on older releases also need the `light-client` module. The
+  epoch catchup seed fetches through the catchup provider: `--state-peers`, or the upstreams when unset. Peers named
+  in `--state-peers` must serve `/v1/light-client/header/{root}/{height}` (SQL query nodes); otherwise the seed fails
+  and the follower walks every epoch.
 
 It does not need staking keys, an orchestrator or cliquenet; those options are ignored. `--state-peers` and
 `--config-peers` default to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to
 identify itself with.
 
-Tuning, as options of the `follower` module:
+Tuning, as options of the `follower` module (the first two) and top-level options:
 
 - `--poll-interval` (`ESPRESSO_NODE_FOLLOWER_POLL_INTERVAL`, 1s): how often to poll the upstreams for new blocks.
 - `--max-blocks-per-poll` (`ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL`, 10): how many blocks one poll ingests. Older
   heights are backfilled by the query service, so a fresh follower serves the tip promptly and fills history in the
   background. A fresh follower with `--prune` is the exception: it never fetches heights below its first block (see
-  [Cold start](#cold-start)). Stake tables for epoch roots skipped this way are caught up from the peers before
-  following on.
+  [Cold start](#cold-start)). Stake tables for epoch roots skipped this way, and at start, are caught up before
+  following on: the LC contract supplies the commitment, and the stake tables come from L1 events at epoch roots
+  proven against it.
 - `--light-client-genesis <file>` (`ESPRESSO_NODE_LIGHT_CLIENT_GENESIS`): pin the light client's root of trust to a
   reviewed TOML file (see `crates/light-client-query-service/genesis/`) instead of deriving it from the network config
   fetched from the peers.
+- `--bootstrap-epoch-catchup-timeout` (`ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT`, 30s), top-level: bound of the
+  wait for the stake table the follower needs, at startup and at each poll. Exceeding it or failing logs a warning and
+  the next poll retries. With a stored network config, startup does not need the upstreams.
 
 Against the native demo (`just demo-native`), node 0 on port 24000 serves everything a follower needs:
 `-- query --peers http://localhost:24000 -- follower`.
