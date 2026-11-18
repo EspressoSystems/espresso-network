@@ -44,6 +44,7 @@ sql-data-source = [
 
 testing = [
     "espresso-macros",
+    "hotshot-example-types",
     "hotshot-query-service-types/testing",
     "rand",
     "tempfile",
@@ -75,8 +76,7 @@ either = { workspace = true }
 espresso-macros = { workspace = true, optional = true }
 futures = { workspace = true }
 
-hotshot-example-types = { workspace = true }
-hotshot-new-protocol = { workspace = true }
+hotshot-example-types = { workspace = true, optional = true }
 hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
@@ -103,7 +103,6 @@ test-utils = { workspace = true, optional = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 trait-variant = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
@@ -129,6 +128,7 @@ http-wire = { workspace = true, features = ["server"] }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

@@ -209,7 +209,13 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::max, collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+    use std::{
+        cmp::max,
+        collections::{BTreeMap, BTreeSet},
+        marker::PhantomData,
+        sync::Arc,
+        time::Duration,
+    };
 
     use alloy::{
         network::EthereumWallet,
@@ -231,7 +237,10 @@ mod tests {
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
         },
-        v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
+        v0_3::{
+            AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, RewardAmount,
+            StakeTableEvent,
+        },
     };
     use futures::{StreamExt, TryStreamExt, future::join_all};
     use hotshot_contract_adapter::{
@@ -2791,6 +2800,81 @@ mod tests {
         );
         assert_eq!(None, iter.next());
 
+        Ok(())
+    }
+
+    /// Epochs with only a DRB result or an epoch root are not listed; those with a stake table are.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stored_stake_epochs<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        assert!(storage.stored_stake_epochs().await?.is_empty());
+
+        let validator = AuthenticatedValidator::mock();
+        let mut stake = IndexMap::new();
+        stake.insert(validator.account, validator);
+
+        storage
+            .store_drb_result(EpochNumber::new(1), [1; 32])
+            .await?;
+        let instance_state = NodeState::mock();
+        let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
+        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
+            .await
+            .into();
+        storage
+            .store_epoch_root(EpochNumber::new(9), leaf.block_header().clone())
+            .await?;
+        for epoch in [7, 3, 5] {
+            storage
+                .store_stake(EpochNumber::new(epoch), stake.clone(), None, None)
+                .await?;
+        }
+
+        let expected: BTreeSet<_> = [3, 5, 7].into_iter().map(EpochNumber::new).collect();
+        assert_eq!(storage.stored_stake_epochs().await?, expected);
+        Ok(())
+    }
+
+    /// A write without a block reward or stake table hash keeps the stored one; `Some` replaces it.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_store_stake_keeps_block_reward_and_hash<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        let validator = AuthenticatedValidator::mock();
+        let mut stake = IndexMap::new();
+        stake.insert(validator.account, validator);
+        let reward = RewardAmount::from(7u64);
+        let hash = Commitment::from_raw([7; 32]);
+        let epoch = EpochNumber::new(4);
+
+        storage
+            .store_stake(epoch, stake.clone(), None, None)
+            .await?;
+        storage
+            .store_stake(epoch, stake.clone(), Some(reward), Some(hash))
+            .await?;
+        let loaded = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!((loaded.1, loaded.2), (Some(reward), Some(hash)));
+
+        storage
+            .store_stake(epoch, stake.clone(), None, None)
+            .await?;
+        let loaded = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!((loaded.1, loaded.2), (Some(reward), Some(hash)));
+
+        let new_reward = RewardAmount::from(9u64);
+        let new_hash = Commitment::from_raw([9; 32]);
+        storage
+            .store_stake(epoch, stake.clone(), Some(new_reward), Some(new_hash))
+            .await?;
+        let loaded = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!((loaded.1, loaded.2), (Some(new_reward), Some(new_hash)));
         Ok(())
     }
 

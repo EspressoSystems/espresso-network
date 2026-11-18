@@ -1,5 +1,8 @@
 mod proposals;
 
+#[cfg(any(test, feature = "trace"))]
+pub(crate) mod recorded;
+
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
@@ -11,11 +14,9 @@ use std::{
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
-    data::{
-        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2,
-        ViewNumber,
-    },
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
     drb::DrbResult,
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
@@ -35,7 +36,6 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
     },
-    utils::{is_epoch_root, is_epoch_transition, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -308,6 +308,21 @@ pub struct Consensus<T: NodeType> {
     /// asked for once per view: a silent peer is replaced in the next view.
     lock_payload_fetches: BTreeMap<(ViewNumber, VidCommitment2), ViewNumber>,
 
+    /// The blocks of timeout certificate locks this node asked for, with the
+    /// lock that certifies each and the block's number. Once a block arrives
+    /// without this node's share, fetched or adopted from parked, its payload
+    /// is asked for.
+    ///
+    /// The other ways a block arrives need no request. One paired live with
+    /// this node's share has its payload rebuilt from the shares the votes
+    /// carry, which a fetch would only race. One taken from an epoch change is
+    /// an epoch's last block, whose payload its only child does not need.
+    lock_block_fetches: BTreeMap<Commitment<Leaf2<T>>, (LockView, Option<u64>)>,
+
+    /// The latest boundary certificate this node asked storage to persist (see
+    /// [`ConsensusOutput::PersistBoundaryQc`]), so that it is asked for once.
+    boundary_qc_requested: Option<LockView>,
+
     /// An assembled or adopted upgrade certificate, kept until a leader turn
     /// attaches it, the upgrade decides, or `decide_by` passes.
     formed_upgrade_certificate: Option<ValidCert<UpgradeCertificate2<T>>>,
@@ -336,7 +351,7 @@ pub struct Consensus<T: NodeType> {
     node_id: KeyPrefix,
     upgrade_lock: UpgradeLock<T>,
 
-    pub(crate) epoch_height: BlockNumber,
+    pub(crate) epoch_length: EpochLength,
 
     pub(crate) tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
@@ -396,7 +411,7 @@ enum SafetyError {
 
 impl<T: NodeType> Consensus<T> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<B>(
+    pub fn new(
         membership_coordinator: EpochMembershipCoordinator<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
@@ -404,11 +419,8 @@ impl<T: NodeType> Consensus<T> {
         stake_table_capacity: usize,
         upgrade_lock: UpgradeLock<T>,
         genesis_leaf: Leaf2<T>,
-        epoch_height: B,
-    ) -> Self
-    where
-        B: Into<BlockNumber>,
-    {
+        epoch_length: EpochLength,
+    ) -> Self {
         let last_decided_view = genesis_leaf.view_number();
         Self {
             proposals: Proposals::new(),
@@ -454,6 +466,8 @@ impl<T: NodeType> Consensus<T> {
             revotes: BTreeMap::new(),
             revote_fetches: BTreeSet::new(),
             lock_payload_fetches: BTreeMap::new(),
+            lock_block_fetches: BTreeMap::new(),
+            boundary_qc_requested: None,
             formed_upgrade_certificate: None,
             decided_upgrade_carrier: None,
             private_key,
@@ -464,7 +478,7 @@ impl<T: NodeType> Consensus<T> {
             vid_shares: BTreeMap::new(),
             unpaired_proposals: BTreeMap::new(),
             unpaired_vid_shares: BTreeMap::new(),
-            epoch_height: epoch_height.into(),
+            epoch_length,
             tracer: None,
         }
     }
@@ -496,7 +510,11 @@ impl<T: NodeType> Consensus<T> {
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
         // A decided last block ends its epoch.
-        if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+        if self
+            .epoch_length
+            .position(proposal.block_header.block_number())
+            .is_last()
+        {
             self.set_current_epoch_max(proposal.epoch + 1);
         } else {
             self.set_current_epoch_max(proposal.epoch);
@@ -578,6 +596,20 @@ impl<T: NodeType> Consensus<T> {
     pub fn seed_anchor_cert2(&mut self, cert2: Certificate2<T>) {
         if cert2.data.leaf_commit == self.last_decided_leaf.commit() {
             self.insert_cert2(cert2);
+        }
+    }
+
+    /// Ask storage to persist `cert1` as the boundary certificate, unless one
+    /// at least as late was asked for already: storage keeps the latest.
+    fn persist_boundary_qc(
+        &mut self,
+        cert1: &Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let lock = LockView::of(cert1);
+        if self.boundary_qc_requested.is_none_or(|asked| asked < lock) {
+            self.boundary_qc_requested = Some(lock);
+            outbox.push_back(ConsensusOutput::PersistBoundaryQc(cert1.clone()));
         }
     }
 
@@ -683,7 +715,7 @@ impl<T: NodeType> Consensus<T> {
         if let Some(proposal) = self.proposals.get(view, leaf_commit).filter(numbered) {
             return Some((view, proposal));
         }
-        if !block_number.is_some_and(|bn| is_last_block(bn, *self.epoch_height)) {
+        if !block_number.is_some_and(|bn| self.epoch_length.position(bn).is_last()) {
             return None;
         }
         self.proposals
@@ -881,9 +913,7 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::Certificate1(certificate) => {
                 debug!(epoch = %certificate.epoch(), "apply: certificate1");
-                let protocol = self.handle_certificate1(certificate, outbox);
-                self.retry_later_certificates(view, outbox);
-                protocol
+                self.handle_certificate1(certificate, outbox)
             },
             ConsensusInput::Certificate2(certificate) => {
                 debug!(epoch = %certificate.epoch(), "apply: certificate2");
@@ -927,30 +957,7 @@ impl<T: NodeType> Consensus<T> {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, payload_commitment));
                 self.blocks.insert((view, payload_commitment), payload);
-                // Retry the votable children whose vote1 is gated on this
-                // parent's reconstruction. More than `view + 1` can be
-                // waiting: while a view's payload was missing, every later
-                // proposal extends it, and of those only the ones later than
-                // the timeout bar can still be voted. Latest first, stopping
-                // at the one we vote for: a vote at an earlier child adds
-                // nothing and costs its vote2, which the later vote1 skips.
-                let children: BTreeSet<ViewNumber> = self
-                    .proposals
-                    .range(view.max(self.timeout_view) + 1..)
-                    .filter(|p| p.justify_qc.view_number() == view)
-                    .map(|p| p.view_number)
-                    .collect();
-                for child in children.into_iter().rev() {
-                    self.maybe_vote_1(child, outbox);
-                    if self
-                        .voted_1_views
-                        .range(ViewEpoch::at_view(child))
-                        .next()
-                        .is_some()
-                    {
-                        break;
-                    }
-                }
+                self.vote_1_on_children(view, outbox);
                 self.retry_later_certificates(view, outbox);
                 Protocol::Continue
             },
@@ -1125,6 +1132,11 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[cfg(test)]
+    pub fn has_drb_result(&self, epoch: EpochNumber) -> bool {
+        self.drb_results.contains_key(&epoch)
+    }
+
+    #[cfg(test)]
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.current_view = view;
         self.current_epoch = epoch;
@@ -1257,7 +1269,7 @@ impl<T: NodeType> Consensus<T> {
             .iter()
             .find_map(|(ViewEpoch(view, cert2_epoch), cert2)| {
                 let block_number = cert2.data.block_number;
-                if *cert2_epoch != epoch || !is_last_block(block_number, *self.epoch_height) {
+                if *cert2_epoch != epoch || !self.epoch_length.position(block_number).is_last() {
                     return None;
                 }
                 let (block_view, proposal) =
@@ -1369,6 +1381,8 @@ impl<T: NodeType> Consensus<T> {
                 self.lock_payload_fetches = self
                     .lock_payload_fetches
                     .split_off(&(keep_from, VidCommitment2::default()));
+                self.lock_block_fetches
+                    .retain(|_, (lock, _)| lock.view >= keep_from);
                 let epoch = EpochNumber::new(self.current_epoch.saturating_sub(1));
                 self.drb_results = self.drb_results.split_off(&epoch);
                 self.state_certs = self.state_certs.split_off(&epoch);
@@ -1394,15 +1408,14 @@ impl<T: NodeType> Consensus<T> {
         self.cert1_at(view).is_some()
             || self.cert2_at(view).is_some()
             || self.proposals.at(view).any(|proposal| {
-                is_last_block(proposal.block_header.block_number(), *self.epoch_height)
+                self.epoch_length
+                    .position(proposal.block_header.block_number())
+                    .is_last()
             })
     }
 
     pub fn leader_of(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.stake_table_coordinator.membership_for_epoch(epoch) {
             Ok(stake_table) => match stake_table.leader(view) {
                 Ok(leader) => Some(leader),
                 Err(err) => {
@@ -1585,22 +1598,21 @@ impl<T: NodeType> Consensus<T> {
         // with the proposal, and put this node in the proposal's view.
         let parent_epoch = LockView::of(&proposal.justify_qc).epoch;
         self.advance_on(proposal.justify_qc.clone(), parent_epoch, outbox);
-        // Decided only now: a re-vote's commit is at a later view than the
-        // block, and deciding it needs a `Certificate1` over the block, which
-        // the parent's certificate may be the first of.
+        // The commit is retried with the parent's certificate when that is the
+        // block's own. When the parent's is a re-vote's certificate, the retry
+        // at its view does not reach a commit at another view, which a
+        // `Certificate1` held earlier may decide.
         if let Some(commit_view) = commit_view {
             self.maybe_decide(commit_view, outbox);
         }
-        if let Some(tc) = proposal.view_change_evidence.clone()
-            && !self.timeout_certs.contains_key(&view)
-        {
+        if let Some(tc) = proposal.view_change_evidence.clone() {
             let tc_epoch = HasEpoch::epoch(&tc).unwrap_or(proposal.epoch);
             self.handle_timeout_certificate(ValidCert::new(tc, tc_epoch), outbox);
         }
 
         self.request_parent_proposal_if_missing(&proposal, outbox);
 
-        if let Some(state_cert) = validated_state_cert(&proposal, *self.epoch_height) {
+        if let Some(state_cert) = validated_state_cert(&proposal, self.epoch_length) {
             self.state_certs
                 .insert(state_cert.epoch, state_cert.clone());
         }
@@ -1613,7 +1625,10 @@ impl<T: NodeType> Consensus<T> {
         // (the successor epoch's DRB lives in this leaf, so the successor
         // epoch's catchup path unwraps `leaf.next_drb_result`).
         if proposal.epoch > EpochNumber::genesis()
-            && is_epoch_transition(block_number, *self.epoch_height)
+            && self
+                .epoch_length
+                .position(block_number)
+                .is_epoch_transition()
         {
             if let Some(drb) = self.drb_results.get(&(epoch + 1)) {
                 if proposal
@@ -1645,7 +1660,38 @@ impl<T: NodeType> Consensus<T> {
 
         self.request_block_and_header_if_next_leader(&proposal, outbox);
 
+        // A proposal extending this one may have arrived first.
+        self.vote_1_on_children(view, outbox);
+
         Protocol::Continue
+    }
+
+    /// Retry the vote1 of the proposals that extend the block at `view`, which
+    /// its proposal or payload arriving may have unblocked.
+    ///
+    /// More than `view + 1` can be waiting: while a view's block was missing,
+    /// every later proposal extends it, and of those only the ones later than
+    /// the timeout bar can still be voted. Latest first, stopping at the one
+    /// we vote for: a vote at an earlier child adds nothing and costs its
+    /// vote2, which the later vote1 skips.
+    fn vote_1_on_children(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let children: BTreeSet<ViewNumber> = self
+            .proposals
+            .range(view.max(self.timeout_view) + 1..)
+            .filter(|p| p.justify_qc.view_number() == view)
+            .map(|p| p.view_number)
+            .collect();
+        for child in children.into_iter().rev() {
+            self.maybe_vote_1(child, outbox);
+            if self
+                .voted_1_views
+                .range(ViewEpoch::at_view(child))
+                .next()
+                .is_some()
+            {
+                break;
+            }
+        }
     }
 
     /// Take in a proposal this node did not receive live together with its
@@ -1665,6 +1711,7 @@ impl<T: NodeType> Consensus<T> {
         }
         for message in chain.into_iter().rev() {
             let view = message.proposal.data.view_number;
+            let commit = proposal_commitment(&message.proposal.data);
             self.store_certified_proposal(message, outbox);
             // The proposal itself may now be decidable (e.g. cert2 arrived first
             // and triggered the fetch).
@@ -1682,6 +1729,16 @@ impl<T: NodeType> Consensus<T> {
                 self.maybe_decide(extending_view, outbox);
             }
             self.retry_later_certificates(view, outbox);
+            // A timeout certificate's lock asked for the block: the node needs
+            // its payload as well to lock on it, if the lock is still later
+            // than its own. Asked for after every decide the block's arrival
+            // allows, at its own view or a re-vote's, since a decide changes
+            // whether the payload is needed.
+            if let Some((lock, block_number)) = self.lock_block_fetches.remove(&commit)
+                && self.lock_view().is_none_or(|own| own < lock)
+            {
+                self.request_lock_payload(lock, commit, block_number, outbox);
+            }
             self.maybe_propose(view + 1, outbox);
         }
     }
@@ -1796,7 +1853,7 @@ impl<T: NodeType> Consensus<T> {
         };
         parked((view, None, vc)..(view + 1, None, vc)).or_else(|| {
             block_number
-                .is_some_and(|bn| is_last_block(bn, *self.epoch_height))
+                .is_some_and(|bn| self.epoch_length.position(bn).is_last())
                 .then(|| parked((ViewNumber::genesis(), None, vc)..(view, None, vc)))
                 .flatten()
         })
@@ -1843,7 +1900,11 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = proposal.view_number();
-        let epoch = if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+        let epoch = if self
+            .epoch_length
+            .position(proposal.block_header.block_number())
+            .is_last()
+        {
             proposal.epoch + 1
         } else {
             proposal.epoch
@@ -1908,11 +1969,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        // A view decided as an ancestor of a later one needs no vote from us,
-        // so its payload no longer blocks anything. Its proposal outlives the
-        // decide by the decide buffer, which would otherwise keep it a
-        // candidate for as long as the lock stays put.
-        if self.decided_views.contains(&view) {
+        if !self.child_needs_payload(view, child.block_header.block_number().saturating_sub(1)) {
             return;
         }
 
@@ -1936,6 +1993,56 @@ impl<T: NodeType> Consensus<T> {
             view,
             payload_commitment,
         });
+    }
+
+    /// Whether a vote1 or a proposal on a child of the block at `view` with
+    /// number `block_number` can still need the block's payload.
+    fn child_needs_payload(&self, view: ViewNumber, block_number: u64) -> bool {
+        view >= self.last_decided_view && !self.epoch_length.position(block_number).is_last()
+    }
+
+    /// Ask for the payload of the block the `Certificate1` at `lock` over
+    /// `leaf_commit` certifies, if this node holds the block without it and can
+    /// still need it: to vote2 and lock on the block while it is undecided, or
+    /// for a child of it ([`Self::child_needs_payload`]). A block of an epoch
+    /// this node has left gets neither: the node does not lock on it, and
+    /// votes for no child of it. Asked for once per view.
+    fn request_lock_payload(
+        &mut self,
+        lock: LockView,
+        leaf_commit: Commitment<Leaf2<T>>,
+        block_number: Option<u64>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let Some((block_view, proposal)) =
+            self.certified_proposal(lock.view, leaf_commit, block_number)
+        else {
+            return;
+        };
+        let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
+        else {
+            return;
+        };
+        if self.behind_current_epoch(lock.view, lock.epoch)
+            || (block_view <= self.last_decided_view
+                && !self.child_needs_payload(block_view, proposal.block_header.block_number()))
+        {
+            return;
+        }
+        if !self
+            .blocks_reconstructed
+            .contains(&(block_view, payload_commitment))
+            && self
+                .lock_payload_fetches
+                .insert((block_view, payload_commitment), self.current_view)
+                .is_none_or(|asked_in| asked_in < self.current_view)
+        {
+            debug!(view = %lock.view, "lock without its payload; requesting fetch");
+            outbox.push_back(ConsensusOutput::RequestMissingPayload {
+                view: block_view,
+                payload_commitment,
+            });
+        }
     }
 
     fn request_parent_proposal_if_missing(
@@ -1983,6 +2090,7 @@ impl<T: NodeType> Consensus<T> {
         }
         self.insert_cert1(certificate.into_cert());
         self.adopt_certified_drb(view);
+        self.retry_later_certificates(view, outbox);
         Protocol::Continue
     }
 
@@ -2037,7 +2145,10 @@ impl<T: NodeType> Consensus<T> {
         };
         // Only transition leaves in epoch >= 1 carry the next epoch's DRB.
         if proposal.epoch <= EpochNumber::genesis()
-            || !is_epoch_transition(proposal.block_header.block_number(), *self.epoch_height)
+            || !self
+                .epoch_length
+                .position(proposal.block_header.block_number())
+                .is_epoch_transition()
         {
             return;
         }
@@ -2182,6 +2293,10 @@ impl<T: NodeType> Consensus<T> {
 
     /// Keep `cert1` of `epoch`, vote2 and lock on it if this node can, and
     /// move to the view after it.
+    ///
+    /// The certificate may be the block's own, arriving after a re-vote's
+    /// certificates over the block at later views, which are then retried:
+    /// whatever message carried it, it counts as received.
     fn advance_on(
         &mut self,
         cert1: Certificate1<T>,
@@ -2214,6 +2329,7 @@ impl<T: NodeType> Consensus<T> {
                 self.current_epoch,
             ));
         }
+        self.retry_later_certificates(view, outbox);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2441,20 +2557,34 @@ impl<T: NodeType> Consensus<T> {
     ) -> Protocol {
         let timed_out_view = certificate.view_number();
         let view = timed_out_view + 1;
+        if certificate.binds_epoch() != self.upgrade_lock.timeout_epoch_bound(timed_out_view) {
+            // One for a view this node has left is expected around a version
+            // cutover, from nodes that lag or restarted.
+            if view < self.current_view {
+                debug!(%timed_out_view, "stale timeout certificate of the wrong form");
+            } else {
+                warn!(
+                    %timed_out_view,
+                    "timeout certificate has the wrong form for its version"
+                );
+            }
+            return Protocol::Abort;
+        }
         if view < self.current_view {
             debug!(
                 %view,
                 current_view = %self.current_view,
-                "ignoring stale timeout certificate"
+                "stale timeout certificate; keeping its epoch and lock"
             );
-            return Protocol::Abort;
-        }
-        if certificate.binds_epoch() != self.upgrade_lock.timeout_epoch_bound(timed_out_view) {
-            warn!(
-                %timed_out_view,
-                "timeout certificate has the wrong form for its version"
-            );
-            return Protocol::Abort;
+            // The TC moves the node to no view, but its epoch and lock are grounds
+            // as much as a current certificate's. No `ViewChanged` is emitted for
+            // a rise in epoch alone, as in `advance_on`: the next one carries the
+            // epoch, and the coordinator's per-epoch steps wait for it.
+            if certificate.binds_epoch() {
+                self.set_current_epoch_max(certificate.epoch());
+            }
+            self.keep_timeout_lock(certificate.timeout_lock().recent(), outbox);
+            return Protocol::Continue;
         }
         if let Some(stored) = self.timeout_certs.get(&view).map(HasEpoch::epoch) {
             if certificate.binds_epoch() && stored < Some(certificate.epoch()) {
@@ -2468,6 +2598,7 @@ impl<T: NodeType> Consensus<T> {
                 self.adopt_timeout_lock(view, outbox);
             } else {
                 debug!(%view, "duplicate timeout certificate; already applied");
+                self.keep_timeout_lock(certificate.timeout_lock().recent(), outbox);
             }
             return Protocol::Continue;
         }
@@ -2498,58 +2629,76 @@ impl<T: NodeType> Consensus<T> {
     }
 
     /// Take in the lock the timeout certificate entering `view` carries.
+    fn adopt_timeout_lock(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let lock = self
+            .timeout_certs
+            .get(&view)
+            .and_then(|tc| tc.timeout_lock().recent().cloned());
+        self.keep_timeout_lock(lock.as_ref(), outbox);
+    }
+
+    /// Keep the lock a TC carries, if it has a recent one.
+    ///
+    /// It is a cert1 like any other: with it, the node can vote2 on and
+    /// decide its block once it holds the rest, and it is grounds for the view
+    /// and epoch after it. Callers pass a recent lock (`TimeoutLock::Recent`),
+    /// the one the certificate's verification checked: no other is kept.
     ///
     /// The lock may be later than this node's own: a leader must build on a
     /// block no earlier than it, and this node may have to lock on it to vote.
-    /// Its block and payload are fetched if missing. Only a recent lock
-    /// (`TimeoutLock::Recent`), the one the certificate's verification
-    /// checked, is taken in.
-    fn adopt_timeout_lock(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        let Some(cert) = self
-            .timeout_certs
-            .get(&view)
-            .and_then(|tc| tc.timeout_lock().recent().cloned())
-        else {
+    /// Its block is then fetched if missing, unless it is at or before the
+    /// newest decided block, and so is its payload while the node can still
+    /// need it ([`Self::request_lock_payload`]). Both are asked for after the
+    /// lock is taken in, which may decide the block and so change whether its
+    /// payload is needed.
+    fn keep_timeout_lock(
+        &mut self,
+        cert: Option<&Certificate1<T>>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let Some(cert) = cert else {
             return;
         };
-        let lock = LockView::of(&cert);
-        if lock.view <= self.decide_floor() || self.lock_view().is_some_and(|own| own >= lock) {
+        let lock = LockView::of(cert);
+        if lock.view <= self.decide_floor() {
             return;
         }
         let leaf_commit = cert.data.leaf_commit;
         let block_number = cert.data.block_number;
-        self.insert_cert1(cert);
-        self.adopt_certified_drb(lock.view);
-        match self.certified_proposal(lock.view, leaf_commit, block_number) {
-            None => {
-                if !self.adopt_unpaired_proposal(lock.view, leaf_commit, block_number, outbox) {
-                    debug!(%view, %lock, "timeout certificate lock without its block; requesting fetch");
-                    outbox.push_back(ConsensusOutput::RequestMissingProposal {
-                        view: lock.view,
-                        leaf_commit,
-                    });
-                }
-            },
-            Some((block_view, proposal)) => {
-                if let VidCommitment::V2(payload_commitment) =
-                    proposal.block_header.payload_commitment()
-                    && !self
-                        .blocks_reconstructed
-                        .contains(&(block_view, payload_commitment))
-                    && self
-                        .lock_payload_fetches
-                        .insert((block_view, payload_commitment), self.current_view)
-                        .is_none_or(|asked_in| asked_in < self.current_view)
-                {
-                    debug!(%view, %lock, "timeout certificate lock without its payload; requesting fetch");
-                    outbox.push_back(ConsensusOutput::RequestMissingPayload {
-                        view: block_view,
-                        payload_commitment,
-                    });
-                }
-            },
+        let later = self.lock_view().is_none_or(|own| own < lock);
+        if later
+            && self
+                .certified_proposal(lock.view, leaf_commit, block_number)
+                .is_none()
+        {
+            // Held before a parked block is adopted, which decides it if it can.
+            self.insert_cert1(cert.clone());
+            self.adopt_unpaired_proposal(lock.view, leaf_commit, block_number, outbox);
         }
-        self.maybe_vote_2_and_update_lock(lock.view, outbox);
+        self.advance_on(cert.clone(), lock.epoch, outbox);
+        if !later {
+            return;
+        }
+        if self
+            .certified_proposal(lock.view, leaf_commit, block_number)
+            .is_some()
+        {
+            self.request_lock_payload(lock, leaf_commit, block_number, outbox);
+            return;
+        }
+        // Asked for also when the lock is of an epoch this node has left: the
+        // block is then that epoch's last, which the leader of the next epoch's
+        // first block builds on, though its payload is not needed.
+        let decided_number = self.last_decided_leaf.block_header().block_number();
+        if lock.view >= self.last_decided_view && block_number.is_none_or(|n| n > decided_number) {
+            debug!(view = %lock.view, "timeout certificate lock without its block; requesting fetch");
+            self.lock_block_fetches
+                .insert(leaf_commit, (lock, block_number));
+            outbox.push_back(ConsensusOutput::RequestMissingProposal {
+                view: lock.view,
+                leaf_commit,
+            });
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2573,7 +2722,7 @@ impl<T: NodeType> Consensus<T> {
         let leaf_commit = cert2.data.leaf_commit;
 
         self.hold_proposal(proposal.clone());
-        outbox.push_back(ConsensusOutput::PersistBoundaryQc(cert1.clone()));
+        self.persist_boundary_qc(&cert1, outbox);
         self.insert_cert1(cert1.clone());
         self.insert_cert2(cert2);
         self.adopt_certified_drb(block_view);
@@ -2647,6 +2796,9 @@ impl<T: NodeType> Consensus<T> {
             );
         }
 
+        // The next epoch's first block may have arrived before its parent.
+        self.vote_1_on_children(block_view, outbox);
+
         Protocol::Continue
     }
 
@@ -2658,7 +2810,7 @@ impl<T: NodeType> Consensus<T> {
 
         let certificate_rule = self.upgrade_lock.certificate_rule(view);
 
-        let view_change_evidence = self
+        let mut view_change_evidence = self
             .timeout_certs
             .get(&view)
             .filter(|tc| !(certificate_rule && tc.epoch() < Some(self.current_epoch)))
@@ -2704,7 +2856,10 @@ impl<T: NodeType> Consensus<T> {
         // The first block of an epoch needs a commit of its parent, and names
         // the parent's own certificate.
         let (justify_qc, next_epoch_justify_qc) = if parent_view != ViewNumber::genesis()
-            && is_last_block(proposal.block_header.block_number(), *self.epoch_height)
+            && self
+                .epoch_length
+                .position(proposal.block_header.block_number())
+                .is_last()
         {
             let Some(cert2) =
                 self.opening_cert2(view, parent_view, parent_commitment, &view_change_evidence)
@@ -2746,6 +2901,18 @@ impl<T: NodeType> Consensus<T> {
         };
         if self.proposed_at(view, proposal_epoch) {
             return;
+        }
+        // A timeout certificate of an earlier epoch is no evidence for this
+        // block, also while this node has not left that epoch itself. A block
+        // right after its parent's view needs none. One that skips views does,
+        // and is refused below until it has one of its own epoch.
+        if certificate_rule
+            && justify_qc.view_number() + 1 == view
+            && view_change_evidence
+                .as_ref()
+                .is_some_and(|tc| tc.epoch() < Some(proposal_epoch))
+        {
+            view_change_evidence = None;
         }
         if certificate_rule {
             // Voters refuse a proposal of an epoch earlier than their own, and
@@ -2808,7 +2975,10 @@ impl<T: NodeType> Consensus<T> {
         // unwraps that field, so leaving it `None` here would panic
         // peers that fetch this leaf.
         let next_drb_result = if proposal.epoch > EpochNumber::genesis()
-            && is_epoch_transition(header.block_number(), *self.epoch_height)
+            && self
+                .epoch_length
+                .position(header.block_number())
+                .is_epoch_transition()
         {
             let Some(drb) = self.drb_results.get(&EpochNumber::new(*proposal.epoch + 1)) else {
                 debug!(%proposal.epoch, "no DRB result for epoch");
@@ -2827,7 +2997,7 @@ impl<T: NodeType> Consensus<T> {
         // if we hold the epoch-root Cert1 then `state_certs` also holds the
         // matching cert.
         let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
-        let state_cert = if is_epoch_root(parent_block_number, *self.epoch_height) {
+        let state_cert = if self.epoch_length.position(parent_block_number).is_root() {
             let Some(parent_epoch) = parent_cert.data.epoch() else {
                 warn!("epoch-root parent QC has no epoch; cannot propose");
                 return;
@@ -2839,7 +3009,7 @@ impl<T: NodeType> Consensus<T> {
                 );
                 return;
             };
-            if !check_qc_state_cert_correspondence(&parent_cert, &sc, *self.epoch_height) {
+            if !check_qc_state_cert_correspondence(&parent_cert, &sc, self.epoch_length) {
                 warn!(%view, "state_cert does not correspond to parent QC; skipping propose");
                 return;
             }
@@ -2927,7 +3097,10 @@ impl<T: NodeType> Consensus<T> {
             .rev()
             .filter(|(_, cert2)| {
                 cert2.data.epoch >= epoch
-                    && is_last_block(cert2.data.block_number, *self.epoch_height)
+                    && self
+                        .epoch_length
+                        .position(cert2.data.block_number)
+                        .is_last()
             })
             .find_map(|(view, cert2)| {
                 let (block_view, _) = self.certified_proposal(
@@ -3106,7 +3279,10 @@ impl<T: NodeType> Consensus<T> {
         };
         // Handle Epoch Change by broadcasting the epoch change message if we have
         // all the data we need.
-        if is_last_block(proposal.block_header.block_number(), *self.epoch_height)
+        if self
+            .epoch_length
+            .position(proposal.block_header.block_number())
+            .is_last()
             && cert1.view_number() == block_view
         {
             let epoch_change =
@@ -3187,7 +3363,7 @@ impl<T: NodeType> Consensus<T> {
             .map_err(|e| anyhow::anyhow!("failed to fetch auth root: {e}"))?;
         let membership = self
             .stake_table_coordinator
-            .membership_for_epoch(Some(proposal.epoch))
+            .membership_for_epoch(proposal.epoch)
             .map_err(|e| anyhow::anyhow!("membership lookup failed: {e}"))?;
         let next_stake_table = membership
             .next_epoch_stake_table()
@@ -3520,7 +3696,10 @@ impl<T: NodeType> Consensus<T> {
         // the attached DRB result.  Same guard as `maybe_propose`:
         // transitions in epoch >= 2 must carry `next_drb_result`.
         if proposal.epoch > EpochNumber::genesis()
-            && is_epoch_transition(block_number, *self.epoch_height)
+            && self
+                .epoch_length
+                .position(block_number)
+                .is_epoch_transition()
         {
             let Some(drb) = self.drb_results.get(&(proposal.epoch + 1)) else {
                 debug!(%view, block = %block_number, %epoch, "DRB result not yet available, deferring vote");
@@ -3546,10 +3725,10 @@ impl<T: NodeType> Consensus<T> {
         let parent_view = proposal.justify_qc.view_number();
 
         if parent_view != ViewNumber::genesis()
-            && !is_last_block(
-                proposal.block_header.block_number().saturating_sub(1),
-                *self.epoch_height,
-            )
+            && !self
+                .epoch_length
+                .position(proposal.block_header.block_number().saturating_sub(1))
+                .is_last()
         {
             let Some(prev_proposal) = self
                 .proposals
@@ -3606,7 +3785,10 @@ impl<T: NodeType> Consensus<T> {
             },
         };
 
-        let state_vote = if is_epoch_root(proposal.block_header.block_number(), *self.epoch_height)
+        let state_vote = if self
+            .epoch_length
+            .position(proposal.block_header.block_number())
+            .is_root()
         {
             match self.build_state_vote(proposal) {
                 Ok(sv) => Some(sv),
@@ -3714,8 +3896,8 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        let own_boundary =
-            (block_view == view && is_last_block(block, *self.epoch_height)).then(|| cert1.clone());
+        let own_boundary = (block_view == view && self.epoch_length.position(block).is_last())
+            .then(|| cert1.clone());
         // We have a valid certificate, proposal, and reconstructed block
         // We can now update the lock, change view and vote. A node does not
         // lock on a late re-vote of an epoch it has left: its timeout votes
@@ -3750,7 +3932,7 @@ impl<T: NodeType> Consensus<T> {
                 .as_ref()
                 .is_some_and(|lock| lock.data.leaf_commit == cert1.data.leaf_commit)
         {
-            outbox.push_back(ConsensusOutput::PersistBoundaryQc(cert1));
+            self.persist_boundary_qc(&cert1, outbox);
         }
 
         if self.voted_2_at(view, epoch)
@@ -3879,9 +4061,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
         self.advance_on(revote.cert1.clone(), revote.epoch, outbox);
-        if let Some(timeout) = &revote.timeout
-            && !self.timeout_certs.contains_key(&view)
-        {
+        if let Some(timeout) = &revote.timeout {
             let tc = ValidCert::new(TimeoutEvidence::V3(timeout.clone()), revote.epoch);
             self.handle_timeout_certificate(tc, outbox);
         }
@@ -3990,7 +4170,11 @@ impl<T: NodeType> Consensus<T> {
         let last_blocks: Vec<_> = self
             .proposals
             .at(block_view)
-            .filter(|block| is_last_block(block.block_header.block_number(), *self.epoch_height))
+            .filter(|block| {
+                self.epoch_length
+                    .position(block.block_header.block_number())
+                    .is_last()
+            })
             .map(proposal_commitment)
             .collect();
         if last_blocks.is_empty() {
@@ -4093,10 +4277,7 @@ impl<T: NodeType> Consensus<T> {
     /// when the stake table is not available.  Used by timeout logging so a
     /// reader can immediately see which validator failed to make progress.
     fn leader_label(&self, view: ViewNumber, epoch: EpochNumber) -> String {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.stake_table_coordinator.membership_for_epoch(epoch) {
             Ok(stake_table) => match stake_table.leader(view) {
                 Ok(leader) => KeyPrefix::from(&leader).to_string(),
                 Err(_) => "unknown".to_string(),
@@ -4111,10 +4292,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
+        match self.stake_table_coordinator.membership_for_epoch(epoch) {
             Ok(stake_table) => stake_table.has_stake(&self.public_key),
             Err(err) => {
                 warn!(%epoch, %err, "failed to get stake table");
@@ -4143,7 +4321,10 @@ impl<T: NodeType> Consensus<T> {
         if let Some(proposal) = proposal {
             let block_number = proposal.block_header.block_number();
             if proposal.epoch > EpochNumber::genesis()
-                && is_epoch_transition(block_number, *self.epoch_height)
+                && self
+                    .epoch_length
+                    .position(block_number)
+                    .is_epoch_transition()
                 && !self.drb_results.contains_key(&(proposal.epoch + 1))
             {
                 missing.push("drb_result_for_next_epoch");
@@ -4153,7 +4334,10 @@ impl<T: NodeType> Consensus<T> {
             // `maybe_vote_1`).
             let parent_view = proposal.justify_qc.view_number();
             if parent_view != ViewNumber::genesis()
-                && !is_last_block(block_number.saturating_sub(1), *self.epoch_height)
+                && !self
+                    .epoch_length
+                    .position(block_number.saturating_sub(1))
+                    .is_last()
             {
                 let parent = self
                     .proposals
@@ -4224,11 +4408,16 @@ impl<T: NodeType> Consensus<T> {
         // The epoch-transition checks below all key off the proposed block
         // number, so we can only evaluate them once we have the header.
         if let Some(header) = header {
-            let first_proposal_of_epoch =
-                is_last_block(header.block_number().saturating_sub(1), *self.epoch_height);
+            let first_proposal_of_epoch = self
+                .epoch_length
+                .position(header.block_number().saturating_sub(1))
+                .is_last();
 
             if parent_proposal.epoch > EpochNumber::genesis()
-                && is_epoch_transition(header.block_number(), *self.epoch_height)
+                && self
+                    .epoch_length
+                    .position(header.block_number())
+                    .is_epoch_transition()
                 && !self
                     .drb_results
                     .contains_key(&EpochNumber::new(*parent_proposal.epoch + 1))
@@ -4242,7 +4431,7 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
-        if is_epoch_root(parent_block_number, *self.epoch_height) {
+        if self.epoch_length.position(parent_block_number).is_root() {
             match parent_cert.data.epoch() {
                 None => missing.push("parent_cert_epoch"),
                 Some(parent_epoch) => {

@@ -23,13 +23,13 @@ use vbs::version::Version;
 
 use crate::{
     data::{EpochNumber, Leaf, Leaf2, VidCommitment, ViewNumber},
+    epoch::EpochLength,
     light_client::{CircuitField, LightClientState, StakeTableState},
     message::UpgradeLock,
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
     },
-    utils::epoch_from_block_number,
     vote::{HasViewNumber, Vote},
 };
 
@@ -57,14 +57,14 @@ pub struct QuorumData2<TYPES: NodeType> {
 }
 
 impl<T: NodeType> QuorumData2<T> {
-    pub fn is_well_formed(&self, epoch_height: u64) -> bool {
+    pub fn is_well_formed(&self, epoch_length: EpochLength) -> bool {
         let Some(epoch) = self.epoch else {
             return false;
         };
         let Some(block) = self.block_number else {
             return false;
         };
-        epoch == epoch_from_block_number(block, epoch_height).into()
+        epoch == epoch_length.epoch_of(block)
     }
 }
 
@@ -336,8 +336,8 @@ pub struct Vote2Data<T: NodeType> {
 impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
 
 impl<T: NodeType> Vote2Data<T> {
-    pub fn is_well_formed(&self, epoch_height: u64) -> bool {
-        self.epoch == epoch_from_block_number(self.block_number, epoch_height).into()
+    pub fn is_well_formed(&self, epoch_length: EpochLength) -> bool {
+        self.epoch == epoch_length.epoch_of(self.block_number)
     }
 }
 
