@@ -2,38 +2,46 @@ default:
     just --list
 
 # Build the specification and check its claims about itself.
+[script("../scripts/with-tools", "lean", "lake")]
 spec:
     cd new-protocol-spec && lake build
 
 # Check that every name the specification's prose mentions still exists.
+[script("../scripts/with-tools", "lean", "lake")]
 lint:
     cd new-protocol-spec && lake exe lint
 
 # Build the executable machine and its conformance proof.
+[script("../scripts/with-tools", "lean", "lake")]
 impl:
     cd new-protocol-impl && lake build
 
 # Build the trace checker and the simulator.
+[script("../scripts/with-tools", "lean", "lake")]
 diff:
     cd new-protocol-diff && lake build
 
 # Run the machine on random schedules over a simulated network, and check every run.
+[script("../scripts/with-tools", "lean", "lake")]
 sim seeds="4":
     cd new-protocol-diff && lake build sim && .lake/build/bin/sim {{seeds}}
 
 # Build and render the reference document.
+[script("../scripts/with-tools", "lean", "lake")]
 docs:
     cd new-protocol-docs && lake build && .lake/build/bin/reference --output _out --with-tex
 
 # Check that every result of the specification is spliced into the reference.
+[script("../scripts/with-tools", "lean", "lake")]
 coverage:
     cd new-protocol-docs && lake exe coverage
 
+[script("../scripts/with-tools", "lean", "latexmk", "lualatex")]
 pdf: docs
     cd new-protocol-docs/_out/tex && latexmk -lualatex -interaction=nonstopmode main.tex
 
+[script("../scripts/with-tools", "python", "python3")]
 serve-docs: docs
     cd new-protocol-docs/_out/html-multi && python3 -m http.server --bind 127.0.0.1 8000
 
 all: spec lint impl diff sim docs coverage
-

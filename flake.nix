@@ -138,6 +138,36 @@
         packages = with pkgs; [ graphviz plantuml mdbook ];
       };
 
+      # elan installs the toolchain pinned in lean/lean-toolchain on the first lake call
+      devShells.lean = addOnShell {
+        packages = [
+          pkgs.elan
+          # `just lean::pdf`
+          (pkgs.texliveBasic.withPackages (ps: with ps; [
+            latexmk
+            memoir
+            fontspec
+            sourcecodepro
+            sourcesanspro
+            sourceserifpro
+            dejavu
+            fancyvrb
+            fvextra
+            tcolorbox
+            ulem
+            newunicodechar
+            listings
+            pdfcol
+            tikzfill
+            lineno
+            upquote
+            xkeyval
+            booktabs
+            xpatch
+          ]))
+        ];
+      };
+
       devShells.go = addOnShell {
         packages = [ pkgs.go_1_27 ];
       };
