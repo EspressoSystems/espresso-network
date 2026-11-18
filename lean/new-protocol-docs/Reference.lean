@@ -320,7 +320,10 @@ on it again ({name NewProtocol.RevoteRequest}`RevoteRequest`,
 block ({name NewProtocol.Commits}`Commits` allows a later view). The next epoch's first block
 still names the block's own {name NewProtocol.Cert1}`Cert1`, not the re-vote's: the outgoing
 committee can form re-vote certificates after the next epoch began, and building on one of those
-could start the epoch a second time.
+could start the epoch a second time. A node that holds a {name NewProtocol.Cert2}`Cert2` over the
+block owes no vote1 on it again, and its leader no request: the block is committed, and the node
+sends the {name NewProtocol.Cert2}`Cert2` on with the epoch change
+({name NewProtocol.OwedVote1Again.notCommitted}`OwedVote1Again.notCommitted`).
 
 *The epoch change.* The last block travels with its own {name NewProtocol.Cert1}`Cert1` and
 a {name NewProtocol.Cert2}`Cert2` as an epoch change
@@ -1349,7 +1352,8 @@ open NewProtocol.History
     | .decide c => OwedDecide cfg h c
     | .propose e v =>
         ((∃ p, ProposalJustified cfg leader node h p ∧ p.viewNumber = v ∧ p.epoch = e)
-          ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e)
+          ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e
+              ∧ ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2)
         ∧ ¬ ProposedIn h e v ∧ ¬ h.TimedOut v ∧ h.InView cfg v
   ```
 :::
