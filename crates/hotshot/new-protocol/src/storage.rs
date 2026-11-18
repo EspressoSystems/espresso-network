@@ -32,7 +32,7 @@ use crate::{
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
     state::StateEntry,
-    store::{self, AppWrite, ConsensusStore, StoredPayload},
+    store::{self, AppWrite, ConsensusStore},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
@@ -190,9 +190,6 @@ struct Pending<T: NodeType> {
 
     /// The height after the newest decide log entry the batch writes.
     next_height: Option<u64>,
-
-    /// The payloads the batch writes.
-    payloads: Vec<StoredPayload>,
 }
 
 impl<T: NodeType> Default for Pending<T> {
@@ -202,7 +199,6 @@ impl<T: NodeType> Default for Pending<T> {
             outputs: Vec::new(),
             timers: Vec::new(),
             next_height: None,
-            payloads: Vec::new(),
         }
     }
 }
@@ -285,15 +281,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             return;
         };
         let encoded = block_payload.encode();
-        let size = encoded.len() as u64;
         let written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
-        if written.is_ok() {
-            self.pending.payloads.push(StoredPayload {
-                view,
-                commitment,
-                size,
-            });
-        }
         self.queued(written, StorageOutput::Payload(view, commitment), |m| {
             &m.append_da
         });
@@ -510,10 +498,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 let Pending {
                     outputs,
                     next_height,
-                    payloads,
                     ..
                 } = applied.pending;
-                self.store.announce(next_height, payloads);
+                if let Some(next_height) = next_height {
+                    self.store.announce(next_height);
+                }
                 self.durable.extend(outputs);
             },
             Err(err @ consensus_store::Error::Poisoned(_)) => return Err(err.into()),

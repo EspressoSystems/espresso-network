@@ -1,19 +1,16 @@
 //! The decide log as the ingester API serves it.
 
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
 use consensus_api::{
-    BODY_FORMAT, Error, Node, PayloadKey, Source, SubmitError,
-    proto::{Body, Decided as DecidedEntry, PayloadReady},
+    BODY_FORMAT, Error, Node, Source, SubmitError,
+    proto::{Body, Decided as DecidedEntry},
 };
 use consensus_store::{Bytes, Store};
-use hotshot_types::{
-    data::{EpochNumber, VidCommitment, ViewNumber},
-    traits::node_implementation::NodeType,
-};
-use tokio::sync::{broadcast, watch};
+use hotshot_types::{data::EpochNumber, traits::node_implementation::NodeType};
+use tokio::sync::watch;
 
 use crate::{
     block::SubmitError as BlockSubmitError,
@@ -50,36 +47,14 @@ pub fn bind<T: NodeType, S: Store>(
 pub struct IngestSource<T, S> {
     store: ConsensusStore<T, S>,
     epoch_height: u64,
-
-    /// Payload announcements in the API's form, fed from the store's.
-    ready: broadcast::Sender<PayloadReady>,
 }
 
 impl<T: NodeType, S: Store> IngestSource<T, S> {
     /// A source over `store`, whose chain has epochs of `epoch_height` blocks.
     pub fn new(store: ConsensusStore<T, S>, epoch_height: u64) -> Arc<Self> {
-        let (ready, _) = broadcast::channel(64);
-        let mut stored = store.stored_payloads();
-        let forward = ready.clone();
-        tokio::spawn(async move {
-            loop {
-                match stored.recv().await {
-                    Ok(p) => {
-                        let _ = forward.send(PayloadReady {
-                            view: *p.view,
-                            payload_commitment: VidCommitment::V2(p.commitment).to_string(),
-                            size: p.size,
-                        });
-                    },
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
-            }
-        });
         Arc::new(Self {
             store,
             epoch_height,
-            ready,
         })
     }
 
@@ -116,25 +91,8 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
         self.blocking(move |s| s.ack(height)).await
     }
 
-    async fn payload(&self, key: PayloadKey) -> Result<Option<Bytes>, Error> {
-        match key {
-            PayloadKey::Height(height) => self.blocking(move |s| s.decided_payload(height)).await,
-            PayloadKey::Block {
-                view,
-                payload_commitment,
-            } => {
-                let VidCommitment::V2(commitment) = VidCommitment::from_str(&payload_commitment)?
-                else {
-                    return Ok(None);
-                };
-                self.blocking(move |s| s.payload(ViewNumber::new(view), &commitment))
-                    .await
-            },
-        }
-    }
-
-    fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady> {
-        self.ready.subscribe()
+    async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error> {
+        self.blocking(move |s| s.decided_payload(height)).await
     }
 
     async fn service_records(

@@ -7,20 +7,14 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use consensus_api::{
-    Error as ApiError, PayloadKey, Source,
-    proto::{Body, PayloadReady},
-};
+use consensus_api::{Error as ApiError, Source, proto::Body};
 use hotshot_query_service::{
     availability::BlockInfo,
     testing::{chain::MockChain, mocks::MockTypes},
     types::HeightIndexed,
 };
 use hotshot_types::{data::VidCommon, traits::block_contents::EncodeBytes};
-use tokio::{
-    sync::{broadcast, watch},
-    time::timeout,
-};
+use tokio::{sync::watch, time::timeout};
 
 use super::*;
 
@@ -29,7 +23,6 @@ struct FakeLog {
     entries: Mutex<BTreeMap<u64, Decided>>,
     payloads: Mutex<BTreeMap<u64, Bytes>>,
     next: watch::Sender<u64>,
-    ready: broadcast::Sender<PayloadReady>,
     acked: Mutex<u64>,
 }
 
@@ -39,7 +32,6 @@ impl FakeLog {
             entries: Mutex::default(),
             payloads: Mutex::default(),
             next: watch::channel(0).0,
-            ready: broadcast::channel(4).0,
             acked: Mutex::new(0),
         })
     }
@@ -129,15 +121,8 @@ impl Source for FakeLog {
         Ok(())
     }
 
-    async fn payload(&self, key: PayloadKey) -> Result<Option<Bytes>, ApiError> {
-        match key {
-            PayloadKey::Height(h) => Ok(self.payloads.lock().unwrap().get(&h).cloned()),
-            PayloadKey::Block { .. } => Ok(None),
-        }
-    }
-
-    fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady> {
-        self.ready.subscribe()
+    async fn payload(&self, height: u64) -> Result<Option<Bytes>, ApiError> {
+        Ok(self.payloads.lock().unwrap().get(&height).cloned())
     }
 
     async fn service_records(
@@ -378,6 +363,22 @@ async fn chain_with_other_parent(chain: &MockChain) -> Decided {
         chain.blocks()[1].leaf.leaf().commit()
     );
     entry(&other, block, true)
+}
+
+/// Heights missing from the decide log are skipped, and the blocks after them stored.
+#[tokio::test]
+async fn skips_a_hole_in_the_decide_log() {
+    let chain = chain(5).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=1);
+    log.decide(&chain, 4..=5);
+    let sink = MemSink::new(0);
+    let ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+
+    wait_for(&sink, 5).await;
+    assert_eq!(sink.heights(), vec![0, 1, 4, 5]);
+    assert_eq!(*log.acked.lock().unwrap(), 6);
+    assert!(!ingester.is_finished());
 }
 
 /// Heights consensus no longer holds are skipped, starting from the earliest one it has.

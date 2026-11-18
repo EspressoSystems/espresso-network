@@ -13,7 +13,7 @@ use std::{pin::Pin, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, stream};
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tonic::{Request, Response, Status};
 
 /// Code generated from the proto definition.
@@ -23,12 +23,11 @@ pub mod proto {
 }
 
 use proto::{
-    AckRequest, AckResponse, Decided, GetPayloadRequest, PayloadChunk, PayloadReady,
-    PayloadsReadyRequest, ServiceRecordsRequest, ServiceRecordsResponse, Start,
-    SubmitTransactionRequest, SubmitTransactionResponse, SubscribeRequest, SubscribeResponse,
+    AckRequest, AckResponse, Decided, PayloadChunk, ServiceRecordsRequest, ServiceRecordsResponse,
+    Start, SubmitTransactionRequest, SubmitTransactionResponse, SubscribeRequest,
+    SubscribeResponse,
     consensus_node_server::{ConsensusNode, ConsensusNodeServer},
     decide_log_server::{DecideLog, DecideLogServer},
-    get_payload_request::Key,
     subscribe_response::Event,
 };
 pub use proto::{consensus_node_client::ConsensusNodeClient, decide_log_client::DecideLogClient};
@@ -57,11 +56,8 @@ pub trait Source: Send + Sync + 'static {
     /// Frees the entries below `height`, and their payloads.
     async fn ack(&self, height: u64) -> Result<(), Error>;
 
-    /// A payload, if this node has it.
-    async fn payload(&self, key: PayloadKey) -> Result<Option<Bytes>, Error>;
-
-    /// Payloads as they are stored, before their block is decided.
-    fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady>;
+    /// The payload of the entry at `height`, if this node has it and still keeps the entry.
+    async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error>;
 
     /// The encoded service records of `epoch`, or of the latest epoch with records if `epoch` is
     /// `None`, with the epoch they are for.
@@ -92,19 +88,6 @@ pub enum SubmitError {
     Internal(Error),
 }
 
-/// Which payload [`Source::payload`] returns.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PayloadKey {
-    /// The payload of the block decided at a height.
-    Height(u64),
-
-    /// The payload of a block, by the view it was proposed in and its payload commitment.
-    Block {
-        view: u64,
-        payload_commitment: String,
-    },
-}
-
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// The gRPC service over `source`.
@@ -121,8 +104,6 @@ type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 #[async_trait]
 impl<S: Source> DecideLog for Service<S> {
     type SubscribeStream = BoxStream<SubscribeResponse>;
-    type GetPayloadStream = BoxStream<PayloadChunk>;
-    type PayloadsReadyStream = BoxStream<PayloadReady>;
 
     async fn subscribe(
         &self,
@@ -140,52 +121,6 @@ impl<S: Source> DecideLog for Service<S> {
             .await
             .map_err(internal)?;
         Ok(Response::new(AckResponse {}))
-    }
-
-    async fn get_payload(
-        &self,
-        request: Request<GetPayloadRequest>,
-    ) -> Result<Response<Self::GetPayloadStream>, Status> {
-        let key = match request.into_inner().key {
-            Some(Key::Height(height)) => PayloadKey::Height(height),
-            Some(Key::Block(block)) => PayloadKey::Block {
-                view: block.view,
-                payload_commitment: block.payload_commitment,
-            },
-            None => return Err(Status::invalid_argument("no payload key")),
-        };
-        let payload = self
-            .source
-            .payload(key)
-            .await
-            .map_err(internal)?
-            .ok_or_else(|| Status::not_found("no such payload"))?;
-        let chunks: Vec<_> = (0..payload.len().max(1))
-            .step_by(CHUNK_SIZE)
-            .map(|start| {
-                let end = (start + CHUNK_SIZE).min(payload.len());
-                Ok(PayloadChunk {
-                    data: payload.slice(start..end).to_vec(),
-                })
-            })
-            .collect();
-        Ok(Response::new(Box::pin(stream::iter(chunks))))
-    }
-
-    async fn payloads_ready(
-        &self,
-        _: Request<PayloadsReadyRequest>,
-    ) -> Result<Response<Self::PayloadsReadyStream>, Status> {
-        let ready = stream::unfold(self.source.payloads_ready(), |mut rx| async move {
-            loop {
-                match rx.recv().await {
-                    Ok(ready) => return Some((Ok(ready), rx)),
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                }
-            }
-        });
-        Ok(Response::new(Box::pin(ready)))
     }
 
     async fn get_service_records(
@@ -266,7 +201,7 @@ async fn feed<S: Source>(
         let read_all = entries.len() < BATCH;
         for entry in entries {
             cursor = entry.height + 1;
-            if !send(&tx, Event::Decided(entry)).await {
+            if !send_entry(&*source, &tx, entry).await {
                 return;
             }
         }
@@ -281,6 +216,45 @@ async fn feed<S: Source>(
             }
         }
     }
+}
+
+/// Sends `entry` and then its payload in chunks, reading the payload only now so that at most one
+/// is held at a time. A payload freed since the entry was read leaves the entry without one.
+/// Returns whether the subscriber is still there.
+async fn send_entry<S: Source>(
+    source: &S,
+    tx: &mpsc::Sender<Result<SubscribeResponse, Status>>,
+    mut entry: Decided,
+) -> bool {
+    let payload = match entry.payload_size {
+        Some(_) => match source.payload(entry.height).await {
+            Ok(payload) => payload,
+            Err(err) => {
+                let _ = tx.send(Err(internal(err))).await;
+                return false;
+            },
+        },
+        None => None,
+    };
+    entry.payload_size = payload.as_ref().map(|p| p.len() as u64);
+    if !send(tx, Event::Decided(entry)).await {
+        return false;
+    }
+    let Some(payload) = payload else {
+        return true;
+    };
+    let mut start = 0;
+    while start < payload.len() {
+        let end = (start + CHUNK_SIZE).min(payload.len());
+        let chunk = PayloadChunk {
+            data: payload.slice(start..end).to_vec(),
+        };
+        if !send(tx, Event::PayloadChunk(chunk)).await {
+            return false;
+        }
+        start = end;
+    }
+    true
 }
 
 async fn send(tx: &mpsc::Sender<Result<SubscribeResponse, Status>>, event: Event) -> bool {

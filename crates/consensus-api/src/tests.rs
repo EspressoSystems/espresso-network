@@ -10,14 +10,12 @@ use tokio::time::timeout;
 use tonic::{Code, transport::Server};
 
 use super::*;
-use crate::proto::{Block, get_payload_request::Key};
 
 /// A source over entries and payloads held in memory.
 struct MemSource {
     entries: Mutex<BTreeMap<u64, Decided>>,
     payloads: Mutex<BTreeMap<u64, Bytes>>,
     next: watch::Sender<u64>,
-    ready: broadcast::Sender<PayloadReady>,
     acked: Mutex<Vec<u64>>,
     records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
 }
@@ -28,14 +26,15 @@ impl MemSource {
             entries: Mutex::default(),
             payloads: Mutex::default(),
             next: watch::channel(0).0,
-            ready: broadcast::channel(4).0,
             acked: Mutex::default(),
             records: Mutex::default(),
         })
     }
 
     fn decide(&self, height: u64, payload: Option<Bytes>) {
-        self.entries.lock().unwrap().insert(height, entry(height));
+        let mut decided = entry(height);
+        decided.payload_size = payload.as_ref().map(|p| p.len() as u64);
+        self.entries.lock().unwrap().insert(height, decided);
         if let Some(payload) = payload {
             self.payloads.lock().unwrap().insert(height, payload);
         }
@@ -72,15 +71,8 @@ impl Source for MemSource {
         Ok(())
     }
 
-    async fn payload(&self, key: PayloadKey) -> Result<Option<Bytes>, Error> {
-        match key {
-            PayloadKey::Height(height) => Ok(self.payloads.lock().unwrap().get(&height).cloned()),
-            PayloadKey::Block { .. } => Ok(None),
-        }
-    }
-
-    fn payloads_ready(&self) -> broadcast::Receiver<PayloadReady> {
-        self.ready.subscribe()
+    async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error> {
+        Ok(self.payloads.lock().unwrap().get(&height).cloned())
     }
 
     async fn service_records(
@@ -181,61 +173,68 @@ async fn ack_reaches_the_source() {
     assert_eq!(source.earliest().await.unwrap(), Some(1));
 }
 
+/// An entry with a payload is followed by the payload in chunks; an empty payload has none.
 #[tokio::test]
-async fn payloads_come_in_chunks() {
+async fn payloads_follow_their_entries_in_chunks() {
     let source = MemSource::new();
     let payload: Bytes = (0..(2 * CHUNK_SIZE + 7)).map(|i| i as u8).collect();
     source.decide(3, Some(payload.clone()));
     source.decide(4, Some(Bytes::new()));
+    source.decide(5, None);
     let mut client = serve(source).await;
-
-    for (height, expected) in [(3, payload), (4, Bytes::new())] {
-        let chunks: Vec<_> = client
-            .get_payload(GetPayloadRequest {
-                key: Some(Key::Height(height)),
-            })
-            .await
-            .unwrap()
-            .into_inner()
-            .collect()
-            .await;
-        let data: Vec<u8> = chunks.into_iter().flat_map(|c| c.unwrap().data).collect();
-        assert_eq!(data, expected);
-    }
-
-    let missing = client
-        .get_payload(GetPayloadRequest {
-            key: Some(Key::Block(Block {
-                view: 1,
-                payload_commitment: "none".into(),
-            })),
-        })
-        .await;
-    assert_eq!(missing.err().map(|s| s.code()), Some(Code::NotFound));
-}
-
-#[tokio::test]
-async fn payloads_ready_are_announced() {
-    let source = MemSource::new();
-    let mut client = serve(source.clone()).await;
     let mut stream = client
-        .payloads_ready(PayloadsReadyRequest {})
+        .subscribe(SubscribeRequest { from_height: 3 })
         .await
         .unwrap()
         .into_inner();
-    let ready = PayloadReady {
-        view: 3,
-        payload_commitment: "c".into(),
-        size: 9,
+
+    let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+        panic!("expected the entry at 3");
     };
-    // The subscription is registered once the call returns.
-    source.ready.send(ready.clone()).unwrap();
-    let got = timeout(Duration::from_secs(5), stream.next())
+    assert_eq!(decided.payload_size, Some(payload.len() as u64));
+    let mut data = Vec::new();
+    for _ in 0..3 {
+        let Some(Event::PayloadChunk(chunk)) = next_event(&mut stream).await else {
+            panic!("expected a payload chunk");
+        };
+        assert!(chunk.data.len() <= CHUNK_SIZE);
+        data.extend(chunk.data);
+    }
+    assert_eq!(data, payload);
+
+    let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+        panic!("expected the entry at 4");
+    };
+    assert_eq!((decided.height, decided.payload_size), (4, Some(0)));
+    let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+        panic!("expected the entry at 5");
+    };
+    assert_eq!((decided.height, decided.payload_size), (5, None));
+}
+
+/// A payload freed after its entry was read leaves the entry without one, so the subscriber does
+/// not wait for chunks that never come.
+#[tokio::test]
+async fn a_freed_payload_is_not_announced() {
+    let source = MemSource::new();
+    source.decide(3, Some(Bytes::from_static(b"payload")));
+    source.payloads.lock().unwrap().clear();
+    source.decide(4, None);
+    let mut client = serve(source).await;
+    let mut stream = client
+        .subscribe(SubscribeRequest { from_height: 3 })
         .await
         .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(got, ready);
+        .into_inner();
+
+    let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+        panic!("expected the entry at 3");
+    };
+    assert_eq!((decided.height, decided.payload_size), (3, None));
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::Decided(entry(4)))
+    );
 }
 
 /// Records come back for the epoch asked for, or for the latest one, and an epoch without any is

@@ -27,7 +27,7 @@ use hotshot_types::{
     vid::avidm_gf2::AvidmGf2Common,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 use crate::discovery::SignedServiceRecord;
 
@@ -107,20 +107,7 @@ struct Changes {
 
     /// The bytes the decide log takes up, with the payloads of its entries.
     decide_log_bytes: watch::Sender<u64>,
-
-    payloads: broadcast::Sender<StoredPayload>,
 }
-
-/// A payload that has become durable.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredPayload {
-    pub view: ViewNumber,
-    pub commitment: VidCommitment2,
-    pub size: u64,
-}
-
-/// How many payload announcements a slow reader may fall behind before it misses some.
-const PAYLOAD_ANNOUNCEMENTS: usize = 64;
 
 /// One decided leaf, as the decide log holds it. Its payload is stored apart.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,7 +260,6 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         let changes = Changes {
             next_height: watch::channel(next_height).0,
             decide_log_bytes: watch::channel(decide_log_bytes).0,
-            payloads: broadcast::channel(PAYLOAD_ANNOUNCEMENTS).0,
         };
         Self {
             store,
@@ -285,11 +271,6 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     /// The height after the newest decide log entry, as entries become durable.
     pub fn next_height(&self) -> watch::Receiver<u64> {
         self.changes.next_height.subscribe()
-    }
-
-    /// Payloads as they become durable. A reader that falls behind misses some.
-    pub fn stored_payloads(&self) -> broadcast::Receiver<StoredPayload> {
-        self.changes.payloads.subscribe()
     }
 
     /// The bytes the decide log takes up, with the payloads of its entries, as it grows and
@@ -305,17 +286,13 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         Ok(())
     }
 
-    /// Announces durable writes: decide log entries up to `next_height`, and `payloads`.
-    pub(crate) fn announce(&self, next_height: Option<u64>, payloads: Vec<StoredPayload>) {
-        if let Some(next) = next_height {
-            self.changes
-                .next_height
-                .send_if_modified(|current| (*current < next).then(|| *current = next).is_some());
-        }
-        for payload in payloads {
-            // No receivers is not an error: nobody follows the payloads.
-            let _ = self.changes.payloads.send(payload);
-        }
+    /// Announces durable decide log entries up to `next_height`.
+    pub(crate) fn announce(&self, next_height: u64) {
+        self.changes.next_height.send_if_modified(|current| {
+            (*current < next_height)
+                .then(|| *current = next_height)
+                .is_some()
+        });
     }
 
     pub fn store(&self) -> &Arc<S> {
@@ -427,16 +404,6 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             .map(|entry| Ok(entry?.1))
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Some((epoch, records)))
-    }
-
-    /// The payload of the block with `commitment` proposed in `view`, if stored.
-    pub fn payload(
-        &self,
-        view: ViewNumber,
-        commitment: &VidCommitment2,
-    ) -> anyhow::Result<Option<Bytes>> {
-        let snap = self.store.snapshot()?;
-        Ok(snap.get(&PAYLOADS, &payload_key(view, commitment)?)?)
     }
 
     /// Frees the decide log entries below `height`, and their payloads.

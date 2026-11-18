@@ -8,22 +8,17 @@ package espresso.consensus.v1;
 // themselves in `Body`, in the encoding consensus nodes exchange.
 service DecideLog {
   // The decided entries from `from_height` on, in height order. The stream stays open and
-  // delivers each entry once it is decided.
+  // delivers each entry once it is decided. An entry whose `payload_size` is set is followed by
+  // its payload, in chunks that add up to that size.
   //
   // If `from_height` is below the earliest entry the node still keeps, the stream starts with
   // `Start`, and the entries from `from_height` up to `Start.earliest_height` must come from
-  // elsewhere.
+  // elsewhere. Heights can be missing in between: consensus decides a block without an ancestor
+  // it never received, and those heights must come from elsewhere too.
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
 
   // Frees the entries below `height`, and their payloads. The caller has made them durable.
   rpc Ack(AckRequest) returns (AckResponse);
-
-  // A payload, in chunks: of a decided height, or of a block by view and payload commitment.
-  rpc GetPayload(GetPayloadRequest) returns (stream PayloadChunk);
-
-  // Payloads as they are stored, before their block is decided. Best effort: a slow reader
-  // misses notifications, and finds the payload through the decided entry instead.
-  rpc PayloadsReady(PayloadsReadyRequest) returns (stream PayloadReady);
 
   // The records the validators signed about their API services for an epoch, newest per
   // validator. Not found if the node holds none for the epoch.
@@ -38,6 +33,7 @@ message SubscribeResponse {
   oneof event {
     Start start = 1;
     Decided decided = 2;
+    PayloadChunk payload_chunk = 3;
   }
 }
 
@@ -90,28 +86,9 @@ message AckRequest {
 
 message AckResponse {}
 
-message GetPayloadRequest {
-  oneof key {
-    uint64 height = 1;
-    Block block = 2;
-  }
-}
-
-message Block {
-  uint64 view = 1;
-  string payload_commitment = 2;
-}
-
+// A part of the payload of the entry before it.
 message PayloadChunk {
   bytes data = 1;
-}
-
-message PayloadsReadyRequest {}
-
-message PayloadReady {
-  uint64 view = 1;
-  string payload_commitment = 2;
-  uint64 size = 3;
 }
 
 message ServiceRecordsRequest {

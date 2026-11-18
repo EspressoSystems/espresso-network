@@ -12,10 +12,7 @@ use async_trait::async_trait;
 use committable::Committable;
 use consensus_api::{
     BODY_FORMAT, DecideLogClient,
-    proto::{
-        AckRequest, Decided, GetPayloadRequest, SubscribeRequest, get_payload_request::Key,
-        subscribe_response::Event,
-    },
+    proto::{AckRequest, Decided, SubscribeRequest, subscribe_response::Event},
 };
 use futures::StreamExt;
 use hotshot_query_service::{
@@ -35,7 +32,6 @@ use hotshot_types::{
     },
     vid::avidm_gf2::AvidmGf2Common,
 };
-use tonic::transport::Channel;
 
 /// How long the ingester waits before reconnecting after the connection fails.
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
@@ -51,7 +47,8 @@ pub trait Sink<Types: NodeType>: Send + Sync {
         state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
     ) -> anyhow::Result<()>;
 
-    /// The height of the first block the sink does not hold. Everything below it is durable.
+    /// The height after the newest block the sink holds. The ingester resumes from it; heights
+    /// below it can be missing, and are the API service's to fill.
     async fn block_height(&self) -> anyhow::Result<u64>;
 }
 
@@ -99,8 +96,22 @@ where
         .await?
         .into_inner();
     let mut chain = Chain::new(from);
+    // The entry whose payload is still arriving, with the bytes so far.
+    let mut receiving: Option<(Entry<Types>, Vec<u8>)> = None;
     while let Some(response) = stream.next().await {
-        match response?.event {
+        let event = response?.event;
+        if let Some((entry, mut payload)) = receiving.take() {
+            let Some(Event::PayloadChunk(chunk)) = event else {
+                bail!("the payload of height {} ended early", entry.leaf.height());
+            };
+            payload.extend(chunk.data);
+            receiving = Some((entry, payload));
+            if let Some(entry) = complete(&mut receiving)? {
+                append(&mut client, sink, &mut chain, entry).await?;
+            }
+            continue;
+        }
+        match event {
             Some(Event::Start(start)) => {
                 tracing::warn!(
                     from = chain.next_height,
@@ -110,17 +121,64 @@ where
                 );
                 chain.skip_to(start.earliest_height);
             },
-            Some(Event::Decided(entry)) => {
-                for mut ready in chain.push(decode(entry)?)? {
-                    let height = ready.leaf.height();
-                    let state_cert = ready.state_cert.take();
-                    sink.append(block_info(&mut client, ready).await?, state_cert)
-                        .await?;
-                    client.ack(AckRequest { height: height + 1 }).await?;
+            Some(Event::Decided(decided)) => {
+                let size = decided.payload_size;
+                let entry = decode(decided)?;
+                match size {
+                    Some(size) => {
+                        receiving = Some((entry, Vec::with_capacity(size as usize)));
+                        if let Some(entry) = complete(&mut receiving)? {
+                            append(&mut client, sink, &mut chain, entry).await?;
+                        }
+                    },
+                    None => append(&mut client, sink, &mut chain, entry).await?,
                 }
             },
+            Some(Event::PayloadChunk(_)) => bail!("a payload chunk without an entry"),
             None => bail!("subscribe response without an event"),
         }
+    }
+    Ok(())
+}
+
+/// The entry of `receiving` once its whole payload has arrived, which leaves `receiving` empty.
+fn complete<Types: NodeType>(
+    receiving: &mut Option<(Entry<Types>, Vec<u8>)>,
+) -> anyhow::Result<Option<Entry<Types>>> {
+    let Some((entry, payload)) = receiving.as_ref() else {
+        return Ok(None);
+    };
+    let expected = entry.payload_size.unwrap_or_default() as usize;
+    ensure!(
+        payload.len() <= expected,
+        "the payload of height {} is longer than announced",
+        entry.leaf.height()
+    );
+    if payload.len() < expected {
+        return Ok(None);
+    }
+    let (mut entry, payload) = receiving.take().expect("checked above");
+    entry.payload = Some(payload);
+    Ok(Some(entry))
+}
+
+/// Takes `entry` into the chain, and stores and acknowledges every block that is ready.
+async fn append<Types>(
+    client: &mut DecideLogClient<tonic::transport::Channel>,
+    sink: &dyn Sink<Types>,
+    chain: &mut Chain<Types>,
+    entry: Entry<Types>,
+) -> anyhow::Result<()>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    for mut ready in chain.push(entry)? {
+        let height = ready.leaf.height();
+        let state_cert = ready.state_cert.take();
+        sink.append(block_info(ready)?, state_cert).await?;
+        client.ack(AckRequest { height: height + 1 }).await?;
     }
     Ok(())
 }
@@ -131,6 +189,7 @@ struct Entry<Types: NodeType> {
     leaf_commitment: String,
     parent_commitment: String,
     payload_size: Option<u64>,
+    payload: Option<Vec<u8>>,
     cert1: Option<Certificate1<Types>>,
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
@@ -141,7 +200,7 @@ struct Entry<Types: NodeType> {
 struct Ready<Types: NodeType> {
     leaf: Leaf2<Types>,
     qc: Certificate1<Types>,
-    payload_size: Option<u64>,
+    payload: Option<Vec<u8>>,
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
     state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
@@ -151,6 +210,11 @@ struct Ready<Types: NodeType> {
 ///
 /// An entry is ready once the QC that certifies its leaf is known: its own `cert1` if it is
 /// the newest leaf of a decide, otherwise the next leaf's justify QC.
+///
+/// Heights can be missing from the decide log, where consensus decided a block without an
+/// ancestor it never received. The ingester stores what follows and leaves the missing heights to
+/// the API service, which fills them from other API services; waiting for them here would make
+/// consensus wait on other operators.
 struct Chain<Types: NodeType> {
     next_height: u64,
 
@@ -170,6 +234,20 @@ impl<Types: NodeType> Chain<Types> {
         }
     }
 
+    /// Continues at `height`, past heights the decide log lacks. An entry waiting for its QC
+    /// cannot get it across the hole, so it becomes part of the hole.
+    fn skip_hole(&mut self, height: u64) {
+        let missing = match &self.waiting {
+            Some(waiting) => waiting.leaf.height()..height,
+            None => self.next_height..height,
+        };
+        tracing::warn!(
+            ?missing,
+            "the decide log lacks these heights; the API service fills them"
+        );
+        self.skip_to(height);
+    }
+
     /// Continues after a gap, from `height`.
     fn skip_to(&mut self, height: u64) {
         self.next_height = height;
@@ -180,11 +258,14 @@ impl<Types: NodeType> Chain<Types> {
     /// Takes the next entry, and returns the entries that are now ready, in height order.
     fn push(&mut self, entry: Entry<Types>) -> Result<Vec<Ready<Types>>, ChainBroken> {
         let height = entry.leaf.height();
-        if height != self.next_height {
+        if height < self.next_height {
             return Err(ChainBroken(format!(
                 "expected height {}, got {height}",
                 self.next_height
             )));
+        }
+        if height > self.next_height {
+            self.skip_hole(height);
         }
         if let Some(last) = &self.last_commitment
             && *last != entry.parent_commitment
@@ -214,7 +295,7 @@ impl<Types: NodeType> Ready<Types> {
         Self {
             leaf: entry.leaf,
             qc,
-            payload_size: entry.payload_size,
+            payload: entry.payload,
             cert2: entry.cert2,
             vid_common: entry.vid_common,
             state_cert: entry.state_cert,
@@ -246,6 +327,7 @@ fn decode<Types: NodeType>(entry: Decided) -> anyhow::Result<Entry<Types>> {
         leaf_commitment: entry.leaf_commitment,
         parent_commitment: entry.parent_commitment,
         payload_size: entry.payload_size,
+        payload: None,
         cert1: optional(&body.cert1).context("decoding the cert1")?,
         cert2: optional(&body.cert2).context("decoding the cert2")?,
         vid_common: optional(&body.vid_common).context("decoding the VID common data")?,
@@ -262,11 +344,8 @@ fn optional<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<Opti
     }
 }
 
-/// What the query service stores for `ready`, with its payload fetched if consensus has it.
-async fn block_info<Types>(
-    client: &mut DecideLogClient<Channel>,
-    ready: Ready<Types>,
-) -> anyhow::Result<BlockInfo<Types>>
+/// What the query service stores for `ready`.
+fn block_info<Types>(ready: Ready<Types>) -> anyhow::Result<BlockInfo<Types>>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -274,9 +353,8 @@ where
 {
     let height = ready.leaf.height();
     let header = ready.leaf.block_header().clone();
-    let block = match ready.payload_size {
-        Some(_) => {
-            let bytes = fetch_payload(client, height).await?;
+    let block = match ready.payload {
+        Some(bytes) => {
             let payload = Payload::<Types>::from_bytes(&bytes, header.metadata());
             Some(BlockQueryData::new(header.clone(), payload))
         },
@@ -305,23 +383,6 @@ where
         info = info.with_cert2(cert2);
     }
     Ok(info)
-}
-
-async fn fetch_payload(
-    client: &mut DecideLogClient<Channel>,
-    height: u64,
-) -> anyhow::Result<Vec<u8>> {
-    let mut chunks = client
-        .get_payload(GetPayloadRequest {
-            key: Some(Key::Height(height)),
-        })
-        .await?
-        .into_inner();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = chunks.next().await {
-        bytes.extend(chunk?.data);
-    }
-    Ok(bytes)
 }
 
 #[cfg(test)]

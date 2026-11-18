@@ -9,10 +9,7 @@ use std::{
 use committable::Committable;
 use consensus_api::{
     DecideLogClient,
-    proto::{
-        GetPayloadRequest, PayloadsReadyRequest, SubscribeRequest, get_payload_request::Key,
-        subscribe_response::Event,
-    },
+    proto::{SubscribeRequest, SubscribeResponse, subscribe_response::Event},
     server,
 };
 use futures::StreamExt;
@@ -43,34 +40,16 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     let mut storage = Storage::new(store.clone(), &private_key);
     let mut client = serve(IngestSource::new(store.clone(), EPOCH_HEIGHT)).await;
 
-    let mut ready = client
-        .payloads_ready(PayloadsReadyRequest {})
-        .await
-        .unwrap()
-        .into_inner();
     let mut decided = client
         .subscribe(SubscribeRequest { from_height: 0 })
         .await
         .unwrap()
         .into_inner();
 
-    // Payloads are announced when they are durable, before their block is decided.
     for v in [v0, v1, v2] {
         store_payload(&mut storage, v);
     }
     flush(&mut storage).await;
-    for v in [v0, v1, v2] {
-        let announced = timeout(Duration::from_secs(5), ready.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert_eq!(announced.view, *v.view_number);
-        assert_eq!(
-            announced.payload_commitment,
-            v.leaf.payload_commitment().to_string()
-        );
-    }
 
     // v1 decides v0 and v1; v2 decides itself later.
     storage.append_decided(
@@ -91,13 +70,7 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     flush(&mut storage).await;
 
     for v in [v0, v1, v2] {
-        let Some(Event::Decided(entry)) = timeout(Duration::from_secs(5), decided.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap()
-            .event
-        else {
+        let Some(Event::Decided(entry)) = next_event(&mut decided).await else {
             panic!("expected a decided entry");
         };
         assert_eq!(entry.height, v.leaf.height());
@@ -120,16 +93,14 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
             "certificates on the newest leaf only"
         );
 
-        let chunks: Vec<_> = client
-            .get_payload(GetPayloadRequest {
-                key: Some(Key::Height(entry.height)),
-            })
-            .await
-            .unwrap()
-            .into_inner()
-            .collect()
-            .await;
-        let bytes: Vec<u8> = chunks.into_iter().flat_map(|c| c.unwrap().data).collect();
+        // The payload follows its entry.
+        let mut bytes = Vec::new();
+        while bytes.len() < payload.len() {
+            let Some(Event::PayloadChunk(chunk)) = next_event(&mut decided).await else {
+                panic!("expected a payload chunk");
+            };
+            bytes.extend(chunk.data);
+        }
         assert_eq!(bytes, payload.to_vec());
     }
 
@@ -145,18 +116,21 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
         .await
         .unwrap()
         .into_inner();
-    let first = timeout(Duration::from_secs(5), late.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap()
-        .event;
     assert_eq!(
-        first,
+        next_event(&mut late).await,
         Some(Event::Start(consensus_api::proto::Start {
             earliest_height: v2.leaf.height()
         }))
     );
+}
+
+async fn next_event(stream: &mut tonic::Streaming<SubscribeResponse>) -> Option<Event> {
+    timeout(Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .event
 }
 
 fn store_payload(storage: &mut Storage<TestTypes, MemStore>, v: &TestView) {
