@@ -53,6 +53,6 @@ all: spec lint impl diff sim docs coverage stake-spec stake-impl stake-check
 # Generate stake table cases with the node's results, and check them against the
 # Lean implementation.
 stake-diff dir="../target/stake-table-corpus":
-    rm -f {{absolute_path(dir)}}/*.jsonl
-    STAKE_TABLE_CORPUS={{absolute_path(dir)}} cargo test -p espresso-types --lib stake_table_corpus -- --ignored
-    cd stake-table-diff && lake build && .lake/build/bin/check {{absolute_path(dir)}}
+    rm -f "{{absolute_path(dir)}}"/*.jsonl
+    STAKE_TABLE_CORPUS="{{absolute_path(dir)}}" cargo test -p espresso-types --lib stake_table_corpus -- --ignored
+    cd stake-table-diff && lake build && .lake/build/bin/check "{{absolute_path(dir)}}"
