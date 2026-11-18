@@ -166,6 +166,11 @@
             xpatch
           ]))
         ];
+        # On Linux elan patches toolchains to store paths in its own closure, which a GC deletes once
+        # elan is unreferenced. One ELAN_HOME per elan build: entering the shell restores those paths.
+        shellHook = lib.optionalString stdenv.hostPlatform.isLinux ''
+          export ELAN_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}/nix-elan/${baseNameOf "${pkgs.elan}"}"
+        '';
       };
 
       devShells.go = addOnShell {
