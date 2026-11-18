@@ -43,7 +43,7 @@ inductive StakeTableError where
   | invalidCommission (validator : Address) (commission : Nat)
   /-- A network key that was admitted before. -/
   | x25519KeyAlreadyUsed (key : X25519Key)
-  /-- A stake that would not fit in 256 bits. The node panics here instead. -/
+  /-- A stake that would not fit in 256 bits. -/
   | stakeOverflow
 deriving DecidableEq, Repr
 
