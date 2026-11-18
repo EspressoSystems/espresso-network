@@ -4,6 +4,8 @@ use alloy::{
     primitives::{Address, Log, U256},
     transports::{RpcError, TransportErrorKind},
 };
+#[cfg(feature = "node")]
+use async_lock::OnceCell;
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
@@ -450,6 +452,9 @@ pub struct Fetcher {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
     pub(crate) initial_supply: Arc<RwLock<Option<U256>>>,
+    /// The LC contract address, read once from the stake table contract.
+    #[cfg(feature = "node")]
+    pub(crate) lc_contract_address: Arc<OnceCell<Address>>,
 }
 
 #[derive(Debug, Default)]

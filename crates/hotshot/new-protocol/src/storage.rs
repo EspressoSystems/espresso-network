@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration}
 
 use async_trait::async_trait;
 use committable::Commitment;
+#[cfg(any(test, feature = "testing"))]
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
@@ -431,6 +432,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 }
 
 #[async_trait]
+#[cfg(any(test, feature = "testing"))]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
         self.store_high_qc2(high_qc).await

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Fail if test code can reach a production binary through the default members:
+# - a default member has a test-only crate as a normal dependency, or
+# - a workspace crate has a test feature (a feature with "test" in its name) turned on.
+#
+# The release binaries are built from the default members (scripts/ci-build-binary), and Cargo
+# merges features across the packages of one build. So the graph is resolved over all default
+# members at once: a `testing` feature that one package turns on reaches the others. cargo-udeps
+# (.github/workflows/unused-deps.yml) runs with --all-targets and counts a normal dependency
+# that only tests use as used; this check covers that gap.
+#
+# espresso-dev-node and hotshot-new-protocol-bench are not default members: both are built on
+# test doubles on purpose, in builds of their own.
+set -euo pipefail
+shopt -s inherit_errexit
+
+test_only=(
+    hotshot-example-types
+    test-server
+    test-utils
+)
+
+# Test features allowed in the default-member build, as crate/feature.
+allowed_test_features=(
+    # The diff-test-hotshot binary feeds the light client contract tests from `mock_ledger`.
+    hotshot-state-prover/testing
+)
+
+main() {
+    status=0
+    check_test_only_crates
+    check_test_features
+    exit "$status"
+}
+
+check_test_only_crates() {
+    local crate dependents dependent
+    for crate in "${test_only[@]}"; do
+        # Direct dependents through normal edges; the first line is the crate itself.
+        dependents=$(cargo tree --locked -e normal --prefix none --depth 1 -i "$crate" \
+            | tail -n +2 | awk '{print $1}' | sort -u)
+        for dependent in $dependents; do
+            if ! contains "$dependent" "${test_only[@]}"; then
+                echo "error: $dependent has the test-only crate $crate as a normal dependency" >&2
+                echo "       see: cargo tree -e normal -i $crate" >&2
+                status=1
+            fi
+        done
+    done
+}
+
+check_test_features() {
+    local features feature
+    features=$(enabled_test_features)
+    for feature in $features; do
+        if ! contains "${feature%%/*}" "${test_only[@]}" \
+            && ! contains "$feature" "${allowed_test_features[@]}"; then
+            echo "error: the test feature $feature is on in the default-member build" >&2
+            echo "       see: cargo tree -e features,normal -i ${feature%%/*}" >&2
+            status=1
+        fi
+    done
+}
+
+# Prints crate/feature for each feature with "test" in its name that a workspace crate has on.
+enabled_test_features() {
+    local root
+    root=$(cargo locate-project --workspace --message-format plain)
+    root=${root%/Cargo.toml}
+    # Each line is "<features>|<name> <version> (<path>)"; workspace crates have a path under root.
+    cargo tree --locked -e normal --prefix none -f '{f}|{p}' \
+        | awk -F'|' -v root="$root/" 'index($2, "(" root) {
+            split($2, package, " ")
+            n = split($1, features, ",")
+            for (i = 1; i <= n; i++) if (features[i] ~ /test/) print package[1] "/" features[i]
+        }' \
+        | sort -u
+}
+
+contains() {
+    local needle=$1 item
+    shift
+    for item in "$@"; do
+        [ "$item" = "$needle" ] && return 0
+    done
+    return 1
+}
+
+main "$@"
