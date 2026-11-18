@@ -2267,7 +2267,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(2)).await;
             let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
                 committees.clone(),
-                *committees.epoch_height(),
+                std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
                 &hotshot_example_types::storage_types::TestStorage::default(),
             );
             coordinator
@@ -2339,7 +2339,7 @@ mod tests {
 
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            epoch_height,
+            std::num::NonZeroU64::new(epoch_height).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator, epoch, fail_next_store)
@@ -2930,7 +2930,7 @@ mod tests {
         let committees = committees_from_first_epoch(first_epoch, Fetcher::mock());
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees,
-            100u64,
+            std::num::NonZeroU64::new(100).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
 
@@ -2948,12 +2948,60 @@ mod tests {
         );
     }
 
+    // A table without a DRB result is resident for the stake table only. The
+    // leader capability appears once the DRB result does.
+    #[tokio::test]
+    async fn resident_readiness_follows_table_and_drb() {
+        use hotshot_types::epoch_membership::ResidentEpochReadiness;
+
+        let first_epoch = EpochNumber::new(5);
+        let epoch = first_epoch + 2;
+        let stored = AuthenticatedValidator::mock();
+        let stored_key = *stored.stake_table_key();
+        let stored_table: AuthenticatedValidatorMap =
+            [(stored.account, stored)].into_iter().collect();
+        let store = LatestStakeStore {
+            stakes: vec![(epoch, (stored_table, None), None)],
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let mut committees = committees_from_first_epoch(first_epoch, fetcher);
+        committees.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+        let coordinator = coordinator_for(committees);
+
+        assert_eq!(
+            coordinator.resident_readiness(epoch + 1),
+            ResidentEpochReadiness::Unavailable
+        );
+        assert_eq!(
+            coordinator.resident_readiness(epoch),
+            ResidentEpochReadiness::StakeTable
+        );
+        assert!(coordinator.leader_snapshot(epoch).is_none());
+
+        coordinator.membership().add_drb_result(epoch, [7u8; 32]);
+        assert_eq!(
+            coordinator.resident_readiness(epoch),
+            ResidentEpochReadiness::Leader
+        );
+        let leader = coordinator
+            .leader_snapshot(epoch)
+            .expect("the DRB result is resident");
+        assert!(leader.snapshot().has_drb());
+        assert_eq!(leader.leader(ViewNumber::new(0)).unwrap(), stored_key);
+    }
+
     type SeqEpochMembership = hotshot_types::epoch_membership::EpochMembership<SeqTypes>;
 
     fn coordinator_for(committees: EpochCommittees) -> EpochMembershipCoordinator<SeqTypes> {
         EpochMembershipCoordinator::<SeqTypes>::new(
             committees,
-            100u64,
+            std::num::NonZeroU64::new(100).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         )
     }
@@ -3490,7 +3538,7 @@ mod tests {
         put_prefilled(&committees, 3, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            *committees.epoch_height(),
+            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator)

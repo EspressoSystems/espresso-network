@@ -528,6 +528,17 @@ theorem hasCert2 {n : Nat} {x : Cert2} (hc : (H k n).HasCert2 x) : ∃ u, x = C2
     have := at0_facts 10 12 u
     exact ⟨u, rfl, by omega⟩
 
+/-- A node holds no `Cert2` over block `u` before the block's arrives. -/
+theorem no_cert2_over {n u : Nat} (hn : n ≤ at0 10 12 u) {c2 : Cert2}
+    (hc : (H k n).HasCert2 c2) : c2.data ≠ (certOf (blk u)).data.toVote2 := by
+  intro hd
+  obtain ⟨x, rfl, hlt⟩ := hasCert2 hc
+  have h1 : (⟨x + 1⟩ : BlockNumber) = ⟨u + 1⟩ :=
+    (cert_number x).symm.trans ((congrArg Vote2Data.blockNumber hd).trans (cert_number u))
+  have := number_inj h1
+  obtain rfl : x = u := by omega
+  omega
+
 theorem hasCert2_of {n : Nat} (u : Nat) (h : at0 10 12 u < n) : (H k n).HasCert2 (C2 u) :=
   Or.inl (recv_c2 u h)
 
@@ -1289,7 +1300,8 @@ theorem revotes_zero : ∃ j, j ≤ 5 ∧ Output.send (.revote (R 0)) ∈ (tr a 
   refine Classical.byContradiction fun hneg => settled a 5 (.propose ⟨1⟩ ⟨2⟩)
     ⟨Or.inr ⟨R 0, ⟨rfl, ⟨?_, Or.inl ⟨rfl, rfl⟩, ?_⟩, Liveness.buildable_of_lockable ?lk,
         fun _ => ?lk, (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl,
-      rfl⟩, ?_, fun ht => ?_, ?_⟩
+      rfl, fun c2 hc => no_cert2_over (by rw [(at0_facts 10 12 0).1 rfl]; omega) hc⟩,
+      ?_, fun ht => ?_, ?_⟩
   · show (1 : Nat) < 2; omega
   · show IsLastBlock (certOf (blk 0)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
   · exact lockable_iff.mpr (Or.inr (Or.inr ⟨0, rfl, by rw [(lk_facts a 0).1 rfl (lag_a 0)]; omega⟩))
@@ -1475,7 +1487,9 @@ theorem revotes (u : Nat) : ∃ j, j ≤ at0 5 11 u ∧ Output.send (.revote (R 
     refine Classical.byContradiction fun hneg => settled a (8 * (u + 1) + 11) (.propose ⟨u + 1 + 1⟩ ⟨bv (u + 1) + 1⟩)
       ⟨Or.inr ⟨R (u + 1), ⟨rfl, ⟨?_, Or.inl ⟨rfl, ?_⟩, ?_⟩, Liveness.buildable_of_lockable ?lk,
         fun _ => ?lk, (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl,
-        cert_epoch (u + 1)⟩, ?_, fun ht => ?_, ?_⟩
+        cert_epoch (u + 1),
+        fun c2 hc => no_cert2_over (by rw [(at0_facts 10 12 (u + 1)).2 (by omega)]; omega) hc⟩,
+        ?_, fun ht => ?_, ?_⟩
     · show (certOf (blk (u + 1))).view < ⟨bv (u + 1) + 1⟩; rw [cert_view]; show bv (u + 1) < bv (u + 1) + 1; omega
     · show (certOf (blk (u + 1))).view + 1 = ⟨bv (u + 1) + 1⟩; rw [cert_view]; rfl
     · show IsLastBlock (certOf (blk (u + 1))).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
@@ -1516,7 +1530,8 @@ theorem revotes_two : ∃ j, j ≤ 9 ∧ Output.send (.revote R2) ∈ (tr a j).o
   have hew : eAt 10 = 1 := (eAt_first (by omega)).1 (by omega)
   refine Classical.byContradiction fun hneg => settled a 9 (.propose ⟨1⟩ ⟨3⟩)
     ⟨Or.inr ⟨R2, ⟨rfl, ⟨?_, Or.inl ⟨rfl, rfl⟩, ?_⟩, Liveness.buildable_of_lockable ?lk,
-        fun _ => ?lk, (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl, rfl⟩,
+        fun _ => ?lk, (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl, rfl,
+        fun c2 hc => no_cert2_over (u := 0) (by rw [(at0_facts 10 12 0).1 rfl]; omega) hc⟩,
       ?_, fun ht => ?_, ?_⟩
   · show (2 : Nat) < 3; omega
   · show IsLastBlock (certOf (blk 0)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
@@ -1644,7 +1659,8 @@ theorem votes1R (k : PubKey) (hl : lag k 0 = 0) : ∃ j, j ≤ 8
     ⟨⟨a, recv_revote 0 (by rw [(at0_facts _ _ _).1 rfl]; omega), rfl⟩, ⟨?_, Or.inl ⟨rfl, rfl⟩, ?_⟩,
       (fun _ h => by cases h),
       ⟨blk 0, hasProposal_of 0 (by simp [at0]), ⟨Nat.le_refl _, rfl⟩, payload_of 0 hl (by simp [at0])⟩,
-      notBehind (by rw [hew]; exact Nat.le_refl _), fun ht => ?_, fun vote hs _ hvv => ?_, ?_⟩
+      notBehind (by rw [hew]; exact Nat.le_refl _), fun ht => ?_, fun vote hs _ hvv => ?_,
+      fun c2 hc => no_cert2_over (by rw [(at0_facts 10 12 0).1 rfl]; omega) hc, ?_⟩
   · show (1 : Nat) < 2; omega
   · show IsLastBlock (certOf (blk 0)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
   · exact not_timedOut ht (fun h => absurd h (by show ¬ (2 : Nat) ≤ 1; omega)) (fun _ => by omega)
