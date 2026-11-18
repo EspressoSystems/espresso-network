@@ -510,7 +510,7 @@ pub enum StakeTableError {
     MinimumStakeOverflow,
     #[error("Delegator {0:#x} has 0 stake")]
     ZeroDelegatorStake(Address),
-    #[error("Stake of validator {0:#x} overflows")]
+    #[error("Delegation to validator {0:#x} overflows")]
     StakeOverflow(Address),
     #[error("Failed to hash stake table: {0}")]
     HashError(#[from] bincode::Error),
