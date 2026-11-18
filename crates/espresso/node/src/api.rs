@@ -83,8 +83,8 @@ use crate::{
         data_source::TokenDataSource,
     },
     catchup::{
-        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
-        add_v2_reward_accounts_to_state,
+        CatchupStorage, MAX_CATCHUP_ACCOUNTS, add_fee_accounts_to_state,
+        add_v1_reward_accounts_to_state, add_v2_reward_accounts_to_state,
     },
     request_response::{
         RequestResponseProtocol,
@@ -785,7 +785,7 @@ where
 }
 
 impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
-    #[tracing::instrument(skip(self, instance))]
+    #[tracing::instrument(skip(self, instance, accounts))]
     async fn get_accounts(
         &self,
         instance: &NodeState,
@@ -793,6 +793,12 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
+        ensure!(
+            accounts.len() <= MAX_CATCHUP_ACCOUNTS,
+            "cannot fetch {} accounts, the limit is {MAX_CATCHUP_ACCOUNTS}",
+            accounts.len()
+        );
+
         // Check if we have the desired state in memory.
         match self
             .as_ref()
@@ -868,7 +874,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         self.inner().load_cert2(height).await
     }
 
-    #[tracing::instrument(skip(self, instance))]
+    #[tracing::instrument(skip(self, instance, accounts))]
     async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
@@ -876,6 +882,12 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
+        ensure!(
+            accounts.len() <= MAX_CATCHUP_ACCOUNTS,
+            "cannot fetch {} accounts, the limit is {MAX_CATCHUP_ACCOUNTS}",
+            accounts.len()
+        );
+
         // Check if we have the desired state in memory.
         match self
             .as_ref()
@@ -908,7 +920,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         Ok(tree)
     }
 
-    #[tracing::instrument(skip(self, instance))]
+    #[tracing::instrument(skip(self, instance, accounts))]
     async fn get_reward_accounts_v1(
         &self,
         instance: &NodeState,
@@ -916,6 +928,12 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
+        ensure!(
+            accounts.len() <= MAX_CATCHUP_ACCOUNTS,
+            "cannot fetch {} accounts, the limit is {MAX_CATCHUP_ACCOUNTS}",
+            accounts.len()
+        );
+
         // Check if we have the desired state in memory.
         match self
             .as_ref()
