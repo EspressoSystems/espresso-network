@@ -141,7 +141,7 @@ jobs:
           flagged_files=$(cat "$RUNNER_TEMP/flagged-files.txt" 2>/dev/null || echo none)
           prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles without conflict markers, per PR:\n%s\n\n%s' \
             "$NEEDS_CLAUDE" "$flagged_files" "$prompt_body")
-          claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
+          claude -p "$prompt" --model claude-opus-5-5 --effort high --dangerously-skip-permissions
 
       - name: Install protoc
         if: steps.resolve.outputs.needs_claude != ''
