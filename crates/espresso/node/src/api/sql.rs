@@ -263,15 +263,14 @@ pub(in crate::api) async fn init_query_module(
     ))
 }
 
-/// Heights of transaction and payload totals deleted per transaction.
+/// Heights of transaction and payload totals deleted per transaction on SQLite.
 const TOTALS_DELETE_HEIGHTS: u64 = 1000;
 
-/// Delete the transaction and payload totals in small transactions, so that the write lock, which
-/// consensus shares on SQLite, is never held for long.
+/// Delete the transaction and payload totals an earlier run left, and give their space back.
 async fn delete_totals(storage: Arc<SqlStorage>) {
     match storage.delete_aggregates(TOTALS_DELETE_HEIGHTS).await {
-        Ok(0) => {},
-        Ok(rows) => tracing::info!(rows, "deleted the totals an earlier run left"),
+        Ok(false) => {},
+        Ok(true) => tracing::info!("deleted the totals an earlier run left"),
         Err(err) => tracing::warn!("failed to delete the totals an earlier run left: {err:#}"),
     }
 }

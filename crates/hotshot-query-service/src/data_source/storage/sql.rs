@@ -707,25 +707,48 @@ impl SqlStorage {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 
-    /// Delete every row of the transaction and payload totals, the newest heights first, at most
-    /// `heights` heights per transaction. Returns how many rows were deleted.
+    /// Delete every row of the transaction and payload totals and give their space back to the
+    /// disk. Returns whether there were any.
     ///
     /// For a node without an aggregator, which keeps no totals, to drop the ones an earlier run
-    /// left. The rows left at any point are the totals of every height from genesis up to some
-    /// height, so an aggregator started later resumes from them.
+    /// left. Nothing else may read or write the totals meanwhile.
     ///
-    /// It pauses between transactions, so that the write lock, which consensus shares on SQLite,
-    /// is free most of the time.
-    pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<u64> {
-        let heights = heights.max(1);
-        let mut top = retry_deleting_aggregates(|| self.highest_aggregate_height(u64::MAX)).await?;
-        let mut total = 0;
+    /// On Postgres it truncates the table. That returns the table and its index at once and writes
+    /// almost no WAL, where deleted rows would stay in the index until a `VACUUM FULL`.
+    ///
+    /// On SQLite it deletes the newest heights first, at most `heights` heights per transaction.
+    /// After each transaction it gives the freed pages back with an incremental vacuum and pauses,
+    /// so that the write lock, which consensus shares, is free most of the time. The rows left at
+    /// any point are the totals of every height from genesis up to some height, so an aggregator
+    /// started later resumes from them.
+    pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<bool> {
+        let Some(top) =
+            retry_deleting_aggregates(|| self.highest_aggregate_height(u64::MAX)).await?
+        else {
+            return Ok(false);
+        };
+        match Db::KIND {
+            DbKind::Postgres => retry_deleting_aggregates(|| self.truncate_aggregates()).await?,
+            DbKind::Sqlite => self.delete_aggregates_from(top, heights.max(1)).await?,
+        }
+        Ok(true)
+    }
+
+    /// Delete the totals from height `top` down, `heights` heights per transaction, each followed
+    /// by an incremental vacuum and a pause.
+    async fn delete_aggregates_from(&self, top: u64, heights: u64) -> anyhow::Result<()> {
+        let vacuum_pages = self.pruner_cfg.as_ref().map_or_else(
+            || PrunerCfg::default().incremental_vacuum_pages(),
+            |cfg| cfg.incremental_vacuum_pages(),
+        );
+        let mut top = Some(top);
+        let mut rows = 0;
         let mut batches = 0u64;
         while let Some(height) = top {
-            total += retry_deleting_aggregates(|| self.delete_newest_aggregates(height, heights))
+            rows += retry_deleting_aggregates(|| self.delete_newest_aggregates(height, heights))
                 .await?;
-            // Below the heights just deleted, so that the search does not pass their index entries,
-            // which Postgres keeps until it vacuums the table. It also skips any gap in the heights.
+            retry_deleting_aggregates(|| self.vacuum(vacuum_pages)).await?;
+            // Below the heights just deleted, which also skips any gap in the heights.
             top = match height.checked_sub(heights) {
                 Some(below) => {
                     retry_deleting_aggregates(|| self.highest_aggregate_height(below)).await?
@@ -736,7 +759,7 @@ impl SqlStorage {
             if batches.is_multiple_of(100) {
                 tracing::info!(
                     target: "announce",
-                    rows = total,
+                    rows,
                     batches,
                     "deleting transaction and payload totals"
                 );
@@ -745,7 +768,20 @@ impl SqlStorage {
                 sleep(AGGREGATE_DELETE_PAUSE).await;
             }
         }
-        Ok(total)
+        Ok(())
+    }
+
+    /// Delete every row of the totals in one transaction, on Postgres.
+    async fn truncate_aggregates(&self) -> anyhow::Result<()> {
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to truncate totals")?;
+        query("TRUNCATE aggregate")
+            .execute(tx.as_mut())
+            .await
+            .context("truncating totals")?;
+        tx.commit().await.context("committing truncated totals")
     }
 
     /// The highest height of the totals at or below `at_most`, if any.
@@ -3133,10 +3169,8 @@ mod test {
         // larger than the table.
         for heights in [1, 3, 4, 5, AGGREGATE_HEIGHTS + 5] {
             write_aggregates(&storage).await;
-            let rows = count_rows(&storage, "aggregate").await;
-            assert_eq!(
+            assert!(
                 delete_all_aggregates(&storage, heights).await,
-                rows as u64,
                 "heights {heights}"
             );
             assert_no_aggregates(&storage).await;
@@ -3151,8 +3185,7 @@ mod test {
             .unwrap();
 
         write_aggregates(&storage).await;
-        let rows = count_rows(&storage, "aggregate").await;
-        assert_eq!(delete_all_aggregates(&storage, 0).await, rows as u64);
+        assert!(delete_all_aggregates(&storage, 0).await);
         assert_no_aggregates(&storage).await;
     }
 
@@ -3164,9 +3197,8 @@ mod test {
             .unwrap();
 
         for heights in [0, 1, AGGREGATE_HEIGHTS] {
-            assert_eq!(
-                delete_all_aggregates(&storage, heights).await,
-                0,
+            assert!(
+                !delete_all_aggregates(&storage, heights).await,
                 "heights {heights}"
             );
             assert_no_aggregates(&storage).await;
@@ -3190,9 +3222,8 @@ mod test {
             for heights in [1, 2, 3, 25] {
                 let rows = totals_at(table);
                 insert_aggregate_rows(&storage, &rows).await;
-                assert_eq!(
+                assert!(
                     delete_all_aggregates(&storage, heights).await,
-                    rows.len() as u64,
                     "table {table:?}, heights {heights}"
                 );
                 assert_no_aggregates(&storage).await;
@@ -3212,9 +3243,8 @@ mod test {
             for heights in [1, 3, 8, 20] {
                 let rows = totals_at(table);
                 insert_aggregate_rows(&storage, &rows).await;
-                assert_eq!(
+                assert!(
                     delete_all_aggregates(&storage, heights).await,
-                    rows.len() as u64,
                     "table {table:?}, heights {heights}"
                 );
                 assert_no_aggregates(&storage).await;
@@ -3234,9 +3264,8 @@ mod test {
             for heights in [1, 2, AGGREGATE_HEIGHTS] {
                 let rows = totals_at(&[height]);
                 insert_aggregate_rows(&storage, &rows).await;
-                assert_eq!(
+                assert!(
                     delete_all_aggregates(&storage, heights).await,
-                    rows.len() as u64,
                     "height {height}, heights {heights}"
                 );
                 assert_no_aggregates(&storage).await;
@@ -3254,10 +3283,8 @@ mod test {
 
         for heights in [i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX] {
             write_aggregates(&storage).await;
-            let rows = count_rows(&storage, "aggregate").await;
-            assert_eq!(
+            assert!(
                 delete_all_aggregates(&storage, heights).await,
-                rows as u64,
                 "heights {heights}"
             );
             assert_no_aggregates(&storage).await;
@@ -3279,6 +3306,64 @@ mod test {
         }
         insert_aggregate_rows(&storage, &totals_at(&[0, 1, 7, 20, 21])).await;
         watch_delete_all_aggregates(&storage, 3).await;
+    }
+
+    /// `delete_aggregates` gives the space of the deleted totals back: on SQLite no free page is
+    /// left in the file, and on Postgres the table and its index are back to their empty size.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_returns_space() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let rows = totals_at(&(0..3000).collect::<Vec<_>>());
+
+        match Db::KIND {
+            DbKind::Sqlite => {
+                assert_eq!(
+                    sqlite_pragma(&storage, "auto_vacuum").await,
+                    2,
+                    "not incremental"
+                );
+                // Free pages the migrations left, so that every free page at the end is one the
+                // deletion freed.
+                vacuum(&storage).await;
+                assert_eq!(sqlite_pragma(&storage, "freelist_count").await, 0);
+                let empty = sqlite_pragma(&storage, "page_count").await;
+                insert_aggregate_rows(&storage, &rows).await;
+                let filled = sqlite_pragma(&storage, "page_count").await - empty;
+                assert!(filled >= 10, "the totals fill only {filled} pages");
+
+                run_delete_aggregates(&storage, 100).await;
+
+                let free = sqlite_pragma(&storage, "freelist_count").await;
+                assert_eq!(
+                    free, 0,
+                    "{free} free pages are left after deleting totals that filled {filled} pages"
+                );
+            },
+            DbKind::Postgres => {
+                insert_aggregate_rows(&storage, &rows).await;
+                let (table, index) = aggregate_relation_sizes(&storage).await;
+                assert!(
+                    table >= 10 * PG_PAGE_SIZE && index > PG_PAGE_SIZE,
+                    "the totals fill only {table} bytes of table and {index} bytes of index"
+                );
+
+                run_delete_aggregates(&storage, 100).await;
+
+                let (table, index) = aggregate_relation_sizes(&storage).await;
+                assert_eq!(
+                    table, 0,
+                    "table of {table} bytes, index of {index} bytes left"
+                );
+                assert!(
+                    index <= PG_PAGE_SIZE,
+                    "table of {table} bytes, index of {index} bytes left"
+                );
+            },
+        }
+        assert_no_aggregates(&storage).await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -3443,10 +3528,41 @@ mod test {
     }
 
     /// Run `delete_aggregates`, and fail instead of hanging if it never finishes.
-    async fn delete_all_aggregates(storage: &SqlStorage, heights: u64) -> u64 {
+    async fn delete_all_aggregates(storage: &SqlStorage, heights: u64) -> bool {
         tokio::time::timeout(Duration::from_secs(60), storage.delete_aggregates(heights))
             .await
             .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"))
+            .unwrap()
+    }
+
+    /// Run `delete_aggregates`, and fail instead of hanging if it never finishes. Unlike
+    /// [`delete_all_aggregates`], it does not look at what `delete_aggregates` returns.
+    async fn run_delete_aggregates(storage: &SqlStorage, heights: u64) {
+        tokio::time::timeout(Duration::from_secs(60), storage.delete_aggregates(heights))
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"))
+            .unwrap();
+    }
+
+    /// The size of a Postgres page, and of an empty B-tree index, which is only its metapage.
+    const PG_PAGE_SIZE: i64 = 8192;
+
+    /// The value of the SQLite `PRAGMA {name}`.
+    async fn sqlite_pragma(storage: &SqlStorage, name: &str) -> i64 {
+        let mut tx = storage.read().await.unwrap();
+        let (value,) = query_as::<(i64,)>(&format!("PRAGMA {name}"))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        value
+    }
+
+    /// The sizes in bytes of the Postgres table of the totals and of its primary key index.
+    async fn aggregate_relation_sizes(storage: &SqlStorage) -> (i64, i64) {
+        let mut tx = storage.read().await.unwrap();
+        query_as("SELECT pg_relation_size('aggregate'), pg_relation_size('aggregate_pkey')")
+            .fetch_one(tx.as_mut())
+            .await
             .unwrap()
     }
 
@@ -3530,8 +3646,8 @@ mod test {
     }
 
     /// Run `delete_aggregates` and read the totals again and again until it finishes. Assert that
-    /// each read finds the rows there were up to some height, that some read finds only part of
-    /// them, and that it returns the number of rows there were.
+    /// each read finds the rows there were up to some height, that on SQLite some read finds only
+    /// part of them, and that it reports that there were totals.
     async fn watch_delete_all_aggregates(storage: &SqlStorage, heights: u64) {
         let written = aggregate_rows(storage).await;
         let deleting = tokio::spawn({
@@ -3561,17 +3677,15 @@ mod test {
             .await
             .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"));
 
-        // Each transaction deletes at most `heights` heights, and a pause follows it, so the reads
-        // see the table partly deleted.
-        assert!(
-            partial_reads > 0,
-            "heights {heights}: no read found the table partly deleted"
-        );
-        assert_eq!(
-            deleting.await.unwrap().unwrap(),
-            written.len() as u64,
-            "heights {heights}"
-        );
+        // On SQLite each transaction deletes at most `heights` heights, and a pause follows it, so
+        // the reads see the table partly deleted. Postgres truncates the table in one step.
+        if Db::KIND == DbKind::Sqlite {
+            assert!(
+                partial_reads > 0,
+                "heights {heights}: no read found the table partly deleted"
+            );
+        }
+        assert!(deleting.await.unwrap().unwrap(), "heights {heights}");
         assert_no_aggregates(storage).await;
     }
 }
