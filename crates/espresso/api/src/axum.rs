@@ -6004,10 +6004,13 @@ mod tests {
 
         let descriptors = prost_types::FileDescriptorSet::decode(crate::FILE_DESCRIPTOR_SET)
             .expect("valid descriptor set");
+        // Services without HTTP bindings, which no route documents.
+        const GRPC_ONLY: &[&str] = &["ChainService"];
         let streaming: std::collections::BTreeSet<&str> = descriptors
             .file
             .iter()
             .flat_map(|file| &file.service)
+            .filter(|service| !GRPC_ONLY.contains(&service.name()))
             .flat_map(|service| &service.method)
             .filter(|method| method.server_streaming())
             .map(|method| method.name())

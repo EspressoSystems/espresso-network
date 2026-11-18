@@ -20,15 +20,19 @@ futures                     = { workspace = true }
 hotshot-new-protocol        = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types               = { workspace = true }
+light-client                = { workspace = true }
 tagged-base64               = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-tonic                       = { workspace = true }
+tonic                       = { workspace = true, features = ["tls-ring", "tls-webpki-roots"] }
 tracing                     = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
+url                         = { workspace = true }
 
 [dev-dependencies]
 chain-store    = { workspace = true, features = ["testing"] }
 espresso-types = { workspace = true, features = ["testing"] }
+hotshot-query-service = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
 reqwest        = { workspace = true }
 serde_json     = { workspace = true }
 versions       = { workspace = true }

@@ -58,6 +58,25 @@ impl Item {
     }
 }
 
+/// A height as the store encodes it: the item, and the parts it has.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Record {
+    pub height: u64,
+    pub item: Bytes,
+    pub payload: Option<Bytes>,
+    pub vid_common: Option<Bytes>,
+}
+
+impl Record {
+    pub fn item(&self) -> anyhow::Result<Item> {
+        decode(&self.item)
+    }
+
+    pub fn vid_common(&self) -> anyhow::Result<Option<VidCommon>> {
+        self.vid_common.as_deref().map(decode).transpose()
+    }
+}
+
 /// A commitment the store finds a height by. Blocks with the same payload share a payload
 /// commitment; a lookup by it finds the earliest of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +155,20 @@ impl ChainStore {
             Some(bytes) => Ok(Some(decode(&bytes)?)),
             None => Ok(None),
         }
+    }
+
+    /// The item and parts of `height` as the store encodes them, for passing on to another store
+    /// unchanged.
+    pub async fn record(&self, height: u64) -> anyhow::Result<Option<Record>> {
+        let Some(item) = self.backend.item(height).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Record {
+            height,
+            item,
+            payload: self.backend.part(height, Part::Payload).await?,
+            vid_common: self.backend.part(height, Part::VidCommon).await?,
+        }))
     }
 
     pub async fn height_of(&self, lookup: &Lookup) -> anyhow::Result<Option<u64>> {
@@ -258,6 +291,22 @@ mod tests {
                 "{lookup:?}"
             );
         }
+    }
+
+    /// A record carries the item and parts as stored, and decodes to them.
+    #[tokio::test]
+    async fn a_record_decodes_to_what_was_stored() {
+        let store = ChainStore::new(mem::MemBackend::default());
+        let item = genesis().await;
+        store
+            .put(&item, Some(Bytes::from_static(b"payload")), None)
+            .await
+            .unwrap();
+        let record = store.record(0).await.unwrap().unwrap();
+        assert_eq!(record.item().unwrap(), item);
+        assert_eq!(record.payload, Some(Bytes::from_static(b"payload")));
+        assert_eq!(record.vid_common().unwrap(), None);
+        assert_eq!(store.record(1).await.unwrap(), None);
     }
 
     #[test]

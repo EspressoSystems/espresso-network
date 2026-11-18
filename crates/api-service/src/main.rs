@@ -3,11 +3,12 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use api_service::ApiService;
+use api_service::{ApiService, GapFiller};
 use chain_store::{ChainStore, postgres::PostgresBackend};
 use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
+use url::Url;
 
 #[derive(Debug, Parser)]
 struct Options {
@@ -22,6 +23,10 @@ struct Options {
     /// The address of the consensus node's API, for submissions and discovery records.
     #[arg(long, env = "ESPRESSO_API_SERVICE_CONSENSUS_API")]
     consensus_api: SocketAddr,
+
+    /// API services to fill gaps from, besides those of the validators, comma-separated.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_BOOTSTRAP", value_delimiter = ',')]
+    bootstrap: Vec<Url>,
 }
 
 #[tokio::main]
@@ -34,7 +39,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    ApiService::new(ChainStore::new(backend), options.consensus_api)
+    let store = ChainStore::new(backend);
+    let filler = GapFiller::new(store.clone(), options.consensus_api, options.bootstrap);
+    tokio::spawn(filler.run());
+    ApiService::new(store, options.consensus_api)
         .serve(listener)
         .await
 }

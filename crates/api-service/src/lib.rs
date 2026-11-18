@@ -1,7 +1,8 @@
 //! The API service: serves the v2 API, over HTTP and gRPC on one port, from the chain store.
 //!
-//! It reads only the store, which the ingester fills from consensus. Consensus is reached only to
-//! submit transactions and to ask for the validators' discovery records. A read of a height the
+//! It reads only the store, which the ingester fills from consensus and the [`GapFiller`] from
+//! other API services. Consensus is reached only to submit transactions and to ask for the
+//! validators' discovery records. A read of a height the
 //! store lacks waits a moment for it, and a stream waits at a missing height until the store has
 //! it, so a client following the chain sees every height in order.
 
@@ -11,20 +12,23 @@ use chain_store::ChainStore;
 use espresso_api::{
     proto::{
         availability_service_server::AvailabilityServiceServer,
-        node_service_server::NodeServiceServer, status_service_server::StatusServiceServer,
-        submit_service_server::SubmitServiceServer,
+        chain_service_server::ChainServiceServer, node_service_server::NodeServiceServer,
+        status_service_server::StatusServiceServer, submit_service_server::SubmitServiceServer,
     },
     rest,
 };
 use tokio::net::TcpListener;
 
 mod availability;
+mod chain;
+mod gaps;
 mod node;
 mod reader;
 mod request;
 mod status;
 mod submit;
 
+pub use gaps::GapFiller;
 use reader::Reader;
 
 /// The services of the API, over one store and one consensus node.
@@ -55,6 +59,8 @@ impl ApiService {
         grpc.add_service(AvailabilityServiceServer::from_arc(service.clone()))
             .add_service(StatusServiceServer::from_arc(service.clone()))
             .add_service(NodeServiceServer::from_arc(service.clone()))
+            // gRPC only: it serves other API services, in the store's own encoding.
+            .add_service(ChainServiceServer::from_arc(service.clone()))
             .add_service(SubmitServiceServer::from_arc(service));
         espresso_api::serve_v2(listener, rest, grpc, None).await
     }

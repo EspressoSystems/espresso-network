@@ -1,5 +1,7 @@
 //! The node service: the chain height, and the API services of the validators.
 
+use std::net::SocketAddr;
+
 use consensus_api::{DecideLogClient, proto::ServiceRecordsRequest};
 use espresso_api::{
     error::to_status,
@@ -16,6 +18,36 @@ fn unimplemented<T>(what: &str) -> Result<T, Status> {
     Err(Status::unimplemented(format!(
         "this API service does not serve {what} yet"
     )))
+}
+
+/// The valid records consensus at `consensus_api` holds for `epoch`, or for the latest epoch with
+/// records, with that epoch.
+pub(crate) async fn service_records(
+    consensus_api: SocketAddr,
+    epoch: Option<u64>,
+) -> Result<(u64, Vec<SignedServiceRecord<SeqTypes>>), Status> {
+    let mut client = DecideLogClient::connect(format!("http://{consensus_api}"))
+        .await
+        .map_err(|err| Status::unavailable(format!("cannot reach consensus: {err}")))?;
+    let response = client
+        .get_service_records(ServiceRecordsRequest { epoch })
+        .await
+        .map_err(|status| match status.code() {
+            Code::NotFound => Status::not_found("no service records for the epoch"),
+            _ => Status::unavailable(format!("asking consensus for records: {status}")),
+        })?
+        .into_inner();
+    let records = response
+        .records
+        .iter()
+        .filter_map(|bytes| {
+            bincode::deserialize::<SignedServiceRecord<SeqTypes>>(bytes)
+                .inspect_err(|err| tracing::warn!(%err, "undecodable service record"))
+                .ok()
+        })
+        .filter(SignedServiceRecord::is_valid)
+        .collect();
+    Ok((response.epoch, records))
 }
 
 /// `signed` as clients receive it; they check the signature against the stake table of the
@@ -51,33 +83,11 @@ impl NodeService for ApiService {
         &self,
         request: Request<proto::GetPeersRequest>,
     ) -> Result<Response<proto::PeersResponse>, Status> {
-        let mut client = DecideLogClient::connect(format!("http://{}", self.consensus_api))
-            .await
-            .map_err(|err| Status::unavailable(format!("cannot reach consensus: {err}")))?;
-        let response = client
-            .get_service_records(ServiceRecordsRequest {
-                epoch: request.into_inner().epoch,
-            })
-            .await
-            .map_err(|status| match status.code() {
-                Code::NotFound => Status::not_found("no service records for the epoch"),
-                _ => Status::unavailable(format!("asking consensus for records: {status}")),
-            })?
-            .into_inner();
-        let peers = response
-            .records
-            .iter()
-            .filter_map(|bytes| {
-                bincode::deserialize::<SignedServiceRecord<SeqTypes>>(bytes)
-                    .inspect_err(|err| tracing::warn!(%err, "undecodable service record"))
-                    .ok()
-            })
-            .filter(SignedServiceRecord::is_valid)
-            .map(listed)
-            .collect();
+        let (epoch, records) =
+            service_records(self.consensus_api, request.into_inner().epoch).await?;
         Ok(Response::new(proto::PeersResponse {
-            peers,
-            epoch: response.epoch,
+            peers: records.into_iter().map(listed).collect(),
+            epoch,
         }))
     }
 

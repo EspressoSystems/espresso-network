@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+// The chain as an API service keeps it, for other API services to fill their stores from.
+//
+// Records are in the chain store's own encoding, so that the receiver can check each one exactly:
+// a leaf against the parent commitment of the leaf after it, and a payload against its header.
+// gRPC only; clients reading the chain use the availability service.
+service ChainService {
+  // The records of the heights `from` up to `until`, in height order. Heights the server does not
+  // have are left out, and the client asks another server for them.
+  rpc GetRecords(GetRecordsRequest) returns (stream ChainRecord);
+}
+
+message GetRecordsRequest {
+  // First height (inclusive)
+  optional uint64 from = 1;
+
+  // Height just past the last one (exclusive)
+  optional uint64 until = 2;
+}
+
+message ChainRecord {
+  uint64 height = 1;
+
+  // The item: leaf, certificates and state certificate, bincode-encoded after a format byte
+  bytes item = 2;
+
+  // The payload as the block encodes it; absent if the server does not have it
+  optional bytes payload = 3;
+
+  // The VID common data, encoded as the item is; absent if the server does not have it
+  optional bytes vid_common = 4;
+}
