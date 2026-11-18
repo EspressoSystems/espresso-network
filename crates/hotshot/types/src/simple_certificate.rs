@@ -30,11 +30,10 @@ use crate::{
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_vote::{
-        DaData, DaData2, HasEpoch, LockView, NextEpochQuorumData2, QuorumData, QuorumData2,
-        QuorumMarker, TimeoutData, TimeoutData2, TimeoutLock, UpgradeProposalData,
-        UpgradeProposalData2, VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2,
-        ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
-        Vote2Data, Voteable,
+        DaData, HasEpoch, LockView, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
+        TimeoutData, TimeoutData2, TimeoutLock, UpgradeProposalData, UpgradeProposalData2,
+        VersionedVoteData, ViewSyncCommitData, ViewSyncFinalizeData, ViewSyncFinalizeData2,
+        ViewSyncPreCommitData, Vote2Data, Voteable,
     },
     stake_table::HSStakeTable,
     traits::{
@@ -252,90 +251,6 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     }
 }
 
-impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
-    for SimpleCertificate<TYPES, DaData2, THRESHOLD>
-{
-    type Voteable = DaData2;
-    type Threshold = THRESHOLD;
-
-    fn create_signed_certificate(
-        vote_commitment: Commitment<VersionedVoteData<TYPES, DaData2>>,
-        data: Self::Voteable,
-        sig: <TYPES::SignatureKey as SignatureKey>::QcType,
-        view: ViewNumber,
-    ) -> Self {
-        let vote_commitment_bytes: [u8; 32] = vote_commitment.into();
-
-        SimpleCertificate {
-            data,
-            vote_commitment: Commitment::from_raw(vote_commitment_bytes),
-            view_number: view,
-            signatures: Some(sig),
-            _pd: PhantomData,
-        }
-    }
-    fn is_valid_cert(
-        &self,
-        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
-        threshold: U256,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        if self.view_number == ViewNumber::genesis() {
-            return Ok(());
-        }
-        let real_qc_pp =
-            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
-        let commit = self.data_commitment(upgrade_lock)?;
-        let signatures = self
-            .signatures
-            .as_ref()
-            .ok_or_else(|| warn!("missing signatures"))?;
-
-        <TYPES::SignatureKey as SignatureKey>::check(&real_qc_pp, commit.as_ref(), signatures)
-            .wrap()
-            .context(|e| warn!("Signature check failed: {e}"))
-    }
-    fn signers(
-        &self,
-        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
-        threshold: U256,
-    ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>> {
-        self.signers(stake_table, threshold)
-    }
-    /// Proxy's to `Membership.stake`
-    fn stake_table_entry(
-        membership: &EpochMembership<TYPES>,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES>> {
-        membership.da_stake(pub_key)
-    }
-
-    /// Proxy's to `Membership.da_stake_table`
-    fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.da_stake_table().collect()
-    }
-
-    /// Proxy's to `Membership.da_total_nodes`
-    fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
-        membership.da_total_nodes()
-    }
-
-    fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
-        membership.da_success_threshold()
-    }
-
-    fn data(&self) -> &Self::Voteable {
-        &self.data
-    }
-
-    fn data_commitment(
-        &self,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<Commitment<VersionedVoteData<TYPES, DaData2>>> {
-        Ok(VersionedVoteData::new(self.data.clone(), self.view_number, upgrade_lock)?.commit())
-    }
-}
-
 impl<
     TYPES: NodeType,
     VOTEABLE: Voteable<TYPES> + 'static + QuorumMarker,
@@ -490,7 +405,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
 }
 
 impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
+    /// Convert a `ViewSyncFinalizeCertificate` into a `ViewSyncFinalizeCertificate2`
     pub fn to_vsc2(self) -> ViewSyncFinalizeCertificate2<TYPES> {
         let data = ViewSyncFinalizeData2 {
             relay: self.data.relay,
@@ -512,7 +427,7 @@ impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
 }
 
 impl<TYPES: NodeType> TimeoutCertificate<TYPES> {
-    /// Convert a `DaCertificate` into a `DaCertificate2`
+    /// Convert a `TimeoutCertificate` into a `TimeoutCertificate2`
     pub fn to_tc2(self) -> TimeoutCertificate2<TYPES> {
         let data = TimeoutData2 {
             view: self.data.view,
@@ -736,8 +651,6 @@ pub type Certificate1<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, Succ
 pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
 /// Type alias for a `DaCertificate`, which is a `SimpleCertificate` over `DaData`
 pub type DaCertificate<TYPES> = SimpleCertificate<TYPES, DaData, SuccessThreshold>;
-/// Type alias for a `DaCertificate2`, which is a `SimpleCertificate` over `DaData2`
-pub type DaCertificate2<TYPES> = SimpleCertificate<TYPES, DaData2, SuccessThreshold>;
 /// Type alias for a Timeout certificate over a view number
 pub type TimeoutCertificate<TYPES> = SimpleCertificate<TYPES, TimeoutData, SuccessThreshold>;
 /// Type alias for a `TimeoutCertificate2`, which is a `SimpleCertificate` over `TimeoutData2`
@@ -745,15 +658,9 @@ pub type TimeoutCertificate2<TYPES> = SimpleCertificate<TYPES, TimeoutData2, Suc
 /// Type alias for a `ViewSyncPreCommit` certificate over a view number
 pub type ViewSyncPreCommitCertificate<TYPES> =
     SimpleCertificate<TYPES, ViewSyncPreCommitData, OneHonestThreshold>;
-/// Type alias for a `ViewSyncPreCommitCertificate2`, which is a `SimpleCertificate` over `ViewSyncPreCommitData2`
-pub type ViewSyncPreCommitCertificate2<TYPES> =
-    SimpleCertificate<TYPES, ViewSyncPreCommitData2, OneHonestThreshold>;
 /// Type alias for a `ViewSyncCommit` certificate over a view number
 pub type ViewSyncCommitCertificate<TYPES> =
     SimpleCertificate<TYPES, ViewSyncCommitData, SuccessThreshold>;
-/// Type alias for a `ViewSyncCommitCertificate2`, which is a `SimpleCertificate` over `ViewSyncCommitData2`
-pub type ViewSyncCommitCertificate2<TYPES> =
-    SimpleCertificate<TYPES, ViewSyncCommitData2, SuccessThreshold>;
 /// Type alias for a `ViewSyncFinalize` certificate over a view number
 pub type ViewSyncFinalizeCertificate<TYPES> =
     SimpleCertificate<TYPES, ViewSyncFinalizeData, SuccessThreshold>;

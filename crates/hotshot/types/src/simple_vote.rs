@@ -80,17 +80,6 @@ pub struct DaData {
     pub payload_commit: VidCommitment,
 }
 
-/// Data used for a DA vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct DaData2 {
-    /// Commitment to a block payload
-    pub payload_commit: VidCommitment,
-    /// An optional commitment to a block payload calculated for the next epoch (epoch + 1)
-    pub next_epoch_payload_commit: Option<VidCommitment>,
-    /// Epoch number
-    pub epoch: Option<EpochNumber>,
-}
-
 /// Data used for a timeout vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData {
@@ -206,17 +195,6 @@ pub struct ViewSyncPreCommitData {
     pub round: ViewNumber,
 }
 
-/// Data used for a Pre Commit vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct ViewSyncPreCommitData2 {
-    /// The relay this vote is intended for
-    pub relay: u64,
-    /// The view number we are trying to sync on
-    pub round: ViewNumber,
-    /// Epoch number
-    pub epoch: Option<EpochNumber>,
-}
-
 /// Data used for a Commit vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncCommitData {
@@ -224,17 +202,6 @@ pub struct ViewSyncCommitData {
     pub relay: u64,
     /// The view number we are trying to sync on
     pub round: ViewNumber,
-}
-
-/// Data used for a Commit vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct ViewSyncCommitData2 {
-    /// The relay this vote is intended for
-    pub relay: u64,
-    /// The view number we are trying to sync on
-    pub round: ViewNumber,
-    /// Epoch number
-    pub epoch: Option<EpochNumber>,
 }
 
 /// Data used for a Finalize vote.
@@ -388,8 +355,6 @@ impl QuorumMarker for TimeoutData3 {}
 impl QuorumMarker for ViewSyncPreCommitData {}
 impl QuorumMarker for ViewSyncCommitData {}
 impl QuorumMarker for ViewSyncFinalizeData {}
-impl QuorumMarker for ViewSyncPreCommitData2 {}
-impl QuorumMarker for ViewSyncCommitData2 {}
 impl QuorumMarker for ViewSyncFinalizeData2 {}
 impl QuorumMarker for UpgradeProposalData {}
 impl QuorumMarker for UpgradeProposalData2 {}
@@ -617,29 +582,6 @@ impl Committable for DaData {
     }
 }
 
-impl Committable for DaData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let DaData2 {
-            payload_commit,
-            next_epoch_payload_commit,
-            epoch,
-        } = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("DA data")
-            .var_size_bytes(payload_commit.as_ref());
-
-        if let Some(ref next_epoch_payload_commit) = *next_epoch_payload_commit {
-            cb = cb.var_size_bytes(next_epoch_payload_commit.as_ref());
-        }
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        cb.finalize()
-    }
-}
-
 impl Committable for UpgradeProposalData {
     fn commit(&self) -> Commitment<Self> {
         let builder = committable::RawCommitmentBuilder::new("Upgrade data");
@@ -696,18 +638,6 @@ impl Committable for ViewSyncPreCommitData {
     }
 }
 
-impl Committable for ViewSyncPreCommitData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let ViewSyncPreCommitData2 {
-            relay,
-            round,
-            epoch,
-        } = self;
-
-        view_and_relay_commit(*round, *relay, *epoch, "View Sync Precommit")
-    }
-}
-
 impl Committable for ViewSyncFinalizeData {
     fn commit(&self) -> Commitment<Self> {
         view_and_relay_commit(self.round, self.relay, None, "View Sync Finalize")
@@ -729,18 +659,6 @@ impl Committable for ViewSyncFinalizeData2 {
 impl Committable for ViewSyncCommitData {
     fn commit(&self) -> Commitment<Self> {
         view_and_relay_commit(self.round, self.relay, None, "View Sync Commit")
-    }
-}
-
-impl Committable for ViewSyncCommitData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let ViewSyncCommitData2 {
-            relay,
-            round,
-            epoch,
-        } = self;
-
-        view_and_relay_commit(*round, *relay, *epoch, "View Sync Commit")
     }
 }
 
@@ -788,13 +706,7 @@ impl HasEpoch for UpgradeProposalData2 {
     }
 }
 
-impl_has_epoch!(
-    DaData2,
-    TimeoutData2,
-    ViewSyncPreCommitData2,
-    ViewSyncCommitData2,
-    ViewSyncFinalizeData2
-);
+impl_has_epoch!(TimeoutData2, ViewSyncFinalizeData2);
 
 /// Helper macro for trivial implementation of the `HasEpoch` trait for types that have no epoch
 #[macro_export]
@@ -851,8 +763,6 @@ pub type QuorumVote2<TYPES> = SimpleVote<TYPES, QuorumData2<TYPES>>;
 pub type NextEpochQuorumVote2<TYPES> = SimpleVote<TYPES, NextEpochQuorumData2<TYPES>>;
 /// DA vote type alias
 pub type DaVote<TYPES> = SimpleVote<TYPES, DaData>;
-/// DA vote 2 type alias
-pub type DaVote2<TYPES> = SimpleVote<TYPES, DaData2>;
 
 /// Timeout Vote type alias
 pub type TimeoutVote<TYPES> = SimpleVote<TYPES, TimeoutData>;
@@ -863,16 +773,12 @@ pub type TimeoutVote3<TYPES> = SimpleVote<TYPES, TimeoutData3>;
 
 /// View Sync Pre Commit Vote type alias
 pub type ViewSyncPreCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncPreCommitData>;
-/// View Sync Pre Commit Vote 2 type alias
-pub type ViewSyncPreCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncPreCommitData2>;
 /// View Sync Finalize Vote type alias
 pub type ViewSyncFinalizeVote<TYPES> = SimpleVote<TYPES, ViewSyncFinalizeData>;
 /// View Sync Finalize Vote 2 type alias
 pub type ViewSyncFinalizeVote2<TYPES> = SimpleVote<TYPES, ViewSyncFinalizeData2>;
 /// View Sync Commit Vote type alias
 pub type ViewSyncCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncCommitData>;
-/// View Sync Commit Vote 2 type alias
-pub type ViewSyncCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncCommitData2>;
 /// Upgrade proposal vote
 pub type UpgradeVote<TYPES> = SimpleVote<TYPES, UpgradeProposalData>;
 /// Upgrade vote binding its epoch

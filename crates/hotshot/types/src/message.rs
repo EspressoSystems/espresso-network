@@ -35,16 +35,15 @@ use crate::{
     },
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
+        DaCertificate, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
-        ViewSyncCommitCertificate, ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
+        ViewSyncCommitCertificate, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
+        ViewSyncPreCommitCertificate,
     },
     simple_vote::{
-        DaVote, DaVote2, EpochRootQuorumVote, EpochRootQuorumVote2, HasEpoch, QuorumVote,
-        QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote, ViewSyncCommitVote,
-        ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2, ViewSyncPreCommitVote,
-        ViewSyncPreCommitVote2,
+        DaVote, EpochRootQuorumVote, EpochRootQuorumVote2, HasEpoch, QuorumVote, QuorumVote2,
+        TimeoutVote, TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncFinalizeVote,
+        ViewSyncFinalizeVote2, ViewSyncPreCommitVote,
     },
     traits::{
         network::{DataRequest, ResponseMessage, ViewMessage},
@@ -217,20 +216,8 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     /// Message for the next leader containing the epoch root QC from older consensus version.
     EpochRootQcV1(EpochRootQuorumCertificateV1<TYPES>),
 
-    /// Message with a view sync pre-commit vote
-    ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
-
-    /// Message with a view sync commit vote
-    ViewSyncCommitVote2(ViewSyncCommitVote2<TYPES>),
-
     /// Message with a view sync finalize vote
     ViewSyncFinalizeVote2(ViewSyncFinalizeVote2<TYPES>),
-
-    /// Message with a view sync pre-commit certificate
-    ViewSyncPreCommitCertificate2(ViewSyncPreCommitCertificate2<TYPES>),
-
-    /// Message with a view sync commit certificate
-    ViewSyncCommitCertificate2(ViewSyncCommitCertificate2<TYPES>),
 
     /// Message with a view sync finalize certificate
     ViewSyncFinalizeCertificate2(ViewSyncFinalizeCertificate2<TYPES>),
@@ -271,12 +258,6 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
 
     /// Proposal for data availability committee
     DaProposal2(Proposal<TYPES, DaProposal2<TYPES>>),
-
-    /// vote for data availability committee
-    DaVote2(DaVote2<TYPES>),
-
-    /// Certificate data is available
-    DaCertificate2(DaCertificate2<TYPES>),
 
     /// VID dispersal for AvidM Scheme.
     VidDisperseMsg1(Proposal<TYPES, VidDisperseShare1<TYPES>>),
@@ -346,17 +327,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         message.view_number()
                     },
                     GeneralConsensusMessage::TimeoutVote2(message) => message.view_number(),
-                    GeneralConsensusMessage::ViewSyncPreCommitVote2(message) => {
-                        message.view_number()
-                    },
-                    GeneralConsensusMessage::ViewSyncCommitVote2(message) => message.view_number(),
                     GeneralConsensusMessage::ViewSyncFinalizeVote2(message) => {
-                        message.view_number()
-                    },
-                    GeneralConsensusMessage::ViewSyncPreCommitCertificate2(message) => {
-                        message.view_number()
-                    },
-                    GeneralConsensusMessage::ViewSyncCommitCertificate2(message) => {
                         message.view_number()
                     },
                     GeneralConsensusMessage::ViewSyncFinalizeCertificate2(message) => {
@@ -387,8 +358,6 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.view_number()
                     },
-                    DaConsensusMessage::DaVote2(vote_message) => vote_message.view_number(),
-                    DaConsensusMessage::DaCertificate2(cert) => cert.view_number,
                     DaConsensusMessage::VidDisperseMsg1(disperse) => disperse.data.view_number(),
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
                 }
@@ -436,13 +405,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         message.epoch()
                     },
                     GeneralConsensusMessage::TimeoutVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncPreCommitVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncCommitVote2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncFinalizeVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncPreCommitCertificate2(message) => {
-                        message.epoch()
-                    },
-                    GeneralConsensusMessage::ViewSyncCommitCertificate2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncFinalizeCertificate2(message) => {
                         message.epoch()
                     },
@@ -473,8 +436,6 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // this should match replica upon receipt
                         p.data.epoch()
                     },
-                    DaConsensusMessage::DaVote2(vote_message) => vote_message.epoch(),
-                    DaConsensusMessage::DaCertificate2(cert) => cert.epoch(),
                 }
             },
         }
