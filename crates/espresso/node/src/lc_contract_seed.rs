@@ -176,6 +176,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use alloy::primitives::Address;
     use espresso_types::{EpochCommittees, v0_3::Fetcher};
     use hotshot_example_types::storage_types::TestStorage;
@@ -249,8 +251,11 @@ mod tests {
             EpochNumber::new(1),
         )
         .unwrap();
-        let coordinator =
-            EpochMembershipCoordinator::new(committees, EPOCH_HEIGHT, &TestStorage::default());
+        let coordinator = EpochMembershipCoordinator::new(
+            committees,
+            NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
+            &TestStorage::default(),
+        );
         let not_a_root = TestClient::with_epoch_height(EPOCH_HEIGHT)
             .leaf(3)
             .await

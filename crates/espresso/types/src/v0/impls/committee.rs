@@ -3710,7 +3710,7 @@ mod tests {
         );
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            *committees.epoch_height(),
+            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         assert_eq!(committees.fixed_block_reward(), None);
