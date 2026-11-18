@@ -311,8 +311,8 @@ where
         );
     }
 
-    async fn load_stake_table(&self, _: EpochNumber) -> bool {
-        false
+    async fn load_stake_table(&self, _: EpochNumber) -> Option<Self::Snapshot> {
+        None
     }
 }
 
