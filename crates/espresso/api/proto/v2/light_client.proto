@@ -28,6 +28,9 @@ message HotStuff2Finality {
   CertificatePair committing_qc = 1;
 
   CertificatePair deciding_qc = 2;
+
+  // The leaf `deciding_qc` signs, a child of the last leaf of the chain
+  Leaf2 deciding_leaf = 3;
 }
 
 // A phase-2 certificate under the new protocol
@@ -45,6 +48,12 @@ message HotStuffFinality {
   CertificatePair committing_qc = 2;
 
   CertificatePair deciding_qc = 3;
+
+  // The leaf `committing_qc` signs, a child of the last leaf of the chain
+  Leaf2 committing_leaf = 4;
+
+  // The leaf `deciding_qc` signs, a child of `committing_leaf`
+  Leaf2 deciding_leaf = 5;
 }
 
 // Evidence that the last leaf of a leaf chain is finalized. The arm names the commit rule
