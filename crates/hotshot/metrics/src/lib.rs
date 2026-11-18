@@ -1,5 +1,5 @@
-// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
-// This file is part of the HotShot repository.
+// Copyright (c) 2021-2026 Espresso Systems (espressosys.com)
+// This file is part of the Espresso Network repository.
 
 //! The [`Metrics`] trait is used to collect information from multiple components in the entire system.
 //!

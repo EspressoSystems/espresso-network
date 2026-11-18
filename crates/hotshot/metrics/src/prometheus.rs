@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-// Copyright (c) 2022 Espresso Systems (espressosys.com)
-// This file is part of the HotShot repository.
+// Copyright (c) 2022-2026 Espresso Systems (espressosys.com)
+// This file is part of the Espresso Network repository.
 
 use std::{
     collections::HashMap,
