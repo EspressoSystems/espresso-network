@@ -1,9 +1,10 @@
-//! The ingester: moves the chain a consensus node decides into the query service.
+//! The ingester: copies the chain a consensus node decides into the API service's store.
 //!
 //! It reads the decide log over the ingester API (`consensus-api`), writes each block to a
-//! [`Sink`], and acknowledges it, which lets consensus free it. Data from the node's own
-//! consensus is not verified again; the ingester checks only the structure of the chain, so that
-//! one pointed at the wrong node or a store restored to the wrong place does not mix two chains.
+//! [`Sink`], usually a [`ChainStore`], and acknowledges it, which lets consensus free it. Data from
+//! the node's own consensus is not verified again; the ingester checks only the structure of the
+//! chain, so that one pointed at the wrong node or a store restored to the wrong place does not mix
+//! two chains.
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -15,23 +16,15 @@ use consensus_api::{
     proto::{AckRequest, Decided, SubscribeRequest, subscribe_response::Event},
 };
 use futures::StreamExt;
-use hotshot_query_service::{
-    Header, Payload,
-    availability::{
-        BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
-        VidCommonQueryData,
-    },
-    data_source::genesis_vid,
-};
+use hotshot_query_service::data_source::genesis_vid;
 use hotshot_types::{
     data::{Leaf2, VidCommon, ViewNumber},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
-    traits::{
-        block_contents::{BlockHeader, BlockPayload},
-        node_implementation::NodeType,
-    },
+    traits::node_implementation::NodeType,
     vid::avidm_gf2::AvidmGf2Common,
 };
+
+mod store;
 
 /// How long the ingester waits before reconnecting after the connection fails.
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
@@ -39,27 +32,38 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 /// Where the ingester writes.
 #[async_trait]
 pub trait Sink<Types: NodeType>: Send + Sync {
-    /// Makes the block durable, with the state certificate of the epoch it is the root of, if
-    /// any.
-    async fn append(
-        &self,
-        info: BlockInfo<Types>,
-        state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
-    ) -> anyhow::Result<()>;
+    /// Makes `block` durable.
+    async fn append(&self, block: Block<Types>) -> anyhow::Result<()>;
 
     /// The height after the newest block the sink holds. The ingester resumes from it; heights
     /// below it can be missing, and are the API service's to fill.
     async fn block_height(&self) -> anyhow::Result<u64>;
 }
 
+/// A decided block, as the ingester hands it to its sink.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block<Types: NodeType> {
+    pub leaf: Leaf2<Types>,
+
+    /// The certificate that certifies the leaf: its own if it was the newest leaf of a decide,
+    /// otherwise the justify QC of the leaf after it.
+    pub cert1: Certificate1<Types>,
+
+    /// The certificate that decided the leaf directly, if one did.
+    pub cert2: Option<Certificate2<Types>>,
+
+    pub vid_common: Option<VidCommon>,
+
+    /// The light client state certificate of the epoch the block is the root of.
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
+
+    /// The encoded payload; absent if consensus did not have it.
+    pub payload: Option<Vec<u8>>,
+}
+
 /// Ingests from the ingester API at `addr` into `sink`, reconnecting whenever the connection
 /// fails, until an entry breaks the chain the sink holds.
-pub async fn run<Types>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Error
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
+pub async fn run<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Error {
     loop {
         match ingest(addr, sink).await {
             Ok(()) => tracing::warn!(%addr, "decide log stream ended; reconnecting"),
@@ -79,17 +83,13 @@ where
 pub struct ChainBroken(String);
 
 /// Ingests until the stream ends or fails.
-async fn ingest<Types>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Result<()>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
+async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Result<()> {
     let mut client = DecideLogClient::connect(format!("http://{addr}"))
         .await
         .context("connecting to the ingester API")?;
     let from = sink.block_height().await?;
-    // Everything below `from` is in the sink already.
+    // The sink has stored up to `from`; any gap below it is the API service's to fill, not
+    // consensus's to keep.
     client.ack(AckRequest { height: from }).await?;
     let mut stream = client
         .subscribe(SubscribeRequest { from_height: from })
@@ -163,21 +163,15 @@ fn complete<Types: NodeType>(
 }
 
 /// Takes `entry` into the chain, and stores and acknowledges every block that is ready.
-async fn append<Types>(
+async fn append<Types: NodeType>(
     client: &mut DecideLogClient<tonic::transport::Channel>,
     sink: &dyn Sink<Types>,
     chain: &mut Chain<Types>,
     entry: Entry<Types>,
-) -> anyhow::Result<()>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    for mut ready in chain.push(entry)? {
-        let height = ready.leaf.height();
-        let state_cert = ready.state_cert.take();
-        sink.append(block_info(ready)?, state_cert).await?;
+) -> anyhow::Result<()> {
+    for block in chain.push(entry)? {
+        let height = block.leaf.height();
+        sink.append(finish(block)?).await?;
         client.ack(AckRequest { height: height + 1 }).await?;
     }
     Ok(())
@@ -191,16 +185,6 @@ struct Entry<Types: NodeType> {
     payload_size: Option<u64>,
     payload: Option<Vec<u8>>,
     cert1: Option<Certificate1<Types>>,
-    cert2: Option<Certificate2<Types>>,
-    vid_common: Option<AvidmGf2Common>,
-    state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
-}
-
-/// An entry with the QC that certifies its leaf, ready to append.
-struct Ready<Types: NodeType> {
-    leaf: Leaf2<Types>,
-    qc: Certificate1<Types>,
-    payload: Option<Vec<u8>>,
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
     state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
@@ -256,7 +240,7 @@ impl<Types: NodeType> Chain<Types> {
     }
 
     /// Takes the next entry, and returns the entries that are now ready, in height order.
-    fn push(&mut self, entry: Entry<Types>) -> Result<Vec<Ready<Types>>, ChainBroken> {
+    fn push(&mut self, entry: Entry<Types>) -> Result<Vec<Block<Types>>, ChainBroken> {
         let height = entry.leaf.height();
         if height < self.next_height {
             return Err(ChainBroken(format!(
@@ -278,28 +262,27 @@ impl<Types: NodeType> Chain<Types> {
         let mut ready = Vec::new();
         if let Some(waiting) = self.waiting.take() {
             let qc = entry.leaf.justify_qc().clone();
-            ready.push(Ready::new(waiting, qc));
+            ready.push(certified(waiting, qc));
         }
         self.next_height = height + 1;
         self.last_commitment = Some(entry.leaf_commitment.clone());
         match entry.cert1.clone() {
-            Some(qc) => ready.push(Ready::new(entry, qc)),
+            Some(qc) => ready.push(certified(entry, qc)),
             None => self.waiting = Some(entry),
         }
         Ok(ready)
     }
 }
 
-impl<Types: NodeType> Ready<Types> {
-    fn new(entry: Entry<Types>, qc: Certificate1<Types>) -> Self {
-        Self {
-            leaf: entry.leaf,
-            qc,
-            payload: entry.payload,
-            cert2: entry.cert2,
-            vid_common: entry.vid_common,
-            state_cert: entry.state_cert,
-        }
+/// `entry` with `qc`, the certificate that certifies its leaf.
+fn certified<Types: NodeType>(entry: Entry<Types>, qc: Certificate1<Types>) -> Block<Types> {
+    Block {
+        leaf: entry.leaf,
+        cert1: qc,
+        cert2: entry.cert2,
+        vid_common: entry.vid_common.map(VidCommon::V2),
+        state_cert: entry.state_cert,
+        payload: entry.payload,
     }
 }
 
@@ -344,45 +327,24 @@ fn optional<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<Opti
     }
 }
 
-/// What the query service stores for `ready`.
-fn block_info<Types>(ready: Ready<Types>) -> anyhow::Result<BlockInfo<Types>>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    let height = ready.leaf.height();
-    let header = ready.leaf.block_header().clone();
-    let block = match ready.payload {
-        Some(bytes) => {
-            let payload = Payload::<Types>::from_bytes(&bytes, header.metadata());
-            Some(BlockQueryData::new(header.clone(), payload))
-        },
-        None => {
-            tracing::warn!(height, "consensus does not have the payload");
-            None
-        },
-    };
-    let vid_common = match ready.vid_common {
-        Some(common) => Some(VidCommonQueryData::new(header, VidCommon::V2(common))),
-        None if ready.leaf.view_number() == ViewNumber::genesis() => {
-            match genesis_vid(&ready.leaf) {
-                Ok((common, _)) => Some(common),
-                Err(err) => {
-                    tracing::warn!("failed to compute the genesis VID common data: {err:#}");
-                    None
-                },
-            }
-        },
-        None => None,
-    };
-    let leaf = LeafQueryData::new(ready.leaf, ready.qc)
-        .with_context(|| format!("the QC does not certify the leaf at height {height}"))?;
-    let mut info = BlockInfo::new(leaf, block, vid_common, None);
-    if let Some(cert2) = ready.cert2 {
-        info = info.with_cert2(cert2);
+/// `block`, checked that its certificate certifies its leaf, with the VID common data of the
+/// genesis block, which consensus does not disperse.
+fn finish<Types: NodeType>(mut block: Block<Types>) -> anyhow::Result<Block<Types>> {
+    let height = block.leaf.height();
+    ensure!(
+        block.cert1.data.leaf_commit == block.leaf.commit(),
+        "the certificate of height {height} does not certify its leaf"
+    );
+    if block.payload.is_none() {
+        tracing::warn!(height, "consensus does not have the payload");
     }
-    Ok(info)
+    if block.vid_common.is_none() && block.leaf.view_number() == ViewNumber::genesis() {
+        match genesis_vid(&block.leaf) {
+            Ok((common, _)) => block.vid_common = Some(common.common().clone()),
+            Err(err) => tracing::warn!("failed to compute the genesis VID common data: {err:#}"),
+        }
+    }
+    Ok(block)
 }
 
 #[cfg(test)]

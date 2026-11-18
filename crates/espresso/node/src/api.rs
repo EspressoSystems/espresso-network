@@ -2377,14 +2377,11 @@ pub mod test_helpers {
 
     #[async_trait]
     impl ingester::Sink<SeqTypes> for DiscardSink {
-        async fn append(
-            &self,
-            info: hotshot_query_service::availability::BlockInfo<SeqTypes>,
-            _: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
-        ) -> anyhow::Result<()> {
-            use hotshot_query_service::types::HeightIndexed as _;
-            self.0
-                .store(info.height() + 1, std::sync::atomic::Ordering::Relaxed);
+        async fn append(&self, block: ingester::Block<SeqTypes>) -> anyhow::Result<()> {
+            self.0.store(
+                block.leaf.height() + 1,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             Ok(())
         }
 

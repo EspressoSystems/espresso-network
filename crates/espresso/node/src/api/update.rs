@@ -6,15 +6,23 @@ use anyhow::bail;
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use espresso_types::v0::traits::{NullEventConsumer, SequencerPersistence};
+use espresso_types::{
+    Payload,
+    v0::traits::{NullEventConsumer, SequencerPersistence},
+};
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, BlockInfo, LeafQueryData, UpdateAvailabilityData},
+    availability::{
+        AvailabilityDataSource, BlockInfo, BlockQueryData, LeafQueryData, UpdateAvailabilityData,
+        VidCommonQueryData,
+    },
     data_source::UpdateDataSource,
     node::NodeDataSource,
     types::HeightIndexed,
 };
 use hotshot_types::{
-    new_protocol::CoordinatorEvent, simple_certificate::LightClientStateUpdateCertificateV2,
+    new_protocol::CoordinatorEvent,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::block_contents::{BlockHeader, BlockPayload},
 };
 
 use super::{
@@ -162,11 +170,8 @@ pub(crate) struct TrackedSink<P> {
 
 #[async_trait]
 impl<P: SequencerPersistence> ingester::Sink<SeqTypes> for TrackedSink<P> {
-    async fn append(
-        &self,
-        info: BlockInfo<SeqTypes>,
-        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
+    async fn append(&self, block: ingester::Block<SeqTypes>) -> anyhow::Result<()> {
+        let (info, state_cert) = block_info(block)?;
         let leaf = info.leaf.clone();
         self.sink.append(info, state_cert).await?;
         self.view.track(&leaf).await
@@ -179,15 +184,35 @@ impl<P: SequencerPersistence> ingester::Sink<SeqTypes> for TrackedSink<P> {
 
 #[async_trait]
 impl ingester::Sink<SeqTypes> for IngestSink {
-    async fn append(
-        &self,
-        info: BlockInfo<SeqTypes>,
-        state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
+    async fn append(&self, block: ingester::Block<SeqTypes>) -> anyhow::Result<()> {
+        let (info, state_cert) = block_info(block)?;
         self.0.append(info, state_cert).await
     }
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         self.0.block_height().await
     }
+}
+
+/// What the query service stores for `block`, and the state certificate that goes with it.
+fn block_info(
+    block: ingester::Block<SeqTypes>,
+) -> anyhow::Result<(
+    BlockInfo<SeqTypes>,
+    Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+)> {
+    let header = block.leaf.block_header().clone();
+    let payload = block.payload.map(|bytes| {
+        let payload = Payload::from_bytes(&bytes, header.metadata());
+        BlockQueryData::new(header.clone(), payload)
+    });
+    let vid_common = block
+        .vid_common
+        .map(|common| VidCommonQueryData::new(header, common));
+    let leaf = LeafQueryData::new(block.leaf, block.cert1)?;
+    let mut info = BlockInfo::new(leaf, payload, vid_common, None);
+    if let Some(cert2) = block.cert2 {
+        info = info.with_cert2(cert2);
+    }
+    Ok((info, block.state_cert))
 }

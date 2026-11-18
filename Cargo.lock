@@ -5661,8 +5661,11 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes",
+ "chain-store",
+ "clap",
  "committable",
  "consensus-api",
+ "espresso-types",
  "futures",
  "hotshot-query-service",
  "hotshot-types",
@@ -5672,6 +5675,8 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "tracing-subscriber 0.3.23",
+ "versions",
 ]
 
 [[package]]

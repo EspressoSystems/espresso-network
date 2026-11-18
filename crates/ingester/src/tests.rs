@@ -8,11 +8,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use consensus_api::{Error as ApiError, Source, proto::Body};
-use hotshot_query_service::{
-    availability::BlockInfo,
-    testing::{chain::MockChain, mocks::MockTypes},
-    types::HeightIndexed,
-};
+use hotshot_query_service::testing::{chain::MockChain, mocks::MockTypes};
 use hotshot_types::{data::VidCommon, traits::block_contents::EncodeBytes};
 use tokio::{sync::watch, time::timeout};
 
@@ -136,8 +132,7 @@ impl Source for FakeLog {
 /// A sink in memory, holding the blocks from `start` on.
 struct MemSink {
     start: u64,
-    blocks: Mutex<Vec<BlockInfo<MockTypes>>>,
-    state_certs: Mutex<Vec<LightClientStateUpdateCertificateV2<MockTypes>>>,
+    blocks: Mutex<Vec<Block<MockTypes>>>,
 }
 
 impl MemSink {
@@ -145,7 +140,6 @@ impl MemSink {
         Arc::new(Self {
             start,
             blocks: Mutex::default(),
-            state_certs: Mutex::default(),
         })
     }
 
@@ -154,22 +148,15 @@ impl MemSink {
             .lock()
             .unwrap()
             .iter()
-            .map(|b| b.height())
+            .map(|b| b.leaf.height())
             .collect()
     }
 }
 
 #[async_trait]
 impl Sink<MockTypes> for MemSink {
-    async fn append(
-        &self,
-        info: BlockInfo<MockTypes>,
-        state_cert: Option<LightClientStateUpdateCertificateV2<MockTypes>>,
-    ) -> anyhow::Result<()> {
-        self.blocks.lock().unwrap().push(info);
-        if let Some(cert) = state_cert {
-            self.state_certs.lock().unwrap().push(cert);
-        }
+    async fn append(&self, block: Block<MockTypes>) -> anyhow::Result<()> {
+        self.blocks.lock().unwrap().push(block);
         Ok(())
     }
 
@@ -237,11 +224,11 @@ async fn ingests_decided_blocks() {
     {
         let blocks = sink.blocks.lock().unwrap();
         for (stored, expected) in blocks.iter().zip(chain.blocks()) {
-            assert_eq!(stored.leaf.leaf().commit(), expected.leaf.leaf().commit());
-            assert_eq!(stored.leaf.qc(), expected.leaf.qc());
+            assert_eq!(stored.leaf.commit(), expected.leaf.leaf().commit());
+            assert_eq!(&stored.cert1, expected.leaf.qc());
             assert_eq!(
-                stored.block.as_ref().map(|b| b.payload().encode()),
-                Some(expected.block.payload().encode())
+                stored.payload.as_deref(),
+                Some(&*expected.block.payload().encode())
             );
         }
         assert!(
@@ -283,7 +270,10 @@ async fn computes_the_genesis_vid_common() {
 
     wait_for(&sink, 1).await;
     let blocks = sink.blocks.lock().unwrap();
-    assert_eq!(blocks[0].vid_common.as_ref(), Some(&genesis.vid_common));
+    assert_eq!(
+        blocks[0].vid_common.as_ref(),
+        Some(genesis.vid_common.common())
+    );
 }
 
 /// The state certificate an entry carries reaches the sink with its block.
@@ -312,7 +302,7 @@ async fn passes_the_state_certificate() {
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
     wait_for(&sink, 1).await;
-    assert_eq!(*sink.state_certs.lock().unwrap(), vec![cert]);
+    assert_eq!(sink.blocks.lock().unwrap()[1].state_cert, Some(cert));
 }
 
 /// A restarted ingester continues from what the sink holds, and acknowledges that first.

@@ -1,6 +1,6 @@
 [package]
 name        = "ingester"
-description = "Moves the chain a consensus node decides into the query service"
+description = "Copies the chain a consensus node decides into the API service's store"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }
@@ -9,21 +9,27 @@ edition     = { workspace = true }
 anyhow                = { workspace = true }
 async-trait           = { workspace = true }
 bincode               = { workspace = true }
+chain-store           = { workspace = true }
+clap                  = { workspace = true }
 committable           = { workspace = true }
 consensus-api         = { workspace = true }
+espresso-types        = { workspace = true }
 futures               = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types         = { workspace = true }
 serde                 = { workspace = true }
 thiserror             = { workspace = true }
-tokio                 = { workspace = true }
+tokio                 = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tonic                 = { workspace = true }
 tracing               = { workspace = true }
+tracing-subscriber    = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
 bytes                 = { workspace = true }
+espresso-types        = { workspace = true, features = ["testing"] }
 hotshot-query-service = { workspace = true, features = ["testing"] }
 test-utils            = { workspace = true }
+versions              = { workspace = true }
 
 [lints]
 workspace = true
