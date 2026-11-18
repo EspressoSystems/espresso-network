@@ -2262,6 +2262,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "chain-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "committable",
+ "espresso-types",
+ "hotshot-types",
+ "serde",
+ "sqlx",
+ "test-utils",
+ "tokio",
+ "tracing",
+ "versions",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"

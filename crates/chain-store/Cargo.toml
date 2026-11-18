@@ -1,0 +1,33 @@
+[package]
+name        = "chain-store"
+description = "The record of the chain an API service keeps"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[features]
+# The conformance suite every backend runs, and a throwaway Postgres server to run it against.
+testing = ["dep:test-utils"]
+
+[dependencies]
+anyhow        = { workspace = true }
+async-trait   = { workspace = true }
+bincode       = { workspace = true }
+bytes         = { workspace = true }
+committable   = { workspace = true }
+espresso-types = { workspace = true }
+hotshot-types = { workspace = true }
+serde         = { workspace = true }
+sqlx          = { workspace = true }
+test-utils    = { workspace = true, optional = true }
+tokio         = { workspace = true, features = ["sync", "time", "rt"] }
+tracing       = { workspace = true }
+
+[dev-dependencies]
+espresso-types = { workspace = true, features = ["testing"] }
+test-utils     = { workspace = true }
+tokio          = { workspace = true, features = ["full"] }
+versions       = { workspace = true }
+
+[lints]
+workspace = true

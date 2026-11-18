@@ -8,6 +8,7 @@ members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
+    "crates/chain-store",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -63,6 +64,7 @@ default-members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/alloy-compat",
+    "crates/chain-store",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
@@ -167,6 +169,7 @@ cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
 ] }
+chain-store = { path = "crates/chain-store" }
 consensus-api = { path = "crates/consensus-api" }
 consensus-store = { path = "crates/consensus-store" }
 consensus-store-redb = { path = "crates/consensus-store-redb" }
