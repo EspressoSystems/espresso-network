@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {};
+window.SIDEBAR_ITEMS = {"fn":["verified_lc_contract_root","verified_proven_header"]};

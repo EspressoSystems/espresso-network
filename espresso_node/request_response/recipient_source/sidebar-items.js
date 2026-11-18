@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["responder_membership"],"struct":["RecipientSource"]};
+window.SIDEBAR_ITEMS = {"fn":["responder_membership","responders"],"struct":["RecipientSource"]};
