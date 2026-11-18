@@ -71,7 +71,7 @@ impl<T: NodeType> HasEpoch for Proposal<T> {
 impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
     fn from(wrapper: QuorumProposalWrapper<T>) -> Self {
         let qp = wrapper.proposal;
-        let epoch = qp.epoch.unwrap_or(EpochNumber::new(0));
+        let epoch = qp.epoch;
         Self {
             block_header: qp.block_header,
             view_number: qp.view_number,
@@ -95,7 +95,7 @@ impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
         QuorumProposalWrapper::from(QuorumProposal2 {
             block_header: p.block_header,
             view_number: p.view_number,
-            epoch: Some(p.epoch),
+            epoch: p.epoch,
             justify_qc: p.justify_qc,
             next_epoch_justify_qc: None,
             upgrade_certificate: p.upgrade_certificate.map(UpgradeCertificate2::strip_epoch),

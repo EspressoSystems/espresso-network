@@ -2202,7 +2202,7 @@ mod test {
         let mut quorum_proposal = Proposal {
             data: QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: None,
+                    epoch: EpochNumber::new(0),
                     block_header: leaf.block_header().clone(),
                     view_number: ViewNumber::genesis(),
                     justify_qc: QuorumCertificate2::genesis(
@@ -2286,7 +2286,7 @@ mod test {
         let quorum_proposal = Proposal {
             data: QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: None,
+                    epoch: EpochNumber::new(0),
                     block_header: leaf.block_header().clone(),
                     view_number: ViewNumber::new(1),
                     justify_qc: QuorumCertificate2::genesis(

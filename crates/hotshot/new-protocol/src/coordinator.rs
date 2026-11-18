@@ -1414,10 +1414,7 @@ where
                         );
                         return None;
                     }
-                    let Some(epoch) = fragment.data.epoch else {
-                        warn!(%node, %sender, %view, "ignoring vid share fragment without an epoch");
-                        return None;
-                    };
+                    let epoch = fragment.data.epoch;
                     if !self.is_fragment_epoch_admissible(epoch) {
                         warn!(
                             %node,

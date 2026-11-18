@@ -271,7 +271,7 @@ mod test {
                     version,
                 },
                 view_number: ViewNumber::new(view),
-                epoch: Some(EpochNumber::new(epoch)),
+                epoch: EpochNumber::new(epoch),
                 justify_qc,
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,

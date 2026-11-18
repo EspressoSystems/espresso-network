@@ -2716,8 +2716,8 @@ mod test {
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
-                epoch: None,
-                target_epoch: None,
+                epoch: EpochNumber::new(0),
+                target_epoch: EpochNumber::new(0),
                 common: avidm_param.clone(),
             }
             .to_proposal(&privkey)
@@ -2734,7 +2734,7 @@ mod test {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -2754,7 +2754,7 @@ mod test {
                 encoded_transactions: leaf_payload_bytes_arc,
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
@@ -2847,8 +2847,8 @@ mod test {
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
-                epoch: None,
-                target_epoch: None,
+                epoch: EpochNumber::new(0),
+                target_epoch: EpochNumber::new(0),
                 common: avidm_param,
             }
             .to_proposal(&privkey)
@@ -2857,7 +2857,7 @@ mod test {
         );
         let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 block_header: leaf.block_header().clone(),
                 view_number: data_view,
                 justify_qc: QuorumCertificate2::genesis(
@@ -2889,7 +2889,7 @@ mod test {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: data_view,
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,

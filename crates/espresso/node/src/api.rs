@@ -3258,7 +3258,7 @@ mod api_tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -3299,8 +3299,8 @@ mod api_tests {
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
-                epoch: Some(EpochNumber::new(0)),
-                target_epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
+                target_epoch: EpochNumber::new(0),
                 common: common.clone(),
             }
             .into();
@@ -3317,7 +3317,7 @@ mod api_tests {
                 encoded_transactions: payload_bytes_arc.clone(),
                 metadata: payload.ns_table().clone(),
                 view_number: leaf.view_number(),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             };
             let da_proposal = Proposal {
@@ -3490,7 +3490,7 @@ mod api_tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };

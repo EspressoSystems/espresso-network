@@ -773,14 +773,14 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         };
         let mut quorum_proposal = Proposal {
             data: QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: None,
+                    epoch: EpochNumber::new(0),
                     block_header: leaf.block_header().clone(),
                     view_number: ViewNumber::genesis(),
                     justify_qc: QuorumCertificate2::genesis(
@@ -846,7 +846,7 @@ mod tests {
             encoded_transactions: leaf_payload_bytes_arc.clone(),
             metadata: leaf_payload.ns_table().clone(),
             view_number: ViewNumber::new(0),
-            epoch: None,
+            epoch: EpochNumber::new(0),
             epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
@@ -1354,8 +1354,8 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         }
         .to_proposal(&privkey)
@@ -1375,7 +1375,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -1390,7 +1390,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
@@ -1572,8 +1572,8 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         }
         .to_proposal(&privkey)
@@ -1593,7 +1593,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -1608,7 +1608,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
@@ -1791,7 +1791,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -2054,8 +2054,8 @@ mod tests {
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
-                epoch: None,
-                target_epoch: None,
+                epoch: EpochNumber::new(0),
+                target_epoch: EpochNumber::new(0),
                 common: avidm_param,
             }
             .to_proposal(&privkey)
@@ -2078,7 +2078,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -2098,7 +2098,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc,
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
@@ -3019,7 +3019,7 @@ mod tests {
             Leaf2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE.base).await;
         let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 block_header: genesis_leaf.block_header().clone(),
                 view_number: genesis_leaf.view_number(),
                 justify_qc: QuorumCertificate2::genesis(
@@ -3172,8 +3172,8 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         }
         .to_proposal(&privkey)
@@ -3183,7 +3183,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc).unwrap(),
@@ -3209,7 +3209,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };

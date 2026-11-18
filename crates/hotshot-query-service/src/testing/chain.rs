@@ -142,7 +142,7 @@ impl MockChain {
             proposal: QuorumProposal2 {
                 block_header: header.clone(),
                 view_number: parent.view_number() + 1,
-                epoch: Some(self.epoch(height)),
+                epoch: self.epoch(height),
                 justify_qc: qc_for(parent, self.epoch_height),
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,
@@ -212,7 +212,7 @@ impl MockChain {
         ) else {
             panic!("chain disperses with AvidmGf2");
         };
-        let epoch = Some(self.epoch(block.height()));
+        let epoch = self.epoch(block.height());
         VidDisperseShare::V2(AvidmGf2DisperseShare {
             view_number: block.leaf.leaf().view_number(),
             epoch,

@@ -206,7 +206,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 encoded_transactions: block_payload.encode(),
                 metadata,
                 view_number,
-                epoch: Some(epoch),
+                epoch,
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             };
             let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {

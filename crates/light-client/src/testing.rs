@@ -206,7 +206,7 @@ pub async fn custom_leaf_chain(
     let mut qc = QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade).await;
     let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
         proposal: QuorumProposal2::<SeqTypes> {
-            epoch: None,
+            epoch: EpochNumber::new(1),
             block_header: genesis_leaf.block_header().clone(),
             view_number: genesis_leaf.view_number(),
             justify_qc: qc.clone(),
@@ -228,7 +228,8 @@ pub async fn custom_leaf_chain(
             .block_merkle_tree_root_mut() = block_merkle_tree.commitment();
         quorum_proposal.proposal.view_number = ViewNumber::new(height);
         map(&mut quorum_proposal.proposal);
-        let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+        let mut leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+        leaf.with_epoch = false;
 
         qc.view_number = leaf.view_number();
         qc.data.leaf_commit = Committable::commit(&leaf);
@@ -678,7 +679,7 @@ impl InnerTestClient {
             };
             let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: Some(epoch),
+                    epoch,
                     block_header,
                     view_number,
                     justify_qc,

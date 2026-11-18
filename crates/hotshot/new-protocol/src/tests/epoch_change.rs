@@ -973,8 +973,8 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     // The proposal is relabelled into epoch 3 to reach the transition window,
     // so its dispersal is too: a share pairs with a proposal only in the epoch
     // the proposal names.
-    vid_share.epoch = Some(EpochNumber::new(3));
-    vid_share.target_epoch = Some(EpochNumber::new(3));
+    vid_share.epoch = EpochNumber::new(3);
+    vid_share.target_epoch = EpochNumber::new(3);
     harness
         .apply_pair((
             ConsensusInput::Proposal(v17.leader_public_key, ProposalMessage::validated(signed)),

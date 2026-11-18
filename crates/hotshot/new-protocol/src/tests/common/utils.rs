@@ -596,11 +596,11 @@ impl TestData {
             // gives it: the two must agree for the share to pair with the
             // proposal. The epoch is not an input to the commitment, so
             // patching it does not invalidate the shares.
-            vid_disperse.epoch = Some(epoch);
-            vid_disperse.target_epoch = Some(epoch);
+            vid_disperse.epoch = epoch;
+            vid_disperse.target_epoch = epoch;
             for share in &mut vid_shares {
-                share.epoch = Some(epoch);
-                share.target_epoch = Some(epoch);
+                share.epoch = epoch;
+                share.target_epoch = epoch;
             }
 
             let needs_new_epoch = length.position(block_number.saturating_sub(1)).is_last();
@@ -1773,7 +1773,7 @@ impl ConsensusHarness {
                     &self.membership_coordinator,
                     *view,
                     *epoch,
-                    Some(*epoch),
+                    *epoch,
                     metadata,
                 )
                 .await

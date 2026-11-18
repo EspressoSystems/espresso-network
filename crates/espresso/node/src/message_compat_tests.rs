@@ -337,7 +337,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 encoded_transactions: payload.encode(),
                 metadata,
                 view_number: ViewNumber::genesis(),
-                epoch: Some(EpochNumber::genesis()),
+                epoch: EpochNumber::genesis(),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: signature.clone(),
@@ -666,7 +666,7 @@ async fn reference_new_protocol_messages(
         &membership,
         view,
         epoch,
-        Some(epoch),
+        epoch,
         &metadata,
     )
     .await
@@ -686,8 +686,8 @@ async fn reference_new_protocol_messages(
     let payload_commitment = vid_share.payload_commitment;
     let vid_fragment = AvidmGf2DisperseShareFragment::<SeqTypes> {
         view_number: view,
-        epoch: Some(epoch),
-        target_epoch: Some(epoch),
+        epoch,
+        target_epoch: epoch,
         payload_commitment: vid_share.payload_commitment,
         recipient_key: params.recipients[0],
         param: params.param.clone(),

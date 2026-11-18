@@ -501,8 +501,8 @@ async fn test_carried_later_timeout_certificate_raises_the_epoch() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
     let mut share = block.vid_share_for(&node_key);
     share.view_number = entered;
-    share.epoch = Some(ahead);
-    share.target_epoch = Some(ahead);
+    share.epoch = ahead;
+    share.target_epoch = ahead;
     // Sent by the leader of the view it is for, in its epoch.
     let leader = harness
         .consensus
@@ -3084,8 +3084,8 @@ async fn test_node_votes_once_in_a_view_it_has_left() {
     )
     .expect("sign the rival proposal");
     let mut rival_share = view.vid_share_for(&node_key);
-    rival_share.epoch = Some(next_epoch);
-    rival_share.target_epoch = Some(next_epoch);
+    rival_share.epoch = next_epoch;
+    rival_share.target_epoch = next_epoch;
     rival_share.payload_commitment = rival_payload;
     harness
         .apply_pair((
@@ -4161,7 +4161,7 @@ async fn vid_share_pairs_only_within_the_proposals_epoch() {
 
     let (proposal, honest_share) = view.proposal_input_consensus(&node_key);
     let mut relabelled = view.vid_share_for(&node_key);
-    relabelled.epoch = relabelled.epoch.map(|epoch| epoch + 1);
+    relabelled.epoch += 1;
     relabelled.target_epoch = relabelled.epoch;
 
     harness.apply(proposal).await;

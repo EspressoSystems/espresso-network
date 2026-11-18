@@ -1948,8 +1948,8 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
         if let MessageType::Consensus(ConsensusMessage::VidShareFragment(f)) =
             &mut fragment.message_type
         {
-            f.data.epoch = Some(EpochNumber::new(999));
-            f.data.target_epoch = Some(EpochNumber::new(999));
+            f.data.epoch = EpochNumber::new(999);
+            f.data.target_epoch = EpochNumber::new(999);
         }
         harness.message(fragment);
     }

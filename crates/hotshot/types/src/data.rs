@@ -199,22 +199,11 @@ pub struct DaProposal2<TYPES: NodeType> {
     /// View this proposal applies to
     pub view_number: ViewNumber,
     /// Epoch this proposal applies to
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// Indicates whether we are in epoch transition
     /// In epoch transition the next epoch payload commit should be calculated additionally
     pub epoch_transition_indicator: EpochTransitionIndicator,
-}
-
-impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
-    fn from(da_proposal: DaProposal<TYPES>) -> Self {
-        Self {
-            encoded_transactions: da_proposal.encoded_transactions,
-            metadata: da_proposal.metadata,
-            view_number: da_proposal.view_number,
-            epoch: None,
-            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-        }
-    }
 }
 
 impl<TYPES: NodeType> From<DaProposal2<TYPES>> for DaProposal<TYPES> {
@@ -621,8 +610,8 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     pub fn target_epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V0(_) => None,
-            Self::V1(share) => share.target_epoch,
-            Self::V2(share) => share.target_epoch,
+            Self::V1(share) => Some(share.target_epoch),
+            Self::V2(share) => Some(share.target_epoch),
         }
     }
 
@@ -802,7 +791,8 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     pub view_number: ViewNumber,
 
     /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 
     /// certificate that the proposal is chaining from
     pub justify_qc: QuorumCertificate2<TYPES>,
@@ -855,7 +845,8 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
     pub view_number: ViewNumber,
 
     /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 
     /// certificate that the proposal is chaining from
     pub justify_qc: QuorumCertificate2<TYPES>,
@@ -1019,14 +1010,6 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposalWrapper<TYPES> {
-    fn from(quorum_proposal: QuorumProposal<TYPES>) -> Self {
-        Self {
-            proposal: quorum_proposal.into(),
-        }
-    }
-}
-
 impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposalWrapper<TYPES> {
     fn from(quorum_proposal: QuorumProposal2Legacy<TYPES>) -> Self {
         Self {
@@ -1052,24 +1035,6 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Lega
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal
-    }
-}
-
-impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposal2<TYPES> {
-    fn from(quorum_proposal: QuorumProposal<TYPES>) -> Self {
-        Self {
-            block_header: quorum_proposal.block_header,
-            view_number: quorum_proposal.view_number,
-            epoch: None,
-            justify_qc: quorum_proposal.justify_qc.to_qc2(),
-            next_epoch_justify_qc: None,
-            upgrade_certificate: quorum_proposal.upgrade_certificate,
-            view_change_evidence: quorum_proposal
-                .proposal_certificate
-                .map(ViewChangeEvidence::to_evidence2),
-            next_drb_result: None,
-            state_cert: None,
-        }
     }
 }
 
@@ -1148,19 +1113,19 @@ impl HasViewNumber for UpgradeProposal2 {
 
 impl<NODE: NodeType> HasEpoch for QuorumProposal2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for DaProposal2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for QuorumProposal2Legacy<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
@@ -1889,7 +1854,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             proposal:
                 QuorumProposal2 {
                     view_number,
-                    epoch,
+                    epoch: _,
                     justify_qc,
                     next_epoch_justify_qc,
                     block_header,
@@ -1910,7 +1875,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             block_payload: None,
             view_change_evidence: view_change_evidence.clone(),
             next_drb_result: *next_drb_result,
-            with_epoch: epoch.is_some(),
+            with_epoch: true,
         }
     }
 }
@@ -1921,7 +1886,7 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
             proposal:
                 QuorumProposal2 {
                     view_number,
-                    epoch,
+                    epoch: _,
                     justify_qc,
                     next_epoch_justify_qc,
                     block_header,
@@ -1944,7 +1909,7 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
             block_payload: None,
             view_change_evidence,
             next_drb_result,
-            with_epoch: epoch.is_some(),
+            with_epoch: true,
         }
     }
 }

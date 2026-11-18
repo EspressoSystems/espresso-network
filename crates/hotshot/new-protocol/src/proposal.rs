@@ -432,10 +432,7 @@ impl<T: NodeType> Validator<T> {
         vid_proposal: &SignedProposal<T, VidDisperseShare2<T>>,
     ) -> Result<()> {
         let view = vid_proposal.data.view_number();
-        let epoch = vid_proposal
-            .data
-            .epoch
-            .ok_or(ValidationError::MissingEpoch(view, "vid share"))?;
+        let epoch = vid_proposal.data.epoch;
         let membership = self.membership(epoch).await?;
         let stake_table = membership.stake_table();
         let leader = match membership.leader(view) {

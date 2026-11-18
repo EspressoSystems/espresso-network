@@ -487,7 +487,7 @@ impl World {
             &self.membership,
             ViewNumber::new(view),
             epoch,
-            Some(epoch),
+            epoch,
             metadata,
         )
         .await

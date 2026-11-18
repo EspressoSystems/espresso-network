@@ -201,7 +201,11 @@ pub enum ConsensusOutput<T: NodeType> {
 ///
 /// That makes the share's epoch exactly as trustworthy as the proposal's, and
 /// no more.
-type PairingKey = (ViewNumber, Option<EpochNumber>, VidCommitment2);
+type PairingKey = (ViewNumber, EpochNumber, VidCommitment2);
+
+/// Below every real epoch (they start at 1), so `(view, KEY_FLOOR_EPOCH, _)` sorts before every
+/// [`PairingKey`] of `view`.
+const KEY_FLOOR_EPOCH: EpochNumber = EpochNumber::new(0);
 
 type UnpairedProposals<T> =
     BTreeMap<PairingKey, (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>)>;
@@ -1354,9 +1358,12 @@ impl<T: NodeType> Consensus<T> {
                 self.certs2 = self.certs2.split_off(&ViewEpoch::start(keep_from));
                 self.decided_views = self.decided_views.split_off(&keep_from);
                 self.proposals.retain_from(keep_from);
-                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, None, vc));
+                self.unpaired_proposals =
+                    self.unpaired_proposals
+                        .split_off(&(keep_from, KEY_FLOOR_EPOCH, vc));
                 self.unpaired_vid_shares =
-                    self.unpaired_vid_shares.split_off(&(keep_from, None, vc));
+                    self.unpaired_vid_shares
+                        .split_off(&(keep_from, KEY_FLOOR_EPOCH, vc));
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 let c = Commitment::default_commitment_no_preimage();
                 self.leaves = self.leaves.split_off(&(view, c));
@@ -1456,7 +1463,7 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "proposal payload commitment is not V2, discarding");
             return Protocol::Abort;
         };
-        let key = (view, Some(proposal.proposal.data.epoch), commit);
+        let key = (view, proposal.proposal.data.epoch, commit);
         let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
             let leaf_commit = proposal_commitment(&proposal.proposal.data);
             self.unpaired_proposals.insert(key, (sender, proposal));
@@ -1851,10 +1858,14 @@ impl<T: NodeType> Consensus<T> {
                 .find(certified)
                 .cloned()
         };
-        parked((view, None, vc)..(view + 1, None, vc)).or_else(|| {
+        parked((view, KEY_FLOOR_EPOCH, vc)..(view + 1, KEY_FLOOR_EPOCH, vc)).or_else(|| {
             block_number
                 .is_some_and(|bn| self.epoch_length.position(bn).is_last())
-                .then(|| parked((ViewNumber::genesis(), None, vc)..(view, None, vc)))
+                .then(|| {
+                    parked(
+                        (ViewNumber::genesis(), KEY_FLOOR_EPOCH, vc)..(view, KEY_FLOOR_EPOCH, vc),
+                    )
+                })
                 .flatten()
         })
     }
@@ -1890,7 +1901,7 @@ impl<T: NodeType> Consensus<T> {
             return Some(share.payload_byte_len());
         }
         self.unpaired_vid_shares
-            .get(&(view, Some(proposal.epoch), commitment))
+            .get(&(view, proposal.epoch, commitment))
             .map(|share| share.payload_byte_len())
     }
 
