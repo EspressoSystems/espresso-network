@@ -197,8 +197,10 @@ pub fn selections() -> Result<Vec<Case>> {
 /// Every read holds key updates the node drops: ones whose keys do not decode, and ones
 /// whose signatures do not verify, which the contract can emit and a replay would stop
 /// on. Every other read is of validators with stake, so that it gives a committee.
+/// Every fifth read holds an event the node stops on, when it fetches or in the replay,
+/// so that it gives no stake table unless it ends before that event.
 ///
-/// Fails if no read with a dropped key update gave a committee.
+/// Fails if no read with a dropped key update gave a committee, or if no read stopped.
 pub fn committees() -> Result<Vec<Case>> {
     let mut rng = StdRng::seed_from_u64(7);
     let pool = Pool::new(&mut rng, 8);
@@ -211,6 +213,7 @@ pub fn committees() -> Result<Vec<Case>> {
         .collect();
     let mut cases = Vec::new();
     let mut committees = 0;
+    let mut stopped = 0;
     for round in 0..150 {
         let mut events = if round % 2 == 0 {
             let len = rng.gen_range(1..60);
@@ -228,6 +231,27 @@ pub fn committees() -> Result<Vec<Case>> {
             };
             let at = rng.gen_range(0..=events.len());
             events.insert(at, dropped);
+        }
+        if round % 5 == 4 {
+            let validator = pool.account(&mut rng);
+            let fatal = if round % 10 == 4 {
+                // Rejected when the logs are fetched.
+                StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                    validator,
+                    timestamp: U256::ZERO,
+                    oldCommission: 0,
+                    newCommission: 10_001,
+                })
+            } else {
+                // Rejected in the replay: the validator never registered.
+                StakeTableEvent::Delegate(Delegated {
+                    delegator: validator,
+                    validator: random_address(&mut rng),
+                    amount: U256::from(1),
+                })
+            };
+            let at = rng.gen_range(0..=events.len());
+            events.insert(at, fatal);
         }
         let (mut block, mut index) = (0, 0);
         let mut logs: Vec<(EventKey, StakeTableEvent)> = events
@@ -261,10 +285,11 @@ pub fn committees() -> Result<Vec<Case>> {
             usable.clone(),
         )?;
         if let Case::Committee {
-            active: Some(_), ..
+            finished, active, ..
         } = &case
         {
-            committees += usize::from(drops);
+            committees += usize::from(drops && active.is_some());
+            stopped += usize::from(!finished);
         }
         cases.push(case);
     }
@@ -272,6 +297,7 @@ pub fn committees() -> Result<Vec<Case>> {
         committees > 0,
         "no read with a dropped key update gave a committee"
     );
+    ensure!(stopped > 0, "no read stopped on an event");
     Ok(cases)
 }
 
