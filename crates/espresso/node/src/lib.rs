@@ -678,7 +678,9 @@ where
     info!("Stake reloaded");
 
     let persistence = Arc::new(persistence);
-    let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
+    let epoch_length =
+        std::num::NonZeroU64::new(epoch_height).context("genesis needs a positive epoch_height")?;
+    let coordinator = EpochMembershipCoordinator::new(membership, epoch_length, &persistence);
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -1621,7 +1623,7 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
-                config.epoch_height,
+                std::num::NonZeroU64::new(config.epoch_height).unwrap(),
                 &persistence.clone(),
             );
 

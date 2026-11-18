@@ -190,8 +190,8 @@ test-dev-node *args:
 test-all:
     just nextest --profile all
 
-# A pass means the recorded node obeyed `ProtocolHistory` and discharged what it
-# owed within `defaultDelta` (`Prompt`). See `lean/new-protocol-diff/CheckMain.lean`
+# A pass means the recorded node obeyed `ProtocolHistory` and acted on what it
+# owed in the step it owed it in (`StepPrompt`). See `lean/new-protocol-diff/CheckMain.lean`
 # and `crates/hotshot/new-protocol/src/trace.rs`.
 #
 # The suite is recorded at 0.7 (`NP_TEST_VERSION`), whose timeouts sign their
@@ -295,6 +295,10 @@ check-features-ci *args:
         --exclude hotshot-utils \
         --exclude vid \
         {{args}}
+
+# check that no test-only crate or test feature reaches the default-member build
+check-production-deps:
+    scripts/check-production-deps
 
 # requires the succinct toolchain (`sp1up`, https://docs.succinct.xyz/docs/sp1/getting-started/install)
 # check that the zkVM client crates compile for the SP1 target
