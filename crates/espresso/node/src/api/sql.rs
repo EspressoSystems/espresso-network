@@ -117,7 +117,8 @@ impl SequencerDataSource for DataSource {
         }
 
         // Transaction and payload totals count from genesis, and a pruned node never has those
-        // blocks.
+        // blocks. Without an aggregator, the data source also deletes the totals an earlier run
+        // left.
         if opt.prune {
             builder = builder.disable_aggregator();
         }
@@ -202,14 +203,6 @@ pub(in crate::api) async fn init_query_module(
         update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
     );
 
-    // A pruned node has no aggregator, so it never reads or adds to the totals an earlier run left.
-    if mod_opt.prune {
-        tasks.spawn(
-            "delete transaction and payload totals",
-            delete_totals(inner_storage.clone()),
-        );
-    }
-
     // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
     if mod_opt.archive && !mod_opt.archive_full_state {
         let get_node_state = {
@@ -261,18 +254,6 @@ pub(in crate::api) async fn init_query_module(
         Box::new(ApiEventConsumer::from(ds)),
         Some(RequestResponseStorage::Sql(inner_storage)),
     ))
-}
-
-/// Heights of transaction and payload totals deleted per transaction on SQLite.
-const TOTALS_DELETE_HEIGHTS: u64 = 1000;
-
-/// Delete the transaction and payload totals an earlier run left, and give their space back.
-async fn delete_totals(storage: Arc<SqlStorage>) {
-    match storage.delete_aggregates(TOTALS_DELETE_HEIGHTS).await {
-        Ok(false) => {},
-        Ok(true) => tracing::info!("deleted the totals an earlier run left"),
-        Err(err) => tracing::warn!("failed to delete the totals an earlier run left: {err:#}"),
-    }
 }
 
 /// Prune archive state older than the light client contract's retained history. Block merkle paths

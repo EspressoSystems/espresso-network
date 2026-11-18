@@ -344,6 +344,10 @@ impl Config {
     }
 }
 
+/// Heights of totals [`SqlStorage::delete_aggregates`] deletes per transaction on SQLite, when a
+/// data source without an aggregator deletes the ones an earlier run left.
+const AGGREGATE_DELETE_HEIGHTS: u64 = 1000;
+
 /// The pause between two transactions of [`SqlStorage::delete_aggregates`].
 const AGGREGATE_DELETE_PAUSE: Duration = Duration::from_millis(250);
 
@@ -1278,6 +1282,10 @@ impl PruneStorage for SqlStorage {
         self.prune_batch(pruner, category, from, to).await?;
         self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
         Ok(Some(to))
+    }
+
+    async fn delete_leftover_aggregates(&self) -> anyhow::Result<bool> {
+        self.delete_aggregates(AGGREGATE_DELETE_HEIGHTS).await
     }
 
     async fn init_pruned_height(&self, height: u64) -> anyhow::Result<()> {
