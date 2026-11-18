@@ -31,7 +31,9 @@ Reads **finalized L1 blocks** only, to avoid reorgs.
 events that affect consensus membership, including the V2/V3 event variants.
 
 A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`
-drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake.
+drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake. From
+`CANONICAL_STAKE_TABLE_ORDER_VERSION` on, equal stakes rank by address and the result is listed by address; before, both
+follow registration order.
 Effective from the next epoch boundary.
 
 ## Fast finality
