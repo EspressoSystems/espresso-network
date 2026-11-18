@@ -304,6 +304,8 @@ mod tests {
     pub trait TestablePersistence: SequencerPersistence + MembershipPersistence {
         type Storage: Sync;
 
+        const DELETES_VID_SHARES_ON_DECIDE: bool;
+
         async fn tmp_storage() -> Self::Storage;
 
         /// Seed the historical eQC format without depending on a production writer.
@@ -1042,8 +1044,12 @@ mod tests {
             );
 
             assert_eq!(
-                storage.load_vid_share(ViewNumber::new(i)).await.unwrap(),
-                None
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                P::DELETES_VID_SHARES_ON_DECIDE
             );
         }
 
@@ -1118,8 +1124,12 @@ mod tests {
         );
 
         assert_eq!(
-            storage.load_vid_share(ViewNumber::new(3)).await.unwrap(),
-            None
+            storage
+                .load_vid_share(ViewNumber::new(3))
+                .await
+                .unwrap()
+                .is_none(),
+            P::DELETES_VID_SHARES_ON_DECIDE
         );
         assert_eq!(
             storage.load_quorum_proposals().await.unwrap(),
@@ -1506,12 +1516,13 @@ mod tests {
         // Garbage collection should have run.
         for i in 0..4 {
             tracing::info!(i, "check proposal garbage collected");
-            assert!(
+            assert_eq!(
                 storage
                     .load_vid_share(ViewNumber::new(i))
                     .await
                     .unwrap()
-                    .is_none()
+                    .is_none(),
+                P::DELETES_VID_SHARES_ON_DECIDE
             );
             assert!(
                 storage
@@ -1742,13 +1753,13 @@ mod tests {
 
         // GC ran for the processed range.
         for i in 0..4 {
-            assert!(
+            assert_eq!(
                 storage
                     .load_vid_share(ViewNumber::new(i))
                     .await
                     .unwrap()
                     .is_none(),
-                "process_decided_events should have garbage collected VID shares"
+                P::DELETES_VID_SHARES_ON_DECIDE
             );
             assert!(
                 storage
@@ -3369,8 +3380,12 @@ mod tests {
         );
         for i in 0..2 {
             assert_eq!(
-                storage.load_vid_share(ViewNumber::new(i)).await.unwrap(),
-                None
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                P::DELETES_VID_SHARES_ON_DECIDE
             );
         }
         // Consensus can still decide view 3, so pruning must not reach past the decided view.
