@@ -20,7 +20,7 @@ use hotshot_types::{
 };
 use tokio::sync::mpsc;
 
-use super::utils::reconstructed_blocks;
+use super::utils::{epoch_length, reconstructed_blocks};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -79,7 +79,7 @@ pub async fn build_test_coordinator(
         config: upgrade_config,
     } = upgrade;
 
-    let epoch_manager = EpochManager::new(epoch_height, membership.clone());
+    let epoch_manager = EpochManager::new(epoch_length(epoch_height), membership.clone());
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -111,7 +111,7 @@ pub async fn build_test_coordinator(
         10,
         upgrade_lock.clone(),
         initial_leaf,
-        epoch_height,
+        epoch_length(epoch_height),
     );
 
     let vid_disperser = VidDisperser::new(
@@ -256,12 +256,15 @@ pub async fn build_test_coordinator(
 
     let proposal_validator = ProposalValidator::new(
         membership.clone(),
-        epoch_height,
+        epoch_length(epoch_height),
         upgrade_lock.clone(),
         consensus.cert1_at(ViewNumber::genesis()),
     );
-    let share_validator =
-        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator = VidShareValidator::new(
+        membership.clone(),
+        epoch_length(epoch_height),
+        upgrade_lock.clone(),
+    );
 
     let service_record = ServiceRecord {
         epoch: EpochNumber::genesis(),

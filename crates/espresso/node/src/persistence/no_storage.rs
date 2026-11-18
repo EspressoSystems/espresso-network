@@ -1,5 +1,5 @@
 //! Mock implementation of persistence, for testing.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -167,6 +167,10 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        Ok(BTreeSet::new())
     }
 
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {

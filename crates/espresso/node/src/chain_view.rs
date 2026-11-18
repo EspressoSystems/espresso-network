@@ -73,7 +73,12 @@ impl<P: SequencerPersistence> ChainView<P> {
     pub(crate) async fn resume(&self, leaf: &LeafQueryData<SeqTypes>) {
         self.track_chain_config(leaf.header()).await;
         let last = (leaf.leaf().height(), leaf.leaf().view_number());
-        self.participation.lock().last = Some(last);
+        let mut participation = self.participation.lock();
+        if let Some(epoch) = leaf.leaf().epoch(self.epoch_height) {
+            participation.tracker = ParticipationTracker::new(&self.coordinator, epoch);
+        }
+        participation.last = Some(last);
+        drop(participation);
         self.decided.send_replace(Some(leaf.clone()));
     }
 

@@ -6,6 +6,8 @@
 //! epochs come from the API services, which keep history. The events are kept in full, since a
 //! stake table is computed from all events before its epoch.
 
+use std::collections::BTreeSet;
+
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -184,6 +186,11 @@ impl MembershipPersistence for MembershipStore {
             .collect::<anyhow::Result<Vec<IndexedStake>>>()?;
         stakes.sort_by_key(|(epoch, ..)| std::cmp::Reverse(*epoch));
         Ok(Some(stakes))
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let entries = self.blocking(|s| s.app_entries(STAKE, &[])).await?;
+        entries.iter().map(|(k, _)| epoch_of(k)).collect()
     }
 
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {

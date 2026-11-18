@@ -1,6 +1,9 @@
 #[cfg(feature = "node")]
 use std::time::Duration;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
@@ -223,6 +226,10 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        Ok(BTreeSet::new())
+    }
+
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         Ok(None)
     }
@@ -361,7 +368,11 @@ impl NodeState {
         .expect("genesis without duplicate keys");
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap(),
+            &storage,
+        );
         Self::new(
             0,
             chain_config,
@@ -394,7 +405,11 @@ impl NodeState {
         )
         .expect("genesis without duplicate keys");
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap(),
+            &storage,
+        );
 
         Self::new(
             0,
@@ -427,7 +442,11 @@ impl NodeState {
         .expect("genesis without duplicate keys");
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap(),
+            &storage,
+        );
         Self::new(
             0,
             ChainConfig::default(),
@@ -524,7 +543,11 @@ impl Default for NodeState {
         )
         .expect("genesis without duplicate keys");
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
+        let coordinator = EpochMembershipCoordinator::new(
+            membership,
+            std::num::NonZeroU64::new(100).unwrap(),
+            &storage,
+        );
 
         Self::new(
             1u64,
@@ -608,7 +631,13 @@ impl Upgrade {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod mock {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{
+            Mutex as StdMutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use anyhow::Context;
     use async_trait::async_trait;
@@ -620,35 +649,38 @@ pub mod mock {
 
     use super::*;
     use crate::{
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-        retain_accounts,
+        BackoffParams, BlockMerkleCommitment, BlockMerkleTree, FeeAccount, FeeAccountProof,
+        FeeMerkleCommitment, LcContractFinalizedState, Leaf2, retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
     };
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct MockStateCatchup {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
         delay: std::time::Duration,
-    }
-
-    impl Default for MockStateCatchup {
-        fn default() -> Self {
-            Self {
-                backoff: Default::default(),
-                state: Default::default(),
-                delay: std::time::Duration::ZERO,
-            }
-        }
+        /// Headers served to the proven-header and anchor requests, by height.
+        headers: BTreeMap<u64, Header>,
+        /// Calls of `try_fetch_proven_header` that fail before the first success.
+        failing_header_calls: usize,
+        /// Calls made to `try_fetch_proven_header`.
+        proven_header_calls: Arc<AtomicUsize>,
+        /// The `retry` argument of each call to `try_fetch_proven_header`, in call order.
+        proven_header_retries: Arc<StdMutex<Vec<usize>>>,
+        /// Heights whose `try_fetch_proven_header` calls fail.
+        unavailable_heights: Arc<StdMutex<BTreeSet<u64>>>,
+        /// Calls of `try_fetch_lc_contract_block_merkle_root` that fail before the first success.
+        failing_anchor_calls: usize,
+        /// Calls made to `try_fetch_lc_contract_block_merkle_root`.
+        anchor_calls: Arc<AtomicUsize>,
     }
 
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
         fn from_iter<I: IntoIterator<Item = (ViewNumber, Arc<ValidatedState>)>>(iter: I) -> Self {
             Self {
-                backoff: Default::default(),
                 state: iter.into_iter().collect(),
-                delay: std::time::Duration::ZERO,
+                ..Default::default()
             }
         }
     }
@@ -657,6 +689,48 @@ pub mod mock {
         pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
             self.delay = delay;
             self
+        }
+
+        /// Serves the proven-header and anchor requests from `headers`, keyed by height; the root
+        /// answer is the block Merkle root of the header at `lc_contract_state.height`.
+        pub fn with_headers(mut self, headers: impl IntoIterator<Item = Header>) -> Self {
+            self.headers = headers
+                .into_iter()
+                .map(|header| (header.height(), header))
+                .collect();
+            self
+        }
+
+        /// Fails the first `calls` calls of `try_fetch_proven_header`; the root request never fails.
+        pub fn with_failing_header_calls(mut self, calls: usize) -> Self {
+            self.failing_header_calls = calls;
+            self
+        }
+
+        /// Fails the first `calls` calls of `try_fetch_lc_contract_block_merkle_root`.
+        pub fn with_failing_anchor_calls(mut self, calls: usize) -> Self {
+            self.failing_anchor_calls = calls;
+            self
+        }
+
+        /// Makes `try_fetch_proven_header` fail at exactly `heights` from now on; shared by clones.
+        pub fn set_unavailable_heights(&self, heights: impl IntoIterator<Item = u64>) {
+            *self.unavailable_heights.lock().unwrap() = heights.into_iter().collect();
+        }
+
+        /// Calls made to `try_fetch_lc_contract_block_merkle_root` so far.
+        pub fn anchor_calls(&self) -> usize {
+            self.anchor_calls.load(Ordering::SeqCst)
+        }
+
+        /// Calls made to `try_fetch_proven_header` so far.
+        pub fn proven_header_calls(&self) -> usize {
+            self.proven_header_calls.load(Ordering::SeqCst)
+        }
+
+        /// The `retry` argument of each call to `try_fetch_proven_header` so far, in call order.
+        pub fn proven_header_retries(&self) -> Vec<usize> {
+            self.proven_header_retries.lock().unwrap().clone()
         }
     }
 
@@ -781,6 +855,54 @@ pub mod mock {
 
         fn is_local(&self) -> bool {
             true
+        }
+
+        async fn try_fetch_lc_contract_block_merkle_root(
+            &self,
+            _retry: usize,
+            lc_contract_state: &LcContractFinalizedState,
+        ) -> anyhow::Result<BlockMerkleCommitment> {
+            let call = self.anchor_calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::ensure!(
+                call >= self.failing_anchor_calls,
+                "anchor call {call} fails"
+            );
+            let header = self
+                .headers
+                .get(&lc_contract_state.height)
+                .context("no header at the LC contract height")?;
+            lc_contract_state.verify_header(header)
+        }
+
+        async fn try_fetch_proven_header(
+            &self,
+            retry: usize,
+            root_height: u64,
+            root: BlockMerkleCommitment,
+            height: u64,
+        ) -> anyhow::Result<Header> {
+            self.proven_header_retries.lock().unwrap().push(retry);
+            let root_header = self
+                .headers
+                .get(&root_height)
+                .with_context(|| format!("no header at root height {root_height}"))?;
+            anyhow::ensure!(
+                root == root_header.block_merkle_tree_root(),
+                "root is not the block Merkle root of the header at height {root_height}"
+            );
+            let call = self.proven_header_calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::ensure!(
+                call >= self.failing_header_calls,
+                "header call {call} fails"
+            );
+            anyhow::ensure!(
+                !self.unavailable_heights.lock().unwrap().contains(&height),
+                "no proof at height {height}"
+            );
+            self.headers
+                .get(&height)
+                .cloned()
+                .with_context(|| format!("no header at height {height}"))
         }
     }
 }

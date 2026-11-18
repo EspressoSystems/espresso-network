@@ -32,7 +32,7 @@ use crate::{
         payload::{PayloadFetchMessage, PayloadRequestBody},
     },
     network::Cliquenet,
-    tests::common::runner::TestRunner,
+    tests::common::{runner::TestRunner, utils::epoch_length},
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -249,7 +249,11 @@ fn rotating_membership(members: &[PeerConfig<TestTypes>]) -> EpochMembershipCoor
     for epoch in 3..=5 {
         membership.register_epoch(EpochNumber::new(epoch), INITIAL_DRB_RESULT);
     }
-    EpochMembershipCoordinator::new(membership, EPOCH_HEIGHT, &TestStorage::default())
+    EpochMembershipCoordinator::new(
+        membership,
+        epoch_length(EPOCH_HEIGHT),
+        &TestStorage::default(),
+    )
 }
 
 /// Networks handshake only with networks of the same name.

@@ -114,7 +114,6 @@ impl<P: SequencerPersistence> ValidatorApi<P> {
             node.persistence(),
             node.network_config(),
             upgrade,
-            EpochNumber::genesis(),
             crate::follower::SubmitTo::Consensus(node.consensus_api_addr()),
         )
         .await?;

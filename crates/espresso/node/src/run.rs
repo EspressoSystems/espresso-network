@@ -301,7 +301,6 @@ where
             base_timeout: opt.catchup_base_timeout,
             http_delay: opt.http_catchup_delay,
         },
-        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
     };
 
     let empty_block_delay = opt.empty_block_delay;
@@ -333,7 +332,6 @@ where
                 options: l1_params.options.clone(),
             };
             let api_catchup = network_params.catchup.clone();
-            let bootstrap_timeout = network_params.bootstrap_epoch_catchup_timeout;
             let api_genesis = genesis.clone();
             let validator = http_opt
                 .serve(move |metrics, consumer, storage, _| {
@@ -359,7 +357,7 @@ where
                         let (api, view) = init_api_service(
                             &api_genesis,
                             api_catchup,
-                            bootstrap_timeout,
+                            true,
                             &*api_metrics,
                             api_persistence,
                             api_l1_params,

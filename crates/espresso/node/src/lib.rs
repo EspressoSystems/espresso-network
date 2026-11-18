@@ -1,8 +1,10 @@
 mod external_event_handler;
+mod lc_contract_headers;
+mod lc_contract_seed;
 pub mod membership_store;
 mod message_compat_tests;
 mod request_response;
-mod startup_catchup;
+mod stake_table_backfill;
 
 pub mod api;
 pub mod catchup;
@@ -100,9 +102,6 @@ pub struct NetworkParams {
     pub private_staking_key: BLSPrivKey,
     pub private_state_key: StateSignKey,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// The Ed25519 public key the API service authenticates requests with, if it does.
@@ -414,7 +413,6 @@ where
         &*metrics,
         genesis.stake_table.capacity,
         event_consumer,
-        network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
         leader_trace_dir,
@@ -628,13 +626,15 @@ where
 
     let state_catchup_providers =
         ParallelStateCatchup::new(&[]).with_fallback_delay(catchup.http_delay);
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
-        catchup.state_peers,
-        catchup.backoff,
-        catchup.base_timeout,
-        metrics,
-    );
-    state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    if !catchup.state_peers.is_empty() {
+        let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+            catchup.state_peers,
+            catchup.backoff,
+            catchup.base_timeout,
+            metrics,
+        );
+        state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    }
 
     persistence.enable_metrics(metrics);
 
@@ -681,9 +681,11 @@ where
     info!("Stake reloaded");
 
     let persistence = Arc::new(persistence);
+    let epoch_length =
+        std::num::NonZeroU64::new(epoch_height).context("genesis needs a positive epoch_height")?;
     let coordinator = match &membership_store {
-        Some(store) => EpochMembershipCoordinator::new(membership, epoch_height, store),
-        None => EpochMembershipCoordinator::new(membership, epoch_height, &persistence),
+        Some(store) => EpochMembershipCoordinator::new(membership, epoch_length, store),
+        None => EpochMembershipCoordinator::new(membership, epoch_length, &persistence),
     };
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
@@ -719,11 +721,9 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
-/// the first step, which silently downgrades the node to a stale epoch window when it
-/// exceeds its timeout. Untimed: an unreachable L1 panics after
-/// `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, so that the seed's
+/// installs, the follower's polls and the startup dial do not load that scan onto their first
+/// read. Untimed: an unreachable L1 panics after `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
@@ -850,8 +850,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, Header, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -859,7 +859,10 @@ pub mod testing {
         future::join_all,
         stream::{Stream, StreamExt},
     };
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::{
+        sol_types::{LightClientStateSol, LightClientV3Mock},
+        stake_table::StakeTableContractVersion,
+    };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
@@ -1279,7 +1282,7 @@ pub mod testing {
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
                 l1_opt: L1ClientOptions {
                     stake_table_update_interval: Duration::from_secs(5),
-                    l1_events_max_block_range: 1000,
+                    l1_events_max_block_range: std::num::NonZeroU64::new(1000).unwrap(),
                     l1_polling_interval: Duration::from_secs(1),
                     subscription_timeout: Duration::from_secs(5),
                     ..Default::default()
@@ -1414,6 +1417,42 @@ pub mod testing {
         /// that was used to set up this config.
         pub fn contracts(&self) -> Option<Contracts> {
             self.contracts.clone()
+        }
+
+        /// Sets the mock LC contract's `finalizedState` to `header`'s height and `block_comm_root`,
+        /// as a prover would after proving it; `viewNum` keeps its value. `commitment_header`
+        /// supplies the `block_comm_root`: `header` for a valid state, another header for one no
+        /// header at that height matches. `contracts` are those the network deployed.
+        pub async fn set_lc_contract_finalized_state(
+            &self,
+            contracts: &Contracts,
+            header: &Header,
+            commitment_header: &Header,
+        ) -> anyhow::Result<()> {
+            let address = contracts
+                .address(Contract::LightClientProxy)
+                .context("no LightClientProxy deployed")?;
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(self.signer.clone()))
+                .connect_http(self.l1_url.clone());
+            let lc = LightClientV3Mock::new(address, &provider);
+            let current = LightClientStateSol::from(lc.finalizedState().call().await?);
+            let proven =
+                LightClientStateSol::from(header.get_light_client_state(ViewNumber::new(0))?);
+            let committed = LightClientStateSol::from(
+                commitment_header.get_light_client_state(ViewNumber::new(0))?,
+            );
+            let state = LightClientStateSol {
+                viewNum: current.viewNum,
+                blockCommRoot: committed.blockCommRoot,
+                ..proven
+            };
+            lc.setFinalizedState(state.into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            Ok(())
         }
 
         pub fn validator_providers(
@@ -1590,8 +1629,11 @@ pub mod testing {
             let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
-            let coordinator =
-                EpochMembershipCoordinator::new(membership, config.epoch_height, &membership_store);
+            let coordinator = EpochMembershipCoordinator::new(
+                membership,
+                std::num::NonZeroU64::new(config.epoch_height).unwrap(),
+                &membership_store,
+            );
 
             let max_block_size = *chain_config.max_block_size;
             let mut node_state = NodeState::new(
@@ -1662,7 +1704,6 @@ pub mod testing {
                 metrics,
                 stake_table_capacity,
                 event_consumer,
-                Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
                 None,
