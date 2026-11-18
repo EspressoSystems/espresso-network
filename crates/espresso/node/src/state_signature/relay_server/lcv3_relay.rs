@@ -3,12 +3,13 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{FixedBytes, U256};
 use axum::http::StatusCode;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     light_client::{
-        LCV3StateSignatureRequestBody, LCV3StateSignaturesBundle, LightClientState, StateVerKey,
+        LCV3StateSignatureRequestBody, LCV3StateSignaturesBundle, LightClientState,
+        StakeTableState, StateVerKey,
     },
     traits::signature_key::LCV3StateSignatureKey,
 };
@@ -33,8 +34,12 @@ pub trait LCV3StateRelayServerDataSource {
 
 /// Server state that tracks the light client V3 state and signatures
 pub struct LCV3StateRelayServerState {
-    /// Bundles for light client V3
-    bundles: HashMap<u64, HashMap<LightClientState, LCV3StateSignaturesBundle>>,
+    /// Bundles for light client V3, keyed by everything a signature commits to, so signers that
+    /// disagree on `next_stake` or `auth_root` never share a bundle.
+    bundles: HashMap<
+        u64,
+        HashMap<(LightClientState, StakeTableState, FixedBytes<32>), LCV3StateSignaturesBundle>,
+    >,
 
     /// The latest state signatures bundle for LCV3 light client
     latest_available_bundle: Option<LCV3StateSignaturesBundle>,
@@ -100,7 +105,7 @@ impl LCV3StateRelayServerDataSource for LCV3StateRelayServerState {
         self.gc_queue.insert(block_height);
 
         let bundle = bundles_at_height
-            .entry(req.state)
+            .entry((req.state, req.next_stake, req.auth_root))
             .or_insert(LCV3StateSignaturesBundle {
                 state: req.state,
                 next_stake: req.next_stake,
