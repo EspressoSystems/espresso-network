@@ -88,7 +88,7 @@ use crate::{
         RequestResponseProtocol,
         request::{Request, Response},
     },
-    state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
+    state_cert::{StateCertFetchError, ensure_cert_can_exist},
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::{SequencerApiVersion, SequencerContext};
@@ -734,7 +734,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
             ))),
             Ok(Ok(cert)) => {
                 // Validation errors should be mapped to ValidationError
-                validate_state_cert(
+                espresso_types::state_cert::validate_state_cert(
                     &cert,
                     &stake_table,
                     EpochNumber::new(epoch),

@@ -7,6 +7,8 @@ pub use v0::*;
 pub mod decided_state;
 pub mod eth_signature_key;
 mod reference_tests;
+#[cfg(feature = "node")]
+pub mod state_cert;
 
 /// Panics when compiled without the `node` feature. Node binaries call this at
 /// startup so a build without consensus support fails immediately instead of
