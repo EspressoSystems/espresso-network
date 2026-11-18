@@ -133,18 +133,45 @@ def readLeaders (text : String) : Std.TreeMap ViewNumber (List (EpochNumber × P
         | _, _ => leaders
       | _ => leaders
 
+/--
+The committee of each epoch the recorder saw one for: the
+`# committee <epoch> <key> …` lines.
+-/
+def readCommittees (text : String) : List (EpochNumber × List PubKey) :=
+  (text.splitOn "\n").filterMap fun line =>
+    let tag := "# committee "
+    if !line.startsWith tag then none
+    else
+      match (line.drop tag.length).toString.trimAscii.toString.splitOn " " with
+      | e :: keys =>
+        e.toNat?.map fun e =>
+          (⟨e⟩, keys.filterMap fun key =>
+            (cryptoFromJson (Json.str (key.replace "\"" ""))).toOption.map PubKey.mk)
+      | [] => none
+
+/--
+Whether `node` is in the committee of epoch `e`, by what `readCommittees` read.
+An epoch the trace names no committee for is read as one the node is in. A
+recorder writes an epoch with no members while its node cannot resolve the
+committee, and again once it can: the last line for an epoch counts.
+-/
+def memberIn (committees : List (EpochNumber × List PubKey)) (node : PubKey) (e : EpochNumber) :
+    Bool :=
+  ((committees.reverse.lookup e).map (·.contains node)).getD true
+
 /-- The leader of epoch `e` at view `v`, in a schedule `readLeaders` read. -/
 def leaderIn (leaders : Std.TreeMap ViewNumber (List (EpochNumber × PubKey)))
     (e : EpochNumber) (v : ViewNumber) : Option PubKey :=
   ((leaders.get? v).getD []).lookup e
 
 /--
-Whether the trace says its timeouts sign no lock: the `# timeouts sign no lock`
-line. Before the certificate rule a timeout vote and certificate carry no lock,
-which the specification does not model.
+Whether the trace says it was, at least in part, before the certificate rule: the
+`# before the certificate rule` line. Before it a timeout vote and certificate
+carry no lock, and a node votes by the rules it replaced, which the specification
+does not model.
 -/
-def signsNoLock (text : String) : Bool :=
-  (text.splitOn "\n").any (· == "# timeouts sign no lock")
+def beforeCertificateRule (text : String) : Bool :=
+  (text.splitOn "\n").any (· == "# before the certificate rule")
 
 /--
 Whether the test that recorded the trace failed: the `# test failed` line. A failing

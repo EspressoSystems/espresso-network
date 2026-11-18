@@ -270,7 +270,7 @@ fn setup_with(
 
     let coordinator = EpochMembershipCoordinator::new(
         committees,
-        EPOCH_HEIGHT,
+        std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
         &TestStorage::<SeqTypes>::default(),
     )
     .with_catchup_timeout(catchup_timeout);
