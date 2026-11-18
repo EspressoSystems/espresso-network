@@ -1,9 +1,10 @@
 //! The record of the chain an API service keeps.
 //!
-//! The store holds one [`Item`] per block height: the leaf, the certificates that decided it, its
-//! VID common data and, at an epoch root, the light client state certificate. Payloads are kept
-//! apart, since they can be several megabytes and a height can have its item without its payload.
-//! The store also finds the height of a leaf, a block or a payload by its commitment.
+//! The store holds one [`Item`] per block height: the leaf, the certificates that decided it and,
+//! at an epoch root, the light client state certificate. The payload and the VID common data are
+//! kept apart, as [`Part`]s: a height can have its item without them, when consensus decided the
+//! block without them, and they are filled in later. The store also finds the height of a leaf, a
+//! block or a payload by its commitment.
 //!
 //! The ingester writes to the store, copying the decide log of its consensus node, and the API
 //! service writes the heights it fills from other API services. Writes are idempotent by height, so
@@ -31,7 +32,7 @@ pub mod postgres;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use backend::{Backend, Column, Row};
+pub use backend::{Backend, Column, Part, Row};
 
 /// The store's record of one block height.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,8 +47,6 @@ pub struct Item {
 
     /// The certificate that decided the leaf directly, if one did.
     pub cert2: Option<Certificate2<SeqTypes>>,
-
-    pub vid_common: Option<VidCommon>,
 
     /// The light client state certificate of the epoch the block is the root of.
     pub state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
@@ -68,8 +67,9 @@ pub enum Lookup {
     Payload(VidCommitment),
 }
 
-/// The version of the encoding of an [`Item`]. A store refuses items of other versions.
-const ITEM_FORMAT: u8 = 1;
+/// The version of the encoding of an [`Item`] and of VID common data. A store refuses values of
+/// other versions.
+const FORMAT: u8 = 1;
 
 /// A store over a [`Backend`]. Clones share the backend.
 #[derive(Clone)]
@@ -90,16 +90,34 @@ impl ChainStore {
         }
     }
 
-    /// Stores `item`, and `payload` if given. An item already stored at the height is kept, and a
-    /// payload is only added to a height that lacks one. Heights the store has pruned are not
-    /// written.
-    pub async fn put(&self, item: &Item, payload: Option<Bytes>) -> anyhow::Result<()> {
-        self.backend.put(row(item)?, payload).await
+    /// Stores `item` with the parts given. An item or part already stored is kept, so a write
+    /// fills only what is missing. Heights the store has pruned are not written.
+    pub async fn put(
+        &self,
+        item: &Item,
+        payload: Option<Bytes>,
+        vid_common: Option<&VidCommon>,
+    ) -> anyhow::Result<()> {
+        let mut parts = Vec::new();
+        if let Some(payload) = payload {
+            parts.push((Part::Payload, payload));
+        }
+        if let Some(common) = vid_common {
+            parts.push((Part::VidCommon, encode(common)?));
+        }
+        self.backend.put(row(item)?, parts).await
     }
 
     /// Stores the payload of `height`, unless the height has one or is pruned.
     pub async fn put_payload(&self, height: u64, payload: Bytes) -> anyhow::Result<()> {
-        self.backend.put_payload(height, payload).await
+        self.backend.put_part(height, Part::Payload, payload).await
+    }
+
+    /// Stores the VID common data of `height`, unless the height has it or is pruned.
+    pub async fn put_vid_common(&self, height: u64, common: &VidCommon) -> anyhow::Result<()> {
+        self.backend
+            .put_part(height, Part::VidCommon, encode(common)?)
+            .await
     }
 
     pub async fn item(&self, height: u64) -> anyhow::Result<Option<Item>> {
@@ -110,7 +128,14 @@ impl ChainStore {
     }
 
     pub async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
-        self.backend.payload(height).await
+        self.backend.part(height, Part::Payload).await
+    }
+
+    pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {
+        match self.backend.part(height, Part::VidCommon).await? {
+            Some(bytes) => Ok(Some(decode(&bytes)?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn height_of(&self, lookup: &Lookup) -> anyhow::Result<Option<u64>> {
@@ -138,9 +163,14 @@ impl ChainStore {
         self.backend.missing_items(from, limit).await
     }
 
-    /// Up to `limit` heights from `from` on that have an item but no payload, in height order.
-    pub async fn missing_payloads(&self, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
-        self.backend.missing_payloads(from, limit).await
+    /// Up to `limit` heights from `from` on that have an item but not `part`, in height order.
+    pub async fn missing_parts(
+        &self,
+        part: Part,
+        from: u64,
+        limit: usize,
+    ) -> anyhow::Result<Vec<u64>> {
+        self.backend.missing_parts(part, from, limit).await
     }
 
     /// Deletes everything before `height` and stops accepting writes there.
@@ -157,24 +187,26 @@ impl ChainStore {
 
 /// `item` as its backend stores it.
 fn row(item: &Item) -> anyhow::Result<Row> {
-    let mut bytes = vec![ITEM_FORMAT];
-    bincode::serialize_into(&mut bytes, item)?;
     Ok(Row {
         height: item.height(),
         leaf: item.leaf.commit().to_string(),
         block: item.leaf.block_header().commit().to_string(),
         payload: item.leaf.payload_commitment().to_string(),
-        item: bytes.into(),
+        item: encode(item)?,
     })
 }
 
-fn decode(bytes: &[u8]) -> anyhow::Result<Item> {
+fn encode<T: Serialize>(value: &T) -> anyhow::Result<Bytes> {
+    let mut bytes = vec![FORMAT];
+    bincode::serialize_into(&mut bytes, value)?;
+    Ok(bytes.into())
+}
+
+fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
     match bytes.split_first() {
-        Some((&ITEM_FORMAT, rest)) => Ok(bincode::deserialize(rest)?),
-        Some((format, _)) => {
-            anyhow::bail!("item of format {format}, this store reads {ITEM_FORMAT}")
-        },
-        None => anyhow::bail!("empty item"),
+        Some((&FORMAT, rest)) => Ok(bincode::deserialize(rest)?),
+        Some((format, _)) => anyhow::bail!("a value of format {format}, this store reads {FORMAT}"),
+        None => anyhow::bail!("an empty value"),
     }
 }
 
@@ -197,7 +229,6 @@ mod tests {
             leaf: Leaf2::genesis(&state, &instance, NEW_PROTOCOL_VERSION).await,
             cert1: QuorumCertificate2::genesis(&state, &instance, upgrade).await,
             cert2: None,
-            vid_common: None,
             state_cert: None,
         }
     }
@@ -207,7 +238,7 @@ mod tests {
         let store = ChainStore::new(mem::MemBackend::default());
         let item = genesis().await;
         store
-            .put(&item, Some(Bytes::from_static(b"payload")))
+            .put(&item, Some(Bytes::from_static(b"payload")), None)
             .await
             .unwrap();
 
@@ -231,7 +262,7 @@ mod tests {
 
     #[test]
     fn refuses_an_item_of_another_format() {
-        assert!(decode(&[ITEM_FORMAT + 1, 0, 0]).is_err());
-        assert!(decode(&[]).is_err());
+        assert!(decode::<Item>(&[FORMAT + 1, 0, 0]).is_err());
+        assert!(decode::<Item>(&[]).is_err());
     }
 }

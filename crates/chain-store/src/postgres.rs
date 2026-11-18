@@ -13,7 +13,7 @@ use sqlx::{
 };
 use tokio::{sync::watch, task::JoinHandle};
 
-use crate::{Backend, Column, Row};
+use crate::{Backend, Column, Part, Row};
 
 /// The channel writes are announced on.
 const CHANNEL: &str = "chain_store";
@@ -32,9 +32,11 @@ CREATE TABLE IF NOT EXISTS chain_items (
 CREATE INDEX IF NOT EXISTS chain_items_leaf ON chain_items (leaf);
 CREATE INDEX IF NOT EXISTS chain_items_block ON chain_items (block);
 CREATE INDEX IF NOT EXISTS chain_items_payload ON chain_items (payload, height);
-CREATE TABLE IF NOT EXISTS chain_payloads (
-    height BIGINT PRIMARY KEY,
-    data   BYTEA NOT NULL
+CREATE TABLE IF NOT EXISTS chain_parts (
+    height BIGINT NOT NULL,
+    part   SMALLINT NOT NULL,
+    data   BYTEA NOT NULL,
+    PRIMARY KEY (height, part)
 );
 CREATE TABLE IF NOT EXISTS chain_floor (
     id     BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
@@ -108,22 +110,26 @@ async fn lock_floor(tx: &mut Transaction<'_, Postgres>) -> anyhow::Result<u64> {
     Ok(height as u64)
 }
 
-async fn insert_payload(
+async fn insert_part(
     tx: &mut Transaction<'_, Postgres>,
     height: u64,
-    payload: &[u8],
+    part: Part,
+    data: &[u8],
 ) -> anyhow::Result<()> {
-    sqlx::query("INSERT INTO chain_payloads (height, data) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-        .bind(height as i64)
-        .bind(payload)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO chain_parts (height, part, data) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    )
+    .bind(height as i64)
+    .bind(part.id())
+    .bind(data)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
 #[async_trait]
 impl Backend for PostgresBackend {
-    async fn put(&self, row: Row, payload: Option<Bytes>) -> anyhow::Result<()> {
+    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         if row.height < lock_floor(&mut tx).await? {
             return Ok(());
@@ -139,18 +145,18 @@ impl Backend for PostgresBackend {
         .bind(&row.item[..])
         .execute(&mut *tx)
         .await?;
-        if let Some(payload) = payload {
-            insert_payload(&mut tx, row.height, &payload).await?;
+        for (part, data) in parts {
+            insert_part(&mut tx, row.height, part, &data).await?;
         }
         self.commit(tx).await
     }
 
-    async fn put_payload(&self, height: u64, payload: Bytes) -> anyhow::Result<()> {
+    async fn put_part(&self, height: u64, part: Part, data: Bytes) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         if height < lock_floor(&mut tx).await? {
             return Ok(());
         }
-        insert_payload(&mut tx, height, &payload).await?;
+        insert_part(&mut tx, height, part, &data).await?;
         self.commit(tx).await
     }
 
@@ -163,10 +169,11 @@ impl Backend for PostgresBackend {
         Ok(item.map(Bytes::from))
     }
 
-    async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
+    async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>> {
         let data: Option<Vec<u8>> =
-            sqlx::query_scalar("SELECT data FROM chain_payloads WHERE height = $1")
+            sqlx::query_scalar("SELECT data FROM chain_parts WHERE height = $1 AND part = $2")
                 .bind(height as i64)
+                .bind(part.id())
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(data.map(Bytes::from))
@@ -226,16 +233,17 @@ impl Backend for PostgresBackend {
             .collect()
     }
 
-    async fn missing_payloads(&self, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
+    async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
         let heights: Vec<i64> = sqlx::query_scalar(
             "SELECT i.height FROM chain_items i
-             LEFT JOIN chain_payloads p ON p.height = i.height
+             LEFT JOIN chain_parts p ON p.height = i.height AND p.part = $2
              WHERE i.height >= GREATEST($1::BIGINT, (SELECT height FROM chain_floor))
                AND p.height IS NULL
              ORDER BY i.height
-             LIMIT $2",
+             LIMIT $3",
         )
         .bind(from as i64)
+        .bind(part.id())
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
@@ -250,7 +258,7 @@ impl Backend for PostgresBackend {
         .bind(height as i64)
         .fetch_one(&mut *tx)
         .await?;
-        for table in ["chain_items", "chain_payloads"] {
+        for table in ["chain_items", "chain_parts"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE height < $1"))
                 .bind(floor)
                 .execute(&mut *tx)
@@ -287,7 +295,7 @@ mod tests {
         let mut changes = reader.changes();
         changes.borrow_and_update();
 
-        writer.put(row(0, "x"), None).await.unwrap();
+        writer.put(row(0, "x"), Vec::new()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(10), changes.changed())
             .await
             .expect("the reader hears of the write")

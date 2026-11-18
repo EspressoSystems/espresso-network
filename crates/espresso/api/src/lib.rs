@@ -151,6 +151,28 @@ where
     serve_router(listener, "v1 and v2", router, Some(grpc), max_connections).await
 }
 
+/// Serves the v2 REST routes of `rest` and the gRPC services of `grpc` on `listener`, with the
+/// layers [`serve_axum`] gives v2 and gRPC reflection added.
+///
+/// A server that implements part of v2 puts each service's `rest::*_service_rest_router` in
+/// `rest` and the matching gRPC server in `grpc`.
+pub async fn serve_v2(
+    listener: tokio::net::TcpListener,
+    rest: ::axum::Router,
+    mut grpc: ::tonic::service::RoutesBuilder,
+    max_connections: Option<usize>,
+) -> anyhow::Result<()> {
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build_v1()?;
+    grpc.add_service(reflection);
+    let rest = rest
+        .layer(::axum::middleware::from_fn(axum::v2_refuse_post_query))
+        .layer(::axum::middleware::from_fn(axum::v2_error_envelope));
+    let grpc = grpc.routes().into_axum_router();
+    serve_router(listener, "v2", rest, Some(grpc), max_connections).await
+}
+
 /// The v2 REST routes exactly as [`serve_axum`] mounts them. Extracted so the test asserting
 /// every documented route is mounted exercises the same construction; don't inline it back.
 pub(crate) fn router_v2<S>(state: std::sync::Arc<S>, modules: OptionalModules) -> ::axum::Router

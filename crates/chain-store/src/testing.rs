@@ -9,7 +9,7 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::{Backend, Column, Row};
+use crate::{Backend, Column, Part, Row};
 
 /// A row at `height` whose payload commitment is `payload`.
 pub fn row(height: u64, payload: &str) -> Row {
@@ -28,31 +28,33 @@ fn bytes(s: &str) -> Bytes {
 
 /// Checks the contract of [`Backend`] on `backend`, which must be empty.
 pub async fn conformance(backend: &dyn Backend) {
+    use Part::{Payload, VidCommon};
+
     assert_eq!(backend.newest().await.unwrap(), None);
     assert_eq!(backend.floor().await.unwrap(), 0);
     assert!(backend.missing_items(0, 10).await.unwrap().is_empty());
 
     let mut changes = backend.changes();
     changes.borrow_and_update();
-    // Heights 1 and 5 share a payload commitment, as blocks with the same payload do.
-    for (height, commitment, payload) in [
-        (0, "p", Some("p0")),
-        (1, "shared", Some("p1")),
-        (4, "p", None),
-        (5, "shared", Some("p5")),
+    // Heights 1 and 5 share a payload commitment, as blocks with the same payload do. Height 4
+    // arrives without its parts, height 5 without its VID common data.
+    for (height, commitment, parts) in [
+        (0, "p", vec![(Payload, "p0"), (VidCommon, "v0")]),
+        (1, "shared", vec![(Payload, "p1"), (VidCommon, "v1")]),
+        (4, "p", vec![]),
+        (5, "shared", vec![(Payload, "p5")]),
     ] {
-        backend
-            .put(row(height, commitment), payload.map(bytes))
-            .await
-            .unwrap();
+        let parts = parts.into_iter().map(|(p, d)| (p, bytes(d))).collect();
+        backend.put(row(height, commitment), parts).await.unwrap();
     }
     assert!(changes.has_changed().unwrap(), "a write changes `changes`");
 
     // What was written is read back.
     assert_eq!(backend.item(1).await.unwrap(), Some(bytes("item-1")));
-    assert_eq!(backend.payload(1).await.unwrap(), Some(bytes("p1")));
+    assert_eq!(backend.part(1, Payload).await.unwrap(), Some(bytes("p1")));
+    assert_eq!(backend.part(1, VidCommon).await.unwrap(), Some(bytes("v1")));
     assert_eq!(backend.item(2).await.unwrap(), None);
-    assert_eq!(backend.payload(4).await.unwrap(), None);
+    assert_eq!(backend.part(4, Payload).await.unwrap(), None);
     assert_eq!(backend.newest().await.unwrap(), Some(5));
 
     // Lookups find the height; a commitment several rows share finds the earliest.
@@ -70,42 +72,67 @@ pub async fn conformance(backend: &dyn Backend) {
     );
     assert_eq!(backend.height_of(Column::Leaf, "none").await.unwrap(), None);
 
-    // Gaps: heights without an item up to the newest, and items without a payload.
+    // Gaps: heights without an item up to the newest, and items without a part.
     assert_eq!(backend.missing_items(0, 10).await.unwrap(), vec![2..4]);
     assert_eq!(backend.missing_items(3, 10).await.unwrap(), vec![3..4]);
     assert_eq!(backend.missing_items(4, 10).await.unwrap(), vec![]);
-    assert_eq!(backend.missing_payloads(0, 10).await.unwrap(), vec![4]);
+    assert_eq!(
+        backend.missing_parts(Payload, 0, 10).await.unwrap(),
+        vec![4]
+    );
+    assert_eq!(
+        backend.missing_parts(VidCommon, 0, 10).await.unwrap(),
+        vec![4, 5]
+    );
 
     // Writing again keeps what is stored, and fills only what is missing.
     let mut other = row(1, "shared");
     other.item = bytes("other");
-    backend.put(other, Some(bytes("other"))).await.unwrap();
+    backend
+        .put(other, vec![(Payload, bytes("other"))])
+        .await
+        .unwrap();
     assert_eq!(backend.item(1).await.unwrap(), Some(bytes("item-1")));
-    assert_eq!(backend.payload(1).await.unwrap(), Some(bytes("p1")));
-    backend.put_payload(4, bytes("p4")).await.unwrap();
-    backend.put_payload(4, bytes("other")).await.unwrap();
-    assert_eq!(backend.payload(4).await.unwrap(), Some(bytes("p4")));
-    assert!(backend.missing_payloads(0, 10).await.unwrap().is_empty());
+    assert_eq!(backend.part(1, Payload).await.unwrap(), Some(bytes("p1")));
+    backend.put_part(4, Payload, bytes("p4")).await.unwrap();
+    backend.put_part(4, Payload, bytes("other")).await.unwrap();
+    backend.put_part(5, VidCommon, bytes("v5")).await.unwrap();
+    assert_eq!(backend.part(4, Payload).await.unwrap(), Some(bytes("p4")));
+    assert_eq!(backend.part(5, VidCommon).await.unwrap(), Some(bytes("v5")));
+    assert!(
+        backend
+            .missing_parts(Payload, 0, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        backend.missing_parts(VidCommon, 0, 10).await.unwrap(),
+        vec![4]
+    );
 
     // A gap at the start counts, and `limit` bounds the answer.
-    backend.put(row(8, "p"), None).await.unwrap();
+    backend.put(row(8, "p"), Vec::new()).await.unwrap();
     backend.prune_below(0).await.unwrap();
     assert_eq!(backend.missing_items(0, 1).await.unwrap(), vec![2..4]);
     assert_eq!(
         backend.missing_items(0, 10).await.unwrap(),
         vec![2..4, 6..8]
     );
-    assert_eq!(backend.missing_payloads(0, 1).await.unwrap(), vec![8]);
+    assert_eq!(backend.missing_parts(Payload, 0, 1).await.unwrap(), vec![8]);
 
     // Pruning deletes what is before the floor and refuses later writes there.
     backend.prune_below(2).await.unwrap();
     assert_eq!(backend.floor().await.unwrap(), 2);
     assert_eq!(backend.item(1).await.unwrap(), None);
-    assert_eq!(backend.payload(1).await.unwrap(), None);
-    backend.put(row(1, "p"), Some(bytes("p"))).await.unwrap();
-    backend.put_payload(0, bytes("p")).await.unwrap();
+    assert_eq!(backend.part(1, Payload).await.unwrap(), None);
+    backend
+        .put(row(1, "p"), vec![(Payload, bytes("p"))])
+        .await
+        .unwrap();
+    backend.put_part(0, Payload, bytes("p")).await.unwrap();
     assert_eq!(backend.item(1).await.unwrap(), None);
-    assert_eq!(backend.payload(0).await.unwrap(), None);
+    assert_eq!(backend.part(0, Payload).await.unwrap(), None);
     assert_eq!(
         backend.missing_items(0, 10).await.unwrap(),
         vec![2..4, 6..8]

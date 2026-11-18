@@ -968,6 +968,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "api-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "chain-store",
+ "clap",
+ "committable",
+ "consensus-api",
+ "espresso-api",
+ "espresso-types",
+ "futures",
+ "hotshot-new-protocol",
+ "hotshot-query-service-types",
+ "hotshot-types",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tagged-base64",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "versions",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

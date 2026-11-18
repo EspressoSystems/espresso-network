@@ -10,17 +10,16 @@ use tokio::sync::watch;
 /// Every method is the backend's whole contract; [`testing`](crate::testing) checks it.
 #[async_trait]
 pub trait Backend: Send + Sync + 'static {
-    /// Stores `row`, and `payload` if given, in one commit. A row already stored at the height is
-    /// kept, a payload is only added to a height without one, and nothing is written before the
-    /// floor.
-    async fn put(&self, row: Row, payload: Option<Bytes>) -> anyhow::Result<()>;
+    /// Stores `row` and `parts` in one commit. A row or part already stored is kept, and nothing
+    /// is written before the floor.
+    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()>;
 
-    /// Stores the payload of `height`, unless it has one or is before the floor.
-    async fn put_payload(&self, height: u64, payload: Bytes) -> anyhow::Result<()>;
+    /// Stores `part` of `height`, unless the height has it or is before the floor.
+    async fn put_part(&self, height: u64, part: Part, data: Bytes) -> anyhow::Result<()>;
 
     async fn item(&self, height: u64) -> anyhow::Result<Option<Bytes>>;
 
-    async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>>;
+    async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>>;
 
     /// The height of the row whose `column` is `value`.
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>>;
@@ -32,10 +31,10 @@ pub trait Backend: Send + Sync + 'static {
     /// See [`ChainStore::missing_items`](crate::ChainStore::missing_items).
     async fn missing_items(&self, from: u64, limit: usize) -> anyhow::Result<Vec<Range<u64>>>;
 
-    /// See [`ChainStore::missing_payloads`](crate::ChainStore::missing_payloads).
-    async fn missing_payloads(&self, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
+    /// See [`ChainStore::missing_parts`](crate::ChainStore::missing_parts).
+    async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
 
-    /// Deletes rows and payloads before `height`, and raises the floor to it.
+    /// Deletes rows and parts before `height`, and raises the floor to it.
     async fn prune_below(&self, height: u64) -> anyhow::Result<()>;
 
     /// A value that changes after each committed write by any writer.
@@ -62,4 +61,21 @@ pub enum Column {
     Leaf,
     Block,
     Payload,
+}
+
+/// A part of a height that is stored apart from its row, and can arrive after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Part {
+    Payload,
+    VidCommon,
+}
+
+impl Part {
+    /// The number a backend stores the part under.
+    pub fn id(self) -> i16 {
+        match self {
+            Self::Payload => 0,
+            Self::VidCommon => 1,
+        }
+    }
 }

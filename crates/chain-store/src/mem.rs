@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
 
-use crate::{Backend, Column, Row};
+use crate::{Backend, Column, Part, Row};
 
 #[derive(Debug)]
 pub struct MemBackend {
@@ -17,7 +17,7 @@ pub struct MemBackend {
 #[derive(Debug, Default)]
 struct State {
     rows: BTreeMap<u64, Row>,
-    payloads: BTreeMap<u64, Bytes>,
+    parts: BTreeMap<(u64, Part), Bytes>,
     floor: u64,
 }
 
@@ -43,24 +43,24 @@ impl MemBackend {
 
 #[async_trait]
 impl Backend for MemBackend {
-    async fn put(&self, row: Row, payload: Option<Bytes>) -> anyhow::Result<()> {
+    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
         self.write(|state| {
             if row.height < state.floor {
                 return;
             }
             let height = row.height;
             state.rows.entry(height).or_insert(row);
-            if let Some(payload) = payload {
-                state.payloads.entry(height).or_insert(payload);
+            for (part, data) in parts {
+                state.parts.entry((height, part)).or_insert(data);
             }
         });
         Ok(())
     }
 
-    async fn put_payload(&self, height: u64, payload: Bytes) -> anyhow::Result<()> {
+    async fn put_part(&self, height: u64, part: Part, data: Bytes) -> anyhow::Result<()> {
         self.write(|state| {
             if height >= state.floor {
-                state.payloads.entry(height).or_insert(payload);
+                state.parts.entry((height, part)).or_insert(data);
             }
         });
         Ok(())
@@ -70,8 +70,8 @@ impl Backend for MemBackend {
         Ok(self.read(|state| state.rows.get(&height).map(|row| row.item.clone())))
     }
 
-    async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
-        Ok(self.read(|state| state.payloads.get(&height).cloned()))
+    async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>> {
+        Ok(self.read(|state| state.parts.get(&(height, part)).cloned()))
     }
 
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -116,13 +116,13 @@ impl Backend for MemBackend {
         }))
     }
 
-    async fn missing_payloads(&self, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
+    async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
         Ok(self.read(|state| {
             state
                 .rows
                 .range(from.max(state.floor)..)
                 .map(|(&height, _)| height)
-                .filter(|height| !state.payloads.contains_key(height))
+                .filter(|height| !state.parts.contains_key(&(*height, part)))
                 .take(limit)
                 .collect()
         }))
@@ -133,7 +133,7 @@ impl Backend for MemBackend {
             state.floor = state.floor.max(height);
             let floor = state.floor;
             state.rows = state.rows.split_off(&floor);
-            state.payloads = state.payloads.split_off(&floor);
+            state.parts = state.parts.split_off(&(floor, Part::Payload));
         });
         Ok(())
     }

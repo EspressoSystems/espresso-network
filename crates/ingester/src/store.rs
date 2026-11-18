@@ -13,10 +13,14 @@ impl Sink<SeqTypes> for ChainStore {
             leaf: block.leaf,
             cert1: block.cert1,
             cert2: block.cert2,
-            vid_common: block.vid_common,
             state_cert: block.state_cert,
         };
-        self.put(&item, block.payload.map(Into::into)).await
+        self.put(
+            &item,
+            block.payload.map(Into::into),
+            block.vid_common.as_ref(),
+        )
+        .await
     }
 
     async fn block_height(&self) -> anyhow::Result<u64> {
