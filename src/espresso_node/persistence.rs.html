@@ -2536,7 +2536,7 @@
 <a href=#2536 id=2536 data-nosnippet>2536</a>        <span class="kw">let </span>l1_client = L1ClientOptions {
 <a href=#2537 id=2537 data-nosnippet>2537</a>            stake_table_update_interval: Duration::from_secs(<span class="number">7</span>),
 <a href=#2538 id=2538 data-nosnippet>2538</a>            l1_retry_delay: Duration::from_millis(<span class="number">10</span>),
-<a href=#2539 id=2539 data-nosnippet>2539</a>            l1_events_max_block_range: <span class="number">10000</span>,
+<a href=#2539 id=2539 data-nosnippet>2539</a>            l1_events_max_block_range: std::num::NonZeroU64::new(<span class="number">10000</span>).unwrap(),
 <a href=#2540 id=2540 data-nosnippet>2540</a>            ..Default::default()
 <a href=#2541 id=2541 data-nosnippet>2541</a>        }
 <a href=#2542 id=2542 data-nosnippet>2542</a>        .connect(<span class="macro">vec!</span>[l1_url])

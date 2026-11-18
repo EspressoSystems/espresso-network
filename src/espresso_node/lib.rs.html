@@ -1276,7 +1276,7 @@
 <a href=#1276 id=1276 data-nosnippet>1276</a>                l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
 <a href=#1277 id=1277 data-nosnippet>1277</a>                l1_opt: L1ClientOptions {
 <a href=#1278 id=1278 data-nosnippet>1278</a>                    stake_table_update_interval: Duration::from_secs(<span class="number">5</span>),
-<a href=#1279 id=1279 data-nosnippet>1279</a>                    l1_events_max_block_range: <span class="number">1000</span>,
+<a href=#1279 id=1279 data-nosnippet>1279</a>                    l1_events_max_block_range: std::num::NonZeroU64::new(<span class="number">1000</span>).unwrap(),
 <a href=#1280 id=1280 data-nosnippet>1280</a>                    l1_polling_interval: Duration::from_secs(<span class="number">1</span>),
 <a href=#1281 id=1281 data-nosnippet>1281</a>                    subscription_timeout: Duration::from_secs(<span class="number">5</span>),
 <a href=#1282 id=1282 data-nosnippet>1282</a>                    ..Default::default()
