@@ -53,6 +53,7 @@ dyn-clone = { workspace = true }
 either = { workspace = true }
 espresso-api = { path = "../api" }
 espresso-contract-deployer = { workspace = true }
+espresso-genesis = { workspace = true }
 espresso-keyset = { workspace = true }
 espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }

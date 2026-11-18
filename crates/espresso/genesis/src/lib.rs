@@ -1,3 +1,6 @@
+//! The genesis file of an Espresso chain: the parameters it starts with, including the stake
+//! table of its first epochs.
+
 use std::{
     cmp::max,
     collections::{BTreeMap, HashMap},

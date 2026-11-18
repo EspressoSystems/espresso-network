@@ -3868,6 +3868,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "espresso-genesis"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "espresso-contract-deployer",
+ "espresso-keyset",
+ "espresso-types",
+ "espresso-utils",
+ "hotshot-types",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "staking-cli",
+ "tempfile",
+ "test-log",
+ "tokio",
+ "toml",
+ "tracing",
+ "url",
+ "vbs",
+ "versions",
+]
+
+[[package]]
 name = "espresso-keyset"
 version = "0.1.0"
 dependencies = [
@@ -3929,6 +3954,7 @@ dependencies = [
  "escargot",
  "espresso-api",
  "espresso-contract-deployer",
+ "espresso-genesis",
  "espresso-keyset",
  "espresso-macros",
  "espresso-telemetry",

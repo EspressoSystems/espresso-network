@@ -19,6 +19,7 @@ members = [
     "crates/espresso/api",
     "crates/espresso/deploy",
     "crates/espresso/dev-node",
+    "crates/espresso/genesis",
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
@@ -75,6 +76,7 @@ default-members = [
     "crates/consensus-store-redb",
     "crates/espresso/api",
     "crates/espresso/deploy",
+    "crates/espresso/genesis",
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
@@ -195,6 +197,7 @@ erased-serde = "0.4"
 escargot = "0.5.10"
 espresso-api = { path = "crates/espresso/api" }
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
+espresso-genesis = { path = "crates/espresso/genesis" }
 espresso-keyset = { path = "crates/espresso/keyset" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 espresso-node = { path = "crates/espresso/node", default-features = false }

@@ -1,0 +1,34 @@
+[package]
+name        = "espresso-genesis"
+description = "The genesis file of an Espresso chain"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+alloy          = { workspace = true }
+anyhow         = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
+hotshot-types  = { workspace = true }
+reqwest        = { workspace = true }
+serde          = { workspace = true }
+toml           = { workspace = true }
+tracing        = { workspace = true }
+url            = { workspace = true }
+vbs            = { workspace = true }
+versions       = { workspace = true }
+
+[dev-dependencies]
+alloy                      = { workspace = true, features = ["node-bindings"] }
+espresso-contract-deployer = { workspace = true }
+espresso-keyset            = { workspace = true }
+espresso-types             = { workspace = true, features = ["testing"] }
+espresso-utils             = { workspace = true, features = ["full"] }
+rstest                     = { workspace = true }
+staking-cli                = { workspace = true }
+tempfile                   = { workspace = true }
+test-log                   = { workspace = true }
+tokio                      = { workspace = true }
+
+[lints]
+workspace = true
