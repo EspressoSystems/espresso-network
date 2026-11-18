@@ -190,7 +190,7 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_HTTP_CATCHUP_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub http_catchup_delay: Duration,
 
-    /// Per-step timeout for the startup stake-table catchup walk.
+    /// Per-step timeout for the follower startup stake-table catchup walk.
     ///
     /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
     /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
