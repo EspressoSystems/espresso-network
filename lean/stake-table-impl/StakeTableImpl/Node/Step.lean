@@ -100,8 +100,7 @@ open State in
 /--
 Apply one event.
 
-A delegation that would take a validator's stake to `U256` or beyond is rejected:
-the node panics on it.
+A delegation that would take a validator's stake to `U256` or beyond is rejected.
 -/
 def step (s : State) : Event → Outcome
   | .register a bls schnorr commission =>

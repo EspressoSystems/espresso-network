@@ -795,8 +795,7 @@ impl Pool {
         }
     }
 
-    /// The outcomes, other than applying, that the node gives for some event. A
-    /// delegation that overflows is left out: the node panics on it.
+    /// The outcomes, other than applying, that the node gives for some event.
     fn targets() -> Vec<&'static str> {
         vec![
             "skipped:schnorrKeyAlreadyUsed",
@@ -809,6 +808,7 @@ impl Pool {
             "fatal:validatorAlreadyExited",
             "fatal:zeroDelegatorStake",
             "fatal:insufficientStake",
+            "fatal:stakeOverflow",
             "fatal:authenticationFailed",
             "fatal:invalidCommission",
             "fatal:x25519KeyAlreadyUsed",
@@ -927,6 +927,8 @@ impl Pool {
         let amount = match rng.gen_range(0..20) {
             0 => U256::ZERO,
             1 => U256::from(rng.next_u64()) << 64,
+            // The largest amount or about half of it, so that a later delegation overflows.
+            2 => U256::MAX >> rng.gen_range(0..2),
             _ => U256::from(rng.gen_range(1u64..1000)),
         };
         let withdrawn = amount / U256::from(rng.gen_range(1u64..4));
@@ -1042,6 +1044,7 @@ fn outcome(
             StakeTableError::ValidatorAlreadyExited(_) => "fatal:validatorAlreadyExited",
             StakeTableError::ZeroDelegatorStake(_) => "fatal:zeroDelegatorStake",
             StakeTableError::InsufficientStake => "fatal:insufficientStake",
+            StakeTableError::StakeOverflow(_) => "fatal:stakeOverflow",
             StakeTableError::AuthenticationFailed(_) => "fatal:authenticationFailed",
             StakeTableError::InvalidCommission(..) => "fatal:invalidCommission",
             StakeTableError::X25519KeyAlreadyUsed(_) => "fatal:x25519KeyAlreadyUsed",
