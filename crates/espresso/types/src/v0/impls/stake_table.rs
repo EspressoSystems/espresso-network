@@ -1,6 +1,7 @@
 use std::{
     cmp::{max, min},
     collections::{HashMap, HashSet},
+    num::NonZeroU64,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -67,6 +68,7 @@ use tokio::time::sleep;
 #[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
+use versions::CANONICAL_STAKE_TABLE_ORDER_VERSION;
 
 #[cfg(feature = "node")]
 use super::BackoffParams;
@@ -1004,13 +1006,17 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Filters out unauthenticated validator candidates, those without stake, and selects
 /// the top [`MAX_VALIDATORS`] staked validators.
 /// Returns a new AuthenticatedValidatorMap containing only the selected validators.
+///
+/// From [`CANONICAL_STAKE_TABLE_ORDER_VERSION`] on, the result depends only on the
+/// candidates' contents, not on their registration order: equal stakes are ranked by
+/// address, and the selected validators are listed by address.
 pub(crate) fn select_active_validator_set(
     candidates: &RegisteredValidatorMap,
     protocol_version: Version,
 ) -> Result<AuthenticatedValidatorMap, StakeTableError> {
     let total_candidates = candidates.len();
 
-    let valid_validators: AuthenticatedValidatorMap = candidates
+    let mut valid_validators: AuthenticatedValidatorMap = candidates
         .iter()
         .filter_map(
             |(address, validator)| match AuthenticatedValidator::try_from(validator) {
@@ -1050,6 +1056,13 @@ pub(crate) fn select_active_validator_set(
     if valid_validators.is_empty() {
         tracing::warn!("Validator selection failed: no validators passed minimum criteria");
         return Err(StakeTableError::NoValidValidators);
+    }
+
+    if protocol_version >= CANONICAL_STAKE_TABLE_ORDER_VERSION {
+        // In address order, the stable sort by stake below ranks equal stakes by
+        // address, and the selected validators are listed by address. Certificate
+        // signers are given by position in that list.
+        valid_validators.sort_unstable_keys();
     }
 
     let maximum_stake = valid_validators.values().map(|v| v.stake).max().unwrap();
@@ -1467,22 +1480,21 @@ impl Fetcher {
     }
 
     /// Break a block range into fixed-size chunks.
+    ///
+    /// Both bounds of every chunk are inclusive. The chunks cover `from_block..=to_block` for
+    /// every chunk size, also where `from_block + chunk_size` or `to_block + 1` is not a `u64`.
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
-    fn block_range_chunks(
+    pub(crate) fn block_range_chunks(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let mut start = from_block;
-        let end = to_block;
+        let mut next = (from_block <= to_block).then_some(from_block);
         std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
+            let start = next?;
+            let chunk_end = min(start.saturating_add(chunk_size.get() - 1), to_block);
+            next = chunk_end.checked_add(1).filter(|start| *start <= to_block);
+            Some((start, chunk_end))
         })
     }
 
@@ -1494,9 +1506,8 @@ impl Fetcher {
     fn block_range_chunks_rev(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let chunk_size = chunk_size.max(1);
         let mut end = to_block;
         let mut exhausted = to_block < from_block;
         std::iter::from_fn(move || {
@@ -1504,7 +1515,7 @@ impl Fetcher {
                 return None;
             }
             let chunk_end = end;
-            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size.get() - 1));
             exhausted = chunk_start == from_block;
             end = chunk_start.saturating_sub(1);
             Some((chunk_start, chunk_end))
@@ -2590,7 +2601,7 @@ mod tests {
     /// scan for the token `Initialized` event could never succeed at the default range.
     #[test_log::test]
     fn test_block_range_chunks_never_exceed_chunk_size() {
-        const MAX_RANGE: u64 = 10_000;
+        const MAX_RANGE: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
         const INIT_BLOCK: u64 = 1_000_000;
         const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
 
@@ -2599,10 +2610,13 @@ mod tests {
         let descending: Vec<_> =
             Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
 
-        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(
+            descending[0],
+            (INIT_BLOCK - MAX_RANGE.get() + 1, INIT_BLOCK)
+        );
         assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
         for chunk in &descending {
-            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+            assert_eq!(width(chunk), MAX_RANGE.get(), "chunk {chunk:?} is missized");
         }
         for pair in descending.windows(2) {
             assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
@@ -2612,9 +2626,15 @@ mod tests {
             Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
         for chunk in &ascending {
             assert!(
-                width(chunk) <= MAX_RANGE,
+                width(chunk) <= MAX_RANGE.get(),
                 "chunk {chunk:?} exceeds {MAX_RANGE}"
             );
+        }
+
+        assert_eq!(ascending[0].0, LOWEST_BLOCK);
+        assert_eq!(ascending.last().unwrap().1, INIT_BLOCK);
+        for pair in ascending.windows(2) {
+            assert_eq!(pair[1].0, pair[0].1 + 1, "gap or overlap at {pair:?}");
         }
 
         // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
@@ -2623,9 +2643,35 @@ mod tests {
             vec![(0, 5)]
         );
         assert_eq!(
-            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
-            vec![(1, MAX_RANGE), (0, 0)]
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE.get(), MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE.get()), (0, 0)]
         );
+    }
+
+    /// The chunks cover the range where `from_block + chunk_size` or `to_block + 1` is not a
+    /// `u64`. The sum used to wrap in release builds, which ended the iterator before the range
+    /// was covered, and to panic in debug builds.
+    #[test_log::test]
+    fn test_block_range_chunks_at_the_u64_bounds() {
+        let chunks = |from, to, size| {
+            let size = NonZeroU64::new(size).unwrap();
+            Fetcher::block_range_chunks(from, to, size).collect::<Vec<_>>()
+        };
+        const MAX: u64 = u64::MAX;
+
+        assert_eq!(chunks(2, 100, MAX), vec![(2, 100)]);
+        assert_eq!(chunks(0, MAX, MAX), vec![(0, MAX - 1), (MAX, MAX)]);
+        assert_eq!(
+            chunks(MAX - 4, MAX, 2),
+            vec![(MAX - 4, MAX - 3), (MAX - 2, MAX - 1), (MAX, MAX)]
+        );
+        assert_eq!(
+            chunks(MAX - 5, MAX - 1, 4),
+            vec![(MAX - 5, MAX - 2), (MAX - 1, MAX - 1)]
+        );
+        assert_eq!(chunks(MAX, MAX, 1), vec![(MAX, MAX)]);
+        assert_eq!(chunks(5, 4, MAX), vec![]);
+        assert_eq!(chunks(MAX, 0, 1), vec![]);
     }
 
     #[test_log::test]
@@ -3557,7 +3603,7 @@ mod tests {
     ) {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3645,7 +3691,7 @@ mod tests {
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3716,7 +3762,7 @@ mod tests {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
             // max block range for public node rpc is 50000 so this should result in a panic
-            l1_events_max_block_range: 10_u64.pow(9),
+            l1_events_max_block_range: NonZeroU64::new(10_u64.pow(9)).unwrap(),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
@@ -4773,6 +4819,69 @@ mod tests {
 
         let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// A complete validator with `stake`, delegated by a single delegator.
+    fn staked_mock_validator(stake: u64) -> RegisteredValidator<BLSPubKey> {
+        let mut v = complete_mock_validator();
+        v.stake = U256::from(stake);
+        v.delegators = [(Address::random(), v.stake)].into_iter().collect();
+        v
+    }
+
+    /// The candidates, registered in the order given.
+    fn registered(order: &[&RegisteredValidator<BLSPubKey>]) -> RegisteredValidatorMap {
+        order.iter().map(|v| (v.account, (*v).clone())).collect()
+    }
+
+    /// From the canonical order on, the selected validators and the order they are listed in
+    /// depend only on the candidates, not on the order they registered in.
+    #[test]
+    fn test_select_canonical_order_ignores_registration_order() {
+        let validators: Vec<_> = [3, 1, 2, 2, 1]
+            .into_iter()
+            .map(staked_mock_validator)
+            .collect();
+        let forward: Vec<_> = validators.iter().collect();
+        let backward: Vec<_> = validators.iter().rev().collect();
+
+        let select = |order: &[&RegisteredValidator<BLSPubKey>]| {
+            select_active_validator_set(&registered(order), CANONICAL_STAKE_TABLE_ORDER_VERSION)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let active = select(&forward);
+        assert_eq!(active, select(&backward));
+        assert!(active.is_sorted_by_key(|(address, _)| *address));
+    }
+
+    /// When stakes tie at the cut-off, the validator with the lower address is selected from
+    /// the canonical order on, and the one that registered first before it.
+    #[test]
+    fn test_select_canonical_order_breaks_cutoff_ties_by_address() {
+        let others: Vec<_> = (0..MAX_VALIDATORS - 1)
+            .map(|_| staked_mock_validator(2))
+            .collect();
+        let (low, high) = {
+            let a = staked_mock_validator(1);
+            let b = staked_mock_validator(1);
+            if a.account < b.account {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        let mut order: Vec<_> = others.iter().collect();
+        order.extend([&high, &low]);
+        let candidates = registered(&order);
+
+        let canonical =
+            select_active_validator_set(&candidates, CANONICAL_STAKE_TABLE_ORDER_VERSION).unwrap();
+        assert!(canonical.contains_key(&low.account) && !canonical.contains_key(&high.account));
+
+        let before = select_active_validator_set(&candidates, NEW_PROTOCOL_VERSION).unwrap();
+        assert!(before.contains_key(&high.account) && !before.contains_key(&low.account));
     }
 
     /// Integration test: a RegisterV3 event with an unparsable p2p address results in
