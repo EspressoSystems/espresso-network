@@ -3678,7 +3678,7 @@ mod tests {
         }
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            *committees.epoch_height(),
+            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator)
@@ -3999,7 +3999,7 @@ mod tests {
         put_prefilled(&committees, 20, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            *committees.epoch_height(),
+            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         )
         .with_catchup_timeout(catchup_timeout);
