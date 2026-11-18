@@ -13,7 +13,6 @@ use hotshot_types::{
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
     simple_vote::{HasEpoch, LockView, QuorumData2, SimpleVote, TimeoutData2, Vote2Data},
     traits::{ValidatedState, block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_root,
     vote::HasViewNumber,
 };
 
@@ -22,12 +21,12 @@ use super::common::{
     utils::{
         TestData, TestView, build_cert1, build_cert2, build_state_cert_for_test,
         build_timeout_cert2_signed_by, build_timeout_cert3, build_timeout_cert3_with_lock,
-        mock_membership,
+        epoch_length, mock_membership,
     },
 };
 use crate::{
     cert_verifier::ValidCert,
-    consensus::{ConsensusInput, ConsensusOutput},
+    consensus::{ConsensusInput, ConsensusOutput, recorded::HeldKind},
     coordinator::GcScope,
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
     leader_trace::LeaderEvent,
@@ -1044,26 +1043,32 @@ fn test_quorum_data_well_formedness() {
         epoch: epoch.map(EpochNumber::new),
         block_number,
     };
-    assert!(vote1(Some(1), Some(0)).is_well_formed(height), "genesis");
     assert!(
-        vote1(Some(1), Some(10)).is_well_formed(height),
+        vote1(Some(1), Some(0)).is_well_formed(epoch_length(height)),
+        "genesis"
+    );
+    assert!(
+        vote1(Some(1), Some(10)).is_well_formed(epoch_length(height)),
         "an epoch's last block"
     );
     assert!(
-        vote1(Some(2), Some(11)).is_well_formed(height),
+        vote1(Some(2), Some(11)).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote1(Some(2), Some(10)).is_well_formed(height),
+        !vote1(Some(2), Some(10)).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
     assert!(
-        !vote1(Some(1), Some(11)).is_well_formed(height),
+        !vote1(Some(1), Some(11)).is_well_formed(epoch_length(height)),
         "an epoch its height has left"
     );
-    assert!(!vote1(None, Some(10)).is_well_formed(height), "no epoch");
     assert!(
-        !vote1(Some(1), None).is_well_formed(height),
+        !vote1(None, Some(10)).is_well_formed(epoch_length(height)),
+        "no epoch"
+    );
+    assert!(
+        !vote1(Some(1), None).is_well_formed(epoch_length(height)),
         "no block number"
     );
 
@@ -1072,13 +1077,16 @@ fn test_quorum_data_well_formedness() {
         epoch: EpochNumber::new(epoch),
         block_number,
     };
-    assert!(vote2(1, 10).is_well_formed(height), "an epoch's last block");
     assert!(
-        vote2(2, 11).is_well_formed(height),
+        vote2(1, 10).is_well_formed(epoch_length(height)),
+        "an epoch's last block"
+    );
+    assert!(
+        vote2(2, 11).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote2(2, 10).is_well_formed(height),
+        !vote2(2, 10).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
 }
@@ -1342,6 +1350,70 @@ async fn test_vote1_blocked_without_parent_proposal() {
     assert!(
         !any(harness.outputs(), is_vote1),
         "vote1 must not fire when the parent proposal is unavailable"
+    );
+}
+
+/// Holding the parent proposal is not enough: the vote1 on its child waits for
+/// the parent's payload.
+#[tokio::test]
+async fn test_vote1_waits_for_parent_payload() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let child = *test_data.views[1].view_number;
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, child)),
+        "vote1 must not fire before the parent's payload is held"
+    );
+
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, child)),
+        "vote1 should fire once the parent's payload is held"
+    );
+}
+
+/// A proposal that arrives after one extending it unblocks the vote1 on the
+/// later one at once. Nothing else for the later view may arrive to retry it.
+#[tokio::test]
+async fn test_vote1_on_child_when_its_parent_proposal_arrives_later() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (parent, child) = (&test_data.views[0], &test_data.views[1]);
+
+    harness.apply(parent.block_reconstructed_input()).await;
+    harness
+        .apply_pair(child.proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 2)),
+        "setup: no vote1 on the child without its parent"
+    );
+
+    // Applied by hand: the harness would answer the storage requests, and a
+    // confirmation is an input that retries votes too.
+    let (proposal, share) = parent.proposal_input_consensus(&node_key);
+    let mut outbox = Outbox::new();
+    harness.consensus.apply(proposal, &mut outbox);
+    harness.consensus.apply(share, &mut outbox);
+    assert!(
+        harness
+            .consensus
+            .held_back()
+            .iter()
+            .any(|held| held.kind == HeldKind::Vote1 && held.key.0 == child.view_number),
+        "the node decides on the child's vote1 when the parent's proposal arrives"
     );
 }
 
@@ -3379,9 +3451,7 @@ async fn test_no_revote2_for_restart_barred_views() {
     )
     .await;
     // Raise the action bar to the voted view, as `Coordinator::maker` does.
-    harness
-        .consensus
-        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+    harness.resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
 
     // A peer relays the missed Cert2s before re-broadcasting the Cert1s.
     harness.apply(anchor.cert2_input()).await;
@@ -3423,9 +3493,7 @@ async fn test_revote2_after_restart_without_cert2() {
         [voted.proposal.data.clone()],
     )
     .await;
-    harness
-        .consensus
-        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+    harness.resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
 
     // A peer re-broadcasts Cert1 for the voted view; no Cert2 exists anywhere.
     harness.apply(voted.cert1_input()).await;
@@ -3457,9 +3525,7 @@ async fn test_no_redecide_below_restart_anchor() {
     // Make the pre-anchor proposal available so only the floor stands between
     // the replayed certificates and a duplicate decide.
     harness.seed_proposals([decided.proposal.data.clone()]);
-    harness
-        .consensus
-        .resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+    harness.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
 
     harness.apply(decided.cert1_input()).await;
     harness.apply(decided.cert2_input()).await;
@@ -4232,7 +4298,7 @@ async fn test_unvalidated_state_cert_is_not_stored() {
     // Precondition: a non-epoch-root parent QC is what makes the validator skip entirely.
     let parent_block = view.proposal.data.justify_qc.data.block_number;
     assert!(
-        parent_block.is_none_or(|bn| !is_epoch_root(bn, EPOCH_HEIGHT)),
+        parent_block.is_none_or(|bn| !epoch_length(EPOCH_HEIGHT).position(bn).is_root()),
         "fixture precondition: parent QC must not be an epoch root, got {parent_block:?}"
     );
     assert!(
@@ -4317,7 +4383,7 @@ async fn test_validated_state_cert_is_stored() {
         .block_number
         .expect("a state_cert-bearing proposal must have a parent block number");
     assert!(
-        is_epoch_root(parent_block, EPOCH_HEIGHT),
+        epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
         "fixture precondition: parent QC must be an epoch root, got block {parent_block}"
     );
 
@@ -4388,7 +4454,7 @@ async fn test_forged_state_cert_at_epoch_root_fails_validation() {
 
     let mut validator = ProposalValidator::new(
         harness.membership_coordinator.clone(),
-        EPOCH_HEIGHT,
+        epoch_length(EPOCH_HEIGHT),
         test_upgrade_lock(),
         None,
     );

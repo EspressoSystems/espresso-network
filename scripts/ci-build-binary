@@ -3,7 +3,7 @@
 #
 # ./ci-build-binary <binary>
 #
-# where <binary> is one of: espresso-node, espresso-dev-node, other
+# where <binary> is one of: espresso-node, espresso-dev-node, new-protocol-bench-node, other
 #
 set -euo pipefail
 
@@ -13,6 +13,9 @@ case "$1" in
         ;;
     "espresso-dev-node")
         cargo build --locked --release --timings -p espresso-dev-node
+        ;;
+    "new-protocol-bench-node")
+        cargo build --locked --release --timings -p hotshot-new-protocol-bench --bin new-protocol-bench-node
         ;;
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \
