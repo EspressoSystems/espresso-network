@@ -2,9 +2,11 @@
 
 use std::net::SocketAddr;
 
-use consensus::discovery::SignedServiceRecord;
+use anyhow::Context;
+use consensus::discovery::{ServiceRecord, SignedServiceRecord};
 use consensus_api::{DecideLogClient, proto::ServiceRecordsRequest};
 use espresso_types::SeqTypes;
+use hotshot_types::data::EpochNumber;
 use tagged_base64::TaggedBase64;
 use tonic::{Code, Request, Response, Status};
 
@@ -59,9 +61,30 @@ pub(crate) async fn service_records(
     Ok((response.epoch, records))
 }
 
+/// The record `listed` describes, as [`listed`] lists it; its signature is not checked here.
+pub(crate) fn from_listed(
+    listed: proto::ServiceRecord,
+) -> anyhow::Result<SignedServiceRecord<SeqTypes>> {
+    let api_key = listed
+        .api_key
+        .map(|key| <[u8; 32]>::try_from(key.as_slice()))
+        .transpose()
+        .context("an API key that is not 32 bytes")?;
+    Ok(SignedServiceRecord {
+        record: ServiceRecord {
+            epoch: EpochNumber::new(listed.epoch),
+            api_url: listed.api_url,
+            api_key,
+            sequence: listed.sequence,
+        },
+        signer: listed.signer.parse().context("the signer")?,
+        signature: listed.signature.parse().context("the signature")?,
+    })
+}
+
 /// `signed` as clients receive it; they check the signature against the stake table of the
 /// record's epoch themselves.
-fn listed(signed: SignedServiceRecord<SeqTypes>) -> proto::ServiceRecord {
+pub(crate) fn listed(signed: SignedServiceRecord<SeqTypes>) -> proto::ServiceRecord {
     proto::ServiceRecord {
         signer: signed.signer.to_string(),
         epoch: *signed.record.epoch,

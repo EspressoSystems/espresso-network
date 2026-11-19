@@ -1,7 +1,7 @@
 //! One port for HTTP and gRPC: a request with a gRPC content type goes to the gRPC services, any
 //! other to the REST routes.
 
-use axum::{Router, extract::Request, http::header::CONTENT_TYPE};
+use axum::{Router, extract::Request, http::header::CONTENT_TYPE, serve::ListenerExt};
 use tokio::net::TcpListener;
 use tonic::service::RoutesBuilder;
 
@@ -28,6 +28,12 @@ pub(crate) async fn serve(
         tower::ServiceExt::oneshot(service, request)
     });
     tracing::info!(addr = ?listener.local_addr()?, "serving the API");
+    // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
+    let listener = listener.tap_io(|stream| {
+        if let Err(err) = stream.set_nodelay(true) {
+            tracing::debug!(%err, "cannot set TCP_NODELAY");
+        }
+    });
     axum::serve(listener, axum::ServiceExt::into_make_service(app)).await?;
     Ok(())
 }

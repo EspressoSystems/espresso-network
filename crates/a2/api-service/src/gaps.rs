@@ -10,12 +10,11 @@
 //! A filled height is stored without the `Certificate2` and state certificate the peer may have,
 //! since checking those needs the stake table of their epoch.
 //!
-//! The peers are the API services of the validators, from the discovery records consensus holds,
-//! and the bootstrap URLs the operator gives.
+//! The peers are the API services the validators of the current epoch name, from [`Peers`], asked
+//! in random order for each gap.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::SocketAddr,
     ops::Range,
     time::Duration,
 };
@@ -39,7 +38,7 @@ use url::Url;
 use crate::{
     Membership,
     chain::{RECORD_RANGE_LIMIT, from_proto},
-    discovery::service_records,
+    peers::Peers,
     proto::{GetRecordsRequest, chain_service_client::ChainServiceClient},
 };
 
@@ -63,8 +62,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(600);
 
 pub struct GapFiller {
     pub(crate) store: ChainStore,
-    consensus_api: SocketAddr,
-    bootstrap: Vec<Url>,
+    pub(crate) peers: Peers,
 
     /// The stake tables to check certificates against; without them certificates are not
     /// filled.
@@ -96,16 +94,10 @@ pub struct GapFiller {
 }
 
 impl GapFiller {
-    pub fn new(
-        store: ChainStore,
-        consensus_api: SocketAddr,
-        bootstrap: Vec<Url>,
-        membership: Option<Membership>,
-    ) -> Self {
+    pub fn new(store: ChainStore, peers: Peers, membership: Option<Membership>) -> Self {
         Self {
             store,
-            consensus_api,
-            bootstrap,
+            peers,
             membership,
             newest: None,
             floor: 0,
@@ -143,12 +135,12 @@ impl GapFiller {
     /// tables of the stored epoch roots and checks the certificates they allow. A step that
     /// fails does not stop the others.
     async fn pass(&mut self) {
-        let peers = self.peers().await;
-        if peers.is_empty() {
+        self.refresh_peers().await;
+        if self.peers.shuffled().is_empty() {
             tracing::warn!("no API service to fill gaps from");
             return;
         }
-        if let Err(err) = self.fill_gaps(&peers).await {
+        if let Err(err) = self.fill_gaps().await {
             tracing::warn!("filling gaps failed: {err:#}");
         }
         let Some(membership) = self.membership.clone() else {
@@ -157,12 +149,27 @@ impl GapFiller {
         if let Err(err) = self.follow_roots(&membership).await {
             tracing::warn!("deriving stake tables failed: {err:#}");
         }
-        if let Err(err) = self.check_certs(&membership, &peers).await {
+        if let Err(err) = self.check_certs(&membership).await {
             tracing::warn!("checking certificates failed: {err:#}");
         }
     }
 
-    async fn fill_gaps(&mut self, peers: &[Url]) -> anyhow::Result<()> {
+    /// Takes the peers of the epoch of the newest stored height, once per epoch.
+    async fn refresh_peers(&mut self) {
+        let Some(membership) = &self.membership else {
+            return;
+        };
+        match self.store.newest().await {
+            Ok(Some(newest)) => {
+                let epoch = membership.epoch_of(newest);
+                self.peers.refresh(epoch, membership).await;
+            },
+            Ok(None) => {},
+            Err(err) => tracing::warn!("reading the newest height failed: {err:#}"),
+        }
+    }
+
+    async fn fill_gaps(&mut self) -> anyhow::Result<()> {
         let Some(newest) = self.store.newest().await? else {
             return Ok(());
         };
@@ -173,7 +180,7 @@ impl GapFiller {
         for gap in self.item_gaps(newest).await? {
             // A filled height can lack its payload, and lies before the parts cursor.
             self.parts_from = self.parts_from.min(gap.start);
-            match self.fill_items(gap.clone(), peers).await {
+            match self.fill_items(gap.clone(), &self.peers.shuffled()).await {
                 Ok(()) => self.item_retries.succeeded(gap.start),
                 Err(err) => {
                     tracing::warn!(?gap, "filling a gap failed: {err:#}");
@@ -183,7 +190,7 @@ impl GapFiller {
         }
         let heights = self.part_heights(newest).await?;
         for run in runs(&heights) {
-            self.fill_parts(run.clone(), peers).await;
+            self.fill_parts(run.clone(), &self.peers.shuffled()).await;
             let missing = match self.lacking_parts(run.clone()).await {
                 Ok(missing) => missing,
                 Err(err) => {
@@ -269,24 +276,6 @@ impl GapFiller {
         .into_iter()
         .flatten()
         .min()
-    }
-
-    /// The bootstrap URLs, then the API services of the validators that consensus knows.
-    async fn peers(&self) -> Vec<Url> {
-        let mut peers = self.bootstrap.clone();
-        match service_records(self.consensus_api, None).await {
-            Ok((_, records)) => {
-                for record in records {
-                    match record.record.api_url.parse() {
-                        Ok(url) if !peers.contains(&url) => peers.push(url),
-                        Ok(_) => {},
-                        Err(err) => tracing::debug!(%err, "a record with a bad API URL"),
-                    }
-                }
-            },
-            Err(err) => tracing::debug!(%err, "no records from consensus"),
-        }
-        peers
     }
 
     /// Fills `gap` from the top down, from the first peer that continues the chain.
@@ -454,13 +443,7 @@ pub(crate) async fn fetch(
     heights: Range<u64>,
     skip_payloads: bool,
 ) -> anyhow::Result<Vec<Record>> {
-    let mut endpoint = Endpoint::from_shared(peer.to_string())?
-        .connect_timeout(REQUEST_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT);
-    if peer.scheme() == "https" {
-        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_webpki_roots())?;
-    }
-    let mut client = ChainServiceClient::new(endpoint.connect().await?)
+    let mut client = ChainServiceClient::new(endpoint(peer)?.connect().await?)
         .max_decoding_message_size(MAX_RECORD_SIZE);
     let mut stream = client
         .get_records(GetRecordsRequest {
@@ -488,6 +471,17 @@ pub(crate) async fn fetch(
     records.sort_by_key(|record| record.height);
     records.dedup_by_key(|record| record.height);
     Ok(records)
+}
+
+/// The endpoint of the API service at `peer`, with TLS for an `https` URL.
+pub(crate) fn endpoint(peer: &Url) -> anyhow::Result<Endpoint> {
+    let mut endpoint = Endpoint::from_shared(peer.to_string())?
+        .connect_timeout(REQUEST_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT);
+    if peer.scheme() == "https" {
+        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_webpki_roots())?;
+    }
+    Ok(endpoint)
 }
 
 /// The item of `record`, which must be the parent of `child`, certified by `child`'s justify QC
@@ -623,12 +617,8 @@ mod tests {
     /// A store holding `item1` only, filling its gaps from `peer`.
     fn filling(item1: &Item, peer: Url) -> ChainStore {
         let store = ChainStore::new(MemBackend::default());
-        let filler = GapFiller::new(
-            store.clone(),
-            "127.0.0.1:1".parse().unwrap(),
-            vec![peer],
-            None,
-        );
+        let peers = Peers::new("127.0.0.1:1".parse().unwrap(), vec![peer], None);
+        let filler = GapFiller::new(store.clone(), peers, None);
         let item1 = item1.clone();
         let writer = store.clone();
         tokio::spawn(async move {

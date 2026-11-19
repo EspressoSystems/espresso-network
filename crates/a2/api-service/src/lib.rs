@@ -41,6 +41,7 @@ mod discovery;
 mod gaps;
 pub mod membership;
 mod node;
+mod peers;
 mod reader;
 mod request;
 mod server;
@@ -50,6 +51,7 @@ mod submit;
 
 pub use gaps::GapFiller;
 pub use membership::Membership;
+pub use peers::Peers;
 use reader::Reader;
 
 /// The services of the API, over one store and one consensus node.

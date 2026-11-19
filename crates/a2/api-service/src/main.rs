@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, anyhow};
 use api_service::{
-    ApiService, GapFiller, Membership,
+    ApiService, GapFiller, Membership, Peers,
     catchup::Catchup,
     chain_state,
     compat::Compat,
@@ -31,9 +31,15 @@ struct Options {
     #[arg(long, env = "ESPRESSO_API_SERVICE_CONSENSUS_API")]
     consensus_api: SocketAddr,
 
-    /// API services to fill gaps from, besides those of the validators, comma-separated.
+    /// API services to learn the validators' API services from, and to fill gaps from until then,
+    /// comma-separated.
     #[arg(long, env = "ESPRESSO_API_SERVICE_BOOTSTRAP", value_delimiter = ',')]
     bootstrap: Vec<Url>,
+
+    /// The URL other services reach this API service at, as its validator's record names it. It
+    /// is left out of the peers.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_PUBLIC_URL")]
+    public_url: Option<Url>,
 
     /// The genesis file of the chain, a path or an HTTP URL.
     #[arg(long, env = "ESPRESSO_API_SERVICE_GENESIS_FILE")]
@@ -62,12 +68,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("building the node state")?;
     let membership = Membership::new(&state)?;
-    let filler = GapFiller::new(
-        store.clone(),
-        options.consensus_api,
-        options.bootstrap,
-        Some(membership.clone()),
-    );
+    let peers = Peers::new(options.consensus_api, options.bootstrap, options.public_url);
+    let filler = GapFiller::new(store.clone(), peers, Some(membership.clone()));
     let (follower, states) = chain_state::follower(store.clone(), state.clone());
     let config = network_config(&genesis)?;
     let api = ApiService::new(store.clone(), options.consensus_api)

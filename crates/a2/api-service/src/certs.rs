@@ -63,11 +63,7 @@ impl GapFiller {
     }
 
     /// Checks the certificates of the newest complete epochs that are not checked yet.
-    pub(crate) async fn check_certs(
-        &mut self,
-        membership: &Membership,
-        peers: &[Url],
-    ) -> anyhow::Result<()> {
+    pub(crate) async fn check_certs(&mut self, membership: &Membership) -> anyhow::Result<()> {
         let Some((front, newest)) = self.filled().await? else {
             return Ok(());
         };
@@ -87,7 +83,8 @@ impl GapFiller {
                 continue;
             }
             // An epoch no peer can answer for does not hold up the ones before it.
-            match self.check_epoch(membership, epoch, peers).await {
+            let peers = self.peers.shuffled();
+            match self.check_epoch(membership, epoch, &peers).await {
                 Ok(()) => self.epoch_retries.succeeded(*epoch),
                 Err(err) => {
                     tracing::warn!(%epoch, "checking certificates failed: {err:#}");
@@ -279,14 +276,10 @@ mod tests {
         url.parse().unwrap()
     }
 
-    /// A filler over `store` that has looked for gaps and found none.
-    async fn filler(store: &ChainStore) -> GapFiller {
-        let mut filler = GapFiller::new(
-            store.clone(),
-            "127.0.0.1:1".parse().unwrap(),
-            Vec::new(),
-            None,
-        );
+    /// A filler over `store`, asking `peer`, that has looked for gaps and found none.
+    async fn filler(store: &ChainStore, peer: &Url) -> GapFiller {
+        let peers = crate::Peers::new("127.0.0.1:1".parse().unwrap(), vec![peer.clone()], None);
+        let mut filler = GapFiller::new(store.clone(), peers, None);
         let newest = store.newest().await.unwrap().unwrap();
         (filler.newest, filler.items_from) = (Some(newest), newest + 1);
         filler
@@ -315,9 +308,9 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(10), async {
             while !known(&store, &membership).await {
-                filler(&store)
+                filler(&store, &peer)
                     .await
-                    .check_certs(&membership, std::slice::from_ref(&peer))
+                    .check_certs(&membership)
                     .await
                     .unwrap();
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -358,11 +351,8 @@ mod tests {
 
     /// A pass over `store` with `peer` leaves `EPOCH` unchecked, to be tried again later.
     async fn assert_fails(store: &ChainStore, membership: &Membership, peer: &Url) {
-        let mut filler = filler(store).await;
-        filler
-            .check_certs(membership, std::slice::from_ref(peer))
-            .await
-            .unwrap();
+        let mut filler = filler(store, peer).await;
+        filler.check_certs(membership).await.unwrap();
         assert!(filler.epoch_retries.waiting(EPOCH), "the epoch waits");
         assert!(!known(store, membership).await);
     }

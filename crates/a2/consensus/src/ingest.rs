@@ -31,7 +31,8 @@ pub fn bind<T: NodeType, S: Store>(
     SocketAddr,
     impl Future<Output = Result<(), tonic::transport::Error>> + Send,
 )> {
-    let incoming = tonic::transport::server::TcpIncoming::bind(addr)?;
+    // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
+    let incoming = tonic::transport::server::TcpIncoming::bind(addr)?.with_nodelay(Some(true));
     let bound = incoming.local_addr()?;
     let server = tonic::transport::Server::builder()
         .add_service(consensus_api::server(IngestSource::new(

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs an a2 network on this machine: anvil as L1 with the Espresso contracts and the demo
-# validators staked, the five consensus nodes of the demo genesis file, and for node 0 two API
-# services, each with its own store service on Postgres and its own ingester. The second ingester
-# starts a minute late, so its store misses what node 0 freed meanwhile, and its API service fills
-# that from the first. Logs go to RUNDIR. Stops everything on exit.
+# validators staked, and for each of the five validators of the demo genesis file a deployment of
+# a consensus node and an API service, with its own ingester and store service on Postgres. API
+# services find each other through the validators' records, starting from the first. Node 4's
+# ingester starts a minute late, so its store misses what node 4 freed meanwhile, and its API
+# service fills that from the others. Logs go to RUNDIR. Stops everything on exit.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -16,7 +17,7 @@ Run an a2 network, keeping its stores and logs in RUNDIR, which must not exist. 
 PATH or in the repository root, Postgres, and the binaries deploy, consensus-node, store-service,
 ingester, api-service and staking-cli in target/PROFILE or target/debug.
 
-The API services serve on http://127.0.0.1:24000 and http://127.0.0.1:24001.
+The API services serve on http://127.0.0.1:24000 to http://127.0.0.1:24004, one per node.
 
 ENVIRONMENT:
   GENESIS_FILE   The genesis file, data/genesis/demo-ff.toml by default
@@ -44,7 +45,9 @@ main() {
   local l1="http://127.0.0.1:${ESPRESSO_L1_PORT}"
   local genesis=${GENESIS_FILE:-data/genesis/demo-ff.toml}
 
-  trap 'stop "$rundir"' EXIT
+  # Expanded now: the trap runs after main's locals are gone.
+  # shellcheck disable=SC2064
+  trap "stop '$rundir'" EXIT
   trap 'exit 1' INT TERM
 
   anvil --host 127.0.0.1 --port "$ESPRESSO_L1_PORT" --chain-id 31337 --accounts 20 \
@@ -63,6 +66,9 @@ main() {
     ESP_TOKEN_CONTRACT_ADDRESS=$ESP_TOKEN_PROXY_ADDRESS \
     STAKE_TABLE_ADDRESS=$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS \
     staking-cli --no-config stake-for-demo >"$rundir/stake.log" 2>&1
+  # Stake tables come from finalized L1 blocks. Without the stake, the first epoch roots, which
+  # fast blocks reach within the finality lag, give empty stake tables and the chain stops.
+  wait_for_finalized "$l1" "$(l1_block "$l1" latest)"
 
   local pg_port=25432
   # Postgres keeps its socket in its data directory, whose path must stay short.
@@ -72,18 +78,14 @@ main() {
   scripts/run-postgres "$pg_port" "$pg_data/data" >"$rundir/postgres.log" 2>&1 &
   until pg_isready -h 127.0.0.1 -p "$pg_port" >/dev/null 2>&1; do sleep 1; done
   sleep 2
-  psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE espresso2" >/dev/null
-
-  store-service --address 127.0.0.1:8070 \
-    --database "postgres://root@127.0.0.1:${pg_port}/espresso" >"$rundir/store.log" 2>&1 &
-  store-service --address 127.0.0.1:8071 \
-    --database "postgres://root@127.0.0.1:${pg_port}/espresso2" >"$rundir/store-2.log" 2>&1 &
-
   for i in 0 1 2 3 4; do
     local staking="ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_$i"
     local state="ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_$i"
     local x25519="ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_$i"
     local port="ESPRESSO_DEMO_NODE_CLIQUENET_PORT_$i"
+    psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE chain$i" >/dev/null
+    store-service --address "127.0.0.1:$((8070 + i))" \
+      --database "postgres://root@127.0.0.1:${pg_port}/chain$i" >"$rundir/store-$i.log" 2>&1 &
     ESPRESSO_NODE_PRIVATE_STAKING_KEY=${!staking} \
       ESPRESSO_NODE_PRIVATE_STATE_KEY=${!state} \
       ESPRESSO_NODE_PRIVATE_X25519_KEY=${!x25519} \
@@ -98,20 +100,31 @@ main() {
   done
 
   sleep 5
-  ingester --consensus-api 127.0.0.1:9978 --store http://127.0.0.1:8070 \
-    >"$rundir/ingester.log" 2>&1 &
-  api-service --port 24000 --store http://127.0.0.1:8070 --consensus-api 127.0.0.1:9978 \
-    --genesis-file "$genesis" --l1-provider "$l1" >"$rundir/api.log" 2>&1 &
-  api-service --port 24001 --store http://127.0.0.1:8071 --consensus-api 127.0.0.1:9978 \
-    --bootstrap http://127.0.0.1:24000 \
-    --genesis-file "$genesis" --l1-provider "$l1" >"$rundir/api-2.log" 2>&1 &
+  for i in 0 1 2 3 4; do
+    local bootstrap=()
+    if ((i > 0)); then
+      bootstrap=(--bootstrap http://127.0.0.1:24000)
+    fi
+    api-service --port $((24000 + i)) --store "http://127.0.0.1:$((8070 + i))" \
+      --consensus-api "127.0.0.1:$((9978 + i))" --public-url "http://127.0.0.1:$((24000 + i))" \
+      "${bootstrap[@]}" --genesis-file "$genesis" --l1-provider "$l1" \
+      >"$rundir/api-$i.log" 2>&1 &
+    if ((i < 4)); then
+      start_ingester "$rundir" "$i"
+    fi
+  done
 
   echo "running; logs in $rundir"
   sleep 60
-  ingester --consensus-api 127.0.0.1:9978 --store http://127.0.0.1:8071 \
-    >"$rundir/ingester-2.log" 2>&1 &
-  echo "second ingester started"
+  start_ingester "$rundir" 4
+  echo "ingester 4 started"
   wait
+}
+
+# Starts the ingester of node $2, from its consensus node into its store.
+start_ingester() {
+  ingester --consensus-api "127.0.0.1:$((9978 + $2))" --store "http://127.0.0.1:$((8070 + $2))" \
+    >"$1/ingester-$2.log" 2>&1 &
 }
 
 # Stops every process and removes the Postgres data, which lives outside RUNDIR.
@@ -121,6 +134,23 @@ stop() {
   if [[ -f "$1/postgres-data" ]]; then
     rm -rf "$(cat "$1/postgres-data")"
   fi
+}
+
+# The number of the L1 block with tag $2 (latest, finalized, ...).
+l1_block() {
+  local body="{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$2\",false],\"id\":1}"
+  local hex
+  hex=$(curl -s -H "Content-Type: application/json" --data "$body" "$1" |
+    sed -n 's/.*"number":"0x\([0-9a-fA-F]*\)".*/\1/p')
+  echo $((16#${hex:-0}))
+}
+
+# Waits until the L1 at $1 has finalized block $2.
+wait_for_finalized() {
+  echo "waiting for L1 block $2 to be finalized"
+  until (($(l1_block "$1" finalized) >= $2)); do
+    sleep 2
+  done
 }
 
 wait_for_l1() {

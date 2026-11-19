@@ -68,9 +68,10 @@ async fn main() -> anyhow::Result<()> {
         });
     }
     tasks.spawn(async move {
+        // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
         let served = Server::builder()
             .add_service(service::server(backend))
-            .serve_with_incoming(TcpIncoming::from(listener))
+            .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
             .await;
         match served {
             Ok(()) => anyhow!("the server stopped"),

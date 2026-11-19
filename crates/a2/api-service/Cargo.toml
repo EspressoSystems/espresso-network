@@ -37,6 +37,7 @@ serde                       = { workspace = true }
 serde_json                  = { workspace = true }
 tagged-base64               = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+rand                        = { workspace = true }
 tonic                       = { workspace = true, features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost                 = { workspace = true }
 tonic-reflection            = { workspace = true }
