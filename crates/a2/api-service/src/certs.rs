@@ -203,3 +203,127 @@ async fn checked_certs(
         ..Default::default()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use chain_store::{ChainStore, mem::MemBackend};
+    use hotshot_types::simple_certificate::QuorumCertificate2;
+    use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::{ApiService, membership::testing::*};
+
+    const EPOCH: u64 = FIRST_EPOCH + 1;
+
+    /// A store with every height of `EPOCH` and the first of the next, so `EPOCH` is complete and
+    /// not the newest.
+    async fn store(membership: &Membership) -> (ChainStore, Vec<Item>) {
+        let store = ChainStore::new(MemBackend::default());
+        let heights = membership.heights_of(EpochNumber::new(EPOCH));
+        let mut items = Vec::new();
+        for height in heights.start..=heights.end {
+            let leaf = leaf(height).await;
+            let mut cert1 = QuorumCertificate2::<espresso_types::SeqTypes>::genesis(
+                &Default::default(),
+                &espresso_types::NodeState::mock(),
+                versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
+            )
+            .await;
+            cert1.data.leaf_commit = committable::Committable::commit(&leaf);
+            let item = Item { leaf, cert1 };
+            store.put(&item, &Parts::default()).await.unwrap();
+            items.push(item);
+        }
+        (store, items)
+    }
+
+    /// A peer that has `items` and, for the height of `decided`, a cert2 signed by `signers`, and
+    /// for the epoch root a state certificate.
+    async fn peer(membership: &Membership, items: &[Item], decided: u64, signers: &[u64]) -> Url {
+        let store = ChainStore::new(MemBackend::default());
+        let root = membership.root_of(EpochNumber::new(EPOCH));
+        for item in items {
+            let mut parts = Parts::default();
+            if item.height() == decided {
+                parts.cert2 = Some(cert2(&item.leaf, EPOCH, signers));
+            }
+            if item.height() == root {
+                parts.state_cert = Some(state_cert(root, &[0, 1]));
+            }
+            store.put(item, &parts).await.unwrap();
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap());
+        tokio::spawn(service.serve(listener));
+        url.parse().unwrap()
+    }
+
+    fn filler(store: &ChainStore) -> GapFiller {
+        GapFiller::new(
+            store.clone(),
+            "127.0.0.1:1".parse().unwrap(),
+            Vec::new(),
+            None,
+        )
+    }
+
+    /// The certificates a peer has for a complete epoch are checked and stored, and the epoch is
+    /// recorded as checked.
+    #[tokio::test]
+    async fn takes_the_certificates_of_a_complete_epoch() {
+        let membership = membership();
+        let (store, items) = store(&membership).await;
+        let decided = items[3].height();
+        let peer = peer(&membership, &items, decided, &[0, 1, 2]).await;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if filler(&store)
+                    .check_certs(&membership, std::slice::from_ref(&peer))
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("a pass succeeds");
+
+        let epoch = EpochNumber::new(EPOCH);
+        assert!(store.certs_checked(epoch).await.unwrap());
+        assert!(store.cert2(decided).await.unwrap().is_some());
+        assert!(store.cert2(decided + 1).await.unwrap().is_none());
+        let root = membership.root_of(epoch);
+        assert!(store.state_cert(root).await.unwrap().is_some());
+    }
+
+    /// A certificate that does not check fails the pass, and the epoch stays unchecked.
+    #[tokio::test]
+    async fn refuses_a_cert2_without_a_quorum() {
+        let membership = membership();
+        let (store, items) = store(&membership).await;
+        let decided = items[3].height();
+        let peer = peer(&membership, &items, decided, &[0, 1]).await;
+
+        let mut failed = false;
+        for _ in 0..20 {
+            if filler(&store)
+                .check_certs(&membership, std::slice::from_ref(&peer))
+                .await
+                .is_err()
+            {
+                failed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(failed, "the pass fails");
+        assert!(!store.certs_checked(EpochNumber::new(EPOCH)).await.unwrap());
+        assert!(store.cert2(decided).await.unwrap().is_none());
+    }
+}

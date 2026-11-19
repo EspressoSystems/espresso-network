@@ -44,6 +44,7 @@ versions                    = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
+bitvec         = { workspace = true }
 chain-store    = { workspace = true, features = ["testing"] }
 espresso-types = { workspace = true, features = ["testing"] }
 hotshot-query-service = { workspace = true }

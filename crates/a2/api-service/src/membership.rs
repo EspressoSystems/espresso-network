@@ -92,10 +92,18 @@ impl Membership {
             epoch_height,
             first_epoch,
         )?;
+        Self::from_committees(committees, epoch_height, &store)
+    }
+
+    fn from_committees(
+        committees: EpochCommittees,
+        epoch_height: u64,
+        store: &MemMembership,
+    ) -> anyhow::Result<Self> {
         let epoch_length =
             NonZeroU64::new(epoch_height).context("genesis needs a positive epoch_height")?;
         Ok(Self {
-            coordinator: EpochMembershipCoordinator::new(committees, epoch_length, &store),
+            coordinator: EpochMembershipCoordinator::new(committees, epoch_length, store),
             epoch_height,
         })
     }
@@ -432,8 +440,212 @@ impl Storage<SeqTypes> for MemMembership {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod testing {
+    //! A membership on a fixed committee, which needs no L1, and certificates it checks.
+
+    use alloy::primitives::FixedBytes;
+    use bitvec::vec::BitVec;
+    use espresso_types::{NodeState, ValidatedState, v0_3::ChainConfig};
+    use hotshot_contract_adapter::light_client::derive_signed_state_digest;
+    use hotshot_types::{
+        PeerConfig,
+        light_client::{
+            CircuitField, LightClientState, StakeTableState, StateKeyPair, StateVerKey,
+        },
+        simple_certificate::SimpleCertificate,
+        simple_vote::{VersionedVoteData, Vote2Data},
+        traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
+        vote::Certificate,
+    };
+    use versions::NEW_PROTOCOL_VERSION;
+
     use super::*;
+
+    pub(crate) const EPOCH_HEIGHT: u64 = 10;
+    pub(crate) const SIGNERS: u64 = 4;
+    pub(crate) const STAKE: u64 = 100;
+
+    /// The first two epochs run on the genesis committee, so this membership needs no L1.
+    pub(crate) const FIRST_EPOCH: u64 = 1;
+
+    pub(crate) fn bls_key(i: u64) -> (PubKey, <PubKey as SignatureKey>::PrivateKey) {
+        PubKey::generated_from_seed_indexed([0; 32], i)
+    }
+
+    pub(crate) fn state_key(i: u64) -> StateKeyPair {
+        StateKeyPair::generate_from_seed_indexed([0; 32], i)
+    }
+
+    pub(crate) fn committee() -> Vec<PeerConfig<SeqTypes>> {
+        (0..SIGNERS)
+            .map(|i| PeerConfig {
+                stake_table_entry: bls_key(i).0.stake_table_entry(U256::from(STAKE)),
+                state_ver_key: state_key(i).ver_key(),
+                connect_info: None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn membership() -> Membership {
+        // Never reached: the genesis committee's epochs read nothing from L1.
+        let l1 = L1ClientOptions::default()
+            .connect(vec!["http://127.0.0.1:1".parse().unwrap()])
+            .unwrap();
+        let store = MemMembership::default();
+        let fetcher = Fetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store.clone())),
+            l1,
+            ChainConfig::default(),
+        );
+        let committees = EpochCommittees::new(
+            committee(),
+            committee(),
+            None,
+            fetcher,
+            EPOCH_HEIGHT,
+            EpochNumber::new(FIRST_EPOCH),
+        )
+        .unwrap();
+        Membership::from_committees(committees, EPOCH_HEIGHT, &store).unwrap()
+    }
+
+    /// A leaf of the new protocol at `height`.
+    pub(crate) async fn leaf(height: u64) -> Leaf2 {
+        let instance = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
+        let state = ValidatedState {
+            chain_config: instance.chain_config.into(),
+            ..Default::default()
+        };
+        let mut leaf = Leaf2::genesis(&state, &instance, NEW_PROTOCOL_VERSION).await;
+        *leaf.block_header_mut().height_mut() = height;
+        leaf
+    }
+
+    /// A cert2 deciding `leaf`, labelled `epoch`, signed by the keys `signers`.
+    pub(crate) fn cert2(leaf: &Leaf2, epoch: u64, signers: &[u64]) -> Certificate2<SeqTypes> {
+        let data = Vote2Data {
+            leaf_commit: leaf.commit(),
+            epoch: EpochNumber::new(epoch),
+            block_number: leaf.height(),
+        };
+        let view = hotshot_types::data::ViewNumber::new(7);
+        let lock = UpgradeLock::<SeqTypes>::new(Upgrade::trivial(leaf.block_header().version()));
+        let commitment = VersionedVoteData::new_infallible(data.clone(), view, &lock).commit();
+        let entries: Vec<_> = committee()
+            .iter()
+            .map(|peer| peer.stake_table_entry.clone())
+            .collect();
+        // Assembling checks only that the signers reach this threshold; the check under test
+        // applies the stake table's own.
+        let pp = PubKey::public_parameter(&entries, U256::ONE);
+        let signed: BitVec = (0..SIGNERS).map(|i| signers.contains(&i)).collect();
+        let signatures: Vec<_> = signers
+            .iter()
+            .map(|&i| PubKey::sign(&bls_key(i).1, commitment.as_ref()).unwrap())
+            .collect();
+        let signature = PubKey::assemble(&pp, &signed, &signatures);
+        SimpleCertificate::create_signed_certificate(commitment, data, signature, view)
+    }
+
+    /// A state certificate for the block at `height`, signed by the state keys `signers`.
+    pub(crate) fn state_cert(
+        height: u64,
+        signers: &[u64],
+    ) -> LightClientStateUpdateCertificateV2<SeqTypes> {
+        let light_client_state = LightClientState {
+            view_number: 7,
+            block_height: height,
+            block_comm_root: CircuitField::from(7u64),
+        };
+        let next_stake_table_state = StakeTableState {
+            bls_key_comm: CircuitField::from(1u64),
+            schnorr_key_comm: CircuitField::from(2u64),
+            amount_comm: CircuitField::from(3u64),
+            threshold: CircuitField::from(1u64),
+        };
+        let auth_root = FixedBytes::<32>::from([9u8; 32]);
+        let digest =
+            derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
+        let signatures = signers
+            .iter()
+            .map(|&i| {
+                let keys = state_key(i);
+                let lcv2 = <StateVerKey as LCV2StateSignatureKey>::sign_state(
+                    keys.sign_key_ref(),
+                    &light_client_state,
+                    &next_stake_table_state,
+                )
+                .unwrap();
+                let lcv3 =
+                    <StateVerKey as LCV3StateSignatureKey>::sign_state(keys.sign_key_ref(), digest)
+                        .unwrap();
+                (keys.ver_key(), lcv3, lcv2)
+            })
+            .collect();
+        LightClientStateUpdateCertificateV2 {
+            epoch: EpochNumber::new(epoch_from_block_number(height, EPOCH_HEIGHT)),
+            light_client_state,
+            next_stake_table_state,
+            signatures,
+            auth_root,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{testing::*, *};
+
+    #[tokio::test]
+    async fn checks_a_cert2_against_the_stake_table_of_its_epoch() {
+        let membership = membership();
+        let epoch = FIRST_EPOCH + 1;
+        let leaf = leaf(membership.heights_of(EpochNumber::new(epoch)).start + 2).await;
+
+        membership
+            .check_cert2(&cert2(&leaf, epoch, &[0, 1, 2]), &leaf)
+            .await
+            .expect("a quorum of the stake table");
+        membership
+            .check_cert2(&cert2(&leaf, epoch, &[0, 1]), &leaf)
+            .await
+            .expect_err("half the stake is no quorum");
+        membership
+            .check_cert2(&cert2(&leaf, epoch - 1, &[0, 1, 2]), &leaf)
+            .await
+            .expect_err("a cert2 labelled with another epoch");
+        let other = self::leaf(leaf.height() + 1).await;
+        membership
+            .check_cert2(&cert2(&other, epoch, &[0, 1, 2]), &leaf)
+            .await
+            .expect_err("a cert2 of another leaf");
+
+        let later = self::leaf(membership.heights_of(EpochNumber::new(epoch + 3)).start).await;
+        membership
+            .check_cert2(&cert2(&later, epoch + 3, &[0, 1, 2]), &later)
+            .await
+            .expect_err("no stake table of the epoch yet");
+    }
+
+    #[tokio::test]
+    async fn checks_a_state_cert_against_the_stake_table_of_its_epoch() {
+        let membership = membership();
+        let epoch = EpochNumber::new(FIRST_EPOCH + 1);
+        let root = membership.root_of(epoch);
+        let header = leaf(root).await.block_header().clone();
+
+        membership
+            .check_state_cert(&state_cert(root, &[0, 1]), &header)
+            .expect("more than a third of the stake");
+        membership
+            .check_state_cert(&state_cert(root, &[0]), &header)
+            .expect_err("a quarter of the stake is too little");
+        let other = leaf(root - 1).await.block_header().clone();
+        membership
+            .check_state_cert(&state_cert(root - 1, &[0, 1]), &other)
+            .expect_err("a block that is no epoch root");
+    }
 
     #[test]
     fn epoch_heights_agree_with_the_epoch_of_each_height() {
