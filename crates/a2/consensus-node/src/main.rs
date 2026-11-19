@@ -53,6 +53,10 @@ struct Options {
     #[arg(long, env = "ESPRESSO_CONSENSUS_BOOTSTRAP", value_delimiter = ',')]
     bootstrap: Vec<Url>,
 
+    /// The state relay server to send light client state signatures to.
+    #[arg(long, env = "ESPRESSO_CONSENSUS_STATE_RELAY_SERVER_URL")]
+    state_relay_server_url: Option<Url>,
+
     /// How many bytes the decide log may take up before the node holds its vote.
     #[arg(long, env = "ESPRESSO_CONSENSUS_DECIDE_LOG_LIMIT", default_value_t = DEFAULT_DECIDE_LOG_LIMIT)]
     decide_log_limit: u64,
@@ -91,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         api_url: options.public_api_url,
         api_key: None,
         bootstrap: options.bootstrap,
+        relay: options.state_relay_server_url,
         decide_log_limit: options.decide_log_limit,
         empty_block_delay: options.empty_block_delay,
     };

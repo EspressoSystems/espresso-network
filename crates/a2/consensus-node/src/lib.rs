@@ -7,6 +7,7 @@ pub mod membership_store;
 pub mod node;
 pub mod node_state;
 pub mod null_catchup;
+pub mod state_signer;
 
 use espresso_types::SeqTypes;
 

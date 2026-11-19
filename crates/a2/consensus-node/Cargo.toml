@@ -17,6 +17,8 @@ consensus             = { workspace = true }
 dyn-clone             = { workspace = true }
 espresso-genesis      = { workspace = true }
 espresso-keyset       = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+http-client           = { workspace = true }
 humantime             = { workspace = true }
 espresso-types        = { workspace = true, features = ["node"] }
 hotshot-types         = { workspace = true }
@@ -39,6 +41,7 @@ versions              = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
+axum           = { workspace = true }
 espresso-types = { workspace = true, features = ["testing"] }
 serde_json     = { workspace = true }
 tempfile       = { workspace = true }

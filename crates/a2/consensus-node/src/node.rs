@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, bail, ensure};
 use consensus::{
+    consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
     discovery::ServiceRecord,
     network::{Cliquenet, Role, message_limit},
@@ -33,15 +34,22 @@ use hotshot_types::{
     upgrade_config::UpgradeConfig,
     x25519,
 };
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::{broadcast, mpsc::unbounded_channel};
 use url::Url;
 use vbs::version::Version;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
-    catchup::ApiCatchup, decided_state::DecidedStateWriter, initializer::initializer,
-    membership_store::MembershipStore, node_state::node_state,
+    catchup::ApiCatchup,
+    decided_state::DecidedStateWriter,
+    initializer::initializer,
+    membership_store::MembershipStore,
+    node_state::node_state,
+    state_signer::{Decided, StateSigner},
 };
+
+/// How many decides the state signer may fall behind before it skips the oldest.
+const SIGNER_QUEUE: usize = 128;
 
 /// How long a view may take before the node times out.
 const VIEW_TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,6 +81,9 @@ pub struct Config {
     /// needs if its own is not reachable.
     pub bootstrap: Vec<Url>,
 
+    /// The state relay server to send light client state signatures to, if any.
+    pub relay: Option<Url>,
+
     /// How many bytes the decide log may take up before the node holds its vote.
     pub decide_log_limit: u64,
 
@@ -94,6 +105,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         api_url,
         api_key,
         bootstrap,
+        relay,
         decide_log_limit,
         empty_block_delay,
     } = config;
@@ -116,6 +128,18 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     )
     .await?;
     let membership = state.coordinator.clone();
+    let decided = relay.map(|relay| {
+        let (tx, rx) = broadcast::channel(SIGNER_QUEUE);
+        let signer = StateSigner::new(
+            state_keys.sign_key(),
+            relay,
+            membership.clone(),
+            genesis.epoch_height.unwrap_or_default(),
+            genesis.stake_table.capacity,
+        );
+        tokio::spawn(signer.run(rx));
+        tx
+    });
     let initializer = initializer(state, upgrade, &store, &restored, &membership_store).await?;
     let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
     let version = running_version(&upgrade_lock);
@@ -201,13 +225,17 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     tracing::info!(%addr, "serving the consensus API");
     let server = tokio::spawn(server);
 
-    let result = run_coordinator(coordinator).await;
+    let result = run_coordinator(coordinator, decided).await;
     server.abort();
     result
 }
 
-/// Drives `coordinator` until it fails critically.
-async fn run_coordinator(mut coordinator: Coordinator<SeqTypes>) -> anyhow::Result<()> {
+/// Drives `coordinator` until it fails critically, sending the newest leaf of each decide to
+/// `decided`.
+async fn run_coordinator(
+    mut coordinator: Coordinator<SeqTypes>,
+    decided: Option<broadcast::Sender<Decided>>,
+) -> anyhow::Result<()> {
     coordinator.start();
     loop {
         match coordinator.next_consensus_input().await {
@@ -219,6 +247,16 @@ async fn run_coordinator(mut coordinator: Coordinator<SeqTypes>) -> anyhow::Resu
             Err(err) => tracing::warn!(%err, "consensus input failed"),
         }
         while let Some(output) = coordinator.outbox_mut().pop_front() {
+            if let (Some(decided), ConsensusOutput::LeafDecided { leaves, .. }) =
+                (&decided, &output)
+                && let Some(newest) = leaves.first()
+            {
+                // No receiver only means the signer stopped; consensus goes on.
+                let _ = decided.send(Decided {
+                    header: newest.block_header().clone(),
+                    view: newest.view_number(),
+                });
+            }
             match coordinator.process_consensus_output(output) {
                 Ok(_) => {},
                 Err(err) if err.severity == Severity::Critical => {
