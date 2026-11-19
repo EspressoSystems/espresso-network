@@ -3788,12 +3788,17 @@ dependencies = [
 name = "espresso-fuzz"
 version = "0.0.0"
 dependencies = [
+ "alloy",
+ "anyhow",
  "arbitrary",
+ "ark-serialize 0.5.0",
  "bincode",
+ "committable",
  "espresso-types",
  "hotshot-query-service-types",
  "hotshot-types",
  "jf-advz",
+ "jf-merkle-tree-compat",
  "libfuzzer-sys",
  "serde",
  "serde_json",

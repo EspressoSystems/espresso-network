@@ -394,6 +394,27 @@ impl FeeAccountProof {
         }
     }
 
+    /// Prove each of `accounts` out of `snapshot`, a partial tree from an untrusted peer, and
+    /// verify every proof against `root`. Fails if the snapshot lacks an account or any proof does
+    /// not verify.
+    pub fn verify_snapshot(
+        snapshot: &FeeMerkleTree,
+        accounts: &[FeeAccount],
+        root: &FeeMerkleCommitment,
+    ) -> anyhow::Result<Vec<Self>> {
+        accounts
+            .iter()
+            .map(|account| {
+                let (proof, _) = Self::prove(snapshot, account.0)
+                    .with_context(|| format!("response missing fee account {account}"))?;
+                proof.verify(root).with_context(|| {
+                    format!("invalid proof for fee account {account}, root: {root}")
+                })?;
+                Ok(proof)
+            })
+            .collect()
+    }
+
     pub fn remember(&self, tree: &mut FeeMerkleTree) -> anyhow::Result<()> {
         match &self.proof {
             FeeMerkleProof::Presence(proof) => {
