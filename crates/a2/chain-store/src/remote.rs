@@ -1,0 +1,285 @@
+//! A [`Backend`] that is a client of the store service.
+
+use std::{ops::Range, time::Duration};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use tokio::{sync::watch, task::JoinHandle, time::sleep};
+use tonic::transport::{Channel, Endpoint};
+
+use crate::{
+    Backend, Column, Part, Row,
+    proto::{self, store_client::StoreClient},
+    service::{MAX_MESSAGE_SIZE, parts_from, parts_to},
+};
+
+/// How long the client waits before following the store's changes again after the stream failed.
+const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
+
+#[derive(Debug)]
+pub struct RemoteBackend {
+    client: StoreClient<Channel>,
+    changes: watch::Sender<u64>,
+    follower: JoinHandle<()>,
+}
+
+impl Drop for RemoteBackend {
+    fn drop(&mut self) {
+        self.follower.abort();
+    }
+}
+
+impl RemoteBackend {
+    /// A client of the store service at `url`, which follows the store's changes from now on.
+    pub async fn connect(url: &str) -> anyhow::Result<Self> {
+        let channel = Endpoint::from_shared(url.to_string())?.connect().await?;
+        let client = StoreClient::new(channel)
+            .max_decoding_message_size(MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_MESSAGE_SIZE);
+        let changes = watch::channel(0).0;
+        let follower = tokio::spawn(follow(client.clone(), changes.clone()));
+        Ok(Self {
+            client,
+            changes,
+            follower,
+        })
+    }
+
+    fn client(&self) -> StoreClient<Channel> {
+        self.client.clone()
+    }
+
+    /// The store announces the write too, later; readers here need not wait for it.
+    fn wrote(&self) {
+        self.changes.send_modify(|n| *n += 1);
+    }
+}
+
+/// Changes `changes` whenever the store reports a write. A stream that ends or fails may have
+/// missed writes, so it is followed by a change too.
+async fn follow(mut client: StoreClient<Channel>, changes: watch::Sender<u64>) {
+    loop {
+        match client.changes(proto::Empty {}).await {
+            Ok(response) => {
+                let mut stream = response.into_inner();
+                while let Ok(Some(_)) = stream.message().await {
+                    changes.send_modify(|n| *n += 1);
+                }
+                tracing::warn!("the store's changes ended; following them again");
+            },
+            Err(status) => tracing::warn!(%status, "cannot follow the store's changes"),
+        }
+        changes.send_modify(|n| *n += 1);
+        sleep(RESUBSCRIBE_DELAY).await;
+    }
+}
+
+fn status(status: tonic::Status) -> anyhow::Error {
+    anyhow::anyhow!("store service: {}", status.message())
+}
+
+#[async_trait]
+impl Backend for RemoteBackend {
+    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
+        self.client()
+            .put(proto::PutRequest {
+                height: row.height,
+                leaf: row.leaf,
+                block: row.block,
+                payload: row.payload,
+                item: row.item.to_vec(),
+                parts: parts_to(parts),
+            })
+            .await
+            .map_err(status)?;
+        self.wrote();
+        Ok(())
+    }
+
+    async fn put_parts(&self, height: u64, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
+        self.client()
+            .put_parts(proto::PutPartsRequest {
+                height,
+                parts: parts_to(parts),
+            })
+            .await
+            .map_err(status)?;
+        self.wrote();
+        Ok(())
+    }
+
+    async fn item(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
+        let response = self
+            .client()
+            .get_item(proto::HeightRequest { height })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().data.map(Bytes::from))
+    }
+
+    async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>> {
+        let response = self
+            .client()
+            .get_part(proto::PartRequest {
+                height,
+                part: part.id().into(),
+            })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().data.map(Bytes::from))
+    }
+
+    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>> {
+        let response = self
+            .client()
+            .get_parts(proto::HeightRequest { height })
+            .await
+            .map_err(status)?;
+        parts_from(response.into_inner().parts).map_err(status)
+    }
+
+    async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
+        let column = match column {
+            Column::Leaf => proto::Column::Leaf,
+            Column::Block => proto::Column::Block,
+            Column::Payload => proto::Column::Payload,
+        };
+        let response = self
+            .client()
+            .height_of(proto::HeightOfRequest {
+                column: column.into(),
+                value: value.to_string(),
+            })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().height)
+    }
+
+    async fn newest(&self) -> anyhow::Result<Option<u64>> {
+        let response = self
+            .client()
+            .newest(proto::Empty {})
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().height)
+    }
+
+    async fn floor(&self) -> anyhow::Result<u64> {
+        let response = self.client().floor(proto::Empty {}).await.map_err(status)?;
+        Ok(response.into_inner().height)
+    }
+
+    async fn missing_items(&self, from: u64, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
+        let response = self
+            .client()
+            .missing_items(proto::MissingRequest {
+                from,
+                limit: limit as u64,
+            })
+            .await
+            .map_err(status)?;
+        Ok(response
+            .into_inner()
+            .ranges
+            .into_iter()
+            .map(|range| range.start..range.end)
+            .collect())
+    }
+
+    async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
+        let response = self
+            .client()
+            .missing_parts(proto::MissingPartsRequest {
+                part: part.id().into(),
+                from,
+                limit: limit as u64,
+            })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().heights)
+    }
+
+    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool> {
+        let response = self
+            .client()
+            .certs_checked(proto::EpochRequest { epoch })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().checked)
+    }
+
+    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
+        self.client()
+            .mark_certs_checked(proto::EpochRequest { epoch })
+            .await
+            .map_err(status)?;
+        self.wrote();
+        Ok(())
+    }
+
+    async fn prune_below(&self, height: u64) -> anyhow::Result<()> {
+        self.client()
+            .prune_below(proto::HeightRequest { height })
+            .await
+            .map_err(status)?;
+        self.wrote();
+        Ok(())
+    }
+
+    fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::SocketAddr, sync::Arc};
+
+    use tokio::{net::TcpListener, time::timeout};
+    use tonic::transport::{Server, server::TcpIncoming};
+
+    use super::*;
+    use crate::{mem::MemBackend, service::server, testing::row};
+
+    /// Serves a store service over an empty store in memory, returning its URL.
+    async fn serve() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        let backend: Arc<dyn Backend> = Arc::new(MemBackend::default());
+        tokio::spawn(
+            Server::builder()
+                .add_service(server(backend))
+                .serve_with_incoming(TcpIncoming::from(listener)),
+        );
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn conforms() {
+        let url = serve().await;
+        let backend = RemoteBackend::connect(&url).await.unwrap();
+        crate::testing::conformance(&backend).await;
+    }
+
+    /// A write through one client reaches the changes of another.
+    #[tokio::test]
+    async fn announces_writes_to_other_clients() {
+        let url = serve().await;
+        let writer = RemoteBackend::connect(&url).await.unwrap();
+        let reader = RemoteBackend::connect(&url).await.unwrap();
+        let mut changes = reader.changes();
+        // The first change is the stream's initial value; it says nothing about writes.
+        timeout(Duration::from_secs(10), changes.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        changes.borrow_and_update();
+
+        writer.put(row(0, "x"), Vec::new()).await.unwrap();
+        timeout(Duration::from_secs(10), changes.changed())
+            .await
+            .expect("the reader hears of the write")
+            .unwrap();
+        assert!(reader.item(0).await.unwrap().is_some());
+    }
+}

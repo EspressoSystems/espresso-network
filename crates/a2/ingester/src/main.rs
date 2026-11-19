@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use chain_store::{ChainStore, postgres::PostgresBackend};
+use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_types::SeqTypes;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
@@ -14,7 +14,7 @@ struct Options {
     #[arg(long, env = "ESPRESSO_INGESTER_CONSENSUS_API")]
     consensus_api: SocketAddr,
 
-    /// The store to write to, as a Postgres URL.
+    /// The store service to write to, as a URL.
     #[arg(long, env = "ESPRESSO_INGESTER_STORE")]
     store: String,
 }
@@ -23,7 +23,7 @@ struct Options {
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
     init_logging();
-    let backend = PostgresBackend::connect(&options.store)
+    let backend = RemoteBackend::connect(&options.store)
         .await
         .context("connecting to the store")?;
     let store = ChainStore::new(backend);

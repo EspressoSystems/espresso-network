@@ -31,10 +31,17 @@ use tokio::sync::watch;
 mod backend;
 pub mod mem;
 pub mod postgres;
+pub mod remote;
+pub mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use backend::{Backend, Column, Part, Row};
+
+/// The store service's protocol, generated from `proto/espresso/a2/store/v1`.
+pub mod proto {
+    tonic::include_proto!("espresso.a2.store.v1");
+}
 
 /// The store's record of one block height.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

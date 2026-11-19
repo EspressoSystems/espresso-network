@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use api_service::{ApiService, GapFiller, Membership};
-use chain_store::{ChainStore, postgres::PostgresBackend};
+use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
 use tokio::net::TcpListener;
@@ -17,7 +17,7 @@ struct Options {
     #[arg(long, env = "ESPRESSO_API_SERVICE_PORT", default_value_t = 8080)]
     port: u16,
 
-    /// The store to read, as a Postgres URL.
+    /// The store service to read and fill gaps through, as a URL.
     #[arg(long, env = "ESPRESSO_API_SERVICE_STORE")]
     store: String,
 
@@ -42,7 +42,7 @@ struct Options {
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
     init_logging();
-    let backend = PostgresBackend::connect(&options.store)
+    let backend = RemoteBackend::connect(&options.store)
         .await
         .context("connecting to the store")?;
     let listener = TcpListener::bind(("0.0.0.0", options.port))

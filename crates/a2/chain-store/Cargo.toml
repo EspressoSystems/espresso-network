@@ -1,6 +1,6 @@
 [package]
 name        = "chain-store"
-description = "The record of the chain an API service keeps"
+description = "The record of the chain an API service keeps, and the store service that serves it"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }
@@ -16,12 +16,19 @@ bincode       = { workspace = true }
 bytes         = { workspace = true }
 committable   = { workspace = true }
 espresso-types = { workspace = true }
+futures       = { workspace = true }
 hotshot-types = { workspace = true }
+prost         = { workspace = true }
 serde         = { workspace = true }
 sqlx          = { workspace = true }
 test-utils    = { workspace = true, optional = true }
 tokio         = { workspace = true, features = ["sync", "time", "rt"] }
+tonic         = { workspace = true }
+tonic-prost   = { workspace = true }
 tracing       = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 espresso-types = { workspace = true, features = ["testing"] }
