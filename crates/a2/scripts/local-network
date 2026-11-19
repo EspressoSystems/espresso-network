@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Runs an a2 network on this machine: anvil as L1 with the Espresso contracts, the five consensus
+# nodes of the demo genesis file, and for node 0 a store service on Postgres, an ingester and an
+# API service. Logs go to RUNDIR. Stops everything on exit.
+set -euo pipefail
+
+readonly SCRIPT_NAME="${0##*/}"
+
+usage() {
+  cat <<EOF
+Usage: ${SCRIPT_NAME} RUNDIR
+
+Run an a2 network, keeping its stores and logs in RUNDIR, which must not exist. Needs anvil on the
+PATH or in the repository root, Postgres, and the binaries deploy, consensus-node, store-service,
+ingester and api-service in target/debug.
+
+The API service of node 0 serves on http://127.0.0.1:24000.
+EOF
+}
+
+main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -ne 1 ]]; then
+    usage
+    exit 1
+  fi
+  local rundir=$1
+  local root
+  root=$(git rev-parse --show-toplevel)
+  mkdir "$rundir"
+  rundir=$(cd "$rundir" && pwd)
+  cd "$root"
+
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+  export PATH="$root/target/debug:$root:$PATH"
+  local l1="http://127.0.0.1:${ESPRESSO_L1_PORT}"
+  local genesis=data/genesis/demo-ff.toml
+
+  trap 'stop "$rundir"' EXIT
+  trap 'exit 1' INT TERM
+
+  anvil --host 127.0.0.1 --port "$ESPRESSO_L1_PORT" --chain-id 31337 --accounts 20 \
+    --balance 1000000000 --block-time 1 --slots-in-an-epoch 32 >"$rundir/anvil.log" 2>&1 &
+  wait_for_l1 "$l1"
+
+  (
+    unset ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS ESP_TOKEN_PROXY_ADDRESS \
+      ESPRESSO_STAKE_TABLE_PROXY_ADDRESS
+    deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 \
+      --deploy-esp-token-v1 --deploy-stake-table-v1 --upgrade-stake-table-v2 \
+      --upgrade-stake-table-v3 --rpc-url "$l1"
+  ) >"$rundir/deploy.log" 2>&1
+
+  local pg_port=25432
+  # Postgres keeps its socket in its data directory, whose path must stay short.
+  local pg_data
+  pg_data=$(mktemp -d)
+  echo "$pg_data" >"$rundir/postgres-data"
+  scripts/run-postgres "$pg_port" "$pg_data/data" >"$rundir/postgres.log" 2>&1 &
+  until pg_isready -h 127.0.0.1 -p "$pg_port" >/dev/null 2>&1; do sleep 1; done
+  sleep 2
+
+  store-service --address 127.0.0.1:8070 \
+    --database "postgres://root@127.0.0.1:${pg_port}/espresso" >"$rundir/store.log" 2>&1 &
+
+  for i in 0 1 2 3 4; do
+    local staking="ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_$i"
+    local state="ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_$i"
+    local x25519="ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_$i"
+    local port="ESPRESSO_DEMO_NODE_CLIQUENET_PORT_$i"
+    ESPRESSO_NODE_PRIVATE_STAKING_KEY=${!staking} \
+      ESPRESSO_NODE_PRIVATE_STATE_KEY=${!state} \
+      ESPRESSO_NODE_PRIVATE_X25519_KEY=${!x25519} \
+      consensus-node \
+      --genesis-file "$genesis" \
+      --l1-provider "$l1" \
+      --store-path "$rundir/consensus-$i" \
+      --bind-address "127.0.0.1:${!port}" \
+      --api-address "127.0.0.1:$((9978 + i))" \
+      --public-api-url "http://127.0.0.1:$((24000 + i))" \
+      >"$rundir/consensus-$i.log" 2>&1 &
+  done
+
+  sleep 5
+  ingester --consensus-api 127.0.0.1:9978 --store http://127.0.0.1:8070 \
+    >"$rundir/ingester.log" 2>&1 &
+  api-service --port 24000 --store http://127.0.0.1:8070 --consensus-api 127.0.0.1:9978 \
+    --genesis-file "$genesis" --l1-provider "$l1" >"$rundir/api.log" 2>&1 &
+
+  echo "running; logs in $rundir"
+  wait
+}
+
+# Stops every process and removes the Postgres data, which lives outside RUNDIR.
+stop() {
+  kill $(jobs -p) 2>/dev/null || true
+  wait || true
+  if [[ -f "$1/postgres-data" ]]; then
+    rm -rf "$(cat "$1/postgres-data")"
+  fi
+}
+
+wait_for_l1() {
+  local body='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+  until curl -s -H "Content-Type: application/json" --data "$body" "$1" >/dev/null; do
+    sleep 1
+  done
+}
+
+main "$@"
