@@ -254,6 +254,30 @@ impl Backend for PostgresBackend {
             .collect()
     }
 
+    /// Walks the heights down from the newest, so a gap near the top is found at once.
+    async fn newest_gap(&self) -> anyhow::Result<Option<Range<u64>>> {
+        let row = sqlx::query(
+            "WITH f AS (SELECT height FROM chain_floor),
+                  e AS (SELECT i.height FROM chain_items i, f
+                        WHERE i.height > f.height
+                          AND NOT EXISTS (SELECT 1 FROM chain_items p WHERE p.height = i.height - \
+             1)
+                        ORDER BY i.height DESC LIMIT 1)
+             SELECT COALESCE((SELECT max(i.height) + 1 FROM chain_items i, e
+                              WHERE i.height < e.height), (SELECT height FROM f)) AS start,
+                    e.height AS end
+             FROM e",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            let start: i64 = row.try_get("start")?;
+            let end: i64 = row.try_get("end")?;
+            Ok(start.max(0) as u64..end as u64)
+        })
+        .transpose()
+    }
+
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
         let heights: Vec<i64> = sqlx::query_scalar(
             "SELECT i.height FROM chain_items i

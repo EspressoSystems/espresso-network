@@ -233,6 +233,12 @@ impl ChainStore {
         self.backend.missing_items(from, limit).await
     }
 
+    /// The newest range of heights without an item, at or above the floor and below the newest
+    /// height with one. Every height from its end up to the newest has an item.
+    pub async fn newest_gap(&self) -> anyhow::Result<Option<Range<u64>>> {
+        self.backend.newest_gap().await
+    }
+
     /// Up to `limit` heights from `from` on that have an item but not `part`, in height order.
     pub async fn missing_parts(
         &self,

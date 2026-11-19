@@ -160,6 +160,19 @@ impl proto::store_server::Store for StoreService {
         }))
     }
 
+    async fn newest_gap(
+        &self,
+        _: Request<proto::Empty>,
+    ) -> Result<Response<proto::MaybeRange>, Status> {
+        let gap = self.backend.newest_gap().await.map_err(internal)?;
+        Ok(Response::new(proto::MaybeRange {
+            range: gap.map(|gap| proto::HeightRange {
+                start: gap.start,
+                end: gap.end,
+            }),
+        }))
+    }
+
     async fn missing_parts(
         &self,
         request: Request<proto::MissingPartsRequest>,

@@ -133,6 +133,20 @@ impl Backend for MemBackend {
         }))
     }
 
+    async fn newest_gap(&self) -> anyhow::Result<Option<Range<u64>>> {
+        Ok(self.read(|state| {
+            let mut heights = state.rows.range(state.floor..).map(|(&h, _)| h).rev();
+            let mut end = heights.next()?;
+            for height in heights {
+                if height + 1 < end {
+                    return Some(height + 1..end);
+                }
+                end = height;
+            }
+            (state.floor < end).then_some(state.floor..end)
+        }))
+    }
+
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
         Ok(self.read(|state| {
             state

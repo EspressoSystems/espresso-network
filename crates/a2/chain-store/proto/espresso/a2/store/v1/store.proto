@@ -33,6 +33,10 @@ service Store {
   // Ranges of heights without an item, from `from` or the floor up to the newest height with one.
   rpc MissingItems(MissingRequest) returns (RangesResponse);
 
+  // The newest range of heights without an item, at or above the floor and below the newest height
+  // with one.
+  rpc NewestGap(Empty) returns (MaybeRange);
+
   // Heights from `from` on that have an item but not `part`.
   rpc MissingParts(MissingPartsRequest) returns (HeightsResponse);
 
@@ -137,6 +141,10 @@ message PartsResponse {
 message HeightRange {
   uint64 start = 1;
   uint64 end = 2;
+}
+
+message MaybeRange {
+  optional HeightRange range = 1;
 }
 
 message RangesResponse {

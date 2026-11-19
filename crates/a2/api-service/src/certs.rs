@@ -6,6 +6,11 @@
 //! the ingester wrote have their certificates from consensus already; the others are asked of the
 //! peers. A height a peer has but sends no `Certificate2` for was decided by a later block, and
 //! keeps none. The store then records the epoch as checked, and it is not asked again.
+//!
+//! Both walks go from the newest epoch back to the fill front, the end of the newest gap in the
+//! store: every height from there on is stored, and gaps are filled from the newest back, so the
+//! epochs before the front become workable as the front moves back. Stopping there keeps a pass
+//! from asking the store about every epoch of a history that is not filled yet.
 
 use std::{collections::BTreeSet, ops::Range};
 
@@ -25,13 +30,13 @@ impl GapFiller {
     /// Derives the stake tables that the stored epoch roots give and membership lacks, newest
     /// first.
     pub(crate) async fn follow_roots(&self, membership: &Membership) -> anyhow::Result<()> {
-        let Some(newest) = self.store.newest().await? else {
+        let Some((front, newest)) = self.filled().await? else {
             return Ok(());
         };
         let first = membership.first_epoch();
         let mut installed = 0;
         let mut epoch = membership.epoch_of(newest);
-        while epoch >= first && installed < ROOTS_PER_PASS {
+        while epoch >= first && membership.root_of(epoch) >= front && installed < ROOTS_PER_PASS {
             if membership.stake_table(epoch + 2).is_none()
                 && let Some(root) = self.store.item(membership.root_of(epoch)).await?
             {
@@ -61,7 +66,7 @@ impl GapFiller {
         membership: &Membership,
         peers: &[Url],
     ) -> anyhow::Result<()> {
-        let Some(newest) = self.store.newest().await? else {
+        let Some((front, newest)) = self.filled().await? else {
             return Ok(());
         };
         let first = membership.first_epoch();
@@ -70,10 +75,10 @@ impl GapFiller {
         let mut epoch = membership.epoch_of(newest);
         while epoch > first && checked < EPOCHS_PER_PASS {
             epoch = epoch - 1;
-            if self.certs_checked(epoch).await?
-                || membership.stake_table(epoch).is_none()
-                || !self.has_all(membership.heights_of(epoch)).await?
-            {
+            if membership.heights_of(epoch).start < front {
+                break;
+            }
+            if self.certs_checked(epoch).await? || membership.stake_table(epoch).is_none() {
                 continue;
             }
             self.check_epoch(membership, epoch, peers).await?;
@@ -93,9 +98,17 @@ impl GapFiller {
         Ok(checked)
     }
 
-    async fn has_all(&self, heights: Range<u64>) -> anyhow::Result<bool> {
-        let missing = self.store.missing_items(heights.start, 1).await?;
-        Ok(missing.first().is_none_or(|gap| gap.start >= heights.end))
+    /// The fill front and the newest height, if the store has any: every height from the front
+    /// up to the newest is stored.
+    async fn filled(&self) -> anyhow::Result<Option<(u64, u64)>> {
+        let Some(newest) = self.store.newest().await? else {
+            return Ok(None);
+        };
+        let front = match self.store.newest_gap().await? {
+            Some(gap) => gap.end,
+            None => self.store.floor().await?,
+        };
+        Ok(Some((front, newest)))
     }
 
     /// Fills the certificates `epoch` lacks from the peers, and records the epoch as checked once

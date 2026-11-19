@@ -33,6 +33,7 @@ pub async fn conformance(backend: &dyn Backend) {
     assert_eq!(backend.newest().await.unwrap(), None);
     assert_eq!(backend.floor().await.unwrap(), 0);
     assert!(backend.missing_items(0, 10).await.unwrap().is_empty());
+    assert_eq!(backend.newest_gap().await.unwrap(), None);
 
     let mut changes = backend.changes();
     changes.borrow_and_update();
@@ -81,6 +82,7 @@ pub async fn conformance(backend: &dyn Backend) {
     assert_eq!(backend.missing_items(0, 10).await.unwrap(), vec![2..4]);
     assert_eq!(backend.missing_items(3, 10).await.unwrap(), vec![3..4]);
     assert_eq!(backend.missing_items(4, 10).await.unwrap(), vec![]);
+    assert_eq!(backend.newest_gap().await.unwrap(), Some(2..4));
     assert_eq!(
         backend.missing_parts(Payload, 0, 10).await.unwrap(),
         vec![4]
@@ -140,6 +142,7 @@ pub async fn conformance(backend: &dyn Backend) {
         backend.missing_items(0, 10).await.unwrap(),
         vec![2..4, 6..8]
     );
+    assert_eq!(backend.newest_gap().await.unwrap(), Some(6..8));
     assert_eq!(backend.missing_parts(Payload, 0, 1).await.unwrap(), vec![8]);
 
     // Pruning deletes what is before the floor and refuses later writes there.
@@ -170,6 +173,12 @@ pub async fn conformance(backend: &dyn Backend) {
         backend.missing_items(0, 10).await.unwrap(),
         vec![3..4, 6..8]
     );
+    backend.prune_below(7).await.unwrap();
+    assert_eq!(backend.newest_gap().await.unwrap(), Some(7..8));
+
+    // Filling the gap leaves none.
+    backend.put(row(7, "p"), Vec::new()).await.unwrap();
+    assert_eq!(backend.newest_gap().await.unwrap(), None);
 }
 
 /// A throwaway Postgres server, with user `postgres` and trust auth, removed on drop. Needs

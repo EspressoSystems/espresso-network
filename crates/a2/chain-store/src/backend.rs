@@ -35,6 +35,9 @@ pub trait Backend: Send + Sync + 'static {
     /// See [`ChainStore::missing_items`](crate::ChainStore::missing_items).
     async fn missing_items(&self, from: u64, limit: usize) -> anyhow::Result<Vec<Range<u64>>>;
 
+    /// See [`ChainStore::newest_gap`](crate::ChainStore::newest_gap).
+    async fn newest_gap(&self) -> anyhow::Result<Option<Range<u64>>>;
+
     /// See [`ChainStore::missing_parts`](crate::ChainStore::missing_parts).
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
 

@@ -186,6 +186,15 @@ impl Backend for RemoteBackend {
             .collect())
     }
 
+    async fn newest_gap(&self) -> anyhow::Result<Option<Range<u64>>> {
+        let response = self
+            .client()
+            .newest_gap(proto::Empty {})
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().range.map(|gap| gap.start..gap.end))
+    }
+
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>> {
         let response = self
             .client()
