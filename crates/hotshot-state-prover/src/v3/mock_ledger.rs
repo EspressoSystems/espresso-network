@@ -15,9 +15,9 @@ use hotshot_contract_adapter::{
 };
 use hotshot_types::{
     PeerConfig,
+    epoch::{EpochLength, EpochPosition},
     light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},
     stake_table::{HSStakeTable, StakeTableEntry},
-    utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -54,7 +54,7 @@ pub struct MockSystemParam {
     /// max capacity of stake table
     st_cap: usize,
     /// number of block per epoch
-    epoch_height: u64,
+    epoch_length: EpochLength,
     /// indicate the first epoch
     epoch_start_bock: u64,
 }
@@ -64,7 +64,8 @@ impl MockSystemParam {
     pub fn init() -> Self {
         Self {
             st_cap: STAKE_TABLE_CAPACITY_FOR_TEST,
-            epoch_height: EPOCH_HEIGHT_FOR_TEST,
+            epoch_length: EpochLength::try_from(EPOCH_HEIGHT_FOR_TEST)
+                .expect("the test epoch height is positive"),
             epoch_start_bock: EPOCH_START_BLOCK_FOR_TEST,
         }
     }
@@ -126,7 +127,7 @@ impl MockLedger {
 
     /// returns the current epoch
     pub fn cur_epoch(&self) -> u64 {
-        epoch_from_block_number(self.state.block_height, self.pp.epoch_height)
+        *self.pp.epoch_length.epoch_of(self.state.block_height)
     }
 
     /// return true if epoch is activated
@@ -137,27 +138,31 @@ impl MockLedger {
     /// return true of the current state is epoch root
     /// since it has no meaning before activation, always return false before epoch_start_block
     pub fn is_epoch_root(&self) -> bool {
-        self.epoch_activated() && is_epoch_root(self.state.block_height, self.pp.epoch_height)
+        self.epoch_activated() && self.position().is_root()
     }
 
     /// return true of the current state is between epoch root and the last block
     /// since it has no meaning before activation, always return false before epoch_start_block
     pub fn is_ge_epoch_root(&self) -> bool {
-        self.epoch_activated() && is_ge_epoch_root(self.state.block_height, self.pp.epoch_height)
+        self.epoch_activated() && self.position().is_at_or_after_root()
     }
 
     /// return the first epoch (activation epoch)
     pub fn first_epoch(&self) -> u64 {
-        epoch_from_block_number(self.pp.epoch_start_bock, self.pp.epoch_height)
+        *self.pp.epoch_length.epoch_of(self.pp.epoch_start_bock)
     }
 
     /// compute the epoch corresponding to `height`
     pub fn derive_epoch(&self, height: u64) -> u64 {
-        epoch_from_block_number(height, self.pp.epoch_height)
+        *self.pp.epoch_length.epoch_of(height)
     }
 
     fn is_last_block_in_epoch(&self) -> bool {
-        is_last_block(self.state.block_height, self.pp.epoch_height)
+        self.position().is_last()
+    }
+
+    fn position(&self) -> EpochPosition {
+        self.pp.epoch_length.position(self.state.block_height)
     }
 
     /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_with_block()`
