@@ -5,7 +5,13 @@
 //! its fsync. Each write names the [`StorageOutput`] that reports it durable, which consensus
 //! waits on before sending the messages that depend on it.
 
-use std::{collections::BTreeMap, marker::PhantomData, mem, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
+    mem,
+    sync::Arc,
+    time::Duration,
+};
 
 use committable::Commitment;
 use consensus_store::{Batch, Store};
@@ -179,6 +185,16 @@ pub struct Storage<T: NodeType, S> {
 
     decided_state: Option<Box<dyn DecidedState<T>>>,
 
+    /// Payloads written since this writer started, until garbage collection.
+    written_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
+
+    /// Blocks decided without their payload stored, with their height, until garbage
+    /// collection. A payload stored for one of them in that time joins its decide log entry.
+    awaited_payloads: BTreeMap<(ViewNumber, VidCommitment2), u64>,
+
+    /// The view garbage was last collected before; no payload is awaited for earlier views.
+    collected_before: ViewNumber,
+
     metrics: Option<StorageMetrics>,
 }
 
@@ -188,8 +204,8 @@ struct Pending<T: NodeType> {
     outputs: Vec<StorageOutput<T>>,
     timers: Vec<Measurement>,
 
-    /// The height after the newest decide log entry the batch writes.
-    next_height: Option<u64>,
+    /// Whether the batch writes to the decide log.
+    writes_decide_log: bool,
 }
 
 impl<T: NodeType> Default for Pending<T> {
@@ -198,7 +214,7 @@ impl<T: NodeType> Default for Pending<T> {
             batch: Batch::new(),
             outputs: Vec::new(),
             timers: Vec::new(),
-            next_height: None,
+            writes_decide_log: false,
         }
     }
 }
@@ -233,6 +249,9 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             decide_log_full: false,
             state_certs: BTreeMap::new(),
             decided_state: None,
+            written_payloads: BTreeSet::new(),
+            awaited_payloads: BTreeMap::new(),
+            collected_before: ViewNumber::genesis(),
             metrics: None,
         }
     }
@@ -281,6 +300,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             return;
         };
         let encoded = block_payload.encode();
+        if let Some(height) = self.awaited_payloads.remove(&(view, commitment)) {
+            store::put_decided_payload(&mut self.pending.batch, height, encoded.clone());
+            self.pending.writes_decide_log = true;
+        }
+        self.written_payloads.insert((view, commitment));
         let written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
         self.queued(written, StorageOutput::Payload(view, commitment), |m| {
             &m.append_da
@@ -392,8 +416,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             &state_certs,
         ) {
             Ok(()) => {
-                let next = leaves.iter().map(|l| l.height() + 1).max();
-                self.pending.next_height = self.pending.next_height.max(next);
+                self.pending.writes_decide_log = true;
+                self.await_payloads(leaves);
             },
             Err(err) => {
                 error!(%err, view = %cert1.view_number(), "failed to encode decided leaves");
@@ -414,6 +438,9 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// Deletes the stored proposals and payloads of views before `view`.
     pub fn gc(&mut self, view: ViewNumber) {
         store::collect_garbage(&mut self.pending.batch, view);
+        self.collected_before = self.collected_before.max(view);
+        self.written_payloads.retain(|(v, _)| *v >= view);
+        self.awaited_payloads.retain(|(v, _), _| *v >= view);
     }
 
     /// Marks the state certificates of views up to `view` as decided.
@@ -425,6 +452,27 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             warn!(%err, %view, "failed to finalize state certificates");
         }
         self.state_certs = self.state_certs.split_off(&(view + 1));
+    }
+
+    /// Remembers the decided `leaves` whose payloads are not stored, so that a payload stored
+    /// before garbage collection joins the decide log.
+    fn await_payloads(&mut self, leaves: &[Leaf2<T>]) {
+        for leaf in leaves {
+            let VidCommitment::V2(commitment) = leaf.payload_commitment() else {
+                continue;
+            };
+            let key = (leaf.view_number(), commitment);
+            if key.0 < self.collected_before || self.written_payloads.contains(&key) {
+                continue;
+            }
+            match self.store.has_payload(key.0, &commitment) {
+                Ok(true) => {},
+                Ok(false) => {
+                    self.awaited_payloads.insert(key, leaf.height());
+                },
+                Err(err) => warn!(%err, view = %key.0, "failed to look up a stored payload"),
+            }
+        }
     }
 
     /// The undecided state certificate of the epoch root proposed in `view`, if any.
@@ -497,11 +545,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             Ok(()) => {
                 let Pending {
                     outputs,
-                    next_height,
+                    writes_decide_log,
                     ..
                 } = applied.pending;
-                if let Some(next_height) = next_height {
-                    self.store.announce(next_height);
+                if writes_decide_log {
+                    self.store.announce();
                 }
                 self.durable.extend(outputs);
             },
@@ -567,7 +615,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             let result = store.store().apply(&pending.batch);
             drop(timer);
             if result.is_ok()
-                && pending.next_height.is_some()
+                && pending.writes_decide_log
                 && let Err(err) = store.measure_decide_log()
             {
                 warn!(%err, "failed to measure the decide log");

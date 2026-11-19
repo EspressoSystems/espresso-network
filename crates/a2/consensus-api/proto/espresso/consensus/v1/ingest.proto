@@ -7,17 +7,22 @@ package espresso.consensus.v1;
 // Entries carry the fields an ingester acts on as protobuf fields, and the consensus objects
 // themselves in `Body`, in the encoding consensus nodes exchange.
 service DecideLog {
-  // The decided entries from `from_height` on, in height order. The stream stays open and
-  // delivers each entry once it is decided. An entry whose `payload_size` is set is followed by
-  // its payload, in chunks that add up to that size.
+  // The decided entries from `from_height` on. The stream stays open and delivers each entry once it is decided, mostly in
+  // height order. An entry whose `payload_size` is set is followed by its payload, in chunks
+  // that add up to that size.
   //
-  // If `from_height` is below the earliest entry the node still keeps, the stream starts with
-  // `Start`, and the entries from `from_height` up to `Start.earliest_height` must come from
-  // elsewhere. Heights can be missing in between: consensus decides a block without an ancestor
-  // it never received, and those heights must come from elsewhere too.
+  // The order is weak in two ways, both within `FINALITY_VIEWS` views of the newest decide: a
+  // height that was missing can be decided later and arrive after higher ones, and an entry sent
+  // without its payload can get it later, as `PayloadAdded` followed by its chunks. An entry
+  // whose view is `FINALITY_VIEWS` or more behind the newest entry's view gets neither; heights
+  // still missing then, and payloads still missing, must come from elsewhere.
+  //
+  // The stream starts with `Start`, naming the earliest entry the node still keeps; entries
+  // before it must come from elsewhere too.
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
 
-  // Frees the entries below `height`, and their payloads. The caller has made them durable.
+  // Frees the entries of the heights in the given ranges, and their payloads. The caller has
+  // made them durable, or given up on their payloads.
   rpc Ack(AckRequest) returns (AckResponse);
 
   // The records the validators signed about their API services for an epoch, newest per
@@ -34,10 +39,19 @@ message SubscribeResponse {
     Start start = 1;
     Decided decided = 2;
     PayloadChunk payload_chunk = 3;
+    PayloadAdded payload_added = 4;
   }
 }
 
+// The payload of an entry sent earlier without it, followed by its chunks.
+message PayloadAdded {
+  uint64 height = 1;
+  uint64 payload_size = 2;
+}
+
 message Start {
+  // The earliest entry the node keeps at or after `from_height`; `from_height` if it keeps
+  // none.
   uint64 earliest_height = 1;
 }
 
@@ -67,9 +81,10 @@ message Body {
   // The leaf, without its payload.
   bytes leaf = 2;
 
-  // The `Certificate1` and `Certificate2` of the newest leaf of a decide; empty for the older
-  // leaves of the same decide, which the next leaf's justify QC certifies.
+  // The `Certificate1` that certifies the leaf, always present.
   bytes cert1 = 3;
+
+  // The `Certificate2` that decided the leaf, for the newest leaf of a decide; empty otherwise.
   bytes cert2 = 4;
 
   // The VID common data of the block; empty if this node did not have its share.
@@ -81,12 +96,18 @@ message Body {
 }
 
 message AckRequest {
-  uint64 height = 1;
+  repeated HeightRange ranges = 1;
+}
+
+// The heights from `start` up to, not including, `end`.
+message HeightRange {
+  uint64 start = 1;
+  uint64 end = 2;
 }
 
 message AckResponse {}
 
-// A part of the payload of the entry before it.
+// A part of the payload announced by the `Decided` or `PayloadAdded` before it.
 message PayloadChunk {
   bytes data = 1;
 }

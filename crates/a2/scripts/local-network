@@ -22,6 +22,9 @@ The API services serve on http://127.0.0.1:24000 to http://127.0.0.1:24004, one 
 ENVIRONMENT:
   GENESIS_FILE   The genesis file, data/genesis/demo-ff.toml by default
   PROFILE        The cargo profile whose binaries to run, debug by default
+  EMPTY_BLOCK_DELAY
+                 How long a leader without transactions waits before proposing an empty
+                 block, e.g. 3ms; the consensus node's default if unset
 EOF
 }
 
@@ -96,6 +99,7 @@ main() {
       --bind-address "127.0.0.1:${!port}" \
       --api-address "127.0.0.1:$((9978 + i))" \
       --public-api-url "http://127.0.0.1:$((24000 + i))" \
+      ${EMPTY_BLOCK_DELAY:+--empty-block-delay "$EMPTY_BLOCK_DELAY"} \
       >"$rundir/consensus-$i.log" 2>&1 &
   done
 

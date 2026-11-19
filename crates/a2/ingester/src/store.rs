@@ -23,6 +23,14 @@ impl Sink<SeqTypes> for ChainStore {
         self.put(&item, &parts).await
     }
 
+    async fn add_payload(&self, height: u64, payload: Vec<u8>) -> anyhow::Result<()> {
+        let parts = Parts {
+            payload: Some(payload.into()),
+            ..Default::default()
+        };
+        self.put_parts(height, &parts).await
+    }
+
     async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2>> {
         let Some(height) = self.newest().await? else {
             return Ok(None);

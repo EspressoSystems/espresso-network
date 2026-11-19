@@ -1,19 +1,20 @@
 //! The ingester: copies the chain a consensus node decides into the API service's store.
 //!
 //! It reads the decide log over the ingester API (`consensus-api`), writes each block to a
-//! [`Sink`], usually a [`ChainStore`], and acknowledges it, which lets consensus free it. Data from
-//! the node's own consensus is not verified again; the ingester checks only the structure of the
-//! chain, so that one pointed at the wrong node or a store restored to the wrong place does not mix
-//! two chains.
+//! [`Sink`], usually a [`ChainStore`], and acknowledges it, which lets consensus free it: once it
+//! has the block's payload, or once the block is final and no payload can come any more. Data from
+//! the node's own consensus is not verified again; the ingester checks only that each leaf fits
+//! its neighbours, so that one pointed at the wrong node or a store restored to the wrong place
+//! does not mix two chains.
 
-use std::{net::SocketAddr, time::Duration};
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use consensus_api::{
-    BODY_FORMAT, DecideLogClient,
-    proto::{AckRequest, Decided, SubscribeRequest, subscribe_response::Event},
+    BODY_FORMAT, DecideLogClient, FINALITY_VIEWS,
+    proto::{AckRequest, Decided, HeightRange, SubscribeRequest, subscribe_response::Event},
 };
 use futures::StreamExt;
 use hotshot_types::{
@@ -30,11 +31,15 @@ use hotshot_types::{
     },
 };
 use jf_advz::VidScheme;
+use tokio::time::interval;
 
 mod store;
 
 /// How long the ingester waits before reconnecting after the connection fails.
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+
+/// How often the ingester acknowledges what it stored, in one call for all of it.
+const ACK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Where the ingester writes.
 #[async_trait]
@@ -42,9 +47,10 @@ pub trait Sink<Types: NodeType>: Send + Sync {
     /// Makes `block` durable.
     async fn append(&self, block: Block<Types>) -> anyhow::Result<()>;
 
-    /// The leaf of the newest block the sink holds. The ingester resumes after it and checks that
-    /// the next leaf names it as parent; heights below it can be missing, and are the API
-    /// service's to fill.
+    /// Adds `payload` to the block stored at `height`, which was stored without it.
+    async fn add_payload(&self, height: u64, payload: Vec<u8>) -> anyhow::Result<()>;
+
+    /// The leaf of the newest block the sink holds, which entries after it must follow.
     async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2<Types>>>;
 }
 
@@ -53,8 +59,7 @@ pub trait Sink<Types: NodeType>: Send + Sync {
 pub struct Block<Types: NodeType> {
     pub leaf: Leaf2<Types>,
 
-    /// The certificate that certifies the leaf: its own if it was the newest leaf of a decide,
-    /// otherwise the justify QC of the leaf after it.
+    /// The certificate that certifies the leaf.
     pub cert1: Certificate1<Types>,
 
     /// The certificate that decided the leaf directly, if one did.
@@ -85,211 +90,316 @@ pub async fn run<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> a
     }
 }
 
-/// An entry that does not continue the chain the sink holds.
+/// An entry that does not fit the chain the sink holds.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ChainBroken(String);
 
-/// Ingests until the stream ends or fails.
+/// Ingests until the stream ends or fails. The stream starts at the earliest entry consensus
+/// still holds, all of which are unacknowledged, so nothing stored but unacknowledged is missed.
 async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Result<()> {
     let mut client = DecideLogClient::connect(format!("http://{addr}"))
         .await
         .context("connecting to the ingester API")?;
-    let mut chain = match sink.newest_leaf().await? {
-        Some(leaf) => Chain::new(leaf.height() + 1, Some(leaf.commit())),
-        None => Chain::new(0, None),
-    };
+    let newest = sink.newest_leaf().await?;
     let mut stream = client
-        .subscribe(SubscribeRequest {
-            from_height: chain.next_height,
-        })
+        .subscribe(SubscribeRequest { from_height: 0 })
         .await?
         .into_inner();
-    // The entry whose payload is still arriving, with the bytes so far.
-    let mut receiving: Option<(Entry<Types>, Vec<u8>)> = None;
-    while let Some(response) = stream.next().await {
-        let event = response?.event;
-        if let Some((entry, mut payload)) = receiving.take() {
-            let Some(Event::PayloadChunk(chunk)) = event else {
-                bail!("the payload of height {} ended early", entry.leaf.height());
-            };
-            payload.extend(chunk.data);
-            receiving = Some((entry, payload));
-            if let Some(entry) = complete(&mut receiving)? {
-                append(&mut client, sink, &mut chain, entry).await?;
-            }
-            continue;
-        }
-        match event {
-            Some(Event::Start(start)) => {
-                tracing::warn!(
-                    from = chain.next_height,
-                    earliest = start.earliest_height,
-                    "consensus no longer holds the heights before its earliest entry; they must \
-                     come from elsewhere"
-                );
-                chain.skip_to(start.earliest_height);
+    let mut chain = Chain::new(newest.as_ref());
+    let mut receiving: Option<Receiving<Types>> = None;
+    let mut acks = interval(ACK_INTERVAL);
+    loop {
+        tokio::select! {
+            response = stream.next() => {
+                let Some(response) = response else {
+                    return Ok(());
+                };
+                let event = response?.event.context("subscribe response without an event")?;
+                receive(sink, &mut chain, &mut receiving, event).await?;
             },
-            Some(Event::Decided(decided)) => {
-                let size = decided.payload_size;
-                let entry = decode(decided)?;
-                match size {
-                    Some(size) => {
-                        receiving = Some((entry, Vec::with_capacity(size as usize)));
-                        if let Some(entry) = complete(&mut receiving)? {
-                            append(&mut client, sink, &mut chain, entry).await?;
-                        }
-                    },
-                    None => append(&mut client, sink, &mut chain, entry).await?,
+            _ = acks.tick() => {
+                let ranges = chain.take_ackable();
+                if !ranges.is_empty() {
+                    client.ack(AckRequest { ranges }).await?;
                 }
             },
-            Some(Event::PayloadChunk(_)) => bail!("a payload chunk without an entry"),
-            None => bail!("subscribe response without an event"),
         }
+    }
+}
+
+/// What the stream is sending in chunks: the payload of an entry, or one added to an entry
+/// stored earlier.
+enum Receiving<Types: NodeType> {
+    Entry(Box<Entry<Types>>, Vec<u8>),
+    Payload {
+        height: u64,
+        size: u64,
+        data: Vec<u8>,
+    },
+}
+
+/// Takes `event` into the chain and the sink.
+async fn receive<Types: NodeType>(
+    sink: &dyn Sink<Types>,
+    chain: &mut Chain<Types>,
+    receiving: &mut Option<Receiving<Types>>,
+    event: Event,
+) -> anyhow::Result<()> {
+    if receiving.is_some() {
+        let Event::PayloadChunk(chunk) = event else {
+            bail!("a payload ended early");
+        };
+        return receive_chunk(sink, chain, receiving, chunk.data).await;
+    }
+    match event {
+        Event::Start(start) => chain.start(start.earliest_height),
+        Event::Decided(decided) => {
+            let size = decided.payload_size;
+            let entry = decode(decided)?;
+            chain.check(&entry)?;
+            match size {
+                Some(size) => {
+                    *receiving = Some(Receiving::Entry(
+                        Box::new(entry),
+                        Vec::with_capacity(size as usize),
+                    ));
+                    return receive_chunk(sink, chain, receiving, Vec::new()).await;
+                },
+                None => store(sink, chain, entry, None).await?,
+            }
+        },
+        Event::PayloadAdded(added) => {
+            *receiving = Some(Receiving::Payload {
+                height: added.height,
+                size: added.payload_size,
+                data: Vec::with_capacity(added.payload_size as usize),
+            });
+            return receive_chunk(sink, chain, receiving, Vec::new()).await;
+        },
+        Event::PayloadChunk(_) => bail!("a payload chunk without an entry"),
     }
     Ok(())
 }
 
-/// The entry of `receiving` once its whole payload has arrived, which leaves `receiving` empty.
-fn complete<Types: NodeType>(
-    receiving: &mut Option<(Entry<Types>, Vec<u8>)>,
-) -> anyhow::Result<Option<Entry<Types>>> {
-    let Some((entry, payload)) = receiving.as_ref() else {
-        return Ok(None);
+/// Adds `data` to the payload being received, and stores it once it is complete.
+async fn receive_chunk<Types: NodeType>(
+    sink: &dyn Sink<Types>,
+    chain: &mut Chain<Types>,
+    receiving: &mut Option<Receiving<Types>>,
+    data: Vec<u8>,
+) -> anyhow::Result<()> {
+    let (received, expected) = match receiving.as_mut().expect("a payload is being received") {
+        Receiving::Entry(entry, payload) => {
+            payload.extend(data);
+            (payload.len(), entry.payload_size)
+        },
+        Receiving::Payload {
+            size,
+            data: payload,
+            ..
+        } => {
+            payload.extend(data);
+            (payload.len(), *size)
+        },
     };
-    let expected = entry.payload_size.unwrap_or_default() as usize;
     ensure!(
-        payload.len() <= expected,
-        "the payload of height {} is longer than announced",
-        entry.leaf.height()
+        received as u64 <= expected,
+        "a payload is longer than announced"
     );
-    if payload.len() < expected {
-        return Ok(None);
+    if (received as u64) < expected {
+        return Ok(());
     }
-    let (mut entry, payload) = receiving.take().expect("checked above");
-    entry.payload = Some(payload);
-    Ok(Some(entry))
+    match receiving.take().expect("a payload is being received") {
+        Receiving::Entry(entry, payload) => store(sink, chain, *entry, Some(payload)).await,
+        Receiving::Payload { height, data, .. } => {
+            sink.add_payload(height, data).await?;
+            chain.payload_added(height);
+            Ok(())
+        },
+    }
 }
 
-/// Takes `entry` into the chain, and stores and acknowledges every block that is ready.
-async fn append<Types: NodeType>(
-    client: &mut DecideLogClient<tonic::transport::Channel>,
+/// Stores `entry`, with `payload` if consensus had it.
+async fn store<Types: NodeType>(
     sink: &dyn Sink<Types>,
     chain: &mut Chain<Types>,
     entry: Entry<Types>,
+    payload: Option<Vec<u8>>,
 ) -> anyhow::Result<()> {
-    for block in chain.push(entry)? {
-        let height = block.leaf.height();
-        sink.append(finish(block)?).await?;
-        client.ack(AckRequest { height: height + 1 }).await?;
-    }
+    let (height, view) = (entry.leaf.height(), entry.view);
+    let complete = payload.is_some();
+    sink.append(finish(entry.into_block(payload))?).await?;
+    chain.stored(height, view, complete);
     Ok(())
 }
 
 /// A decide log entry with its consensus objects decoded.
 struct Entry<Types: NodeType> {
     leaf: Leaf2<Types>,
-    payload_size: Option<u64>,
-    payload: Option<Vec<u8>>,
-    cert1: Option<Certificate1<Types>>,
+    view: u64,
+    payload_size: u64,
+    cert1: Certificate1<Types>,
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
     state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
 }
 
-/// The ingester's position in the chain.
+impl<Types: NodeType> Entry<Types> {
+    fn into_block(self, payload: Option<Vec<u8>>) -> Block<Types> {
+        Block {
+            leaf: self.leaf,
+            cert1: self.cert1,
+            cert2: self.cert2,
+            vid_common: self.vid_common.map(VidCommon::V2),
+            state_cert: self.state_cert,
+            payload,
+        }
+    }
+}
+
+/// What the ingester knows of the chain: the leaves of recent heights, to check each entry
+/// against its neighbours, and the stored heights not acknowledged yet.
 ///
-/// An entry is ready once the QC that certifies its leaf is known: its own `cert1` if it is
-/// the newest leaf of a decide, otherwise the next leaf's justify QC.
-///
-/// Heights can be missing from the decide log, where consensus decided a block without an
-/// ancestor it never received. The ingester stores what follows and leaves the missing heights to
-/// the API service, which fills them from other API services; waiting for them here would make
-/// consensus wait on other operators.
+/// Entries arrive mostly in height order, but a missing height can be decided later, and a
+/// payload can follow its entry. A height is final once its view is
+/// [`FINALITY_VIEWS`] behind the newest view seen; then nothing more comes for it.
 struct Chain<Types: NodeType> {
-    next_height: u64,
+    /// The leaves of recent heights.
+    known: BTreeMap<u64, Known<Types>>,
 
-    /// The commitment of the leaf before `next_height`, if the ingester or the sink has it.
-    last_commitment: Option<Commitment<Leaf2<Types>>>,
+    /// Stored heights not acknowledged yet, with their view and whether their payload is stored.
+    unacked: BTreeMap<u64, (u64, bool)>,
 
-    /// An entry waiting for the next leaf to certify it.
-    waiting: Option<Entry<Types>>,
+    newest_view: u64,
 }
 
 impl<Types: NodeType> Chain<Types> {
-    fn new(next_height: u64, last_commitment: Option<Commitment<Leaf2<Types>>>) -> Self {
+    /// The chain as the sink holds it, whose newest leaf is `newest`.
+    fn new(newest: Option<&Leaf2<Types>>) -> Self {
+        let mut known = BTreeMap::new();
+        let mut newest_view = 0;
+        if let Some(leaf) = newest {
+            let leaf = Known::of(leaf, *leaf.view_number());
+            newest_view = leaf.view;
+            known.insert(newest.map_or(0, Leaf2::height), leaf);
+        }
         Self {
-            next_height,
-            last_commitment,
-            waiting: None,
+            known,
+            unacked: BTreeMap::new(),
+            newest_view,
         }
     }
 
-    /// Continues at `height`, past heights the decide log lacks. An entry waiting for its QC
-    /// cannot get it across the hole, so it becomes part of the hole.
-    fn skip_hole(&mut self, height: u64) {
-        let missing = match &self.waiting {
-            Some(waiting) => waiting.leaf.height()..height,
-            None => self.next_height..height,
+    /// Notes where the decide log starts.
+    fn start(&self, earliest: u64) {
+        let Some((&newest, _)) = self.known.last_key_value() else {
+            return;
         };
-        tracing::warn!(
-            ?missing,
-            "the decide log lacks these heights; the API service fills them"
-        );
-        self.skip_to(height);
+        if earliest > newest + 1 {
+            tracing::warn!(
+                missing = ?(newest + 1..earliest),
+                "consensus no longer holds these heights; the API service fills them"
+            );
+        }
     }
 
-    /// Continues after a gap, from `height`.
-    fn skip_to(&mut self, height: u64) {
-        self.next_height = height;
-        self.last_commitment = None;
-        self.waiting = None;
-    }
-
-    /// Takes the next entry, and returns the entries that are now ready, in height order.
-    fn push(&mut self, entry: Entry<Types>) -> Result<Vec<Block<Types>>, ChainBroken> {
+    /// Checks that `entry` fits the leaves of the heights before and after it, if known, and
+    /// any leaf known at its own height.
+    fn check(&mut self, entry: &Entry<Types>) -> Result<(), ChainBroken> {
         let height = entry.leaf.height();
-        if height < self.next_height {
-            return Err(ChainBroken(format!(
-                "expected height {}, got {height}",
-                self.next_height
-            )));
-        }
-        if height > self.next_height {
-            self.skip_hole(height);
-        }
-        let parent = entry.leaf.parent_commitment();
-        if let Some(last) = self.last_commitment
-            && last != parent
+        let leaf = Known::of(&entry.leaf, entry.view);
+        if let Some(known) = self.known.get(&height)
+            && known.commitment != leaf.commitment
         {
             return Err(ChainBroken(format!(
-                "leaf at height {height} names parent {parent}, but the leaf before it is {last}"
+                "leaf {} at height {height}, but the chain has {}",
+                leaf.commitment, known.commitment
             )));
         }
-        let mut ready = Vec::new();
-        if let Some(waiting) = self.waiting.take() {
-            let qc = entry.leaf.justify_qc().clone();
-            ready.push(certified(waiting, qc));
+        if let Some(before) = height.checked_sub(1)
+            && let Some(known) = self.known.get(&before)
+            && known.commitment != leaf.parent
+        {
+            return Err(ChainBroken(format!(
+                "leaf at height {height} names parent {}, but the leaf before it is {}",
+                leaf.parent, known.commitment
+            )));
         }
-        self.next_height = height + 1;
-        self.last_commitment = Some(entry.leaf.commit());
-        match entry.cert1.clone() {
-            Some(qc) => ready.push(certified(entry, qc)),
-            None => self.waiting = Some(entry),
+        if let Some(child) = self.known.get(&(height + 1))
+            && child.parent != leaf.commitment
+        {
+            return Err(ChainBroken(format!(
+                "leaf {} at height {height} is not the parent of the leaf after it",
+                leaf.commitment
+            )));
         }
-        Ok(ready)
+        self.known.insert(height, leaf);
+        self.newest_view = self.newest_view.max(entry.view);
+        // Keep the leaves an entry still to come can neighbour.
+        let horizon = self.newest_view.saturating_sub(2 * FINALITY_VIEWS);
+        let newest = self.known.keys().next_back().copied();
+        self.known
+            .retain(|height, leaf| leaf.view >= horizon || Some(*height) == newest);
+        Ok(())
+    }
+
+    fn stored(&mut self, height: u64, view: u64, complete: bool) {
+        self.unacked.insert(height, (view, complete));
+    }
+
+    fn payload_added(&mut self, height: u64) {
+        if let Some((_, complete)) = self.unacked.get_mut(&height) {
+            *complete = true;
+        }
+    }
+
+    /// The ranges of consecutive stored heights that have their payloads or are final, which
+    /// it then forgets. A final height without its payload is left to the API service.
+    fn take_ackable(&mut self) -> Vec<HeightRange> {
+        let newest = self.newest_view;
+        let ackable: Vec<u64> = self
+            .unacked
+            .iter()
+            .filter(|(_, (view, complete))| *complete || view + FINALITY_VIEWS <= newest)
+            .map(|(height, _)| *height)
+            .collect();
+        let mut ranges: Vec<HeightRange> = Vec::new();
+        for height in ackable {
+            if !self
+                .unacked
+                .remove(&height)
+                .expect("ackable heights are unacked")
+                .1
+            {
+                tracing::warn!(height, "consensus does not have the payload");
+            }
+            match ranges.last_mut() {
+                Some(range) if range.end == height => range.end += 1,
+                _ => ranges.push(HeightRange {
+                    start: height,
+                    end: height + 1,
+                }),
+            }
+        }
+        ranges
     }
 }
 
-/// `entry` with `qc`, the certificate that certifies its leaf.
-fn certified<Types: NodeType>(entry: Entry<Types>, qc: Certificate1<Types>) -> Block<Types> {
-    Block {
-        leaf: entry.leaf,
-        cert1: qc,
-        cert2: entry.cert2,
-        vid_common: entry.vid_common.map(VidCommon::V2),
-        state_cert: entry.state_cert,
-        payload: entry.payload,
+/// What the neighbour check needs of a leaf.
+struct Known<Types: NodeType> {
+    commitment: Commitment<Leaf2<Types>>,
+    parent: Commitment<Leaf2<Types>>,
+    view: u64,
+}
+
+impl<Types: NodeType> Known<Types> {
+    fn of(leaf: &Leaf2<Types>, view: u64) -> Self {
+        Self {
+            commitment: leaf.commit(),
+            parent: leaf.parent_commitment(),
+            view,
+        }
     }
 }
 
@@ -314,9 +424,9 @@ fn decode<Types: NodeType>(entry: Decided) -> anyhow::Result<Entry<Types>> {
     );
     Ok(Entry {
         leaf,
-        payload_size: entry.payload_size,
-        payload: None,
-        cert1: optional(&body.cert1).context("decoding the cert1")?,
+        view: entry.view,
+        payload_size: entry.payload_size.unwrap_or_default(),
+        cert1: bincode::deserialize(&body.cert1).context("decoding the cert1")?,
         cert2: optional(&body.cert2).context("decoding the cert2")?,
         vid_common: optional(&body.vid_common).context("decoding the VID common data")?,
         state_cert: optional(&body.state_cert).context("decoding the state certificate")?,

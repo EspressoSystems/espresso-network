@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     net::{Ipv4Addr, SocketAddr},
+    ops::Range,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -8,7 +9,10 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use consensus_api::{Error as ApiError, Source, proto::Body};
-use hotshot_query_service::testing::{chain::MockChain, mocks::MockTypes};
+use hotshot_query_service::testing::{
+    chain::{MockBlock, MockChain},
+    mocks::MockTypes,
+};
 use hotshot_types::{data::VidCommon, traits::block_contents::EncodeBytes};
 use tokio::{sync::watch, time::timeout};
 
@@ -18,8 +22,8 @@ use super::*;
 struct FakeLog {
     entries: Mutex<BTreeMap<u64, Decided>>,
     payloads: Mutex<BTreeMap<u64, Bytes>>,
-    next: watch::Sender<u64>,
-    acked: Mutex<u64>,
+    changes: watch::Sender<u64>,
+    acked: Mutex<Vec<Range<u64>>>,
 }
 
 impl FakeLog {
@@ -27,47 +31,73 @@ impl FakeLog {
         Arc::new(Self {
             entries: Mutex::default(),
             payloads: Mutex::default(),
-            next: watch::channel(0).0,
-            acked: Mutex::new(0),
+            changes: watch::channel(0).0,
+            acked: Mutex::default(),
         })
     }
 
-    /// Decides `blocks` of `chain`, oldest first, as one decide: only the newest carries the
-    /// certificates.
+    /// Decides the blocks of `chain` at `heights`, with their payloads; the newest carries the
+    /// `Certificate2`.
     fn decide(&self, chain: &MockChain, heights: std::ops::RangeInclusive<usize>) {
         let blocks = &chain.blocks()[heights];
         let newest = blocks.last().unwrap().height();
         for block in blocks {
-            let is_newest = block.height() == newest;
-            let mut entry = entry(chain, block, is_newest);
-            entry.payload_size = Some(block.block.payload().encode().len() as u64);
-            self.payloads.lock().unwrap().insert(
-                block.height(),
-                block.block.payload().encode().to_vec().into(),
-            );
+            let mut entry = entry(chain, block, block.height() == newest);
+            entry.payload_size = Some(payload_of(block).len() as u64);
+            self.payloads
+                .lock()
+                .unwrap()
+                .insert(block.height(), payload_of(block));
             self.entries.lock().unwrap().insert(block.height(), entry);
         }
-        self.next.send_modify(|n| *n = (*n).max(newest + 1));
+        self.changed();
+    }
+
+    /// Decides the block of `chain` at `height` without its payload.
+    fn decide_without_payload(&self, chain: &MockChain, height: usize) {
+        let block = &chain.blocks()[height];
+        let entry = entry(chain, block, true);
+        self.entries.lock().unwrap().insert(block.height(), entry);
+        self.changed();
+    }
+
+    /// Adds the payload of the block of `chain` at `height`, decided without it.
+    fn add_payload(&self, chain: &MockChain, height: usize) {
+        let block = &chain.blocks()[height];
+        self.payloads
+            .lock()
+            .unwrap()
+            .insert(block.height(), payload_of(block));
+        self.changed();
     }
 
     fn insert(&self, entry: Decided) {
-        let height = entry.height;
-        self.entries.lock().unwrap().insert(height, entry);
-        self.next.send_modify(|n| *n = (*n).max(height + 1));
+        self.entries.lock().unwrap().insert(entry.height, entry);
+        self.changed();
+    }
+
+    fn changed(&self) {
+        self.changes.send_modify(|n| *n += 1);
+    }
+
+    fn acked(&self) -> Vec<u64> {
+        let acked = self.acked.lock().unwrap();
+        let mut heights: Vec<u64> = acked.iter().flat_map(Clone::clone).collect();
+        heights.sort();
+        heights
     }
 }
 
-fn entry(
-    chain: &MockChain,
-    block: &hotshot_query_service::testing::chain::MockBlock,
-    newest: bool,
-) -> Decided {
+fn payload_of(block: &MockBlock) -> Bytes {
+    block.block.payload().encode().to_vec().into()
+}
+
+fn entry(chain: &MockChain, block: &MockBlock, newest: bool) -> Decided {
     let leaf = block.leaf.leaf();
     let vid_common = match block.vid_common.common() {
         VidCommon::V2(common) => bincode::serialize(common).unwrap(),
         _ => Vec::new(),
     };
-    let ser = |v: Option<Vec<u8>>| v.unwrap_or_default();
     Decided {
         height: block.height(),
         view: *leaf.view_number(),
@@ -79,11 +109,12 @@ fn entry(
         body: Some(Body {
             format: BODY_FORMAT,
             leaf: bincode::serialize(leaf).unwrap(),
-            cert1: ser(newest.then(|| bincode::serialize(block.leaf.qc()).unwrap())),
-            cert2: ser(newest
+            cert1: bincode::serialize(block.leaf.qc()).unwrap(),
+            cert2: newest
                 .then(|| chain.cert2(block))
                 .flatten()
-                .map(|c| bincode::serialize(&c).unwrap())),
+                .map(|cert| bincode::serialize(&cert).unwrap())
+                .unwrap_or_default(),
             vid_common,
             state_cert: Vec::new(),
         }),
@@ -105,15 +136,14 @@ impl Source for FakeLog {
         Ok(self.entries.lock().unwrap().keys().next().copied())
     }
 
-    fn next_height(&self) -> watch::Receiver<u64> {
-        self.next.subscribe()
+    fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
-    async fn ack(&self, height: u64) -> Result<(), ApiError> {
-        let mut acked = self.acked.lock().unwrap();
-        *acked = (*acked).max(height);
+    async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), ApiError> {
         let mut entries = self.entries.lock().unwrap();
-        *entries = entries.split_off(&height);
+        entries.retain(|height, _| !ranges.iter().any(|range| range.contains(height)));
+        self.acked.lock().unwrap().extend(ranges);
         Ok(())
     }
 
@@ -132,7 +162,8 @@ impl Source for FakeLog {
 /// A sink in memory, holding the blocks the ingester appends after `before`.
 struct MemSink {
     before: Option<Leaf2<MockTypes>>,
-    blocks: Mutex<Vec<Block<MockTypes>>>,
+    blocks: Mutex<BTreeMap<u64, Block<MockTypes>>>,
+    appended: Mutex<Vec<u64>>,
 }
 
 impl MemSink {
@@ -145,31 +176,41 @@ impl MemSink {
         Arc::new(Self {
             before,
             blocks: Mutex::default(),
+            appended: Mutex::default(),
         })
     }
 
-    fn heights(&self) -> Vec<u64> {
-        self.blocks
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|b| b.leaf.height())
-            .collect()
+    /// The heights appended, in the order they were.
+    fn appended(&self) -> Vec<u64> {
+        self.appended.lock().unwrap().clone()
+    }
+
+    fn block(&self, height: u64) -> Option<Block<MockTypes>> {
+        self.blocks.lock().unwrap().get(&height).cloned()
     }
 }
 
 #[async_trait]
 impl Sink<MockTypes> for MemSink {
     async fn append(&self, block: Block<MockTypes>) -> anyhow::Result<()> {
-        self.blocks.lock().unwrap().push(block);
+        let height = block.leaf.height();
+        self.blocks.lock().unwrap().insert(height, block);
+        self.appended.lock().unwrap().push(height);
+        Ok(())
+    }
+
+    async fn add_payload(&self, height: u64, payload: Vec<u8>) -> anyhow::Result<()> {
+        let mut blocks = self.blocks.lock().unwrap();
+        let block = blocks.get_mut(&height).context("no block at the height")?;
+        block.payload = Some(payload);
         Ok(())
     }
 
     async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2<MockTypes>>> {
         let blocks = self.blocks.lock().unwrap();
         Ok(blocks
-            .last()
-            .map(|block| block.leaf.clone())
+            .last_key_value()
+            .map(|(_, block)| block.leaf.clone())
             .or_else(|| self.before.clone()))
     }
 }
@@ -198,14 +239,15 @@ fn spawn_ingester(addr: SocketAddr, sink: Arc<MemSink>) -> tokio::task::JoinHand
     tokio::spawn(async move { run::<MockTypes>(addr, sink.as_ref()).await })
 }
 
-async fn wait_for(sink: &MemSink, height: u64) {
+/// Waits until `done` holds.
+async fn eventually(what: &str, done: impl Fn() -> bool) {
     timeout(Duration::from_secs(10), async {
-        while sink.heights().last() != Some(&height) {
+        while !done() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("the ingester reaches the height");
+    .unwrap_or_else(|_| panic!("{what}"));
 }
 
 async fn chain(blocks: usize) -> MockChain {
@@ -215,7 +257,7 @@ async fn chain(blocks: usize) -> MockChain {
 }
 
 /// Blocks reach the sink with their payload, VID common and certificates, and each one is
-/// acknowledged once stored. An older leaf of a decide waits for the next leaf's QC.
+/// acknowledged once stored.
 #[tokio::test]
 async fn ingests_decided_blocks() {
     let chain = chain(4).await;
@@ -225,34 +267,31 @@ async fn ingests_decided_blocks() {
     let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
-    wait_for(&sink, 2).await;
+    eventually("the first blocks are stored", || sink.appended().len() == 3).await;
     log.decide(&chain, 3..=4);
-    wait_for(&sink, 4).await;
-
-    assert_eq!(sink.heights(), vec![0, 1, 2, 3, 4]);
-    {
-        let blocks = sink.blocks.lock().unwrap();
-        for (stored, expected) in blocks.iter().zip(chain.blocks()) {
-            assert_eq!(stored.leaf.commit(), expected.leaf.leaf().commit());
-            assert_eq!(&stored.cert1, expected.leaf.qc());
-            assert_eq!(
-                stored.payload.as_deref(),
-                Some(&*expected.block.payload().encode())
-            );
-        }
-        assert!(
-            blocks[1].cert2.is_none(),
-            "only the newest leaf of a decide has a cert2"
-        );
-        assert_eq!(blocks[2].cert2, chain.cert2(&chain.blocks()[2]));
-    }
-    timeout(Duration::from_secs(5), async {
-        while *log.acked.lock().unwrap() < 5 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+    eventually("every block is acknowledged", || {
+        log.acked() == vec![0, 1, 2, 3, 4]
     })
-    .await
-    .expect("every stored height is acknowledged");
+    .await;
+
+    assert_eq!(sink.appended(), vec![0, 1, 2, 3, 4]);
+    for expected in chain.blocks() {
+        let stored = sink.block(expected.height()).unwrap();
+        assert_eq!(stored.leaf.commit(), expected.leaf.leaf().commit());
+        assert_eq!(&stored.cert1, expected.leaf.qc());
+        assert_eq!(
+            stored.payload.as_deref(),
+            Some(&*expected.block.payload().encode())
+        );
+    }
+    assert!(
+        sink.block(1).unwrap().cert2.is_none(),
+        "only the newest leaf of a decide has a cert2"
+    );
+    assert_eq!(
+        sink.block(2).unwrap().cert2,
+        chain.cert2(&chain.blocks()[2])
+    );
 }
 
 /// Consensus does not disperse the genesis block, so its entry has no VID common data and the
@@ -277,10 +316,9 @@ async fn computes_the_genesis_vid_common() {
     let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
-    wait_for(&sink, 1).await;
-    let blocks = sink.blocks.lock().unwrap();
+    eventually("genesis is stored", || sink.block(0).is_some()).await;
     assert_eq!(
-        blocks[0].vid_common.as_ref(),
+        sink.block(0).unwrap().vid_common.as_ref(),
         Some(genesis.vid_common.common())
     );
 }
@@ -310,24 +348,29 @@ async fn passes_the_state_certificate() {
     let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
-    wait_for(&sink, 1).await;
-    assert_eq!(sink.blocks.lock().unwrap()[1].state_cert, Some(cert));
+    eventually("the block is stored", || sink.block(1).is_some()).await;
+    assert_eq!(sink.block(1).unwrap().state_cert, Some(cert));
 }
 
-/// A restarted ingester continues after the newest leaf the sink holds.
+/// A restarted ingester takes again every entry consensus still holds, which it has not
+/// acknowledged, and checks them against the newest leaf the sink holds.
 #[tokio::test]
-async fn resumes_from_the_sink() {
+async fn takes_the_unacknowledged_entries_again() {
     let chain = chain(3).await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=3);
     let sink = MemSink::after(Some(chain.blocks()[1].leaf.leaf().clone()));
     let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
-    wait_for(&sink, 3).await;
-    assert_eq!(sink.heights(), vec![2, 3]);
+    eventually("everything is acknowledged", || {
+        log.acked() == vec![0, 1, 2, 3]
+    })
+    .await;
+    assert_eq!(sink.appended(), vec![0, 1, 2, 3]);
 }
 
-/// A restarted ingester whose sink holds a leaf of another chain stops at the first entry.
+/// A restarted ingester whose sink holds a leaf of another chain stops at the entry that
+/// contradicts it.
 #[tokio::test]
 async fn resuming_on_another_chain_stops_the_ingester() {
     let chain = chain(3).await;
@@ -342,17 +385,26 @@ async fn resuming_on_another_chain_stops_the_ingester() {
         .expect("the ingester stops")
         .unwrap();
     assert!(err.is::<ChainBroken>(), "{err:#}");
-    assert!(sink.heights().is_empty());
+    assert_eq!(
+        sink.appended(),
+        vec![0],
+        "genesis is the same on both chains"
+    );
 }
 
 /// A leaf that does not follow the one before it stops the ingester.
 #[tokio::test]
 async fn a_broken_chain_stops_the_ingester() {
     let chain = chain(2).await;
-    let other = chain_with_other_parent(&chain).await;
+    let other = other_chain().await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=1);
-    log.insert(other);
+    let block = &other.blocks()[2];
+    assert_ne!(
+        block.leaf.leaf().parent_commitment(),
+        chain.blocks()[1].leaf.leaf().commit()
+    );
+    log.insert(entry(&other, block, true));
     let sink = MemSink::new();
     let ingester = spawn_ingester(serve(log).await, sink.clone());
 
@@ -361,18 +413,7 @@ async fn a_broken_chain_stops_the_ingester() {
         .expect("the ingester stops")
         .unwrap();
     assert!(err.is::<ChainBroken>(), "{err:#}");
-    assert_eq!(sink.heights(), vec![0, 1]);
-}
-
-/// An entry at height 2 from a chain that differs from `chain` at height 1.
-async fn chain_with_other_parent(chain: &MockChain) -> Decided {
-    let other = other_chain().await;
-    let block = &other.blocks()[2];
-    assert_ne!(
-        block.leaf.leaf().parent_commitment(),
-        chain.blocks()[1].leaf.leaf().commit()
-    );
-    entry(&other, block, true)
+    assert_eq!(sink.appended(), vec![0, 1]);
 }
 
 /// A chain that differs from those of [`chain`] at height 1, so its leaf at height 2 names a
@@ -388,9 +429,10 @@ async fn other_chain() -> MockChain {
     other
 }
 
-/// Heights missing from the decide log are skipped, and the blocks after them stored.
+/// Heights decided after later ones are stored when they arrive, and a range acknowledged
+/// never spans a height not stored.
 #[tokio::test]
-async fn skips_a_hole_in_the_decide_log() {
+async fn stores_heights_decided_late() {
     let chain = chain(5).await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=1);
@@ -398,23 +440,90 @@ async fn skips_a_hole_in_the_decide_log() {
     let sink = MemSink::new();
     let ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
-    wait_for(&sink, 5).await;
-    assert_eq!(sink.heights(), vec![0, 1, 4, 5]);
-    assert_eq!(*log.acked.lock().unwrap(), 6);
+    eventually("the decided heights are acknowledged", || {
+        log.acked() == vec![0, 1, 4, 5]
+    })
+    .await;
+    assert!(
+        log.acked
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|range| !range.contains(&2)),
+        "no range spans the missing heights"
+    );
+
+    log.decide(&chain, 2..=3);
+    eventually("the late heights are acknowledged", || {
+        log.acked() == vec![0, 1, 2, 3, 4, 5]
+    })
+    .await;
+    assert_eq!(sink.appended(), vec![0, 1, 4, 5, 2, 3]);
     assert!(!ingester.is_finished());
 }
 
-/// Heights consensus no longer holds are skipped, starting from the earliest one it has.
+/// A payload added after its entry reaches the sink, and the height is acknowledged only then.
 #[tokio::test]
-async fn skips_to_the_earliest_entry() {
+async fn takes_a_payload_added_later() {
+    let chain = chain(2).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=0);
+    log.decide_without_payload(&chain, 1);
+    log.decide(&chain, 2..=2);
+    let sink = MemSink::new();
+    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+
+    eventually("the complete heights are acknowledged", || {
+        log.acked() == vec![0, 2]
+    })
+    .await;
+    assert_eq!(sink.block(1).unwrap().payload, None);
+
+    log.add_payload(&chain, 1);
+    eventually("the late payload is acknowledged", || {
+        log.acked() == vec![0, 1, 2]
+    })
+    .await;
+    assert_eq!(
+        sink.block(1).unwrap().payload.as_deref(),
+        Some(&*chain.blocks()[1].block.payload().encode())
+    );
+}
+
+/// A height without its payload is acknowledged once it is final, and the payload is left to
+/// the API service.
+#[tokio::test]
+async fn acknowledges_a_final_height_without_its_payload() {
+    let blocks = FINALITY_VIEWS as usize + 2;
+    let chain = chain(blocks).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=0);
+    log.decide_without_payload(&chain, 1);
+    let sink = MemSink::new();
+    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+
+    eventually("the first height is acknowledged", || {
+        log.acked() == vec![0]
+    })
+    .await;
+    log.decide(&chain, 2..=blocks);
+    eventually("the final height is acknowledged", || {
+        log.acked().contains(&1)
+    })
+    .await;
+    assert_eq!(sink.block(1).unwrap().payload, None);
+}
+
+/// Heights consensus no longer holds are not waited for.
+#[tokio::test]
+async fn starts_at_the_earliest_entry() {
     let chain = chain(4).await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=4);
-    log.ack(3).await.unwrap();
+    log.ack(vec![Range { start: 0, end: 3 }]).await.unwrap();
     let sink = MemSink::after(Some(chain.blocks()[0].leaf.leaf().clone()));
-    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
-    wait_for(&sink, 4).await;
-    // The sink is behind; heights 1 and 2 are missing from it.
-    assert_eq!(sink.heights(), vec![3, 4]);
+    eventually("the held heights are stored", || sink.appended().len() == 2).await;
+    assert_eq!(sink.appended(), vec![3, 4]);
 }

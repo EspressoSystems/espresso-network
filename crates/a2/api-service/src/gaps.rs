@@ -10,6 +10,9 @@
 //! A filled height is stored without the `Certificate2` and state certificate the peer may have,
 //! since checking those needs the stake table of their epoch.
 //!
+//! Only final heights are filled, those [`FINALITY_VIEWS`] behind the newest: before that, the
+//! API service's own consensus node can still send a missing height or payload.
+//!
 //! The peers are the API services the validators of the current epoch name, from [`Peers`], asked
 //! in random order for each gap.
 
@@ -22,6 +25,7 @@ use std::{
 use anyhow::{Context, bail, ensure};
 use chain_store::{ChainStore, Item, Part, Parts, Record};
 use committable::Committable;
+use consensus_api::FINALITY_VIEWS;
 use espresso_types::{Header, Payload};
 use hotshot_types::{
     data::EpochNumber,
@@ -68,6 +72,10 @@ pub struct GapFiller {
     /// filled.
     membership: Option<Membership>,
 
+    /// How many heights behind the newest a height is final: [`FINALITY_VIEWS`], since each
+    /// height takes a view at least, so a height that many behind is that many views behind.
+    pub(crate) finality: u64,
+
     /// The newest height and the floor of the store when the cursors last moved.
     pub(crate) newest: Option<u64>,
     pub(crate) floor: u64,
@@ -99,6 +107,7 @@ impl GapFiller {
             store,
             peers,
             membership,
+            finality: FINALITY_VIEWS,
             newest: None,
             floor: 0,
             items_from: 0,
@@ -177,7 +186,12 @@ impl GapFiller {
         (self.newest, self.floor) = (Some(newest), floor);
         self.item_retries.forget_before(floor);
         self.part_retries.forget_before(floor);
-        for gap in self.item_gaps(newest).await? {
+        // Heights before it are final: consensus sends nothing more for them, so they are
+        // asked of peers.
+        let Some(final_until) = (newest + 1).checked_sub(self.finality) else {
+            return Ok(());
+        };
+        for gap in self.item_gaps(newest, final_until).await? {
             // A filled height can lack its payload, and lies before the parts cursor.
             self.parts_from = self.parts_from.min(gap.start);
             match self.fill_items(gap.clone(), &self.peers.shuffled()).await {
@@ -188,7 +202,7 @@ impl GapFiller {
                 },
             }
         }
-        let heights = self.part_heights(newest).await?;
+        let heights = self.part_heights(newest, final_until).await?;
         for run in runs(&heights) {
             self.fill_parts(run.clone(), &self.peers.shuffled()).await;
             let missing = match self.lacking_parts(run.clone()).await {
@@ -208,13 +222,19 @@ impl GapFiller {
         Ok(())
     }
 
-    /// The gaps past the cursor, which it then moves past them, and the gaps due to be tried
-    /// again, as far as they are still missing.
-    async fn item_gaps(&mut self, newest: u64) -> anyhow::Result<Vec<Range<u64>>> {
-        let found = self
+    /// The final gaps past the cursor, which it then moves past them, and the gaps due to be
+    /// tried again, as far as they are still missing. The cursor stops at the first gap that is
+    /// not final yet.
+    async fn item_gaps(
+        &mut self,
+        newest: u64,
+        final_until: u64,
+    ) -> anyhow::Result<Vec<Range<u64>>> {
+        let mut found = self
             .store
             .missing_items(self.items_from, GAPS_PER_PASS)
             .await?;
+        let pending = found.iter().position(|gap| gap.end > final_until);
         let mut gaps = Vec::new();
         for (start, end) in self.item_retries.due() {
             match self.store.missing_items(start, 1).await?.first() {
@@ -227,10 +247,12 @@ impl GapFiller {
             }
         }
         // Only now that nothing can fail before the gaps are filled or retried.
-        self.items_from = match found.last() {
-            Some(gap) if found.len() == GAPS_PER_PASS => gap.end,
-            _ => newest + 1,
+        self.items_from = match (pending, found.last()) {
+            (Some(i), _) => found[i].start,
+            (None, Some(gap)) if found.len() == GAPS_PER_PASS => gap.end,
+            (None, _) => newest + 1,
         };
+        found.truncate(pending.unwrap_or(found.len()));
         gaps.extend(
             found
                 .into_iter()
@@ -239,21 +261,29 @@ impl GapFiller {
         Ok(gaps)
     }
 
-    /// The heights past the cursor that lack a payload or VID common data, which it then moves
-    /// past them, and those due to be tried again.
-    async fn part_heights(&mut self, newest: u64) -> anyhow::Result<BTreeSet<u64>> {
+    /// The final heights past the cursor that lack a payload or VID common data, which it then
+    /// moves past them, and those due to be tried again. The cursor stops at the first height
+    /// that is not final yet.
+    async fn part_heights(
+        &mut self,
+        newest: u64,
+        final_until: u64,
+    ) -> anyhow::Result<BTreeSet<u64>> {
         let limit = GAPS_PER_PASS * RECORD_RANGE_LIMIT as usize;
         let mut heights = BTreeSet::new();
         let mut next = u64::MAX;
         for part in [Part::Payload, Part::VidCommon] {
-            let found = self
+            let mut found = self
                 .store
                 .missing_parts(part, self.parts_from, limit)
                 .await?;
-            next = next.min(match found.last() {
-                Some(last) if found.len() == limit => *last + 1,
-                _ => newest + 1,
+            let pending = found.iter().position(|height| *height >= final_until);
+            next = next.min(match (pending, found.last()) {
+                (Some(i), _) => found[i],
+                (None, Some(last)) if found.len() == limit => *last + 1,
+                (None, _) => newest + 1,
             });
+            found.truncate(pending.unwrap_or(found.len()));
             heights.extend(found);
         }
         heights.retain(|height| !self.part_retries.contains(*height));
@@ -263,7 +293,8 @@ impl GapFiller {
                 .into_iter()
                 .map(|(height, _)| height),
         );
-        self.parts_from = next;
+        // A height still missing before the item cursor can be stored later, without its parts.
+        self.parts_from = next.min(self.items_from);
         Ok(heights)
     }
 
@@ -614,11 +645,18 @@ mod tests {
         url.parse().unwrap()
     }
 
-    /// A store holding `item1` only, filling its gaps from `peer`.
+    /// A store holding `item1` only, filling its gaps from `peer`, with every height final.
     fn filling(item1: &Item, peer: Url) -> ChainStore {
+        filling_with(item1, peer, 0)
+    }
+
+    /// A store holding `item1` only, filling its gaps from `peer`, with heights `finality`
+    /// behind the newest final.
+    fn filling_with(item1: &Item, peer: Url, finality: u64) -> ChainStore {
         let store = ChainStore::new(MemBackend::default());
         let peers = Peers::new("127.0.0.1:1".parse().unwrap(), vec![peer], None);
-        let filler = GapFiller::new(store.clone(), peers, None);
+        let mut filler = GapFiller::new(store.clone(), peers, None);
+        filler.finality = finality;
         let item1 = item1.clone();
         let writer = store.clone();
         tokio::spawn(async move {
@@ -675,6 +713,35 @@ mod tests {
         .expect("the gap is filled");
         let filled = store.item(0).await.unwrap().unwrap();
         assert_eq!(filled.leaf.block_payload(), None);
+    }
+
+    /// The parts cursor does not pass a missing height that is not final yet: it can be stored
+    /// later, without its parts.
+    #[tokio::test]
+    async fn the_parts_cursor_stops_at_a_pending_height() {
+        let (_, item1) = chain().await;
+        let store = ChainStore::new(MemBackend::default());
+        store.put(&item1, &Parts::default()).await.unwrap();
+        let peers = Peers::new("127.0.0.1:1".parse().unwrap(), Vec::new(), None);
+        let mut filler = GapFiller::new(store, peers, None);
+        filler.finality = 2;
+
+        filler.fill_gaps().await.unwrap();
+        assert_eq!(filler.items_from, 0);
+        assert_eq!(filler.parts_from, 0);
+    }
+
+    /// A height that is not final yet is left to the API service's own consensus node.
+    #[tokio::test]
+    async fn leaves_heights_that_are_not_final() {
+        let ((item0, payload, common), item1) = chain().await;
+        let peer = ChainStore::new(MemBackend::default());
+        peer.put(&item0, &parts(&payload, &common)).await.unwrap();
+        peer.put(&item1, &Parts::default()).await.unwrap();
+        let store = filling_with(&item1, serve(peer).await, FINALITY_VIEWS);
+
+        sleep(Duration::from_secs(2)).await;
+        assert_eq!(store.item(0).await.unwrap(), None);
     }
 
     #[tokio::test]

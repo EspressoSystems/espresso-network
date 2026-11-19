@@ -1,4 +1,5 @@
 use std::{
+    ops::Range,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -251,10 +252,11 @@ async fn test_decide_log() {
     let heights: Vec<_> = entries.iter().map(|(d, _)| d.leaf.height()).collect();
     assert_eq!(heights, vec![v1.leaf.height(), v2.leaf.height()]);
     assert_eq!(
-        entries[0].0.cert1, None,
-        "only the newest carries the certificates"
+        &entries[0].0.cert1,
+        v2.leaf.justify_qc(),
+        "an older leaf is certified by the next leaf's justify QC"
     );
-    assert_eq!(entries[1].0.cert1.as_ref(), Some(&v2.cert1));
+    assert_eq!(entries[1].0.cert1, v2.cert1);
     assert_eq!(entries[1].0.cert2.as_ref(), Some(&v2.cert2));
     for ((decided, size), v) in entries.iter().zip([v1, v2]) {
         assert!(
@@ -296,7 +298,12 @@ async fn test_decide_log() {
     );
     assert_eq!(store.decided_from(0, usize::MAX).unwrap().len(), 3);
 
-    store.ack(v2.leaf.height()).unwrap();
+    store
+        .ack(&[Range {
+            start: 0,
+            end: v2.leaf.height(),
+        }])
+        .unwrap();
     let left: Vec<_> = store
         .decided_from(0, usize::MAX)
         .unwrap()
@@ -337,7 +344,8 @@ async fn test_decide_log_limit() {
     );
     assert_nothing_more(&mut storage).await;
 
-    store.ack(v0.leaf.height() + 1).unwrap();
+    let end = v0.leaf.height() + 1;
+    store.ack(&[Range { start: 0, end }]).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(5), storage.next())
             .await

@@ -8,7 +8,7 @@
 //! transactions; the API service connects with [`ConsensusNodeClient`]. See the proto files in
 //! `proto/espresso/consensus/v1/` for the services.
 
-use std::{pin::Pin, sync::Arc};
+use std::{collections::BTreeMap, ops::Range, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,9 +23,9 @@ pub mod proto {
 }
 
 use proto::{
-    AckRequest, AckResponse, Decided, PayloadChunk, ServiceRecordsRequest, ServiceRecordsResponse,
-    Start, SubmitTransactionRequest, SubmitTransactionResponse, SubscribeRequest,
-    SubscribeResponse,
+    AckRequest, AckResponse, Decided, PayloadAdded, PayloadChunk, ServiceRecordsRequest,
+    ServiceRecordsResponse, Start, SubmitTransactionRequest, SubmitTransactionResponse,
+    SubscribeRequest, SubscribeResponse,
     consensus_node_server::{ConsensusNode, ConsensusNodeServer},
     decide_log_server::{DecideLog, DecideLogServer},
     subscribe_response::Event,
@@ -41,6 +41,11 @@ const CHUNK_SIZE: usize = 1 << 20;
 /// How many entries the server reads from its source at a time.
 const BATCH: usize = 64;
 
+/// How many views behind the newest decide an entry is final: no height before it is decided
+/// any more, and its payload no longer joins the decide log. Consensus decides a missing view
+/// only within this many views of the newest decide, and adds a late payload within fewer.
+pub const FINALITY_VIEWS: u64 = 20;
+
 /// What the service serves: the consensus node's decide log and payloads.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
@@ -50,11 +55,12 @@ pub trait Source: Send + Sync + 'static {
     /// The earliest height whose entry is still kept, if any.
     async fn earliest(&self) -> Result<Option<u64>, Error>;
 
-    /// The height after the newest decided entry. It only rises.
-    fn next_height(&self) -> watch::Receiver<u64>;
+    /// Changes after each durable write to the decide log, including entries of heights decided
+    /// late and payloads added to entries.
+    fn changes(&self) -> watch::Receiver<u64>;
 
-    /// Frees the entries below `height`, and their payloads.
-    async fn ack(&self, height: u64) -> Result<(), Error>;
+    /// Frees the entries of the heights in `ranges`, and their payloads.
+    async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), Error>;
 
     /// The payload of the entry at `height`, if this node has it and still keeps the entry.
     async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error>;
@@ -112,8 +118,8 @@ impl<S: Source> DecideLog for Service<S> {
         let from = request.into_inner().from_height;
         let (tx, rx) = mpsc::channel(BATCH);
         // The feed runs as part of the stream, and stops with it when the subscriber goes away.
-        let feed =
-            stream::once(feed(self.source.clone(), from, tx)).filter_map(|()| async { None });
+        let feed = Feed::new(self.source.clone(), tx);
+        let feed = stream::once(feed.run(from)).filter_map(|()| async { None });
         Ok(Response::new(Box::pin(stream::select(
             receiver_stream(rx),
             feed,
@@ -121,10 +127,13 @@ impl<S: Source> DecideLog for Service<S> {
     }
 
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {
-        self.source
-            .ack(request.into_inner().height)
-            .await
-            .map_err(internal)?;
+        let ranges = request
+            .into_inner()
+            .ranges
+            .into_iter()
+            .map(|range| range.start..range.end)
+            .collect();
+        self.source.ack(ranges).await.map_err(internal)?;
         Ok(Response::new(AckResponse {}))
     }
 
@@ -170,102 +179,211 @@ impl<N: Node> ConsensusNode for NodeService<N> {
     }
 }
 
-/// Sends the entries from `from` on to `tx`, then each new one as it is decided, until the
-/// subscriber goes away.
-async fn feed<S: Source>(
+/// Sends a subscriber the decide log, and what joins it late.
+struct Feed<S> {
     source: Arc<S>,
-    from: u64,
     tx: mpsc::Sender<Result<SubscribeResponse, Status>>,
-) {
-    let mut next_height = source.next_height();
-    let mut cursor = from;
-    match source.earliest().await {
-        Ok(Some(earliest)) if earliest > from => {
-            let start = Event::Start(Start {
-                earliest_height: earliest,
-            });
-            if !send(&tx, start).await {
-                return;
-            }
-            cursor = earliest;
-        },
-        Ok(_) => {},
-        Err(err) => {
-            let _ = tx.send(Err(internal(err))).await;
+
+    /// The next height to read in order.
+    cursor: u64,
+
+    /// The view of the newest entry sent.
+    newest_view: u64,
+
+    /// Entries sent without their payload, by height, with their view.
+    awaiting: BTreeMap<u64, u64>,
+
+    /// Heights skipped as missing, by first height, with the end and the view of the entry
+    /// after them, which bounds theirs.
+    missing: BTreeMap<u64, (u64, u64)>,
+}
+
+/// The subscriber went away, or the source failed and the subscriber was told.
+struct Stop;
+
+impl<S: Source> Feed<S> {
+    fn new(source: Arc<S>, tx: mpsc::Sender<Result<SubscribeResponse, Status>>) -> Self {
+        Self {
+            source,
+            tx,
+            cursor: 0,
+            newest_view: 0,
+            awaiting: BTreeMap::new(),
+            missing: BTreeMap::new(),
+        }
+    }
+
+    /// Sends `Start`, the entries from `from` on, then whatever the decide log gets, until the
+    /// subscriber goes away.
+    async fn run(mut self, from: u64) {
+        let mut changes = self.source.changes();
+        if self.start(from).await.is_err() {
             return;
-        },
-    }
-    loop {
-        let entries = match source.decided(cursor, BATCH).await {
-            Ok(entries) => entries,
-            Err(err) => {
-                let _ = tx.send(Err(internal(err))).await;
-                return;
-            },
-        };
-        let read_all = entries.len() < BATCH;
-        for entry in entries {
-            cursor = entry.height + 1;
-            if !send_entry(&*source, &tx, entry).await {
+        }
+        loop {
+            changes.borrow_and_update();
+            if self.pass().await.is_err() {
                 return;
             }
-        }
-        if read_all {
             tokio::select! {
-                changed = next_height.wait_for(|next| *next > cursor) => {
-                    if changed.is_err() {
-                        return;
-                    }
+                changed = changes.changed() => if changed.is_err() {
+                    return;
                 },
-                () = tx.closed() => return,
+                () = self.tx.closed() => return,
             }
         }
     }
-}
 
-/// Sends `entry` and then its payload in chunks, reading the payload only now so that at most one
-/// is held at a time. A payload freed since the entry was read leaves the entry without one.
-/// Returns whether the subscriber is still there.
-async fn send_entry<S: Source>(
-    source: &S,
-    tx: &mpsc::Sender<Result<SubscribeResponse, Status>>,
-    mut entry: Decided,
-) -> bool {
-    let payload = match entry.payload_size {
-        Some(_) => match source.payload(entry.height).await {
-            Ok(payload) => payload,
-            Err(err) => {
-                let _ = tx.send(Err(internal(err))).await;
-                return false;
-            },
-        },
-        None => None,
-    };
-    entry.payload_size = payload.as_ref().map(|p| p.len() as u64);
-    if !send(tx, Event::Decided(entry)).await {
-        return false;
+    /// Sends `Start`. The cursor stays at `from`, so that heights before the earliest entry are
+    /// noted as missing too: one of them can still be decided late.
+    async fn start(&mut self, from: u64) -> Result<(), Stop> {
+        let earliest = self.ok(self.source.earliest().await).await?;
+        self.cursor = from;
+        let start = Event::Start(Start {
+            earliest_height: earliest.map_or(from, |earliest| earliest.max(from)),
+        });
+        self.send(start).await
     }
-    let Some(payload) = payload else {
-        return true;
-    };
-    let mut start = 0;
-    while start < payload.len() {
-        let end = (start + CHUNK_SIZE).min(payload.len());
-        let chunk = PayloadChunk {
-            data: payload.slice(start..end).to_vec(),
-        };
-        if !send(tx, Event::PayloadChunk(chunk)).await {
-            return false;
+
+    /// Sends the new entries, then the late ones, then forgets what is final.
+    async fn pass(&mut self) -> Result<(), Stop> {
+        self.send_new().await?;
+        self.send_late_payloads().await?;
+        self.send_late_entries().await?;
+        let newest = self.newest_view;
+        let is_final = |view: u64| view + FINALITY_VIEWS <= newest;
+        self.awaiting.retain(|_, view| !is_final(*view));
+        self.missing.retain(|_, (_, view)| !is_final(*view));
+        Ok(())
+    }
+
+    /// Sends the entries from the cursor on, noting the heights skipped.
+    async fn send_new(&mut self) -> Result<(), Stop> {
+        loop {
+            let entries = self
+                .ok(self.source.decided(self.cursor, BATCH).await)
+                .await?;
+            let read_all = entries.len() < BATCH;
+            for entry in entries {
+                if entry.height > self.cursor {
+                    self.missing.insert(self.cursor, (entry.height, entry.view));
+                }
+                self.cursor = entry.height + 1;
+                self.send_entry(entry).await?;
+            }
+            if read_all {
+                return Ok(());
+            }
         }
-        start = end;
     }
-    true
-}
 
-async fn send(tx: &mpsc::Sender<Result<SubscribeResponse, Status>>, event: Event) -> bool {
-    tx.send(Ok(SubscribeResponse { event: Some(event) }))
-        .await
-        .is_ok()
+    /// Sends the payloads that joined entries sent without them.
+    async fn send_late_payloads(&mut self) -> Result<(), Stop> {
+        let heights: Vec<u64> = self.awaiting.keys().copied().collect();
+        for height in heights {
+            let Some(payload) = self.ok(self.source.payload(height).await).await? else {
+                continue;
+            };
+            self.awaiting.remove(&height);
+            let added = Event::PayloadAdded(PayloadAdded {
+                height,
+                payload_size: payload.len() as u64,
+            });
+            self.send(added).await?;
+            self.send_chunks(&payload).await?;
+        }
+        Ok(())
+    }
+
+    /// Sends the entries of heights skipped as missing that have been decided since.
+    async fn send_late_entries(&mut self) -> Result<(), Stop> {
+        for (start, (end, view)) in std::mem::take(&mut self.missing) {
+            let mut next = start;
+            for entry in self.decided_before(start, end).await? {
+                if entry.height > next {
+                    self.missing.insert(next, (entry.height, view));
+                }
+                next = entry.height + 1;
+                self.send_entry(entry).await?;
+            }
+            if next < end {
+                self.missing.insert(next, (end, view));
+            }
+        }
+        Ok(())
+    }
+
+    /// The entries from `start` up to `end`, read a batch at a time, so that a long range with
+    /// few entries costs a single read.
+    async fn decided_before(&self, start: u64, end: u64) -> Result<Vec<Decided>, Stop> {
+        let mut found = Vec::new();
+        let mut from = start;
+        loop {
+            let entries = self.ok(self.source.decided(from, BATCH).await).await?;
+            let read_all = entries.len() < BATCH;
+            for entry in entries {
+                if entry.height >= end {
+                    return Ok(found);
+                }
+                from = entry.height + 1;
+                found.push(entry);
+            }
+            if read_all {
+                return Ok(found);
+            }
+        }
+    }
+
+    /// Sends `entry` and then its payload in chunks, reading the payload only now so that at
+    /// most one is held at a time. A payload freed since the entry was read leaves the entry
+    /// without one.
+    async fn send_entry(&mut self, mut entry: Decided) -> Result<(), Stop> {
+        let payload = match entry.payload_size {
+            Some(_) => self.ok(self.source.payload(entry.height).await).await?,
+            None => None,
+        };
+        entry.payload_size = payload.as_ref().map(|p| p.len() as u64);
+        self.newest_view = self.newest_view.max(entry.view);
+        if payload.is_none() {
+            self.awaiting.insert(entry.height, entry.view);
+        }
+        self.send(Event::Decided(entry)).await?;
+        match payload {
+            Some(payload) => self.send_chunks(&payload).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn send_chunks(&self, payload: &Bytes) -> Result<(), Stop> {
+        let mut start = 0;
+        while start < payload.len() {
+            let end = (start + CHUNK_SIZE).min(payload.len());
+            let chunk = PayloadChunk {
+                data: payload.slice(start..end).to_vec(),
+            };
+            self.send(Event::PayloadChunk(chunk)).await?;
+            start = end;
+        }
+        Ok(())
+    }
+
+    async fn send(&self, event: Event) -> Result<(), Stop> {
+        self.tx
+            .send(Ok(SubscribeResponse { event: Some(event) }))
+            .await
+            .map_err(|_| Stop)
+    }
+
+    /// The value of `result`; an error is sent to the subscriber and stops the feed.
+    async fn ok<T>(&self, result: Result<T, Error>) -> Result<T, Stop> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let _ = self.tx.send(Err(internal(err))).await;
+                Err(Stop)
+            },
+        }
+    }
 }
 
 fn receiver_stream<T: Send + 'static>(rx: mpsc::Receiver<Result<T, Status>>) -> BoxStream<T> {

@@ -15,8 +15,8 @@ use super::*;
 struct MemSource {
     entries: Mutex<BTreeMap<u64, Decided>>,
     payloads: Mutex<BTreeMap<u64, Bytes>>,
-    next: watch::Sender<u64>,
-    acked: Mutex<Vec<u64>>,
+    changes: watch::Sender<u64>,
+    acked: Mutex<Vec<Range<u64>>>,
     records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
 }
 
@@ -25,7 +25,7 @@ impl MemSource {
         Arc::new(Self {
             entries: Mutex::default(),
             payloads: Mutex::default(),
-            next: watch::channel(0).0,
+            changes: watch::channel(0).0,
             acked: Mutex::default(),
             records: Mutex::default(),
         })
@@ -38,8 +38,13 @@ impl MemSource {
         if let Some(payload) = payload {
             self.payloads.lock().unwrap().insert(height, payload);
         }
-        self.next
-            .send_modify(|next| *next = (*next).max(height + 1));
+        self.changes.send_modify(|n| *n += 1);
+    }
+
+    /// Adds `payload` to the entry at `height`, decided without it.
+    fn add_payload(&self, height: u64, payload: Bytes) {
+        self.payloads.lock().unwrap().insert(height, payload);
+        self.changes.send_modify(|n| *n += 1);
     }
 }
 
@@ -60,14 +65,14 @@ impl Source for MemSource {
         Ok(self.entries.lock().unwrap().keys().next().copied())
     }
 
-    fn next_height(&self) -> watch::Receiver<u64> {
-        self.next.subscribe()
+    fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
-    async fn ack(&self, height: u64) -> Result<(), Error> {
-        self.acked.lock().unwrap().push(height);
+    async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), Error> {
         let mut entries = self.entries.lock().unwrap();
-        *entries = entries.split_off(&height);
+        entries.retain(|height, _| !ranges.iter().any(|range| range.contains(height)));
+        self.acked.lock().unwrap().extend(ranges);
         Ok(())
     }
 
@@ -109,6 +114,33 @@ async fn serve(source: Arc<MemSource>) -> DecideLogClient<tonic::transport::Chan
     panic!("server did not start");
 }
 
+/// A subscription from `from`, past its `Start`, which names `earliest`.
+async fn subscribe(
+    client: &mut DecideLogClient<tonic::transport::Channel>,
+    from: u64,
+    earliest: u64,
+) -> tonic::Streaming<SubscribeResponse> {
+    let mut stream = client
+        .subscribe(SubscribeRequest { from_height: from })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::Start(Start {
+            earliest_height: earliest
+        }))
+    );
+    stream
+}
+
+/// Whether the stream stays quiet for a moment.
+async fn quiet(stream: &mut tonic::Streaming<SubscribeResponse>) -> bool {
+    timeout(Duration::from_millis(200), stream.next())
+        .await
+        .is_err()
+}
+
 async fn next_event(stream: &mut tonic::Streaming<SubscribeResponse>) -> Option<Event> {
     timeout(Duration::from_secs(5), stream.next())
         .await
@@ -123,11 +155,7 @@ async fn subscribe_delivers_stored_then_new_entries() {
     source.decide(1, None);
     let mut client = serve(source.clone()).await;
 
-    let mut stream = client
-        .subscribe(SubscribeRequest { from_height: 1 })
-        .await
-        .unwrap()
-        .into_inner();
+    let mut stream = subscribe(&mut client, 1, 1).await;
     assert_eq!(
         next_event(&mut stream).await,
         Some(Event::Decided(entry(1)))
@@ -146,15 +174,7 @@ async fn subscribe_below_the_earliest_entry_starts_with_it() {
     source.decide(5, None);
     let mut client = serve(source).await;
 
-    let mut stream = client
-        .subscribe(SubscribeRequest { from_height: 2 })
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(
-        next_event(&mut stream).await,
-        Some(Event::Start(Start { earliest_height: 5 }))
-    );
+    let mut stream = subscribe(&mut client, 2, 5).await;
     assert_eq!(
         next_event(&mut stream).await,
         Some(Event::Decided(entry(5)))
@@ -168,9 +188,114 @@ async fn ack_reaches_the_source() {
     source.decide(1, None);
     let mut client = serve(source.clone()).await;
 
-    client.ack(AckRequest { height: 1 }).await.unwrap();
-    assert_eq!(*source.acked.lock().unwrap(), vec![1]);
-    assert_eq!(source.earliest().await.unwrap(), Some(1));
+    source.decide(2, None);
+    source.decide(3, None);
+    let ranges = [0..1, 2..3].map(|range| proto::HeightRange {
+        start: range.start,
+        end: range.end,
+    });
+    client
+        .ack(AckRequest {
+            ranges: ranges.to_vec(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(*source.acked.lock().unwrap(), vec![0..1, 2..3]);
+    let left: Vec<u64> = source.entries.lock().unwrap().keys().copied().collect();
+    assert_eq!(left, vec![1, 3]);
+}
+
+/// A payload that joins an entry sent without one follows as `PayloadAdded` and its chunks.
+#[tokio::test]
+async fn a_late_payload_follows_its_entry() {
+    let source = MemSource::new();
+    source.decide(3, None);
+    let mut client = serve(source.clone()).await;
+    let mut stream = subscribe(&mut client, 0, 3).await;
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::Decided(entry(3)))
+    );
+
+    source.add_payload(3, Bytes::from_static(b"late"));
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::PayloadAdded(PayloadAdded {
+            height: 3,
+            payload_size: 4
+        }))
+    );
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::PayloadChunk(PayloadChunk {
+            data: b"late".to_vec()
+        }))
+    );
+}
+
+/// A height decided after later ones arrives when it is decided.
+#[tokio::test]
+async fn a_late_entry_fills_its_height() {
+    let source = MemSource::new();
+    source.decide(3, Some(Bytes::new()));
+    source.decide(5, Some(Bytes::new()));
+    let mut client = serve(source.clone()).await;
+    let mut stream = subscribe(&mut client, 0, 3).await;
+    for height in [3, 5] {
+        let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+            panic!("expected the entry at {height}");
+        };
+        assert_eq!(decided.height, height);
+    }
+
+    source.decide(4, Some(Bytes::new()));
+    let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+        panic!("expected the late entry");
+    };
+    assert_eq!(decided.height, 4);
+}
+
+/// A height before the earliest entry kept can still be decided late, and is sent then.
+#[tokio::test]
+async fn a_late_entry_before_the_earliest_is_sent() {
+    let source = MemSource::new();
+    source.decide(11, None);
+    let mut client = serve(source.clone()).await;
+    let mut stream = subscribe(&mut client, 0, 11).await;
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::Decided(entry(11)))
+    );
+
+    source.decide(10, None);
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::Decided(entry(10)))
+    );
+}
+
+/// Nothing joins an entry, or fills a height, once it is `FINALITY_VIEWS` behind the newest.
+#[tokio::test]
+async fn final_heights_get_nothing_late() {
+    let source = MemSource::new();
+    source.decide(3, None);
+    source.decide(5, Some(Bytes::new()));
+    let mut client = serve(source.clone()).await;
+    let mut stream = subscribe(&mut client, 0, 3).await;
+    for _ in 0..2 {
+        next_event(&mut stream).await.expect("an entry");
+    }
+    // Views are heights plus ten, so this entry makes both heights before final.
+    let newest = 5 + FINALITY_VIEWS;
+    source.decide(newest, Some(Bytes::new()));
+    let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
+        panic!("expected the newest entry");
+    };
+    assert_eq!(decided.height, newest);
+
+    source.add_payload(3, Bytes::from_static(b"late"));
+    source.decide(4, Some(Bytes::new()));
+    assert!(quiet(&mut stream).await, "a final height gets nothing");
 }
 
 /// An entry with a payload is followed by the payload in chunks; an empty payload has none.
@@ -182,11 +307,7 @@ async fn payloads_follow_their_entries_in_chunks() {
     source.decide(4, Some(Bytes::new()));
     source.decide(5, None);
     let mut client = serve(source).await;
-    let mut stream = client
-        .subscribe(SubscribeRequest { from_height: 3 })
-        .await
-        .unwrap()
-        .into_inner();
+    let mut stream = subscribe(&mut client, 3, 3).await;
 
     let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
         panic!("expected the entry at 3");
@@ -221,11 +342,7 @@ async fn a_freed_payload_is_not_announced() {
     source.payloads.lock().unwrap().clear();
     source.decide(4, None);
     let mut client = serve(source).await;
-    let mut stream = client
-        .subscribe(SubscribeRequest { from_height: 3 })
-        .await
-        .unwrap()
-        .into_inner();
+    let mut stream = subscribe(&mut client, 3, 3).await;
 
     let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
         panic!("expected the entry at 3");

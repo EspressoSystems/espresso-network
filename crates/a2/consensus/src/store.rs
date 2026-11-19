@@ -9,6 +9,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
+    ops::Range,
     path::PathBuf,
     sync::{Arc, LazyLock},
 };
@@ -102,8 +103,9 @@ impl<T, S> Clone for ConsensusStore<T, S> {
 
 /// Announcements of durable writes, for readers that follow the store.
 struct Changes {
-    /// The height after the newest decide log entry.
-    next_height: watch::Sender<u64>,
+    /// Counts the durable writes to the decide log: new entries, entries of heights decided
+    /// late, and payloads stored after their entry.
+    decide_log_writes: watch::Sender<u64>,
 
     /// The bytes the decide log takes up, with the payloads of its entries.
     decide_log_bytes: watch::Sender<u64>,
@@ -116,9 +118,11 @@ pub struct Decided<T: NodeType> {
     /// The leaf, without its payload.
     pub leaf: Leaf2<T>,
 
-    /// The `Certificate1` and `Certificate2` of the newest leaf of a decide. An older leaf of
-    /// the same decide is certified by the next leaf's justify QC, and has neither.
-    pub cert1: Option<Certificate1<T>>,
+    /// The certificate that certifies the leaf: the decide's own for its newest leaf, the next
+    /// leaf's justify QC for an older one.
+    pub cert1: Certificate1<T>,
+
+    /// The certificate that decided the leaf, for the newest leaf of a decide.
     pub cert2: Option<Certificate2<T>>,
 
     /// The VID common data of the leaf's block, if this node had its share.
@@ -249,16 +253,12 @@ impl<T: NodeType> ConsensusStore<T, DiskStore> {
 
 impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     pub fn new(store: Arc<S>) -> Self {
-        let next_height = newest_decided(store.as_ref())
-            .ok()
-            .flatten()
-            .map_or(0, |h| h + 1);
         let decide_log_bytes = store
             .snapshot()
             .and_then(|snap| decide_log_bytes(&snap))
             .unwrap_or(0);
         let changes = Changes {
-            next_height: watch::channel(next_height).0,
+            decide_log_writes: watch::channel(0).0,
             decide_log_bytes: watch::channel(decide_log_bytes).0,
         };
         Self {
@@ -268,9 +268,10 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         }
     }
 
-    /// The height after the newest decide log entry, as entries become durable.
-    pub fn next_height(&self) -> watch::Receiver<u64> {
-        self.changes.next_height.subscribe()
+    /// Changes after each durable write to the decide log. Writes can add entries below the
+    /// newest, of heights decided late, and payloads of entries already written.
+    pub fn decide_log_writes(&self) -> watch::Receiver<u64> {
+        self.changes.decide_log_writes.subscribe()
     }
 
     /// The bytes the decide log takes up, with the payloads of its entries, as it grows and
@@ -286,13 +287,9 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         Ok(())
     }
 
-    /// Announces durable decide log entries up to `next_height`.
-    pub(crate) fn announce(&self, next_height: u64) {
-        self.changes.next_height.send_if_modified(|current| {
-            (*current < next_height)
-                .then(|| *current = next_height)
-                .is_some()
-        });
+    /// Announces a durable write to the decide log.
+    pub(crate) fn announce(&self) {
+        self.changes.decide_log_writes.send_modify(|n| *n += 1);
     }
 
     pub fn store(&self) -> &Arc<S> {
@@ -406,15 +403,35 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         Ok(Some((epoch, records)))
     }
 
-    /// Frees the decide log entries below `height`, and their payloads.
-    pub fn ack(&self, height: u64) -> anyhow::Result<()> {
-        let below = || KeyRange::before(Bytes::copy_from_slice(&key::u64(height)));
+    /// Frees the decide log entries of the heights in `ranges`, and their payloads.
+    pub fn ack(&self, ranges: &[Range<u64>]) -> anyhow::Result<()> {
         let mut batch = Batch::new();
-        batch
-            .delete_range(&DECIDE_LOG, below())
-            .delete_range(&DECIDED_PAYLOADS, below());
+        for range in ranges.iter().filter(|range| !range.is_empty()) {
+            let heights = || {
+                KeyRange::between(
+                    Bytes::copy_from_slice(&key::u64(range.start)),
+                    Bytes::copy_from_slice(&key::u64(range.end)),
+                )
+            };
+            batch
+                .delete_range(&DECIDE_LOG, heights())
+                .delete_range(&DECIDED_PAYLOADS, heights());
+        }
         self.store.apply(&batch)?;
         self.measure_decide_log()
+    }
+
+    /// Whether the payload of the block with commitment `commitment` proposed in `view` is
+    /// stored.
+    pub(crate) fn has_payload(
+        &self,
+        view: ViewNumber,
+        commitment: &VidCommitment2,
+    ) -> anyhow::Result<bool> {
+        let snap = self.store.snapshot()?;
+        Ok(snap
+            .get(&PAYLOADS, &payload_key(view, commitment)?)?
+            .is_some())
     }
 
     /// The state certificate of the epoch root proposed in `view`, if stored and not yet decided.
@@ -553,6 +570,16 @@ pub fn put_proposal<T: NodeType>(
     Ok(())
 }
 
+/// Stores `payload` as the payload of the decide log entry at `height`, which was written without
+/// it.
+pub fn put_decided_payload(batch: &mut Batch, height: u64, payload: Arc<[u8]>) {
+    batch.put(
+        &DECIDED_PAYLOADS,
+        key::u64(height).to_vec(),
+        Bytes::from_owner(payload),
+    );
+}
+
 /// Stores the encoded payload of the block with commitment `commitment` proposed in `view`.
 pub fn put_payload(
     batch: &mut Batch,
@@ -625,8 +652,13 @@ pub fn put_decided<T: NodeType>(
                 height.clone(),
             );
         }
+        // Leaves are newest first: the one before in the slice is the child.
+        let certifying = match i {
+            0 => cert1.clone(),
+            _ => leaves[i - 1].justify_qc().clone(),
+        };
         let decided = Decided {
-            cert1: newest.then(|| cert1.clone()),
+            cert1: certifying,
             cert2: if newest { cert2.cloned() } else { None },
             vid_common: vid_common.get(i).cloned().flatten(),
             state_cert: state_certs.get(i).cloned().flatten(),
@@ -655,14 +687,6 @@ fn decide_log_bytes(snap: &impl Snapshot) -> Result<u64, consensus_store::Error>
     let mut usage = snap.usage(&DECIDE_LOG)?;
     usage.add(snap.usage(&DECIDED_PAYLOADS)?);
     Ok(usage.inline_bytes.saturating_add(usage.extern_bytes))
-}
-
-fn newest_decided(store: &impl Store) -> anyhow::Result<Option<u64>> {
-    let snap = store.snapshot()?;
-    match snap.range(&DECIDE_LOG, &KeyRange::all())?.last() {
-        Some(entry) => Ok(key::decode_u64(&entry?.0)),
-        None => Ok(None),
-    }
 }
 
 /// Stores `anchor`, unless the stored anchor is of a later height.

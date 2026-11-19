@@ -1,6 +1,6 @@
 //! The decide log as the ingester API serves it.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
@@ -84,12 +84,12 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
         self.blocking(|s| s.earliest_decided()).await
     }
 
-    fn next_height(&self) -> watch::Receiver<u64> {
-        self.store.next_height()
+    fn changes(&self) -> watch::Receiver<u64> {
+        self.store.decide_log_writes()
     }
 
-    async fn ack(&self, height: u64) -> Result<(), Error> {
-        self.blocking(move |s| s.ack(height)).await
+    async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), Error> {
+        self.blocking(move |s| s.ack(&ranges)).await
     }
 
     async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error> {
@@ -117,12 +117,7 @@ fn entry<T: NodeType>(
     let body = Body {
         format: BODY_FORMAT,
         leaf: bincode::serialize(leaf)?,
-        cert1: decided
-            .cert1
-            .as_ref()
-            .map(bincode::serialize)
-            .transpose()?
-            .unwrap_or_default(),
+        cert1: bincode::serialize(&decided.cert1)?,
         cert2: decided
             .cert2
             .as_ref()

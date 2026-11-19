@@ -90,6 +90,14 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
+// The decide log's subscribers take an entry as final `FINALITY_VIEWS` behind the newest decide:
+// by then no missing view can be decided any more, and storage no longer adds late payloads,
+// which it does only until it collects a view's garbage.
+const _: () = assert!(
+    crate::consensus::DECIDE_BUFFER <= consensus_api::FINALITY_VIEWS
+        && STORAGE_GC_MARGIN < consensus_api::FINALITY_VIEWS
+);
+
 /// Messages naming an epoch further ahead than this are dropped at intake. We
 /// could not verify them anyway: an epoch's stake table only materializes by
 /// walking the DRB chain, so parking such a message and driving catchup for an
