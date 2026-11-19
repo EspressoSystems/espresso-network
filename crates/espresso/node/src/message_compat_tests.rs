@@ -444,8 +444,9 @@ async fn reference_new_protocol_messages(
             Fetcher::mock(),
             epoch_height,
             1.into(),
-        ),
-        epoch_height,
+        )
+        .expect("genesis without duplicate keys"),
+        std::num::NonZeroU64::new(epoch_height).unwrap(),
         &storage,
     );
 
@@ -664,7 +665,7 @@ async fn reference_new_protocol_messages(
         &payload,
         &membership,
         view,
-        Some(epoch),
+        epoch,
         Some(epoch),
         &metadata,
     )
@@ -674,8 +675,7 @@ async fn reference_new_protocol_messages(
     .to_shares()
     .remove(0);
     let params =
-        VidDisperse2::<SeqTypes>::disperse_params(&payload, &membership, Some(epoch), &metadata)
-            .unwrap();
+        VidDisperse2::<SeqTypes>::disperse_params(&payload, &membership, epoch, &metadata).unwrap();
     let dispersal = AvidmGf2Scheme::ns_disperse_one(
         &params.param,
         &params.weights,
