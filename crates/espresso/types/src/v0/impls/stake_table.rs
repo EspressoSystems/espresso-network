@@ -212,6 +212,7 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+/// Order decoded logs by their place on L1: block number, then index in the block.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
@@ -639,28 +640,23 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
+                // The token supply keeps the events on L1 far from an overflow. Events from
+                // elsewhere, such as those a server sends a light client, are not bound by it.
+                let stake = val
+                    .stake
+                    .checked_add(amount)
+                    .ok_or(StakeTableError::StakeOverflow(validator))?;
+                let delegator_stake = val
+                    .delegators
+                    .get(&delegator)
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(amount)
+                    .ok_or(StakeTableError::StakeOverflow(validator))?;
+
                 // All checks ok, applying changes
-                // This cannot overflow in practice
-                val.stake = val.stake.checked_add(amount).unwrap_or_else(|| {
-                    panic!(
-                        "validator stake overflow: validator={validator}, stake={}, \
-                         amount={amount}",
-                        val.stake
-                    )
-                });
-                // Insert the delegator with the given stake
-                // or increase the stake if already present
-                val.delegators
-                    .entry(delegator)
-                    .and_modify(|stake| {
-                        *stake = stake.checked_add(amount).unwrap_or_else(|| {
-                            panic!(
-                                "delegator stake overflow: delegator={delegator}, stake={stake}, \
-                                 amount={amount}"
-                            )
-                        });
-                    })
-                    .or_insert(amount);
+                val.stake = stake;
+                val.delegators.insert(delegator, delegator_stake);
             },
 
             StakeTableEvent::Undelegate(Undelegated {
@@ -965,6 +961,8 @@ impl StakeTableState {
     }
 }
 
+/// Decode a network key from a stake table event.
+///
 /// The contract enforces canonical nonzero encodings, so an error here means a
 /// contract bug. Callers degrade it to `None` instead of aborting (defense in
 /// depth): the key only affects p2p networking, not consensus safety, so this
@@ -2265,7 +2263,7 @@ pub mod testing {
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{Rng as _, RngCore as _};
+    use rand::{CryptoRng, Rng as _, RngCore};
 
     use super::*;
 
@@ -2285,9 +2283,16 @@ pub mod testing {
 
     impl TestValidator {
         pub fn random() -> Self {
-            let account = Address::random();
-            let commission = rand::thread_rng().gen_range(0..10000);
-            Self::random_update_keys(account, commission)
+            Self::from_rng(&mut rand::thread_rng())
+        }
+
+        /// A validator whose account, commission and keys are drawn from `rng`, so that a
+        /// seeded `rng` gives the same validators every time.
+        pub fn from_rng<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+            let mut account = [0u8; 20];
+            rng.fill_bytes(&mut account);
+            let commission = rng.gen_range(0..10000);
+            Self::keys_from_rng(rng, Address::from(account), commission)
         }
 
         pub fn randomize_keys(&self) -> Self {
@@ -2295,7 +2300,15 @@ pub mod testing {
         }
 
         pub fn random_update_keys(account: Address, commission: u16) -> Self {
-            let mut rng = &mut rand::thread_rng();
+            Self::keys_from_rng(&mut rand::thread_rng(), account, commission)
+        }
+
+        /// The validator registered under `account`, with keys drawn from `rng`.
+        pub fn keys_from_rng<R: RngCore + CryptoRng>(
+            mut rng: &mut R,
+            account: Address,
+            commission: u16,
+        ) -> Self {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
             let bls_key_pair = BLSKeyPair::generate(&mut rng);
@@ -2460,6 +2473,9 @@ pub mod testing {
         }
     }
 }
+
+#[cfg(test)]
+mod corpus;
 
 #[cfg(test)]
 mod tests {
@@ -3326,6 +3342,75 @@ mod tests {
             err,
             StakeTableError::InvalidCommission(addr, invalid_commission)
                 if addr == addr && invalid_commission == invalid_commission);
+    }
+
+    /// A delegation that takes a validator's stake beyond 256 bits is an error and leaves
+    /// the state as it was. A light client replays events a server sends, so they can
+    /// hold such a delegation.
+    #[test]
+    fn test_delegate_overflow_is_rejected() {
+        let mut state = StakeTableState::default();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap()
+            .unwrap();
+        let delegator = Address::random();
+        let delegate = |delegator, amount| {
+            StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: account,
+                amount,
+            })
+        };
+        state
+            .apply_event(delegate(delegator, U256::MAX))
+            .unwrap()
+            .unwrap();
+        let before = state.clone();
+
+        for delegator in [delegator, Address::random()] {
+            assert_matches!(
+                state.apply_event(delegate(delegator, U256::from(1))),
+                Err(StakeTableError::StakeOverflow(addr)) if addr == account
+            );
+            assert_eq!(state, before);
+        }
+    }
+
+    /// A delegation that takes a delegator's amount beyond 256 bits is an error and leaves
+    /// the state as it was, also where the validator's stake has room for it.
+    ///
+    /// Replaying events keeps the stake equal to the sum of the delegations, so this
+    /// takes a state built another way, as one decoded from storage can be.
+    #[test]
+    fn test_delegate_overflow_of_delegator_is_rejected() {
+        let mut state = StakeTableState::default();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap()
+            .unwrap();
+        let delegator = Address::random();
+        state
+            .validators
+            .get_mut(&account)
+            .unwrap()
+            .delegators
+            .insert(delegator, U256::MAX);
+        let before = state.clone();
+
+        assert_matches!(
+            state.apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: account,
+                amount: U256::from(1),
+            })),
+            Err(StakeTableError::StakeOverflow(addr)) if addr == account
+        );
+        assert_eq!(state, before);
     }
 
     #[test]
