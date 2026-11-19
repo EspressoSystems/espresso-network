@@ -93,6 +93,7 @@ use crate::{
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
+    state::reward_proof_boundary,
     state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
 };
 #[cfg(any(test, feature = "testing"))]
@@ -1402,9 +1403,11 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 ///     reads the previous epoch's last block tree to compute the next
 ///     epoch's rewards.
 ///
-/// `finalized`:  Reward claims
-///   (`reward-claim-input`) target the LightClient L1 finalization
-///   exactly.
+/// keep the tree that reward claims (`reward-claim-input`) at `finalized` read
+///   - EPOCH_REWARD_VERSION+: the epoch boundary at or below `finalized`, as in
+///     `persist_reward_proofs`. It lies below `finalized`, so GC must keep it
+///     however far the light client lags behind `height`.
+///   - Earlier versions: the tree at `finalized` itself.
 fn reward_tree_gc_height(height: u64, finalized: u64, epoch_height: u64, version: Version) -> u64 {
     // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
     // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
@@ -1417,10 +1420,17 @@ fn reward_tree_gc_height(height: u64, finalized: u64, epoch_height: u64, version
         1
     };
     let current_epoch = epoch_from_block_number(height, epoch_height);
-    // First block of the oldest epoch we still want to retain.
+    // Last block of the epoch before the oldest epoch we retain: the oldest boundary tree we keep.
     let epoch_start_block = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
 
-    epoch_start_block.min(finalized)
+    let claim_tree = if version >= versions::EPOCH_REWARD_VERSION {
+        // Before the first boundary no proofs exist yet; keeping every tree from `finalized` up
+        // keeps the first boundary, which a later claim reads.
+        reward_proof_boundary(finalized, epoch_height).unwrap_or(finalized)
+    } else {
+        finalized
+    };
+    epoch_start_block.min(claim_tree)
 }
 
 impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsDataSource {
@@ -3684,6 +3694,7 @@ mod test {
         testing::{DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource},
     };
     use super::*;
+    use crate::state::reward_proof_boundary;
 
     type Postgres = sql::postgres::DataSource;
     type Sqlite = sql::sqlite::DataSource;
@@ -14913,6 +14924,33 @@ mod test {
         }
     }
 
+    /// The L1 light client lags behind the stored tree, with its finalized height inside an epoch
+    /// (the decaf incident of 2026-11-17). Claims at that height read the tree at the epoch
+    /// boundary below it, so GC must keep that tree.
+    #[rstest]
+    #[case::decaf_incident(23_715_000, 23_699_812, 3000, 23_697_000)]
+    #[case::finalized_one_past_boundary(23_715_000, 23_697_001, 3000, 23_697_000)]
+    #[case::finalized_one_below_boundary(23_715_000, 23_699_999, 3000, 23_697_000)]
+    #[case::finalized_past_first_boundary(200, 11, 10, 10)]
+    #[case::water_devnet_lag(1_554_000, 1_537_500, 3000, 1_536_000)]
+    #[case::mainnet_lag_five_epochs(31_920_000, 31_700_000, 40_000, 31_680_000)]
+    #[case::mainnet_lag_many_epochs(32_400_000, 31_700_000, 40_000, 31_680_000)]
+    fn reward_tree_gc_height_keeps_claim_boundary_of_lagging_light_client(
+        #[case] height: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: u64,
+        #[values(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION, MAX_SUPPORTED_VERSION)]
+        version: Version,
+    ) {
+        assert_eq!(
+            reward_tree_gc_height(height, finalized, epoch_height, version),
+            expected,
+            "tree stored at {height}, L1-finalized height {finalized}, epoch height \
+             {epoch_height}, version {version}: claims read the tree at {expected}"
+        );
+    }
+
     /// Reward trees only at epoch boundaries, in cases without the claim bug: GC keeps the five
     /// newest boundary trees and the boundary tree claims read, and deletes all trees below both.
     #[rstest]
@@ -14974,6 +15012,45 @@ mod test {
             expected,
             "tree stored at {height}, L1-finalized height {finalized}, epoch height {epoch_height}"
         );
+    }
+
+    /// Every stored height and every L1-finalized height up to it, over 20 epochs.
+    #[rstest]
+    #[case::epoch_reward(EPOCH_REWARD_VERSION)]
+    #[case::new_protocol(NEW_PROTOCOL_VERSION)]
+    #[case::max_supported(MAX_SUPPORTED_VERSION)]
+    fn reward_tree_gc_height_sweep_epoch_reward_trees(#[case] version: Version) {
+        let epoch_height = 10;
+        for height in 0..=200 {
+            let five_newest_boundaries =
+                epoch_from_block_number(height, epoch_height).saturating_sub(5) * epoch_height;
+            for finalized in 0..=height {
+                let gc_height = reward_tree_gc_height(height, finalized, epoch_height, version);
+                // The tree the claims path reads.
+                let claim_boundary = reward_proof_boundary(finalized, epoch_height);
+                let context = format!(
+                    "tree stored at {height}, L1-finalized height {finalized}, epoch height \
+                     {epoch_height}, version {version}"
+                );
+                if let Some(boundary) = claim_boundary {
+                    assert!(
+                        gc_height <= boundary,
+                        "{context}: GC height {gc_height} deletes the tree at {boundary} that \
+                         claims read"
+                    );
+                }
+                assert!(
+                    gc_height <= five_newest_boundaries,
+                    "{context}: GC height {gc_height} deletes one of the five newest boundary \
+                     trees, which start at {five_newest_boundaries}"
+                );
+                assert_eq!(
+                    gc_height,
+                    five_newest_boundaries.min(claim_boundary.unwrap_or(finalized)),
+                    "{context}: GC keeps more than it must"
+                );
+            }
+        }
     }
 
     /// Every stored height and every L1-finalized height up to it, over 20 epochs.
