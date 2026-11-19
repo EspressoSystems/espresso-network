@@ -185,6 +185,7 @@ committable = { git = "https://github.com/EspressoSystems/commit.git", features 
 chain-store = { path = "crates/a2/chain-store" }
 consensus = { path = "crates/a2/consensus" }
 consensus-api = { path = "crates/a2/consensus-api" }
+consensus-node = { path = "crates/a2/consensus-node" }
 consensus-store = { path = "crates/a2/consensus-store" }
 consensus-store-redb = { path = "crates/a2/consensus-store-redb" }
 crc32fast = "1.5"

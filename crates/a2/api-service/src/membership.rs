@@ -18,6 +18,7 @@ use anyhow::{Context, bail, ensure};
 use async_lock::Mutex as AsyncMutex;
 use async_trait::async_trait;
 use committable::Committable;
+use consensus_node::null_catchup::NullStateCatchup;
 use espresso_genesis::Genesis;
 use espresso_types::{
     AuthenticatedValidatorMap, EpochCommittees, Header, L1ClientOptions, Leaf2, PubKey, SeqTypes,
@@ -48,7 +49,7 @@ use light_client::consensus::quorum::{Quorum, StakeTable, StakeTableQuorum};
 use url::Url;
 use versions::Upgrade;
 
-use crate::{null_catchup::NullStateCatchup, state_cert::validate_state_cert};
+use crate::state_cert::validate_state_cert;
 
 /// The stake tables of the chain, as far as the store's epoch roots reach.
 #[derive(Clone)]

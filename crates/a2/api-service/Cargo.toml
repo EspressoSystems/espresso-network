@@ -17,6 +17,7 @@ chain-store                 = { workspace = true }
 clap                        = { workspace = true }
 committable                 = { workspace = true }
 consensus-api               = { workspace = true }
+consensus-node              = { workspace = true }
 espresso-api                = { workspace = true }
 espresso-genesis            = { workspace = true }
 espresso-types              = { workspace = true, features = ["node"] }

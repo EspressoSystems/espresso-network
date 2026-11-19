@@ -37,7 +37,6 @@ mod discovery;
 mod gaps;
 mod membership;
 mod node;
-mod null_catchup;
 mod reader;
 mod request;
 mod server;

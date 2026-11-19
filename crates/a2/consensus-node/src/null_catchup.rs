@@ -18,8 +18,9 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
 };
 
-/// Catchup that refuses every request, for the stake table fetcher of an API service, which
-/// derives stake tables from L1 and its own store only.
+/// Catchup that refuses every request: for the stake table fetcher of an API service, which
+/// derives stake tables from L1 and its own store only, and for a consensus node until it catches
+/// up from API services.
 #[derive(Clone, Debug)]
 pub struct NullStateCatchup {
     backoff: BackoffParams,
