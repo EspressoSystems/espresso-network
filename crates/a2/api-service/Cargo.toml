@@ -18,6 +18,7 @@ clap                        = { workspace = true }
 committable                 = { workspace = true }
 consensus-api               = { workspace = true }
 consensus-node              = { workspace = true }
+either                      = { workspace = true }
 espresso-api                = { workspace = true }
 espresso-genesis            = { workspace = true }
 espresso-types              = { workspace = true, features = ["node"] }
@@ -28,8 +29,11 @@ hotshot-contract-adapter    = { workspace = true }
 hotshot-types               = { workspace = true }
 http-wire                   = { workspace = true, features = ["server"] }
 indexmap                    = { workspace = true }
+jf-merkle-tree-compat       = { workspace = true }
 light-client                = { workspace = true }
+parking_lot                 = { workspace = true }
 prost                       = { workspace = true }
+serde                       = { workspace = true }
 tagged-base64               = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tonic                       = { workspace = true, features = ["tls-ring", "tls-webpki-roots"] }

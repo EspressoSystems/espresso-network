@@ -12,6 +12,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use chain_store::ChainStore;
+use consensus_node::proto::catchup_service_server::CatchupServiceServer;
 use espresso_api::{
     proto::{
         availability_service_server::AvailabilityServiceServer,
@@ -31,11 +32,13 @@ pub mod proto {
 }
 
 mod availability;
+pub mod catchup;
 mod certs;
 mod chain;
+pub mod chain_state;
 mod discovery;
 mod gaps;
-mod membership;
+pub mod membership;
 mod node;
 mod reader;
 mod request;
@@ -49,12 +52,16 @@ pub use membership::Membership;
 use reader::Reader;
 
 /// The services of the API, over one store and one consensus node.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ApiService {
     reader: Reader,
 
     /// The consensus node's API, for submissions and discovery records.
     consensus_api: SocketAddr,
+
+    /// What consensus nodes that are behind catch up from, if this API service follows the
+    /// chain's state.
+    catchup: Option<Arc<catchup::Catchup>>,
 }
 
 impl ApiService {
@@ -62,11 +69,21 @@ impl ApiService {
         Self {
             reader: Reader::new(store),
             consensus_api,
+            catchup: None,
+        }
+    }
+
+    /// Serves catchup from `catchup` too.
+    pub fn with_catchup(self, catchup: catchup::Catchup) -> Self {
+        Self {
+            catchup: Some(Arc::new(catchup)),
+            ..self
         }
     }
 
     /// Serves the API on `listener` until it fails.
     pub async fn serve(self, listener: TcpListener) -> anyhow::Result<()> {
+        let catchup = self.catchup.clone();
         let service = Arc::new(self);
         let rest = rest::availability_service_rest_router(service.clone())
             .merge(rest::status_service_rest_router(service.clone()))
@@ -79,6 +96,9 @@ impl ApiService {
             .add_service(SubmitServiceServer::from_arc(service.clone()))
             .add_service(ChainServiceServer::from_arc(service.clone()))
             .add_service(DiscoveryServiceServer::from_arc(service));
+        if let Some(catchup) = catchup {
+            grpc.add_service(CatchupServiceServer::from_arc(catchup));
+        }
         server::serve(listener, rest, grpc).await
     }
 }

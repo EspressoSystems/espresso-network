@@ -1,9 +1,14 @@
 //! Serves the v2 API from the chain store.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Context;
-use api_service::{ApiService, GapFiller, Membership};
+use api_service::{
+    ApiService, GapFiller, Membership,
+    catchup::Catchup,
+    chain_state::{self, ChainState},
+    membership::node_state,
+};
 use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
@@ -52,9 +57,10 @@ async fn main() -> anyhow::Result<()> {
     let genesis = Genesis::load(&options.genesis_file)
         .await
         .context("loading the genesis file")?;
-    let membership = Membership::new(&genesis, options.l1_provider)
+    let state = node_state(&genesis, options.l1_provider)
         .await
-        .context("building the membership")?;
+        .context("building the node state")?;
+    let membership = Membership::new(&state)?;
     let filler = GapFiller::new(
         store.clone(),
         options.consensus_api,
@@ -62,7 +68,14 @@ async fn main() -> anyhow::Result<()> {
         Some(membership),
     );
     tokio::spawn(filler.run());
-    ApiService::new(store, options.consensus_api)
+    let chain = Arc::new(ChainState::default());
+    tokio::spawn(chain_state::follow(
+        chain.clone(),
+        store.clone(),
+        state.clone(),
+    ));
+    ApiService::new(store.clone(), options.consensus_api)
+        .with_catchup(Catchup::new(store, chain, state))
         .serve(listener)
         .await
 }

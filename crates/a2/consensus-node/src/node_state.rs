@@ -1,4 +1,4 @@
-//! The state a consensus node validates blocks against: the genesis file, L1, and the stake tables
+//! The state blocks are validated and applied against: the genesis file, L1, and the stake tables
 //! membership derives from both.
 
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
@@ -9,25 +9,36 @@ use async_lock::Mutex;
 use espresso_genesis::{Genesis, L1Finalized};
 use espresso_types::{
     EpochCommittees, EpochRewardsCalculator, L1BlockInfo, L1Client, L1ClientOptions, NodeState,
-    RECENT_STAKE_TABLES_LIMIT, ValidatedState, v0_3::Fetcher,
+    RECENT_STAKE_TABLES_LIMIT, ValidatedState,
+    traits::{MembershipPersistence, StateCatchup},
+    v0_3::Fetcher,
 };
 use hotshot_types::{
-    epoch_membership::EpochMembershipCoordinator, network::NetworkConfig, traits::metrics::Metrics,
+    epoch_membership::EpochMembershipCoordinator,
+    network::NetworkConfig,
+    traits::{metrics::Metrics, storage::Storage},
 };
 use moka::future::Cache;
 use url::Url;
 
-use crate::{SeqTypes, membership_store::MembershipStore, null_catchup::NullStateCatchup};
+use crate::SeqTypes;
 
 /// The node state of the chain `genesis` starts, with stake tables kept in `store` and read from
 /// the L1 at `l1`. Waits for L1 to finalize the chain's L1 genesis block.
-pub async fn node_state(
+///
+/// A consensus node keeps its stake tables in its consensus store and catches up from API
+/// services; an API service keeps them in memory and follows the chain itself.
+pub async fn node_state<S>(
     genesis: &Genesis,
     network_config: &NetworkConfig<SeqTypes>,
     l1: Vec<Url>,
-    store: MembershipStore,
+    store: S,
+    state_catchup: Arc<dyn StateCatchup>,
     metrics: &dyn Metrics,
-) -> anyhow::Result<NodeState> {
+) -> anyhow::Result<NodeState>
+where
+    S: MembershipPersistence + Storage<SeqTypes> + Clone,
+{
     // Before the L1 work below, which can wait a long time for L1.
     let first_epoch = genesis.first_epoch()?;
     let epoch_height = genesis.epoch_height.unwrap_or_default();
@@ -52,7 +63,6 @@ pub async fn node_state(
         genesis_state.prefund_account(*address, *amount);
     }
 
-    let state_catchup = Arc::new(NullStateCatchup::default());
     let fetcher = Fetcher::new(
         state_catchup.clone(),
         Arc::new(Mutex::new(store.clone())),

@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package espresso.a2.catchup.v1;
+
+// What a consensus node that is behind asks an API service for: leaves, and the state of the chain
+// at the newest heights the API service has applied. Values are bincode-encoded, as consensus
+// nodes exchange them. The node checks every answer: leaves against a `Certificate2` and the stake
+// table of its epoch, state against the roots of verified headers.
+service CatchupService {
+  // The leaf at `height` and the leaves after it up to the first one a `Certificate2` decided
+  // directly, with that certificate.
+  rpc GetLeafChain(HeightRequest) returns (LeafChainResponse);
+
+  // Proofs of fee accounts in the state after the block at `height`.
+  rpc GetFeeAccounts(AccountsRequest) returns (Encoded);
+
+  // The frontier of the block Merkle tree after the block at `height`.
+  rpc GetBlocksFrontier(HeightRequest) returns (Encoded);
+
+  // Every balance of the v2 reward Merkle tree after the block at `height`.
+  rpc GetRewardBalancesV2(HeightRequest) returns (Encoded);
+
+  // The chain config with a commitment, as tagged base64.
+  rpc GetChainConfig(ChainConfigRequest) returns (Encoded);
+
+  // The light client state certificate of an epoch.
+  rpc GetStateCert(EpochRequest) returns (Encoded);
+}
+
+message HeightRequest {
+  uint64 height = 1;
+}
+
+message AccountsRequest {
+  uint64 height = 1;
+
+  // Each account, bincode-encoded
+  repeated bytes accounts = 2;
+}
+
+message ChainConfigRequest {
+  string commitment = 1;
+}
+
+message EpochRequest {
+  uint64 epoch = 1;
+}
+
+message LeafChainResponse {
+  repeated bytes leaves = 1;
+  bytes cert2 = 2;
+}
+
+message Encoded {
+  bytes data = 1;
+}

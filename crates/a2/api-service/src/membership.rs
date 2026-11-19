@@ -8,23 +8,20 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
     ops::Range,
     sync::Arc,
 };
 
 use alloy::primitives::{Address, U256};
 use anyhow::{Context, bail, ensure};
-use async_lock::Mutex as AsyncMutex;
 use async_trait::async_trait;
 use committable::Committable;
 use consensus_node::null_catchup::NullStateCatchup;
 use espresso_genesis::Genesis;
 use espresso_types::{
-    AuthenticatedValidatorMap, EpochCommittees, Header, L1ClientOptions, Leaf2, PubKey, SeqTypes,
-    StakeTableHash,
+    AuthenticatedValidatorMap, Header, Leaf2, NodeState, PubKey, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0_3::{EventKey, Fetcher, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
+    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot_types::{
     ValidatorConfig,
@@ -40,6 +37,7 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         election::{Membership as _, MembershipSnapshot as _},
+        metrics::NoMetrics,
         storage::Storage,
     },
     utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
@@ -51,6 +49,27 @@ use versions::Upgrade;
 
 use crate::state_cert::validate_state_cert;
 
+/// The node state of the chain `genesis` starts, as an API service keeps it: stake tables in memory,
+/// read from the L1 at `l1`, and no catchup, since the API service follows the chain itself.
+pub async fn node_state(genesis: &Genesis, l1: Vec<Url>) -> anyhow::Result<NodeState> {
+    // The API service has no stake, so any key serves to read the genesis stake table.
+    let key =
+        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed([0; 32], 0, U256::ONE, false)
+            .public_key;
+    let network_config = genesis
+        .network_config(&key)
+        .context("the genesis file has no stake table")?;
+    consensus_node::node_state::node_state(
+        genesis,
+        &network_config,
+        l1,
+        MemMembership::default(),
+        Arc::new(NullStateCatchup::default()),
+        &NoMetrics,
+    )
+    .await
+}
+
 /// The stake tables of the chain, as far as the store's epoch roots reach.
 #[derive(Clone)]
 pub struct Membership {
@@ -59,53 +78,14 @@ pub struct Membership {
 }
 
 impl Membership {
-    /// The membership of the chain `genesis` starts, reading stake table events from the L1 at
-    /// `l1`.
-    pub async fn new(genesis: &Genesis, l1: Vec<Url>) -> anyhow::Result<Self> {
-        let first_epoch = genesis.first_epoch()?;
-        let epoch_height = genesis.epoch_height.unwrap_or_default();
-        // The API service has no stake, so any key serves to read the genesis stake table.
-        let key =
-            ValidatorConfig::<SeqTypes>::generated_from_seed_indexed([0; 32], 0, U256::ONE, false)
-                .public_key;
-        let committee = genesis
-            .network_config(&key)
-            .context("the genesis file has no stake table")?
-            .config;
-        let l1_client = L1ClientOptions::default()
-            .connect(l1)
-            .context("connecting to L1")?;
-        l1_client.spawn_tasks().await;
-        let store = MemMembership::default();
-        let fetcher = Fetcher::new(
-            Arc::new(NullStateCatchup::default()),
-            Arc::new(AsyncMutex::new(store.clone())),
-            l1_client,
-            genesis.chain_config,
-        );
-        fetcher.spawn_update_loop().await;
-        let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-        let committees = EpochCommittees::new(
-            committee.known_nodes_with_stake,
-            committee.known_da_nodes,
-            block_reward,
-            fetcher,
-            epoch_height,
-            first_epoch,
-        )?;
-        Self::from_committees(committees, epoch_height, &store)
-    }
-
-    fn from_committees(
-        committees: EpochCommittees,
-        epoch_height: u64,
-        store: &MemMembership,
-    ) -> anyhow::Result<Self> {
-        let epoch_length =
-            NonZeroU64::new(epoch_height).context("genesis needs a positive epoch_height")?;
+    /// The membership `state` keeps.
+    pub fn new(state: &NodeState) -> anyhow::Result<Self> {
         Ok(Self {
-            coordinator: EpochMembershipCoordinator::new(committees, epoch_length, store),
-            epoch_height,
+            coordinator: state.coordinator.clone(),
+            epoch_height: state
+                .epoch_height
+                .filter(|&height| height > 0)
+                .context("the chain needs a positive epoch_height")?,
         })
     }
 
@@ -444,9 +424,16 @@ impl Storage<SeqTypes> for MemMembership {
 pub(crate) mod testing {
     //! A membership on a fixed committee, which needs no L1, and certificates it checks.
 
+    use std::num::NonZeroU64;
+
     use alloy::primitives::FixedBytes;
+    use async_lock::Mutex as AsyncMutex;
     use bitvec::vec::BitVec;
-    use espresso_types::{NodeState, ValidatedState, v0_3::ChainConfig};
+    use consensus_node::null_catchup::NullStateCatchup;
+    use espresso_types::{
+        EpochCommittees, L1ClientOptions, NodeState, ValidatedState,
+        v0_3::{ChainConfig, Fetcher},
+    };
     use hotshot_contract_adapter::light_client::derive_signed_state_digest;
     use hotshot_types::{
         PeerConfig,
@@ -508,7 +495,14 @@ pub(crate) mod testing {
             EpochNumber::new(FIRST_EPOCH),
         )
         .unwrap();
-        Membership::from_committees(committees, EPOCH_HEIGHT, &store).unwrap()
+        Membership {
+            coordinator: EpochMembershipCoordinator::new(
+                committees,
+                NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
+                &store,
+            ),
+            epoch_height: EPOCH_HEIGHT,
+        }
     }
 
     /// A leaf of the new protocol at `height`.

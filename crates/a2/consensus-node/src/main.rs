@@ -49,6 +49,10 @@ struct Options {
     #[arg(long, env = "ESPRESSO_CONSENSUS_PUBLIC_API_URL")]
     public_api_url: Url,
 
+    /// API services to catch up from besides the node's own, comma-separated.
+    #[arg(long, env = "ESPRESSO_CONSENSUS_BOOTSTRAP", value_delimiter = ',')]
+    bootstrap: Vec<Url>,
+
     /// How many bytes the decide log may take up before the node holds its vote.
     #[arg(long, env = "ESPRESSO_CONSENSUS_DECIDE_LOG_LIMIT", default_value_t = DEFAULT_DECIDE_LOG_LIMIT)]
     decide_log_limit: u64,
@@ -86,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         consensus_api: options.api_address,
         api_url: options.public_api_url,
         api_key: None,
+        bootstrap: options.bootstrap,
         decide_log_limit: options.decide_log_limit,
         empty_block_delay: options.empty_block_delay,
     };

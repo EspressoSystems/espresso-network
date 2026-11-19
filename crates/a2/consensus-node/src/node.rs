@@ -5,6 +5,7 @@ use std::{
     collections::HashSet,
     net::SocketAddr,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -38,8 +39,8 @@ use vbs::version::Version;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
-    decided_state::DecidedStateWriter, initializer::initializer, membership_store::MembershipStore,
-    node_state::node_state,
+    catchup::ApiCatchup, decided_state::DecidedStateWriter, initializer::initializer,
+    membership_store::MembershipStore, node_state::node_state,
 };
 
 /// How long a view may take before the node times out.
@@ -68,6 +69,10 @@ pub struct Config {
     pub api_url: Url,
     pub api_key: Option<[u8; 32]>,
 
+    /// API services to catch up from besides the node's own, which a node with an empty store
+    /// needs if its own is not reachable.
+    pub bootstrap: Vec<Url>,
+
     /// How many bytes the decide log may take up before the node holds its vote.
     pub decide_log_limit: u64,
 
@@ -88,6 +93,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         consensus_api,
         api_url,
         api_key,
+        bootstrap,
         decide_log_limit,
         empty_block_delay,
     } = config;
@@ -99,11 +105,13 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
 
     let (store, restored) = ConsensusStore::open(store, async || Ok(nothing_to_import())).await?;
     let membership_store = MembershipStore::new(store.clone());
+    let catchup = Arc::new(ApiCatchup::new(api_url.clone(), bootstrap, store.clone()));
     let state = node_state(
         &genesis,
         &network_config,
         l1,
         membership_store.clone(),
+        catchup,
         &*metrics,
     )
     .await?;
