@@ -1246,38 +1246,11 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 },
             };
 
-            // trees at heights strictly less than the gc height are deleted
-            //
-            // keep recent epochs reward trees
-            //   - staking-api-service at startup calls `reward-amounts` at
-            //     `epoch_start - 1`, which needs the previous epoch's last-block
-            //     tree on disk.
-            //   - Per epoch reward (EPOCH_REWARD_VERSION+): `fetch_and_calculate`
-            //     reads the previous epoch's last block tree to compute the next
-            //     epoch's rewards.
-            //
-            // `finalized_hotshot_height`:  Reward claims
-            //   (`reward-claim-input`) target the LightClient L1 finalization
-            //   exactly.
-
             let epoch_height = node_state
                 .epoch_height
                 .context("reward tree gc requires an epoch height")?;
-            // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
-            // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
-            // every block, so 1 epoch is already epoch_height trees; keeping more
-            // would be expensive. We only need 1 epoch for both, but the extra
-            // trees are cheap for V5+ so it doesn't make much of a difference.
-            let epochs_to_retain = if version >= versions::EPOCH_REWARD_VERSION {
-                5
-            } else {
-                1
-            };
-            let current_epoch = epoch_from_block_number(height, epoch_height);
-            // First block of the oldest epoch we still want to retain.
-            let epoch_start_block = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
-
-            let gc_height = epoch_start_block.min(finalized_hotshot_height);
+            let gc_height =
+                reward_tree_gc_height(height, finalized_hotshot_height, epoch_height, version);
 
             if let Err(err) = self.garbage_collect(gc_height).await {
                 tracing::info!(gc_height, "failed to garbage collect: {err:#}");
@@ -1416,6 +1389,38 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
 
     /// garbage collects merkle tree data for blocks strictly older than `height`
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>>;
+}
+
+/// The height below which reward tree GC deletes trees and proofs, after the state loop stored the
+/// tree at `height` of protocol `version`, while the L1 light client has finalized `finalized`.
+///
+/// keep recent epochs reward trees
+///   - staking-api-service at startup calls `reward-amounts` at
+///     `epoch_start - 1`, which needs the previous epoch's last-block
+///     tree on disk.
+///   - Per epoch reward (EPOCH_REWARD_VERSION+): `fetch_and_calculate`
+///     reads the previous epoch's last block tree to compute the next
+///     epoch's rewards.
+///
+/// `finalized`:  Reward claims
+///   (`reward-claim-input`) target the LightClient L1 finalization
+///   exactly.
+fn reward_tree_gc_height(height: u64, finalized: u64, epoch_height: u64, version: Version) -> u64 {
+    // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
+    // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
+    // every block, so 1 epoch is already epoch_height trees; keeping more
+    // would be expensive. We only need 1 epoch for both, but the extra
+    // trees are cheap for V5+ so it doesn't make much of a difference.
+    let epochs_to_retain = if version >= versions::EPOCH_REWARD_VERSION {
+        5
+    } else {
+        1
+    };
+    let current_epoch = epoch_from_block_number(height, epoch_height);
+    // First block of the oldest epoch we still want to retain.
+    let epoch_start_block = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
+
+    epoch_start_block.min(finalized)
 }
 
 impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsDataSource {
@@ -3671,7 +3676,7 @@ mod test {
     use vbs::version::StaticVersion;
     use versions::{
         DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION,
-        NEW_PROTOCOL_VERSION, Upgrade,
+        MAX_SUPPORTED_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
     };
 
     use self::data_source::{
@@ -14904,6 +14909,92 @@ mod test {
                          the epoch boundary (target height was {target_height})."
                     );
                 }
+            }
+        }
+    }
+
+    /// Reward trees only at epoch boundaries, in cases without the claim bug: GC keeps the five
+    /// newest boundary trees and the boundary tree claims read, and deletes all trees below both.
+    #[rstest]
+    #[case::decaf_one_epoch_earlier(23_712_000, 23_699_812, 3000, 23_697_000)]
+    #[case::light_client_current(23_715_000, 23_714_000, 3000, 23_700_000)]
+    #[case::light_client_at_tip(23_715_000, 23_715_000, 3000, 23_700_000)]
+    #[case::finalized_at_boundary_large_lag(23_715_000, 23_697_000, 3000, 23_697_000)]
+    #[case::finalized_at_first_boundary(23_715_000, 3000, 3000, 3000)]
+    #[case::state_loop_behind_light_client(23_715_000, 23_800_000, 3000, 23_700_000)]
+    #[case::mainnet_light_client_current(31_920_000, 31_910_000, 40_000, 31_720_000)]
+    #[case::first_epoch_past_retention(18_000, 17_000, 3000, 3000)]
+    #[case::early_chain_fifth_epoch(15_000, 14_500, 3000, 0)]
+    #[case::early_chain_second_epoch(4_000, 3_500, 3000, 0)]
+    #[case::genesis(0, 0, 3000, 0)]
+    #[case::finalized_zero(23_715_000, 0, 3000, 0)]
+    // No claims in the first epoch: GC keeps everything from the finalized height up.
+    #[case::finalized_in_first_epoch(23_715_000, 2_999, 3000, 2_999)]
+    #[case::epoch_height_one_lag(100, 50, 1, 50)]
+    #[case::epoch_height_one_current(100, 99, 1, 95)]
+    fn reward_tree_gc_height_epoch_reward_trees(
+        #[case] height: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: u64,
+        #[values(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION, MAX_SUPPORTED_VERSION)]
+        version: Version,
+    ) {
+        assert_eq!(
+            reward_tree_gc_height(height, finalized, epoch_height, version),
+            expected,
+            "tree stored at {height}, L1-finalized height {finalized}, epoch height \
+             {epoch_height}, version {version}"
+        );
+    }
+
+    /// A reward tree at every block (V4), where claims read the tree at the finalized height
+    /// itself: GC keeps the current epoch and the finalized height. The epoch boundary rule must
+    /// not apply, as it would keep up to a whole epoch of extra trees.
+    #[rstest]
+    #[case::large_lag(23_715_000, 23_699_812, 3000, 23_699_812)]
+    #[case::light_client_current(23_715_000, 23_714_000, 3000, 23_712_000)]
+    #[case::height_inside_epoch(23_713_000, 23_712_500, 3000, 23_712_000)]
+    #[case::mainnet_lag(31_920_000, 31_700_000, 40_000, 31_700_000)]
+    #[case::first_epoch(2_000, 1_500, 3000, 0)]
+    #[case::finalized_zero(23_715_000, 0, 3000, 0)]
+    fn reward_tree_gc_height_per_block_reward_trees(
+        #[case] height: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: u64,
+    ) {
+        assert_eq!(
+            reward_tree_gc_height(
+                height,
+                finalized,
+                epoch_height,
+                DRB_AND_HEADER_UPGRADE_VERSION
+            ),
+            expected,
+            "tree stored at {height}, L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
+
+    /// Every stored height and every L1-finalized height up to it, over 20 epochs.
+    #[test]
+    fn reward_tree_gc_height_sweep_per_block_reward_trees() {
+        let epoch_height = 10;
+        for height in 0..=200 {
+            let current_epoch_start =
+                epoch_from_block_number(height, epoch_height).saturating_sub(1) * epoch_height;
+            for finalized in 0..=height {
+                assert_eq!(
+                    reward_tree_gc_height(
+                        height,
+                        finalized,
+                        epoch_height,
+                        DRB_AND_HEADER_UPGRADE_VERSION
+                    ),
+                    current_epoch_start.min(finalized),
+                    "tree stored at {height}, L1-finalized height {finalized}, epoch height \
+                     {epoch_height}"
+                );
             }
         }
     }
