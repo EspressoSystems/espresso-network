@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Runs an a2 network on this machine: anvil as L1 with the Espresso contracts, the five consensus
-# nodes of the demo genesis file, and for node 0 a store service on Postgres, an ingester and an
-# API service. Logs go to RUNDIR. Stops everything on exit.
+# Runs an a2 network on this machine: anvil as L1 with the Espresso contracts and the demo
+# validators staked, the five consensus nodes of the demo genesis file, and for node 0 two API
+# services, each with its own store service on Postgres and its own ingester. The second ingester
+# starts a minute late, so its store misses what node 0 freed meanwhile, and its API service fills
+# that from the first. Logs go to RUNDIR. Stops everything on exit.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -12,9 +14,12 @@ Usage: ${SCRIPT_NAME} RUNDIR
 
 Run an a2 network, keeping its stores and logs in RUNDIR, which must not exist. Needs anvil on the
 PATH or in the repository root, Postgres, and the binaries deploy, consensus-node, store-service,
-ingester and api-service in target/debug.
+ingester, api-service and staking-cli in target/debug.
 
-The API service of node 0 serves on http://127.0.0.1:24000.
+The API services serve on http://127.0.0.1:24000 and http://127.0.0.1:24001.
+
+ENVIRONMENT:
+  GENESIS_FILE   The genesis file, data/genesis/demo-ff.toml by default
 EOF
 }
 
@@ -36,7 +41,7 @@ main() {
   set +a
   export PATH="$root/target/debug:$root:$PATH"
   local l1="http://127.0.0.1:${ESPRESSO_L1_PORT}"
-  local genesis=data/genesis/demo-ff.toml
+  local genesis=${GENESIS_FILE:-data/genesis/demo-ff.toml}
 
   trap 'stop "$rundir"' EXIT
   trap 'exit 1' INT TERM
@@ -52,6 +57,11 @@ main() {
       --deploy-esp-token-v1 --deploy-stake-table-v1 --upgrade-stake-table-v2 \
       --upgrade-stake-table-v3 --rpc-url "$l1"
   ) >"$rundir/deploy.log" 2>&1
+  L1_PROVIDER=$l1 MNEMONIC=$ESPRESSO_ETH_MNEMONIC \
+    ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX \
+    ESP_TOKEN_CONTRACT_ADDRESS=$ESP_TOKEN_PROXY_ADDRESS \
+    STAKE_TABLE_ADDRESS=$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS \
+    staking-cli --no-config stake-for-demo >"$rundir/stake.log" 2>&1
 
   local pg_port=25432
   # Postgres keeps its socket in its data directory, whose path must stay short.
@@ -61,9 +71,12 @@ main() {
   scripts/run-postgres "$pg_port" "$pg_data/data" >"$rundir/postgres.log" 2>&1 &
   until pg_isready -h 127.0.0.1 -p "$pg_port" >/dev/null 2>&1; do sleep 1; done
   sleep 2
+  psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE espresso2" >/dev/null
 
   store-service --address 127.0.0.1:8070 \
     --database "postgres://root@127.0.0.1:${pg_port}/espresso" >"$rundir/store.log" 2>&1 &
+  store-service --address 127.0.0.1:8071 \
+    --database "postgres://root@127.0.0.1:${pg_port}/espresso2" >"$rundir/store-2.log" 2>&1 &
 
   for i in 0 1 2 3 4; do
     local staking="ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_$i"
@@ -88,8 +101,15 @@ main() {
     >"$rundir/ingester.log" 2>&1 &
   api-service --port 24000 --store http://127.0.0.1:8070 --consensus-api 127.0.0.1:9978 \
     --genesis-file "$genesis" --l1-provider "$l1" >"$rundir/api.log" 2>&1 &
+  api-service --port 24001 --store http://127.0.0.1:8071 --consensus-api 127.0.0.1:9978 \
+    --bootstrap http://127.0.0.1:24000 \
+    --genesis-file "$genesis" --l1-provider "$l1" >"$rundir/api-2.log" 2>&1 &
 
   echo "running; logs in $rundir"
+  sleep 60
+  ingester --consensus-api 127.0.0.1:9978 --store http://127.0.0.1:8071 \
+    >"$rundir/ingester-2.log" 2>&1 &
+  echo "second ingester started"
   wait
 }
 
