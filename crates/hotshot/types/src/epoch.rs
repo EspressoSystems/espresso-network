@@ -6,6 +6,7 @@
 
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::data::{BlockNumber, EpochNumber};
@@ -18,7 +19,14 @@ const TRANSITION_DISTANCE: u64 = 3;
 
 /// A mathematical epoch length. A length of [`ROOT_DISTANCE`] blocks or fewer still assigns
 /// heights to epochs, but holds no root and therefore no transition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+///
+/// Serializes as its number of blocks, and a length of zero does not deserialize.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodableWrapper, alloy_rlp::RlpDecodableWrapper)
+)]
 pub struct EpochLength(NonZeroU64);
 
 impl EpochLength {
@@ -113,6 +121,16 @@ impl EpochLength {
 impl From<NonZeroU64> for EpochLength {
     fn from(blocks: NonZeroU64) -> Self {
         Self::new(blocks)
+    }
+}
+
+impl TryFrom<u64> for EpochLength {
+    type Error = EpochArithmeticError;
+
+    fn try_from(blocks: u64) -> Result<Self, Self::Error> {
+        NonZeroU64::new(blocks)
+            .map(Self::new)
+            .ok_or(EpochArithmeticError::ZeroLength)
     }
 }
 
@@ -341,6 +359,8 @@ pub enum EpochArithmeticError {
     ZeroEpoch,
     #[error("epoch arithmetic exceeds u64")]
     Overflow,
+    #[error("an epoch length of zero blocks is not a length")]
+    ZeroLength,
     #[error("epoch length {length} must exceed {min} to hold a root", min = ROOT_DISTANCE)]
     TooShort { length: u64 },
     #[error("epoch {epoch} precedes first activation epoch {first_epoch}")]
@@ -373,6 +393,23 @@ mod tests {
 
     fn epoch_length(blocks: u64) -> EpochLength {
         EpochLength::new(NonZeroU64::new(blocks).expect("test epoch lengths are positive"))
+    }
+
+    #[test]
+    fn length_serializes_as_its_blocks_and_rejects_zero() {
+        let length = epoch_length(3000);
+        assert_eq!(serde_json::to_string(&length).unwrap(), "3000");
+        assert_eq!(
+            bincode::serialize(&length).unwrap(),
+            bincode::serialize(&3000u64).unwrap()
+        );
+        assert_eq!(serde_json::from_str::<EpochLength>("3000").unwrap(), length);
+        assert!(serde_json::from_str::<EpochLength>("0").is_err());
+        assert_eq!(EpochLength::try_from(3000), Ok(length));
+        assert_eq!(
+            EpochLength::try_from(0),
+            Err(EpochArithmeticError::ZeroLength)
+        );
     }
 
     #[test]
