@@ -43,6 +43,10 @@ message ChainRecord {
   // The light client state certificate of an epoch root, encoded as the item is; absent if the
   // block is no epoch root or the server does not have it
   optional bytes state_cert = 6;
+
+  // Whether cert2 and state_cert are as complete as consensus made them, so that their absence
+  // means the block has none. False if the server filled the height without them.
+  bool certs_known = 7;
 }
 
 // The API services of the validators, as the records they signed name them.

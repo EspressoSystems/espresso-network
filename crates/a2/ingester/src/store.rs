@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chain_store::{ChainStore, Item, Parts};
-use espresso_types::SeqTypes;
+use espresso_types::{Leaf2, SeqTypes};
 
 use crate::{Block, Sink};
 
@@ -18,19 +18,23 @@ impl Sink<SeqTypes> for ChainStore {
             vid_common: block.vid_common,
             cert2: block.cert2,
             state_cert: block.state_cert,
+            certs_known: true,
         };
         self.put(&item, &parts).await
     }
 
-    async fn block_height(&self) -> anyhow::Result<u64> {
-        Ok(self.newest().await?.map_or(0, |newest| newest + 1))
+    async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2>> {
+        let Some(height) = self.newest().await? else {
+            return Ok(None);
+        };
+        Ok(self.item(height).await?.map(|item| item.leaf))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use chain_store::mem::MemBackend;
-    use espresso_types::{Leaf2, NodeState, ValidatedState};
+    use espresso_types::{NodeState, ValidatedState};
     use hotshot_types::simple_certificate::QuorumCertificate2;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -54,10 +58,10 @@ mod tests {
             payload: Some(b"payload".to_vec()),
         };
         let store = ChainStore::new(MemBackend::default());
-        assert_eq!(store.block_height().await.unwrap(), 0);
+        assert_eq!(store.newest_leaf().await.unwrap(), None);
 
         Sink::append(&store, block.clone()).await.unwrap();
-        assert_eq!(store.block_height().await.unwrap(), 1);
+        assert_eq!(store.newest_leaf().await.unwrap(), Some(block.leaf.clone()));
         let item = store.item(0).await.unwrap().unwrap();
         assert_eq!(item.leaf, block.leaf);
         assert_eq!(item.cert1, block.cert1);

@@ -1,10 +1,6 @@
 //! A backend in memory, for tests and for a single process that keeps nothing across restarts.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Range,
-    sync::Mutex,
-};
+use std::{collections::BTreeMap, ops::Range, sync::Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -22,7 +18,6 @@ pub struct MemBackend {
 struct State {
     rows: BTreeMap<u64, Row>,
     parts: BTreeMap<(u64, Part), Bytes>,
-    checked_epochs: BTreeSet<u64>,
     app: BTreeMap<(String, Bytes), Bytes>,
     floor: u64,
 }
@@ -158,17 +153,6 @@ impl Backend for MemBackend {
                 .take(limit)
                 .collect()
         }))
-    }
-
-    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool> {
-        Ok(self.read(|state| state.checked_epochs.contains(&epoch)))
-    }
-
-    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
-        self.write(|state| {
-            state.checked_epochs.insert(epoch);
-        });
-        Ok(())
     }
 
     async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {

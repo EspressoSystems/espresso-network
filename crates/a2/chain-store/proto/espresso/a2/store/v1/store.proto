@@ -40,10 +40,6 @@ service Store {
   // Heights from `from` on that have an item but not `part`.
   rpc MissingParts(MissingPartsRequest) returns (HeightsResponse);
 
-  rpc CertsChecked(EpochRequest) returns (Checked);
-
-  rpc MarkCertsChecked(EpochRequest) returns (Done);
-
   // The value of a key in an application table.
   rpc AppGet(AppGetRequest) returns (MaybeBytes);
 
@@ -127,10 +123,6 @@ message MissingPartsRequest {
   uint64 limit = 3;
 }
 
-message EpochRequest {
-  uint64 epoch = 1;
-}
-
 message MaybeBytes {
   optional bytes data = 1;
 }
@@ -162,10 +154,6 @@ message RangesResponse {
 
 message HeightsResponse {
   repeated uint64 heights = 1;
-}
-
-message Checked {
-  bool checked = 1;
 }
 
 message AppGetRequest {

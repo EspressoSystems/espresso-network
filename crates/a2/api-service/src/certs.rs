@@ -2,10 +2,12 @@
 //! and the state certificate of an epoch root.
 //!
 //! Each is checked against the stake table of its block's epoch, so they are filled an epoch at a
-//! time, once membership has that stake table and the store has every block of the epoch. Heights
-//! the ingester wrote have their certificates from consensus already; the others are asked of the
-//! peers. A height a peer has but sends no `Certificate2` for was decided by a later block, and
-//! keeps none. The store then records the epoch as checked, and it is not asked again.
+//! time, once membership has that stake table and the store has every block of the epoch. A height
+//! whose certificates are known, [`Parts::certs_known`], has them as consensus made them: the
+//! ingester's heights, from the decide log, and heights checked here. The others are asked of the
+//! peers, and only a peer that knows a height's certificates answers for it: a height it knows
+//! without a `Certificate2` was decided by a later block, and keeps none. A peer that filled the
+//! height without its certificates may simply not have them.
 //!
 //! Both walks go from the newest epoch back to the fill front, the end of the newest gap in the
 //! store: every height from there on is stored, and gaps are filled from the newest back, so the
@@ -62,7 +64,7 @@ impl GapFiller {
 
     /// Checks the certificates of the newest complete epochs that are not checked yet.
     pub(crate) async fn check_certs(
-        &self,
+        &mut self,
         membership: &Membership,
         peers: &[Url],
     ) -> anyhow::Result<()> {
@@ -78,59 +80,59 @@ impl GapFiller {
             if membership.heights_of(epoch).start < front {
                 break;
             }
-            if self.certs_checked(epoch).await? || membership.stake_table(epoch).is_none() {
+            if self.checked_epochs.contains(&epoch)
+                || self.epoch_retries.waiting(*epoch)
+                || membership.stake_table(epoch).is_none()
+            {
                 continue;
             }
-            self.check_epoch(membership, epoch, peers).await?;
+            // An epoch no peer can answer for does not hold up the ones before it.
+            match self.check_epoch(membership, epoch, peers).await {
+                Ok(()) => self.epoch_retries.succeeded(*epoch),
+                Err(err) => {
+                    tracing::warn!(%epoch, "checking certificates failed: {err:#}");
+                    self.epoch_retries.failed(*epoch, *epoch + 1);
+                },
+            }
             checked += 1;
         }
         Ok(())
     }
 
-    async fn certs_checked(&self, epoch: EpochNumber) -> anyhow::Result<bool> {
-        if self.checked_epochs.lock().unwrap().contains(&epoch) {
-            return Ok(true);
-        }
-        let checked = self.store.certs_checked(epoch).await?;
-        if checked {
-            self.checked_epochs.lock().unwrap().insert(epoch);
-        }
-        Ok(checked)
-    }
-
-    /// The fill front and the newest height, if the store has any: every height from the front
-    /// up to the newest is stored.
+    /// The fill front and the newest height, as of the last time the gaps were looked for:
+    /// every height from the front up to the newest is stored. The gaps the filler has not
+    /// filled bound the front; only past the cursor, which a pass that found many gaps leaves
+    /// behind the newest height, the store is asked.
     async fn filled(&self) -> anyhow::Result<Option<(u64, u64)>> {
-        let Some(newest) = self.store.newest().await? else {
+        let Some(newest) = self.newest else {
             return Ok(None);
         };
-        let front = match self.store.newest_gap().await? {
-            Some(gap) => gap.end,
-            None => self.store.floor().await?,
+        let front = match self.items_from > newest {
+            true => self.item_retries.newest_end().unwrap_or(0).max(self.floor),
+            false => match self.store.newest_gap().await? {
+                Some(gap) => gap.end,
+                None => self.floor,
+            },
         };
         Ok(Some((front, newest)))
     }
 
-    /// Fills the certificates `epoch` lacks from the peers, and records the epoch as checked once
-    /// a peer has answered for each height.
+    /// Fills the certificates of the heights of `epoch` whose certificates are not known from the
+    /// peers, and remembers the epoch as checked once a peer has answered for each height.
     async fn check_epoch(
-        &self,
+        &mut self,
         membership: &Membership,
         epoch: EpochNumber,
         peers: &[Url],
     ) -> anyhow::Result<()> {
         let heights = membership.heights_of(epoch);
-        let mut wanted: BTreeSet<u64> = self
+        let wanted: BTreeSet<u64> = self
             .store
-            .missing_parts(Part::Cert2, heights.start, count(&heights))
+            .missing_parts(Part::CertsKnown, heights.start, count(&heights))
             .await?
             .into_iter()
             .filter(|height| heights.contains(height))
             .collect();
-        let root = membership.root_of(epoch);
-        if self.store.state_cert(root).await?.is_none() {
-            wanted.insert(root);
-        }
         for run in runs(&wanted) {
             let mut answered = false;
             for peer in peers {
@@ -146,15 +148,16 @@ impl GapFiller {
                 anyhow::bail!("no peer has the certificates of heights {run:?}");
             }
         }
-        self.store.mark_certs_checked(epoch).await?;
-        self.checked_epochs.lock().unwrap().insert(epoch);
-        tracing::info!(%epoch, "certificates checked");
+        self.checked_epochs.insert(epoch);
+        if !wanted.is_empty() {
+            tracing::info!(%epoch, "certificates checked");
+        }
         Ok(())
     }
 
     /// Stores the certificates `peer` sends for `heights` that check against the stored leaves.
-    /// Fails unless the peer has every height, since a height it lacks says nothing about its
-    /// certificates.
+    /// Fails unless the peer knows the certificates of every height, since a height it lacks, or
+    /// has without knowing its certificates, says nothing about them.
     async fn take_certs(
         &self,
         membership: &Membership,
@@ -169,10 +172,15 @@ impl GapFiller {
             count(&heights)
         );
         for record in records {
+            let parts = record.parts()?;
+            anyhow::ensure!(
+                parts.certs_known,
+                "{peer} does not know the certificates of height {}",
+                record.height
+            );
             let Some(item) = self.store.item(record.height).await? else {
                 continue;
             };
-            let parts = record.parts()?;
             let checked = checked_certs(membership, &item, parts).await?;
             self.store.put_parts(record.height, &checked).await?;
         }
@@ -200,6 +208,7 @@ async fn checked_certs(
     Ok(Parts {
         cert2: parts.cert2,
         state_cert: parts.state_cert,
+        certs_known: true,
         ..Default::default()
     })
 }
@@ -240,12 +249,21 @@ mod tests {
     }
 
     /// A peer that has `items` and, for the height of `decided`, a cert2 signed by `signers`, and
-    /// for the epoch root a state certificate.
-    async fn peer(membership: &Membership, items: &[Item], decided: u64, signers: &[u64]) -> Url {
+    /// for the epoch root a state certificate. It knows the certificates if `knows`.
+    async fn peer(
+        membership: &Membership,
+        items: &[Item],
+        decided: u64,
+        signers: &[u64],
+        knows: bool,
+    ) -> Url {
         let store = ChainStore::new(MemBackend::default());
         let root = membership.root_of(EpochNumber::new(EPOCH));
         for item in items {
-            let mut parts = Parts::default();
+            let mut parts = Parts {
+                certs_known: knows,
+                ..Default::default()
+            };
             if item.height() == decided {
                 parts.cert2 = Some(cert2(&item.leaf, EPOCH, signers));
             }
@@ -261,69 +279,91 @@ mod tests {
         url.parse().unwrap()
     }
 
-    fn filler(store: &ChainStore) -> GapFiller {
-        GapFiller::new(
+    /// A filler over `store` that has looked for gaps and found none.
+    async fn filler(store: &ChainStore) -> GapFiller {
+        let mut filler = GapFiller::new(
             store.clone(),
             "127.0.0.1:1".parse().unwrap(),
             Vec::new(),
             None,
-        )
+        );
+        let newest = store.newest().await.unwrap().unwrap();
+        (filler.newest, filler.items_from) = (Some(newest), newest + 1);
+        filler
     }
 
-    /// The certificates a peer has for a complete epoch are checked and stored, and the epoch is
-    /// recorded as checked.
+    /// Whether every height of `EPOCH` has its certificates known.
+    async fn known(store: &ChainStore, membership: &Membership) -> bool {
+        let heights = membership.heights_of(EpochNumber::new(EPOCH));
+        let missing = store
+            .missing_parts(Part::CertsKnown, heights.start, 1)
+            .await
+            .unwrap();
+        !missing
+            .first()
+            .is_some_and(|height| heights.contains(height))
+    }
+
+    /// The certificates a peer has for a complete epoch are checked and stored, and every height
+    /// of the epoch then has its certificates known.
     #[tokio::test]
     async fn takes_the_certificates_of_a_complete_epoch() {
         let membership = membership();
         let (store, items) = store(&membership).await;
         let decided = items[3].height();
-        let peer = peer(&membership, &items, decided, &[0, 1, 2]).await;
+        let peer = peer(&membership, &items, decided, &[0, 1, 2], true).await;
 
         tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if filler(&store)
+            while !known(&store, &membership).await {
+                filler(&store)
+                    .await
                     .check_certs(&membership, std::slice::from_ref(&peer))
                     .await
-                    .is_ok()
-                {
-                    break;
-                }
+                    .unwrap();
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
-        .expect("a pass succeeds");
+        .expect("a pass takes the certificates");
 
         let epoch = EpochNumber::new(EPOCH);
-        assert!(store.certs_checked(epoch).await.unwrap());
+        assert!(known(&store, &membership).await);
         assert!(store.cert2(decided).await.unwrap().is_some());
         assert!(store.cert2(decided + 1).await.unwrap().is_none());
         let root = membership.root_of(epoch);
         assert!(store.state_cert(root).await.unwrap().is_some());
     }
 
-    /// A certificate that does not check fails the pass, and the epoch stays unchecked.
+    /// A certificate that does not check leaves the epoch unchecked.
     #[tokio::test]
     async fn refuses_a_cert2_without_a_quorum() {
         let membership = membership();
         let (store, items) = store(&membership).await;
         let decided = items[3].height();
-        let peer = peer(&membership, &items, decided, &[0, 1]).await;
-
-        let mut failed = false;
-        for _ in 0..20 {
-            if filler(&store)
-                .check_certs(&membership, std::slice::from_ref(&peer))
-                .await
-                .is_err()
-            {
-                failed = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert!(failed, "the pass fails");
-        assert!(!store.certs_checked(EpochNumber::new(EPOCH)).await.unwrap());
+        let peer = peer(&membership, &items, decided, &[0, 1], true).await;
+        assert_fails(&store, &membership, &peer).await;
         assert!(store.cert2(decided).await.unwrap().is_none());
+    }
+
+    /// A peer that has the heights but does not know their certificates answers for none of them,
+    /// since its lack of a certificate says nothing.
+    #[tokio::test]
+    async fn refuses_a_peer_that_does_not_know_the_certificates() {
+        let membership = membership();
+        let (store, items) = store(&membership).await;
+        let peer = peer(&membership, &items, items[3].height(), &[0, 1, 2], false).await;
+        assert_fails(&store, &membership, &peer).await;
+        assert!(store.cert2(items[3].height()).await.unwrap().is_none());
+    }
+
+    /// A pass over `store` with `peer` leaves `EPOCH` unchecked, to be tried again later.
+    async fn assert_fails(store: &ChainStore, membership: &Membership, peer: &Url) {
+        let mut filler = filler(store).await;
+        filler
+            .check_certs(membership, std::slice::from_ref(peer))
+            .await
+            .unwrap();
+        assert!(filler.epoch_retries.waiting(EPOCH), "the epoch waits");
+        assert!(!known(store, membership).await);
     }
 }

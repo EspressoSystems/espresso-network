@@ -5,8 +5,7 @@
 //! payload, the VID common data, the `Certificate2` that decided the block directly and, at an
 //! epoch root, the light client state certificate. A height can have its item without them, and
 //! they are filled in later, each when it can be checked. The store also finds the height of a
-//! leaf, a block or a payload by its commitment, and records the epochs whose certificates have
-//! been checked.
+//! leaf, a block or a payload by its commitment.
 //!
 //! The ingester writes to the store, copying the decide log of its consensus node, and the API
 //! service writes the heights it fills from other API services. Writes are idempotent by height, so
@@ -22,7 +21,7 @@ use bytes::Bytes;
 use committable::{Commitment, Committable};
 use espresso_types::{Header, Leaf2, SeqTypes};
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, VidCommon},
+    data::{VidCommitment, VidCommon},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -74,6 +73,11 @@ pub struct Parts {
 
     /// The light client state certificate of the epoch the block is the root of.
     pub state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
+
+    /// Whether `cert2` and `state_cert` are as complete as consensus made them: true for a height
+    /// from the decide log, or one whose certificates were checked from a peer that knew them. A
+    /// height without it may lack certificates it has.
+    pub certs_known: bool,
 }
 
 impl Parts {
@@ -91,6 +95,9 @@ impl Parts {
         if let Some(cert) = &self.state_cert {
             parts.push((Part::StateCert, encode(cert)?));
         }
+        if self.certs_known {
+            parts.push((Part::CertsKnown, Bytes::new()));
+        }
         Ok(parts)
     }
 
@@ -102,6 +109,7 @@ impl Parts {
                 Part::VidCommon => decoded.vid_common = Some(decode(bytes)?),
                 Part::Cert2 => decoded.cert2 = Some(decode(bytes)?),
                 Part::StateCert => decoded.state_cert = Some(decode(bytes)?),
+                Part::CertsKnown => decoded.certs_known = true,
             }
         }
         Ok(decoded)
@@ -247,16 +255,6 @@ impl ChainStore {
         limit: usize,
     ) -> anyhow::Result<Vec<u64>> {
         self.backend.missing_parts(part, from, limit).await
-    }
-
-    /// Whether the certificates of every height of `epoch` have been checked and stored.
-    pub async fn certs_checked(&self, epoch: EpochNumber) -> anyhow::Result<bool> {
-        self.backend.certs_checked(*epoch).await
-    }
-
-    /// Records that the certificates of every height of `epoch` have been checked and stored.
-    pub async fn mark_certs_checked(&self, epoch: EpochNumber) -> anyhow::Result<()> {
-        self.backend.mark_certs_checked(*epoch).await
     }
 
     /// The value of `key` in the application table `table`.

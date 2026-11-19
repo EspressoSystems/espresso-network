@@ -60,6 +60,7 @@ hotshot-query-service = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 reqwest        = { workspace = true }
 serde_json     = { workspace = true }
+tokio          = { workspace = true, features = ["test-util"] }
 versions       = { workspace = true }
 
 [lints]

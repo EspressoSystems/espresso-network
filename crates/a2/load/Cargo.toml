@@ -1,0 +1,24 @@
+[package]
+name        = "a2-load"
+description = "Submits transactions to an API service and measures how long they take to come back"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[[bin]]
+name = "a2-load"
+path = "src/main.rs"
+
+[dependencies]
+anyhow     = { workspace = true }
+base64     = { workspace = true }
+clap       = { workspace = true }
+futures    = { workspace = true }
+humantime  = { workspace = true }
+reqwest    = { workspace = true, features = ["stream"] }
+serde_json = { workspace = true }
+tokio      = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+url        = { workspace = true }
+
+[lints]
+workspace = true

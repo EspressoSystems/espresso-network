@@ -8,6 +8,7 @@ members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/a2/api-service",
+    "crates/a2/load",
     "crates/a2/chain-store",
     "crates/a2/consensus",
     "crates/a2/consensus-api",

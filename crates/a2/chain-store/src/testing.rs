@@ -63,6 +63,23 @@ pub async fn conformance(backend: &dyn Backend) {
     );
     assert_eq!(backend.parts(4).await.unwrap(), vec![]);
 
+    // An empty part is kept as present.
+    backend
+        .put_parts(0, vec![(Part::CertsKnown, Bytes::new())])
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.part(0, Part::CertsKnown).await.unwrap(),
+        Some(Bytes::new())
+    );
+    assert_eq!(
+        backend
+            .missing_parts(Part::CertsKnown, 0, 10)
+            .await
+            .unwrap(),
+        vec![1, 4, 5]
+    );
+
     // Lookups find the height; a commitment several rows share finds the earliest.
     assert_eq!(
         backend.height_of(Column::Leaf, "leaf-4").await.unwrap(),
@@ -126,13 +143,6 @@ pub async fn conformance(backend: &dyn Backend) {
         backend.missing_parts(VidCommon, 0, 10).await.unwrap(),
         vec![4]
     );
-
-    // Epochs whose certificates are checked are recorded.
-    assert!(!backend.certs_checked(3).await.unwrap());
-    backend.mark_certs_checked(3).await.unwrap();
-    backend.mark_certs_checked(3).await.unwrap();
-    assert!(backend.certs_checked(3).await.unwrap());
-    assert!(!backend.certs_checked(4).await.unwrap());
 
     // Application tables keep their keys apart, in bytewise order.
     let put = |table: &str, key: &[u8], value: &str| AppWrite::Put {

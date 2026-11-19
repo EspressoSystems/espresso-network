@@ -61,6 +61,7 @@ fn to_proto(record: Record, skip_payloads: bool) -> proto::ChainRecord {
             Part::Payload | Part::VidCommon => {},
             Part::Cert2 => sent.cert2 = data,
             Part::StateCert => sent.state_cert = data,
+            Part::CertsKnown => sent.certs_known = true,
         }
     }
     sent
@@ -73,6 +74,7 @@ pub(crate) fn from_proto(record: proto::ChainRecord) -> Record {
         (Part::VidCommon, record.vid_common),
         (Part::Cert2, record.cert2),
         (Part::StateCert, record.state_cert),
+        (Part::CertsKnown, record.certs_known.then(Vec::new)),
     ]
     .into_iter()
     .filter_map(|(part, data)| Some((part, data?.into())))

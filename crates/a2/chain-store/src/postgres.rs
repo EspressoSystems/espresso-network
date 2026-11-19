@@ -11,7 +11,7 @@ use sqlx::{
     PgPool, Postgres, Row as _, Transaction,
     postgres::{PgListener, PgPoolOptions},
 };
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::{sync::watch, task::JoinSet};
 
 use crate::{AppWrite, Backend, Column, Part, Row};
 
@@ -49,22 +49,15 @@ CREATE TABLE IF NOT EXISTS chain_app (
     value BYTEA NOT NULL,
     PRIMARY KEY (tbl, key)
 );
-CREATE TABLE IF NOT EXISTS chain_checked_epochs (
-    epoch BIGINT PRIMARY KEY
-);
 ";
 
 #[derive(Debug)]
 pub struct PostgresBackend {
     pool: PgPool,
     changes: watch::Sender<u64>,
-    listener: JoinHandle<()>,
-}
 
-impl Drop for PostgresBackend {
-    fn drop(&mut self) {
-        self.listener.abort();
-    }
+    /// The task that turns announcements into changes, which ends with the backend.
+    _listener: JoinSet<()>,
 }
 
 impl PostgresBackend {
@@ -75,11 +68,12 @@ impl PostgresBackend {
         let mut listener = PgListener::connect_with(&pool).await?;
         listener.listen(CHANNEL).await?;
         let changes = watch::channel(0).0;
-        let listener = tokio::spawn(listen(listener, changes.clone()));
+        let mut tasks = JoinSet::new();
+        tasks.spawn(listen(listener, changes.clone()));
         Ok(Self {
             pool,
             changes,
-            listener,
+            _listener: tasks,
         })
     }
 
@@ -299,24 +293,6 @@ impl Backend for PostgresBackend {
         .fetch_all(&self.pool)
         .await?;
         Ok(heights.into_iter().map(|h| h as u64).collect())
-    }
-
-    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool> {
-        let found: Option<i64> =
-            sqlx::query_scalar("SELECT epoch FROM chain_checked_epochs WHERE epoch = $1")
-                .bind(epoch as i64)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(found.is_some())
-    }
-
-    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("INSERT INTO chain_checked_epochs (epoch) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(epoch as i64)
-            .execute(&mut *tx)
-            .await?;
-        self.commit(tx).await
     }
 
     async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {

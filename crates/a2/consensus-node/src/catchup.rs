@@ -28,6 +28,7 @@ use hotshot_types::{
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use serde::de::DeserializeOwned;
+use tokio::time::timeout;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use url::Url;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
@@ -37,7 +38,7 @@ use crate::proto::{
     catchup_service_client::CatchupServiceClient,
 };
 
-/// How long one request to an API service may take.
+/// How long one source may take to connect and answer, the answer's body included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The largest answer an API service may send; a reward tree bounds it.
@@ -104,23 +105,22 @@ impl ApiCatchup {
         sources
     }
 
-    /// The first answer `ask` gets from a source that checks out.
+    /// The first answer `ask` gets from a source that checks out. A source that does not answer
+    /// within [`REQUEST_TIMEOUT`] is passed over.
     async fn ask<T, F, Fut>(&self, what: &str, ask: F) -> anyhow::Result<T>
     where
         F: Fn(CatchupServiceClient<Channel>) -> Fut,
         Fut: Future<Output = anyhow::Result<T>>,
     {
         for source in self.sources() {
-            let client = match connect(&source).await {
-                Ok(client) => client,
-                Err(err) => {
-                    tracing::debug!(%source, "cannot connect: {err:#}");
-                    continue;
-                },
-            };
-            match ask(client).await {
-                Ok(answer) => return Ok(answer),
-                Err(err) => tracing::debug!(%source, "{what}: {err:#}"),
+            let answer = timeout(REQUEST_TIMEOUT, async {
+                ask(connect(&source).await.context("connecting")?).await
+            })
+            .await;
+            match answer {
+                Ok(Ok(answer)) => return Ok(answer),
+                Ok(Err(err)) => tracing::debug!(%source, "{what}: {err:#}"),
+                Err(_) => tracing::debug!(%source, "{what}: no answer in time"),
             }
         }
         bail!("no API service answered {what}")

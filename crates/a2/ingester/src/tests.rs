@@ -129,16 +129,21 @@ impl Source for FakeLog {
     }
 }
 
-/// A sink in memory, holding the blocks from `start` on.
+/// A sink in memory, holding the blocks the ingester appends after `before`.
 struct MemSink {
-    start: u64,
+    before: Option<Leaf2<MockTypes>>,
     blocks: Mutex<Vec<Block<MockTypes>>>,
 }
 
 impl MemSink {
-    fn new(start: u64) -> Arc<Self> {
+    fn new() -> Arc<Self> {
+        Self::after(None)
+    }
+
+    /// A sink that already holds `leaf` as its newest.
+    fn after(before: Option<Leaf2<MockTypes>>) -> Arc<Self> {
         Arc::new(Self {
-            start,
+            before,
             blocks: Mutex::default(),
         })
     }
@@ -160,8 +165,12 @@ impl Sink<MockTypes> for MemSink {
         Ok(())
     }
 
-    async fn block_height(&self) -> anyhow::Result<u64> {
-        Ok(self.start + self.blocks.lock().unwrap().len() as u64)
+    async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2<MockTypes>>> {
+        let blocks = self.blocks.lock().unwrap();
+        Ok(blocks
+            .last()
+            .map(|block| block.leaf.clone())
+            .or_else(|| self.before.clone()))
     }
 }
 
@@ -213,7 +222,7 @@ async fn ingests_decided_blocks() {
     let log = FakeLog::new();
     log.decide(&chain, 0..=0);
     log.decide(&chain, 1..=2);
-    let sink = MemSink::new(0);
+    let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
     wait_for(&sink, 2).await;
@@ -265,7 +274,7 @@ async fn computes_the_genesis_vid_common() {
         .unwrap()
         .vid_common
         .clear();
-    let sink = MemSink::new(0);
+    let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
     wait_for(&sink, 1).await;
@@ -298,24 +307,42 @@ async fn passes_the_state_certificate() {
         .as_mut()
         .unwrap()
         .state_cert = bincode::serialize(&cert).unwrap();
-    let sink = MemSink::new(0);
+    let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
     wait_for(&sink, 1).await;
     assert_eq!(sink.blocks.lock().unwrap()[1].state_cert, Some(cert));
 }
 
-/// A restarted ingester continues from what the sink holds, and acknowledges that first.
+/// A restarted ingester continues after the newest leaf the sink holds.
 #[tokio::test]
 async fn resumes_from_the_sink() {
     let chain = chain(3).await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=3);
-    let sink = MemSink::new(2);
+    let sink = MemSink::after(Some(chain.blocks()[1].leaf.leaf().clone()));
     let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
     wait_for(&sink, 3).await;
     assert_eq!(sink.heights(), vec![2, 3]);
+}
+
+/// A restarted ingester whose sink holds a leaf of another chain stops at the first entry.
+#[tokio::test]
+async fn resuming_on_another_chain_stops_the_ingester() {
+    let chain = chain(3).await;
+    let other = other_chain().await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=3);
+    let sink = MemSink::after(Some(other.blocks()[1].leaf.leaf().clone()));
+    let ingester = spawn_ingester(serve(log).await, sink.clone());
+
+    let err = timeout(Duration::from_secs(10), ingester)
+        .await
+        .expect("the ingester stops")
+        .unwrap();
+    assert!(err.is::<ChainBroken>(), "{err:#}");
+    assert!(sink.heights().is_empty());
 }
 
 /// A leaf that does not follow the one before it stops the ingester.
@@ -326,7 +353,7 @@ async fn a_broken_chain_stops_the_ingester() {
     let log = FakeLog::new();
     log.decide(&chain, 0..=1);
     log.insert(other);
-    let sink = MemSink::new(0);
+    let sink = MemSink::new();
     let ingester = spawn_ingester(serve(log).await, sink.clone());
 
     let err = timeout(Duration::from_secs(10), ingester)
@@ -339,7 +366,18 @@ async fn a_broken_chain_stops_the_ingester() {
 
 /// An entry at height 2 from a chain that differs from `chain` at height 1.
 async fn chain_with_other_parent(chain: &MockChain) -> Decided {
-    // Diverge at height 1, so the leaf at height 2 names a different parent.
+    let other = other_chain().await;
+    let block = &other.blocks()[2];
+    assert_ne!(
+        block.leaf.leaf().parent_commitment(),
+        chain.blocks()[1].leaf.leaf().commit()
+    );
+    entry(&other, block, true)
+}
+
+/// A chain that differs from those of [`chain`] at height 1, so its leaf at height 2 names a
+/// different parent.
+async fn other_chain() -> MockChain {
     let mut other = MockChain::new(4, 100).await;
     other
         .push(vec![
@@ -347,12 +385,7 @@ async fn chain_with_other_parent(chain: &MockChain) -> Decided {
         ])
         .await;
     other.push_empty(1).await;
-    let block = &other.blocks()[2];
-    assert_ne!(
-        block.leaf.leaf().parent_commitment(),
-        chain.blocks()[1].leaf.leaf().commit()
-    );
-    entry(&other, block, true)
+    other
 }
 
 /// Heights missing from the decide log are skipped, and the blocks after them stored.
@@ -362,7 +395,7 @@ async fn skips_a_hole_in_the_decide_log() {
     let log = FakeLog::new();
     log.decide(&chain, 0..=1);
     log.decide(&chain, 4..=5);
-    let sink = MemSink::new(0);
+    let sink = MemSink::new();
     let ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
 
     wait_for(&sink, 5).await;
@@ -378,10 +411,10 @@ async fn skips_to_the_earliest_entry() {
     let log = FakeLog::new();
     log.decide(&chain, 0..=4);
     log.ack(3).await.unwrap();
-    let sink = MemSink::new(1);
+    let sink = MemSink::after(Some(chain.blocks()[0].leaf.leaf().clone()));
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
     wait_for(&sink, 4).await;
-    // The sink's own count is behind; heights 1 and 2 are missing from it.
+    // The sink is behind; heights 1 and 2 are missing from it.
     assert_eq!(sink.heights(), vec![3, 4]);
 }

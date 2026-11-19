@@ -13,7 +13,12 @@
 //! The peers are the API services of the validators, from the discovery records consensus holds,
 //! and the bootstrap URLs the operator gives.
 
-use std::{collections::BTreeSet, net::SocketAddr, ops::Range, sync::Mutex, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    ops::Range,
+    time::Duration,
+};
 
 use anyhow::{Context, bail, ensure};
 use chain_store::{ChainStore, Item, Part, Parts, Record};
@@ -27,7 +32,7 @@ use hotshot_types::{
     },
 };
 use light_client::consensus::payload::PayloadProof;
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, sleep_until, timeout};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use url::Url;
 
@@ -41,14 +46,20 @@ use crate::{
 /// The least time between two passes.
 const PASS_INTERVAL: Duration = Duration::from_secs(1);
 
-/// How many gaps one pass fills.
+/// How many gaps one pass looks for past the cursor.
 const GAPS_PER_PASS: usize = 16;
 
-/// How long one request to a peer may take.
+/// How long a peer may take to connect, to answer a request, and between two records it sends.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The largest record a peer may send, which a payload bounds.
 const MAX_RECORD_SIZE: usize = 64 << 20;
+
+/// How long a gap that no peer filled waits before it is tried again; the wait doubles with each
+/// failure, up to [`MAX_RETRY_DELAY`].
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(600);
 
 pub struct GapFiller {
     pub(crate) store: ChainStore,
@@ -59,8 +70,29 @@ pub struct GapFiller {
     /// filled.
     membership: Option<Membership>,
 
-    /// The epochs the store records as checked, as far as this filler has seen.
-    pub(crate) checked_epochs: Mutex<BTreeSet<EpochNumber>>,
+    /// The newest height and the floor of the store when the cursors last moved.
+    pub(crate) newest: Option<u64>,
+    pub(crate) floor: u64,
+
+    /// Every height before it has its item, but for the gaps in `item_retries`. The store is
+    /// asked only about the heights from it on, so a pass does not read the whole chain.
+    pub(crate) items_from: u64,
+
+    /// Every height before it has its payload and VID common data, but for those in
+    /// `part_retries`.
+    parts_from: u64,
+
+    /// The gaps no peer filled, by their first height, with when to try them again.
+    pub(crate) item_retries: Retries,
+
+    /// The heights whose payload or VID common data no peer had.
+    part_retries: Retries,
+
+    /// The epochs whose certificates no peer could answer for.
+    pub(crate) epoch_retries: Retries,
+
+    /// The epochs whose every height has its certificates known, as far as this filler has seen.
+    pub(crate) checked_epochs: BTreeSet<EpochNumber>,
 }
 
 impl GapFiller {
@@ -75,57 +107,168 @@ impl GapFiller {
             consensus_api,
             bootstrap,
             membership,
-            checked_epochs: Mutex::default(),
+            newest: None,
+            floor: 0,
+            items_from: 0,
+            parts_from: 0,
+            item_retries: Retries::default(),
+            part_retries: Retries::default(),
+            epoch_retries: Retries::default(),
+            checked_epochs: BTreeSet::new(),
         }
     }
 
-    /// Fills gaps whenever the store changes, at most once per [`PASS_INTERVAL`]. Never returns.
-    pub async fn run(self) {
+    /// Fills gaps whenever the store changes, at most once per [`PASS_INTERVAL`]. Returns when
+    /// the store's changes end.
+    pub async fn run(mut self) {
         let mut changes = self.store.changes();
         loop {
             let started = Instant::now();
             changes.borrow_and_update();
-            if let Err(err) = self.pass().await {
-                tracing::warn!("filling gaps failed: {err:#}");
-            }
+            self.pass().await;
             sleep(PASS_INTERVAL.saturating_sub(started.elapsed())).await;
-            if changes.changed().await.is_err() {
-                return;
+            let retry = self
+                .next_retry()
+                .unwrap_or(Instant::now() + MAX_RETRY_DELAY);
+            tokio::select! {
+                changed = changes.changed() => if changed.is_err() {
+                    return;
+                },
+                () = sleep_until(retry) => {},
             }
         }
     }
 
-    /// Fills the first gaps of each kind, each from the first peer that has it, then derives the
-    /// stake tables of the stored epoch roots and checks the certificates they allow.
-    async fn pass(&self) -> anyhow::Result<()> {
+    /// Fills the gaps of each kind, each from the first peer that has it, then derives the stake
+    /// tables of the stored epoch roots and checks the certificates they allow. A step that
+    /// fails does not stop the others.
+    async fn pass(&mut self) {
         let peers = self.peers().await;
-        ensure!(!peers.is_empty(), "no API service to fill gaps from");
-        self.fill_gaps(&peers).await?;
-        if let Some(membership) = &self.membership {
-            self.follow_roots(membership).await?;
-            self.check_certs(membership, &peers).await?;
+        if peers.is_empty() {
+            tracing::warn!("no API service to fill gaps from");
+            return;
+        }
+        if let Err(err) = self.fill_gaps(&peers).await {
+            tracing::warn!("filling gaps failed: {err:#}");
+        }
+        let Some(membership) = self.membership.clone() else {
+            return;
+        };
+        if let Err(err) = self.follow_roots(&membership).await {
+            tracing::warn!("deriving stake tables failed: {err:#}");
+        }
+        if let Err(err) = self.check_certs(&membership, &peers).await {
+            tracing::warn!("checking certificates failed: {err:#}");
+        }
+    }
+
+    async fn fill_gaps(&mut self, peers: &[Url]) -> anyhow::Result<()> {
+        let Some(newest) = self.store.newest().await? else {
+            return Ok(());
+        };
+        let floor = self.store.floor().await?;
+        (self.newest, self.floor) = (Some(newest), floor);
+        self.item_retries.forget_before(floor);
+        self.part_retries.forget_before(floor);
+        for gap in self.item_gaps(newest).await? {
+            // A filled height can lack its payload, and lies before the parts cursor.
+            self.parts_from = self.parts_from.min(gap.start);
+            match self.fill_items(gap.clone(), peers).await {
+                Ok(()) => self.item_retries.succeeded(gap.start),
+                Err(err) => {
+                    tracing::warn!(?gap, "filling a gap failed: {err:#}");
+                    self.item_retries.failed(gap.start, gap.end);
+                },
+            }
+        }
+        let heights = self.part_heights(newest).await?;
+        for run in runs(&heights) {
+            self.fill_parts(run.clone(), peers).await;
+            let missing = match self.lacking_parts(run.clone()).await {
+                Ok(missing) => missing,
+                Err(err) => {
+                    tracing::warn!(?run, "reading the store failed: {err:#}");
+                    run.clone().collect()
+                },
+            };
+            for height in run {
+                match missing.contains(&height) {
+                    true => self.part_retries.failed(height, height + 1),
+                    false => self.part_retries.succeeded(height),
+                }
+            }
         }
         Ok(())
     }
 
-    async fn fill_gaps(&self, peers: &[Url]) -> anyhow::Result<()> {
-        let missing = self.store.missing_items(0, GAPS_PER_PASS).await?;
-        let mut parts: BTreeSet<u64> = BTreeSet::new();
+    /// The gaps past the cursor, which it then moves past them, and the gaps due to be tried
+    /// again, as far as they are still missing.
+    async fn item_gaps(&mut self, newest: u64) -> anyhow::Result<Vec<Range<u64>>> {
+        let found = self
+            .store
+            .missing_items(self.items_from, GAPS_PER_PASS)
+            .await?;
+        let mut gaps = Vec::new();
+        for (start, end) in self.item_retries.due() {
+            match self.store.missing_items(start, 1).await?.first() {
+                Some(gap) if gap.start < end => {
+                    // Pruning can have moved the gap's start.
+                    self.item_retries.moved(start, gap.start);
+                    gaps.push(gap.start..gap.end.min(end));
+                },
+                _ => self.item_retries.succeeded(start),
+            }
+        }
+        // Only now that nothing can fail before the gaps are filled or retried.
+        self.items_from = match found.last() {
+            Some(gap) if found.len() == GAPS_PER_PASS => gap.end,
+            _ => newest + 1,
+        };
+        gaps.extend(
+            found
+                .into_iter()
+                .filter(|gap| !self.item_retries.contains(gap.start)),
+        );
+        Ok(gaps)
+    }
+
+    /// The heights past the cursor that lack a payload or VID common data, which it then moves
+    /// past them, and those due to be tried again.
+    async fn part_heights(&mut self, newest: u64) -> anyhow::Result<BTreeSet<u64>> {
+        let limit = GAPS_PER_PASS * RECORD_RANGE_LIMIT as usize;
+        let mut heights = BTreeSet::new();
+        let mut next = u64::MAX;
         for part in [Part::Payload, Part::VidCommon] {
-            let limit = GAPS_PER_PASS * RECORD_RANGE_LIMIT as usize;
-            parts.extend(self.store.missing_parts(part, 0, limit).await?);
+            let found = self
+                .store
+                .missing_parts(part, self.parts_from, limit)
+                .await?;
+            next = next.min(match found.last() {
+                Some(last) if found.len() == limit => *last + 1,
+                _ => newest + 1,
+            });
+            heights.extend(found);
         }
-        for gap in missing {
-            if let Err(err) = self.fill_items(gap.clone(), peers).await {
-                tracing::warn!(?gap, "filling a gap failed: {err:#}");
-            }
-        }
-        for heights in runs(&parts) {
-            if let Err(err) = self.fill_parts(heights.clone(), peers).await {
-                tracing::warn!(?heights, "filling payloads failed: {err:#}");
-            }
-        }
-        Ok(())
+        heights.retain(|height| !self.part_retries.contains(*height));
+        heights.extend(
+            self.part_retries
+                .due()
+                .into_iter()
+                .map(|(height, _)| height),
+        );
+        self.parts_from = next;
+        Ok(heights)
+    }
+
+    fn next_retry(&self) -> Option<Instant> {
+        [
+            self.item_retries.next(),
+            self.part_retries.next(),
+            self.epoch_retries.next(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// The bootstrap URLs, then the API services of the validators that consensus knows.
@@ -198,44 +341,114 @@ impl GapFiller {
         Ok((end, child))
     }
 
-    /// Fills the payloads and VID common data of the stored `heights` from the peers.
-    async fn fill_parts(&self, heights: Range<u64>, peers: &[Url]) -> anyhow::Result<()> {
+    /// Fills the payloads and VID common data of the stored `heights` from the peers, until
+    /// none lacks them or every peer was asked.
+    async fn fill_parts(&self, heights: Range<u64>, peers: &[Url]) {
         for peer in peers {
-            let records = match fetch(peer, heights.clone(), false).await {
-                Ok(records) => records,
-                Err(err) => {
-                    tracing::debug!(%peer, "{err:#}");
-                    continue;
-                },
-            };
-            for record in records {
-                let Some(item) = self.store.item(record.height).await? else {
-                    continue;
-                };
-                if let Ok(parts) = checked_parts(item.leaf.block_header(), &record) {
-                    self.store.put_parts(record.height, &parts).await?;
-                }
+            if let Err(err) = self.fill_parts_from(peer, heights.clone()).await {
+                tracing::debug!(%peer, ?heights, "{err:#}");
             }
-            if self.lacks_none(heights.clone()).await? {
-                return Ok(());
+            match self.lacking_parts(heights.clone()).await {
+                Ok(missing) if missing.is_empty() => return,
+                Ok(_) => {},
+                Err(err) => {
+                    tracing::warn!(?heights, "reading the store failed: {err:#}");
+                    return;
+                },
             }
         }
-        bail!("no peer has the payloads of heights {heights:?}")
     }
 
-    async fn lacks_none(&self, heights: Range<u64>) -> anyhow::Result<bool> {
-        for part in [Part::Payload, Part::VidCommon] {
-            let missing = self.store.missing_parts(part, heights.start, 1).await?;
-            if missing.first().is_some_and(|h| heights.contains(h)) {
-                return Ok(false);
+    async fn fill_parts_from(&self, peer: &Url, heights: Range<u64>) -> anyhow::Result<()> {
+        for record in fetch(peer, heights, false).await? {
+            let Some(item) = self.store.item(record.height).await? else {
+                continue;
+            };
+            if let Ok(parts) = checked_parts(item.leaf.block_header(), &record) {
+                self.store.put_parts(record.height, &parts).await?;
             }
         }
-        Ok(true)
+        Ok(())
+    }
+
+    /// The heights of `heights` that lack a payload or VID common data.
+    async fn lacking_parts(&self, heights: Range<u64>) -> anyhow::Result<BTreeSet<u64>> {
+        let mut missing = BTreeSet::new();
+        let limit = (heights.end - heights.start) as usize;
+        for part in [Part::Payload, Part::VidCommon] {
+            let found = self.store.missing_parts(part, heights.start, limit).await?;
+            missing.extend(found.into_iter().filter(|h| heights.contains(h)));
+        }
+        Ok(missing)
+    }
+}
+
+/// What to try again: ranges of heights, or of epochs, by their first, each with its end, when it
+/// is due and how long it waited last.
+#[derive(Debug, Default)]
+pub(crate) struct Retries(BTreeMap<u64, (u64, Instant, Duration)>);
+
+impl Retries {
+    pub(crate) fn contains(&self, start: u64) -> bool {
+        self.0.contains_key(&start)
+    }
+
+    /// Whether the gap at `start` failed and is not due yet.
+    pub(crate) fn waiting(&self, start: u64) -> bool {
+        self.0
+            .get(&start)
+            .is_some_and(|(_, at, _)| *at > Instant::now())
+    }
+
+    /// Keeps the gap at `from` as starting at `to`, with its wait.
+    fn moved(&mut self, from: u64, to: u64) {
+        if from != to
+            && let Some(entry) = self.0.remove(&from)
+        {
+            self.0.insert(to, entry);
+        }
+    }
+
+    /// The gaps that are due, as their first and end heights.
+    fn due(&self) -> Vec<(u64, u64)> {
+        let now = Instant::now();
+        self.0
+            .iter()
+            .filter(|(_, (_, at, _))| *at <= now)
+            .map(|(start, (end, ..))| (*start, *end))
+            .collect()
+    }
+
+    fn next(&self) -> Option<Instant> {
+        self.0.values().map(|(_, at, _)| *at).min()
+    }
+
+    /// The end of the newest gap.
+    pub(crate) fn newest_end(&self) -> Option<u64> {
+        self.0.values().map(|(end, ..)| *end).max()
+    }
+
+    pub(crate) fn failed(&mut self, start: u64, end: u64) {
+        let delay = match self.0.get(&start) {
+            Some((_, _, delay)) => (*delay * 2).min(MAX_RETRY_DELAY),
+            None => RETRY_DELAY,
+        };
+        self.0.insert(start, (end, Instant::now() + delay, delay));
+    }
+
+    pub(crate) fn succeeded(&mut self, start: u64) {
+        self.0.remove(&start);
+    }
+
+    /// Forgets the gaps that end at or before `floor`, which the store no longer keeps.
+    fn forget_before(&mut self, floor: u64) {
+        self.0.retain(|_, (end, ..)| *end > floor);
     }
 }
 
 /// The records of `heights` that `peer` has, in height order, without payloads and VID common
-/// data if `skip_payloads`.
+/// data if `skip_payloads`. A peer that sends nothing for [`REQUEST_TIMEOUT`] fails; one that
+/// keeps sending may take as long as its records need.
 pub(crate) async fn fetch(
     peer: &Url,
     heights: Range<u64>,
@@ -258,7 +471,13 @@ pub(crate) async fn fetch(
         .await?
         .into_inner();
     let mut records = Vec::new();
-    while let Some(record) = stream.message().await? {
+    while (records.len() as u64) < heights.end.saturating_sub(heights.start) {
+        let next = timeout(REQUEST_TIMEOUT, stream.message())
+            .await
+            .with_context(|| format!("{peer} stopped sending"))??;
+        let Some(record) = next else {
+            break;
+        };
         ensure!(
             heights.contains(&record.height),
             "{peer} sent height {} for {heights:?}",
@@ -293,6 +512,9 @@ fn checked_item(record: &Record, child: &Item) -> anyhow::Result<Item> {
         child.height()
     );
     item.cert1 = qc.clone();
+    // The leaf commitment does not cover a payload the peer filled in; only checked parts may
+    // carry one.
+    item.leaf.unfill_block_payload();
     Ok(item)
 }
 
@@ -438,6 +660,33 @@ mod tests {
         assert_eq!(store.vid_common(0).await.unwrap(), Some(common));
     }
 
+    /// A payload inside a peer's leaf is not covered by the leaf commitment, so it is not taken.
+    #[tokio::test]
+    async fn drops_the_payload_inside_a_peers_leaf() {
+        let ((item0, payload, common), item1) = chain().await;
+        let mut stuffed = item0.clone();
+        let (other, _) = Payload::from_transactions_sync(
+            &[espresso_types::Transaction::new(1u32.into(), vec![7])],
+            NodeState::mock().chain_config,
+        )
+        .unwrap();
+        stuffed.leaf.fill_block_payload_unchecked(other);
+        let peer = ChainStore::new(MemBackend::default());
+        peer.put(&stuffed, &parts(&payload, &common)).await.unwrap();
+        peer.put(&item1, &Parts::default()).await.unwrap();
+        let store = filling(&item1, serve(peer).await);
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while store.item(0).await.unwrap().is_none() {
+                sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the gap is filled");
+        let filled = store.item(0).await.unwrap().unwrap();
+        assert_eq!(filled.leaf.block_payload(), None);
+    }
+
     #[tokio::test]
     async fn refuses_a_leaf_that_is_not_the_parent() {
         let ((mut item0, payload, common), item1) = chain().await;
@@ -453,6 +702,38 @@ mod tests {
 
         sleep(Duration::from_secs(2)).await;
         assert_eq!(store.item(0).await.unwrap(), None);
+    }
+
+    /// A gap that failed waits before it is tried again, twice as long after each failure.
+    #[tokio::test(start_paused = true)]
+    async fn backs_off_a_failing_gap() {
+        let mut retries = Retries::default();
+        retries.failed(3, 7);
+        assert!(retries.contains(3));
+        assert!(retries.due().is_empty());
+        tokio::time::advance(RETRY_DELAY).await;
+        assert_eq!(retries.due(), vec![(3, 7)]);
+
+        retries.failed(3, 5);
+        tokio::time::advance(RETRY_DELAY).await;
+        assert!(retries.due().is_empty(), "the second wait is longer");
+        tokio::time::advance(RETRY_DELAY).await;
+        assert_eq!(retries.due(), vec![(3, 5)]);
+        assert_eq!(retries.newest_end(), Some(5));
+
+        retries.moved(3, 4);
+        assert!(!retries.contains(3));
+        assert_eq!(
+            retries.due(),
+            vec![(4, 5)],
+            "a moved gap keeps its end and wait"
+        );
+
+        retries.forget_before(5);
+        assert!(!retries.contains(4));
+        retries.failed(9, 10);
+        retries.succeeded(9);
+        assert_eq!(retries.next(), None);
     }
 
     #[test]

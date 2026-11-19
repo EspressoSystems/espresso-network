@@ -1,19 +1,19 @@
 //! Serves the v2 API from the chain store.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use api_service::{
     ApiService, GapFiller, Membership,
     catchup::Catchup,
-    chain_state::{self, ChainState},
+    chain_state,
     compat::Compat,
     membership::{network_config, node_state},
 };
 use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, task::JoinSet};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
 
@@ -68,19 +68,32 @@ async fn main() -> anyhow::Result<()> {
         options.bootstrap,
         Some(membership.clone()),
     );
-    tokio::spawn(filler.run());
-    let chain = Arc::new(ChainState::default());
-    tokio::spawn(chain_state::follow(
-        chain.clone(),
-        store.clone(),
-        state.clone(),
-    ));
+    let (follower, states) = chain_state::follower(store.clone(), state.clone());
     let config = network_config(&genesis)?;
-    ApiService::new(store.clone(), options.consensus_api)
-        .with_compat(Compat::new(store.clone(), membership.clone(), config))
-        .with_catchup(Catchup::new(store, chain, state))
-        .serve(listener)
-        .await
+    let api = ApiService::new(store.clone(), options.consensus_api)
+        .with_compat(Compat::new(store.clone(), membership, config))
+        .with_catchup(Catchup::new(store, states, state));
+
+    // The service runs as long as all of its parts do.
+    let mut tasks = JoinSet::new();
+    tasks.spawn(async move {
+        filler.run().await;
+        anyhow!("the gap filler stopped")
+    });
+    tasks.spawn(async move {
+        match follower.run().await {
+            Ok(()) => anyhow!("the chain follower stopped"),
+            Err(err) => err.context("following the chain"),
+        }
+    });
+    tasks.spawn(async move {
+        match api.serve(listener).await {
+            Ok(()) => anyhow!("the server stopped"),
+            Err(err) => err.context("serving the API"),
+        }
+    });
+    let stopped = tasks.join_next().await.context("no task to run")?;
+    Err(stopped.unwrap_or_else(|err| anyhow!("a task failed: {err}")))
 }
 
 /// Logs to stdout, at the level `RUST_LOG` sets or INFO, as JSON when `RUST_LOG_FORMAT=json`.

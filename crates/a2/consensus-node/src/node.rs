@@ -9,7 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use consensus::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
@@ -34,7 +34,10 @@ use hotshot_types::{
     upgrade_config::UpgradeConfig,
     x25519,
 };
-use tokio::sync::{broadcast, mpsc::unbounded_channel};
+use tokio::{
+    sync::{broadcast, mpsc::unbounded_channel},
+    task::JoinSet,
+};
 use url::Url;
 use vbs::version::Version;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
@@ -128,6 +131,8 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     )
     .await?;
     let membership = state.coordinator.clone();
+    // The tasks the node runs beside consensus; it stops when one of them does.
+    let mut tasks = JoinSet::new();
     let decided = relay.map(|relay| {
         let (tx, rx) = broadcast::channel(SIGNER_QUEUE);
         let signer = StateSigner::new(
@@ -137,7 +142,10 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
             genesis.epoch_height.unwrap_or_default(),
             genesis.stake_table.capacity,
         );
-        tokio::spawn(signer.run(rx));
+        tasks.spawn(async move {
+            signer.run(rx).await;
+            anyhow!("the state signer stopped")
+        });
         tx
     });
     let initializer = initializer(state, upgrade, &store, &restored, &membership_store).await?;
@@ -180,7 +188,10 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         .context("reading the decided state")?;
     // Requests from other nodes outside consensus, which this node does not answer.
     let (external_tx, mut external_rx) = unbounded_channel();
-    tokio::spawn(async move { while external_rx.recv().await.is_some() {} });
+    tasks.spawn(async move {
+        while external_rx.recv().await.is_some() {}
+        anyhow!("consensus stopped sending external messages")
+    });
     let config = &network_config.config;
     let coordinator = Coordinator::maker()
         .membership_coordinator(membership)
@@ -223,22 +234,33 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     )
     .with_context(|| format!("binding the consensus API to {consensus_api}"))?;
     tracing::info!(%addr, "serving the consensus API");
-    let server = tokio::spawn(server);
+    tasks.spawn(async move {
+        match server.await {
+            Ok(()) => anyhow!("the consensus API stopped"),
+            Err(err) => anyhow!(err).context("serving the consensus API"),
+        }
+    });
 
-    let result = run_coordinator(coordinator, decided).await;
-    server.abort();
-    result
+    run_coordinator(coordinator, decided, tasks).await
 }
 
-/// Drives `coordinator` until it fails critically, sending the newest leaf of each decide to
-/// `decided`.
+/// Drives `coordinator` until it fails critically or one of `tasks` stops, sending the newest leaf
+/// of each decide to `decided`.
 async fn run_coordinator(
     mut coordinator: Coordinator<SeqTypes>,
     decided: Option<broadcast::Sender<Decided>>,
+    mut tasks: JoinSet<anyhow::Error>,
 ) -> anyhow::Result<()> {
     coordinator.start();
     loop {
-        match coordinator.next_consensus_input().await {
+        let input = tokio::select! {
+            input = coordinator.next_consensus_input() => input,
+            Some(stopped) = tasks.join_next() => {
+                coordinator.stop().await;
+                return Err(stopped.unwrap_or_else(|err| anyhow!("a task failed: {err}")));
+            },
+        };
+        match input {
             Ok(input) => coordinator.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
                 coordinator.stop().await;
@@ -251,7 +273,7 @@ async fn run_coordinator(
                 (&decided, &output)
                 && let Some(newest) = leaves.first()
             {
-                // No receiver only means the signer stopped; consensus goes on.
+                // No receiver means the signer stopped, which `tasks` reports.
                 let _ = decided.send(Decided {
                     header: newest.block_header().clone(),
                     view: newest.view_number(),

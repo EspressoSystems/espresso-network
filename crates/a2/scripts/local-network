@@ -14,12 +14,13 @@ Usage: ${SCRIPT_NAME} RUNDIR
 
 Run an a2 network, keeping its stores and logs in RUNDIR, which must not exist. Needs anvil on the
 PATH or in the repository root, Postgres, and the binaries deploy, consensus-node, store-service,
-ingester, api-service and staking-cli in target/debug.
+ingester, api-service and staking-cli in target/PROFILE or target/debug.
 
 The API services serve on http://127.0.0.1:24000 and http://127.0.0.1:24001.
 
 ENVIRONMENT:
   GENESIS_FILE   The genesis file, data/genesis/demo-ff.toml by default
+  PROFILE        The cargo profile whose binaries to run, debug by default
 EOF
 }
 
@@ -39,7 +40,7 @@ main() {
   # shellcheck disable=SC1091
   source .env
   set +a
-  export PATH="$root/target/debug:$root:$PATH"
+  export PATH="$root/target/${PROFILE:-debug}:$root/target/debug:$root:$PATH"
   local l1="http://127.0.0.1:${ESPRESSO_L1_PORT}"
   local genesis=${GENESIS_FILE:-data/genesis/demo-ff.toml}
 

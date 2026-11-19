@@ -16,7 +16,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::Serialize;
 use tonic::{Request, Response, Status};
 
-use crate::chain_state::ChainState;
+use crate::chain_state::ChainStates;
 
 /// How many leaves after the one asked for a chain may take to reach a `Certificate2`.
 const MAX_CHAIN: u64 = 64;
@@ -24,12 +24,12 @@ const MAX_CHAIN: u64 = 64;
 /// What the catchup service answers from.
 pub struct Catchup {
     store: ChainStore,
-    chain: Arc<ChainState>,
+    chain: ChainStates,
     node: NodeState,
 }
 
 impl Catchup {
-    pub fn new(store: ChainStore, chain: Arc<ChainState>, node: NodeState) -> Self {
+    pub fn new(store: ChainStore, chain: ChainStates, node: NodeState) -> Self {
         Self { store, chain, node }
     }
 

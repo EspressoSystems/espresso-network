@@ -4,7 +4,7 @@ use std::{ops::Range, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::{sync::watch, task::JoinHandle, time::sleep};
+use tokio::{sync::watch, task::JoinSet, time::sleep};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
@@ -16,32 +16,44 @@ use crate::{
 /// How long the client waits before following the store's changes again after the stream failed.
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
 
+/// How often the client pings the store service, so that a connection that died without closing
+/// fails the requests and the change stream on it instead of leaving them waiting.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long the client waits for the answer to a ping before it drops the connection.
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug)]
 pub struct RemoteBackend {
     client: StoreClient<Channel>,
     changes: watch::Sender<u64>,
-    follower: JoinHandle<()>,
-}
 
-impl Drop for RemoteBackend {
-    fn drop(&mut self) {
-        self.follower.abort();
-    }
+    /// The task that follows the store's changes, which ends with the backend.
+    _follower: JoinSet<()>,
 }
 
 impl RemoteBackend {
     /// A client of the store service at `url`, which follows the store's changes from now on.
     pub async fn connect(url: &str) -> anyhow::Result<Self> {
-        let channel = Endpoint::from_shared(url.to_string())?.connect().await?;
+        let channel = Endpoint::from_shared(url.to_string())?
+            .connect_timeout(CONNECT_TIMEOUT)
+            .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
+            .keep_alive_while_idle(true)
+            .connect()
+            .await?;
         let client = StoreClient::new(channel)
             .max_decoding_message_size(MAX_MESSAGE_SIZE)
             .max_encoding_message_size(MAX_MESSAGE_SIZE);
         let changes = watch::channel(0).0;
-        let follower = tokio::spawn(follow(client.clone(), changes.clone()));
+        let mut follower = JoinSet::new();
+        follower.spawn(follow(client.clone(), changes.clone()));
         Ok(Self {
             client,
             changes,
-            follower,
+            _follower: follower,
         })
     }
 
@@ -206,24 +218,6 @@ impl Backend for RemoteBackend {
             .await
             .map_err(status)?;
         Ok(response.into_inner().heights)
-    }
-
-    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool> {
-        let response = self
-            .client()
-            .certs_checked(proto::EpochRequest { epoch })
-            .await
-            .map_err(status)?;
-        Ok(response.into_inner().checked)
-    }
-
-    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
-        self.client()
-            .mark_certs_checked(proto::EpochRequest { epoch })
-            .await
-            .map_err(status)?;
-        self.wrote();
-        Ok(())
     }
 
     async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {

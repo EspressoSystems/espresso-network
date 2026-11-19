@@ -12,7 +12,7 @@ use std::{pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{Stream, stream};
+use futures::{Stream, StreamExt, stream};
 use tokio::sync::{mpsc, watch};
 use tonic::{Request, Response, Status};
 
@@ -111,8 +111,13 @@ impl<S: Source> DecideLog for Service<S> {
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let from = request.into_inner().from_height;
         let (tx, rx) = mpsc::channel(BATCH);
-        tokio::spawn(feed(self.source.clone(), from, tx));
-        Ok(Response::new(receiver_stream(rx)))
+        // The feed runs as part of the stream, and stops with it when the subscriber goes away.
+        let feed =
+            stream::once(feed(self.source.clone(), from, tx)).filter_map(|()| async { None });
+        Ok(Response::new(Box::pin(stream::select(
+            receiver_stream(rx),
+            feed,
+        ))))
     }
 
     async fn ack(&self, request: Request<AckRequest>) -> Result<Response<AckResponse>, Status> {

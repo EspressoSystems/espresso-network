@@ -41,10 +41,6 @@ pub trait Backend: Send + Sync + 'static {
     /// See [`ChainStore::missing_parts`](crate::ChainStore::missing_parts).
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
 
-    async fn certs_checked(&self, epoch: u64) -> anyhow::Result<bool>;
-
-    async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()>;
-
     /// The value of `key` in the application table `table`.
     async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>>;
 
@@ -90,10 +86,20 @@ pub enum Part {
     VidCommon,
     Cert2,
     StateCert,
+
+    /// An empty marker: the height's `Certificate2` and state certificate are as complete as
+    /// consensus made them, so a height without them has none.
+    CertsKnown,
 }
 
 impl Part {
-    pub const ALL: [Part; 4] = [Self::Payload, Self::VidCommon, Self::Cert2, Self::StateCert];
+    pub const ALL: [Part; 5] = [
+        Self::Payload,
+        Self::VidCommon,
+        Self::Cert2,
+        Self::StateCert,
+        Self::CertsKnown,
+    ];
 
     /// The number a backend stores the part under.
     pub fn id(self) -> i16 {
@@ -102,6 +108,7 @@ impl Part {
             Self::VidCommon => 1,
             Self::Cert2 => 2,
             Self::StateCert => 3,
+            Self::CertsKnown => 4,
         }
     }
 

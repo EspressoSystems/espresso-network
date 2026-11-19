@@ -186,29 +186,6 @@ impl proto::store_server::Store for StoreService {
         Ok(Response::new(proto::HeightsResponse { heights }))
     }
 
-    async fn certs_checked(
-        &self,
-        request: Request<proto::EpochRequest>,
-    ) -> Result<Response<proto::Checked>, Status> {
-        let checked = self
-            .backend
-            .certs_checked(request.into_inner().epoch)
-            .await
-            .map_err(internal)?;
-        Ok(Response::new(proto::Checked { checked }))
-    }
-
-    async fn mark_certs_checked(
-        &self,
-        request: Request<proto::EpochRequest>,
-    ) -> Result<Response<proto::Done>, Status> {
-        self.backend
-            .mark_certs_checked(request.into_inner().epoch)
-            .await
-            .map_err(internal)?;
-        Ok(Response::new(proto::Done {}))
-    }
-
     async fn app_get(
         &self,
         request: Request<proto::AppGetRequest>,

@@ -10,7 +10,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use consensus_api::{
     BODY_FORMAT, DecideLogClient,
     proto::{AckRequest, Decided, SubscribeRequest, subscribe_response::Event},
@@ -42,9 +42,10 @@ pub trait Sink<Types: NodeType>: Send + Sync {
     /// Makes `block` durable.
     async fn append(&self, block: Block<Types>) -> anyhow::Result<()>;
 
-    /// The height after the newest block the sink holds. The ingester resumes from it; heights
-    /// below it can be missing, and are the API service's to fill.
-    async fn block_height(&self) -> anyhow::Result<u64>;
+    /// The leaf of the newest block the sink holds. The ingester resumes after it and checks that
+    /// the next leaf names it as parent; heights below it can be missing, and are the API
+    /// service's to fill.
+    async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2<Types>>>;
 }
 
 /// A decided block, as the ingester hands it to its sink.
@@ -94,15 +95,16 @@ async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> an
     let mut client = DecideLogClient::connect(format!("http://{addr}"))
         .await
         .context("connecting to the ingester API")?;
-    let from = sink.block_height().await?;
-    // The sink has stored up to `from`; any gap below it is the API service's to fill, not
-    // consensus's to keep.
-    client.ack(AckRequest { height: from }).await?;
+    let mut chain = match sink.newest_leaf().await? {
+        Some(leaf) => Chain::new(leaf.height() + 1, Some(leaf.commit())),
+        None => Chain::new(0, None),
+    };
     let mut stream = client
-        .subscribe(SubscribeRequest { from_height: from })
+        .subscribe(SubscribeRequest {
+            from_height: chain.next_height,
+        })
         .await?
         .into_inner();
-    let mut chain = Chain::new(from);
     // The entry whose payload is still arriving, with the bytes so far.
     let mut receiving: Option<(Entry<Types>, Vec<u8>)> = None;
     while let Some(response) = stream.next().await {
@@ -187,8 +189,6 @@ async fn append<Types: NodeType>(
 /// A decide log entry with its consensus objects decoded.
 struct Entry<Types: NodeType> {
     leaf: Leaf2<Types>,
-    leaf_commitment: String,
-    parent_commitment: String,
     payload_size: Option<u64>,
     payload: Option<Vec<u8>>,
     cert1: Option<Certificate1<Types>>,
@@ -209,18 +209,18 @@ struct Entry<Types: NodeType> {
 struct Chain<Types: NodeType> {
     next_height: u64,
 
-    /// The commitment of the leaf before `next_height`, once the ingester has seen it.
-    last_commitment: Option<String>,
+    /// The commitment of the leaf before `next_height`, if the ingester or the sink has it.
+    last_commitment: Option<Commitment<Leaf2<Types>>>,
 
     /// An entry waiting for the next leaf to certify it.
     waiting: Option<Entry<Types>>,
 }
 
 impl<Types: NodeType> Chain<Types> {
-    fn new(next_height: u64) -> Self {
+    fn new(next_height: u64, last_commitment: Option<Commitment<Leaf2<Types>>>) -> Self {
         Self {
             next_height,
-            last_commitment: None,
+            last_commitment,
             waiting: None,
         }
     }
@@ -258,12 +258,12 @@ impl<Types: NodeType> Chain<Types> {
         if height > self.next_height {
             self.skip_hole(height);
         }
-        if let Some(last) = &self.last_commitment
-            && *last != entry.parent_commitment
+        let parent = entry.leaf.parent_commitment();
+        if let Some(last) = self.last_commitment
+            && last != parent
         {
             return Err(ChainBroken(format!(
-                "leaf at height {height} names parent {}, but the leaf before it is {last}",
-                entry.parent_commitment
+                "leaf at height {height} names parent {parent}, but the leaf before it is {last}"
             )));
         }
         let mut ready = Vec::new();
@@ -272,7 +272,7 @@ impl<Types: NodeType> Chain<Types> {
             ready.push(certified(waiting, qc));
         }
         self.next_height = height + 1;
-        self.last_commitment = Some(entry.leaf_commitment.clone());
+        self.last_commitment = Some(entry.leaf.commit());
         match entry.cert1.clone() {
             Some(qc) => ready.push(certified(entry, qc)),
             None => self.waiting = Some(entry),
@@ -314,8 +314,6 @@ fn decode<Types: NodeType>(entry: Decided) -> anyhow::Result<Entry<Types>> {
     );
     Ok(Entry {
         leaf,
-        leaf_commitment: entry.leaf_commitment,
-        parent_commitment: entry.parent_commitment,
         payload_size: entry.payload_size,
         payload: None,
         cert1: optional(&body.cert1).context("decoding the cert1")?,
