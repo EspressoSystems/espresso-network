@@ -1,0 +1,58 @@
+[package]
+name = "consensus"
+description = "The consensus protocol of an a2 consensus node: the fast finality protocol with its store and decide log"
+license = "MIT"
+authors = { workspace = true }
+edition = { workspace = true }
+version = { workspace = true }
+
+[features]
+testing = ["consensus-store/testing", "hotshot-example-types"]
+trace = []
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bon = { workspace = true }
+cliquenet = { workspace = true }
+committable = { workspace = true }
+consensus-api = { workspace = true }
+consensus-store = { workspace = true }
+consensus-store-redb = { workspace = true }
+futures = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+hotshot-example-types = { workspace = true, optional = true }
+hotshot-types = { workspace = true }
+hotshot-utils = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+versions = { workspace = true }
+
+[dev-dependencies]
+async-broadcast = { workspace = true }
+bitvec = { workspace = true }
+# Enable our own `testing` feature when building tests.
+consensus = { path = ".", features = ["testing"] }
+quickcheck = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+test-utils = { workspace = true }
+vbs = { workspace = true }
+# Enables `vid/testing` for tests only: constructs non-codeword dispersals to
+# exercise the unrecoverable VID reconstruction path.
+vid = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

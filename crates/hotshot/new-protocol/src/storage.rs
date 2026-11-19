@@ -1,45 +1,64 @@
-//! The single writer of the consensus store.
-//!
-//! Writes are queued synchronously into a batch. While one batch is being applied on a blocking
-//! thread, the next one fills, so all writes made during one commit share the next commit and
-//! its fsync. Each write names the [`StorageOutput`] that reports it durable, which consensus
-//! waits on before sending the messages that depend on it.
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
-use std::{collections::BTreeMap, marker::PhantomData, mem, sync::Arc, time::Duration};
-
+use async_trait::async_trait;
 use committable::Commitment;
-use consensus_store::{Batch, Store};
+#[cfg(any(test, feature = "testing"))]
+use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
+    data::{
+        DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        VidDisperseShare2, ViewNumber,
+    },
     event::HotShotAction,
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     simple_vote::LockView,
     traits::{
         BlockPayload, EncodeBytes,
-        metrics::{Gauge, Histogram, Metrics},
+        metrics::{Histogram, Metrics},
         node_implementation::NodeType,
         signature_key::SignatureKey,
+        storage::Storage as StorageTrait,
     },
+    utils::EpochTransitionIndicator,
     vote::HasViewNumber,
 };
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::{
+    task::{AbortHandle, JoinSet},
+    time::sleep,
+};
 use tracing::{error, info, warn};
 
 use crate::{
-    coordinator::metrics::Measurement,
-    discovery::SignedServiceRecord,
+    coordinator::metrics::{Measurement, finish_measurement},
     helpers::proposal_commitment,
-    message::{Certificate1, Certificate2, Proposal},
-    state::StateEntry,
-    store::{self, AppWrite, ConsensusStore},
+    message::{Certificate1, Proposal},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
 
-/// How many bytes the decide log may take up, with the payloads of its entries, before this
-/// node stops sending vote2, unless configured otherwise.
-pub const DEFAULT_DECIDE_LOG_LIMIT: u64 = 10 << 30;
+/// New protocol storage extension for data that is not part of the legacy HotShot storage trait.
+#[async_trait]
+pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
+    /// Persist the locked QC, written before each phase-2 vote so the lock
+    /// survives a restart instead of regressing to the decided-anchor QC.
+    async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()>;
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
+
+    /// Persist the own `Certificate1` of the last block of an epoch, at the
+    /// block's own view.
+    ///
+    /// A re-vote request and the next epoch's first block name it, and
+    /// nothing else carries it once the view has passed: without it a
+    /// restarted node cannot lead either. Implementations keep the latest,
+    /// ordered by epoch, then view, as a monotonic compare-and-set.
+    async fn append_boundary_qc2(&self, qc: Certificate1<T>) -> anyhow::Result<()>;
+
+    /// Load the persisted boundary certificate, if any.
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActionKind {
@@ -63,68 +82,36 @@ impl From<ActionKind> for HotShotAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageOutput<T: NodeType> {
     Proposal(ViewNumber, Commitment<Leaf2<T>>),
+    Vid(ViewNumber),
     Action(ViewNumber, ActionKind),
     /// The locked QC at the given lock position has been durably persisted.
     HighQc(LockView),
-    /// The payload of the block with this commitment, proposed in this view, is on disk.
-    Payload(ViewNumber, VidCommitment2),
-
-    /// The decide log has reached its limit, or has room again after reaching it.
-    DecideLogFull(bool),
 }
 
 impl<T: NodeType> StorageOutput<T> {
     pub fn view_number(&self) -> ViewNumber {
         match self {
-            Self::Proposal(view, _) | Self::Action(view, _) | Self::Payload(view, _) => *view,
+            Self::Proposal(view, _) | Self::Vid(view) | Self::Action(view, _) => *view,
             Self::HighQc(lock) => lock.view,
-            Self::DecideLogFull(_) => ViewNumber::genesis(),
         }
     }
 }
 
-/// What the application keeps of the latest decided state, in its own tables of the store.
+/// Request-to-completion latency of each storage operation, including task
+/// queueing, backend lock waits, and error-retry loops. These latencies gate
+/// consensus progress: proposal release waits on `append_proposal` and
+/// `record_action(Propose)`, and phase-2 votes wait on `append_vid`,
+/// `record_action(Vote)`, and `append_high_qc2`.
 ///
-/// Its writes join the batch that appends the decide to the decide log, so the tables never
-/// fall behind or run ahead of the anchor.
-pub trait DecidedState<T: NodeType>: Send + Sync {
-    /// The writes that bring the application's tables up to date with the decided `leaf`.
-    ///
-    /// Called for each leaf of a decide, oldest first. `state` is what this node holds for
-    /// `leaf`: a state with its delta if this node validated `leaf`, else one without, or none.
-    fn decided(&mut self, leaf: &Leaf2<T>, state: Option<&StateEntry<T>>) -> Vec<AppWrite>;
-}
-
-/// Storage cannot go on.
-#[derive(Debug, thiserror::Error)]
-pub enum StorageError {
-    /// The store failed in a way retrying cannot fix.
-    #[error("consensus store failed: {0}")]
-    Store(#[from] consensus_store::Error),
-
-    /// The blocking task applying a batch was cancelled, as at runtime shutdown.
-    #[error("storage task cancelled")]
-    Cancelled,
-}
-
-/// Time from a write's request until it is durable, including the wait for the batch it joined.
-/// These latencies gate consensus progress: proposal release waits on `append_proposal` and
-/// `record_action(Propose)`, and phase-2 votes wait on `append_da`,
-/// `record_action(Vote)` and `append_high_qc2`.
-///
-/// [`Measurement`] records on drop, so a write lost to shutdown still records its elapsed time.
+/// [`Measurement`] records on drop, so an op aborted by GC or shutdown still
+/// records its elapsed time up to the abort.
 pub struct StorageMetrics {
+    append_vid: Arc<dyn Histogram>,
     append_da: Arc<dyn Histogram>,
     append_high_qc: Arc<dyn Histogram>,
     append_state_cert: Arc<dyn Histogram>,
     append_proposal: Arc<dyn Histogram>,
     record_action: Arc<dyn Histogram>,
-    /// Duration of one batch commit.
-    apply: Arc<dyn Histogram>,
-
-    /// The bytes the decide log takes up, and how many it may.
-    decide_log_bytes: Arc<dyn Gauge>,
-    decide_log_limit: Arc<dyn Gauge>,
 }
 
 impl StorageMetrics {
@@ -134,445 +121,332 @@ impl StorageMetrics {
                 .into()
         };
         Self {
+            append_vid: histogram("append_vid"),
             append_da: histogram("append_da"),
             append_high_qc: histogram("append_high_qc"),
             append_state_cert: histogram("append_state_cert"),
             append_proposal: histogram("append_proposal"),
             record_action: histogram("record_action"),
-            apply: histogram("apply"),
-            decide_log_bytes: m
-                .create_gauge("storage_decide_log_bytes".into(), Some("bytes".into()))
-                .into(),
-            decide_log_limit: m
-                .create_gauge("storage_decide_log_limit".into(), Some("bytes".into()))
-                .into(),
         }
     }
 }
 
 pub struct Storage<T: NodeType, S> {
-    store: ConsensusStore<T, S>,
-
-    /// Signature stored with proposals. It signs no data; restarted nodes serve the proposals to
-    /// peers in the signed form messages use.
-    signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-
-    /// Writes not yet handed to the store.
-    pending: Pending<T>,
-
-    /// The batch being applied, if any.
-    applying: Option<JoinHandle<Applied<T>>>,
-
-    /// Outputs of applied batches, not yet returned by [`Self::next`].
-    durable: std::collections::VecDeque<StorageOutput<T>>,
-
-    /// The size of the decide log, and the size at which it is full.
-    decide_log_bytes: watch::Receiver<u64>,
-    decide_log_limit: u64,
-
-    /// Whether the last [`StorageOutput::DecideLogFull`] reported the log full.
-    decide_log_full: bool,
-
-    /// State certificates written since this writer started and not yet decided, by the view of
-    /// their epoch root. A decide finds them here even before their write is durable.
-    state_certs: BTreeMap<ViewNumber, LightClientStateUpdateCertificateV2<T>>,
-
-    decided_state: Option<Box<dyn DecidedState<T>>>,
-
+    storage: S,
+    private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    tasks: JoinSet<Option<StorageOutput<T>>>,
+    handles: BTreeMap<ViewNumber, Vec<AbortHandle>>,
     metrics: Option<StorageMetrics>,
 }
 
-/// A batch and what to report once it is durable.
-struct Pending<T: NodeType> {
-    batch: Batch,
-    outputs: Vec<StorageOutput<T>>,
-    timers: Vec<Measurement>,
-
-    /// The height after the newest decide log entry the batch writes.
-    next_height: Option<u64>,
-}
-
-impl<T: NodeType> Default for Pending<T> {
-    fn default() -> Self {
+impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
+    pub fn new(storage: S, private_key: <T::SignatureKey as SignatureKey>::PrivateKey) -> Self {
         Self {
-            batch: Batch::new(),
-            outputs: Vec::new(),
-            timers: Vec::new(),
-            next_height: None,
-        }
-    }
-}
-
-impl<T: NodeType> Pending<T> {
-    fn is_empty(&self) -> bool {
-        self.batch.is_empty()
-    }
-}
-
-struct Applied<T: NodeType> {
-    pending: Pending<T>,
-    result: Result<(), consensus_store::Error>,
-}
-
-impl<T: NodeType, S: Store> Storage<T, S> {
-    pub fn new(
-        store: ConsensusStore<T, S>,
-        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
-    ) -> Self {
-        let signature =
-            T::SignatureKey::sign(private_key, &[]).expect("signing empty data cannot fail");
-        let decide_log_bytes = store.decide_log_bytes();
-        Self {
-            store,
-            signature,
-            pending: Pending::default(),
-            applying: None,
-            durable: Default::default(),
-            decide_log_bytes,
-            decide_log_limit: DEFAULT_DECIDE_LOG_LIMIT,
-            decide_log_full: false,
-            state_certs: BTreeMap::new(),
-            decided_state: None,
+            storage,
+            private_key,
+            tasks: JoinSet::new(),
+            handles: BTreeMap::new(),
             metrics: None,
         }
     }
 
     pub fn with_metrics(mut self, m: &dyn Metrics) -> Self {
         if m.is_recording() {
-            let metrics = StorageMetrics::new(m);
-            metrics
-                .decide_log_limit
-                .set(usize::try_from(self.decide_log_limit).unwrap_or(usize::MAX));
-            self.metrics = Some(metrics);
+            self.metrics = Some(StorageMetrics::new(m));
         }
         self
     }
 
-    /// Sets how many bytes the decide log may take up, with the payloads of its entries.
-    ///
-    /// Once it is full, [`Self::next`] reports [`StorageOutput::DecideLogFull`], and consensus
-    /// holds its vote2 until the ingester frees entries.
-    pub fn with_decide_log_limit(mut self, limit: u64) -> Self {
-        self.decide_log_limit = limit;
-        if let Some(m) = &self.metrics {
-            m.decide_log_limit
-                .set(usize::try_from(limit).unwrap_or(usize::MAX));
-        }
-        self
+    pub fn append_vid(&mut self, vid_share: VidDisperseShare2<T>) {
+        let view = vid_share.view_number;
+        let storage = self.storage.clone();
+        let private_key = self.private_key.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_vid.clone()));
+        let handle = self.tasks.spawn(async move {
+            let share: VidDisperseShare<T> = VidDisperseShare::V2(vid_share);
+            let Some(proposal) = share.to_proposal(&private_key) else {
+                error!("failed to sign VID share for storage");
+                return None;
+            };
+            loop {
+                match storage.append_vid(&proposal).await {
+                    Ok(()) => {
+                        finish_measurement(timer);
+                        return Some(StorageOutput::Vid(view));
+                    },
+                    Err(err) => {
+                        warn!(%err, "failed to append VID share, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
     }
 
-    /// Keeps the application's decided state with every decide.
-    pub fn with_decided_state(mut self, decided_state: Box<dyn DecidedState<T>>) -> Self {
-        self.decided_state = Some(decided_state);
-        self
-    }
-
-    /// Persists the payload of a block. Vote2 on the block waits for it.
     pub fn append_da(
         &mut self,
-        view: ViewNumber,
-        _epoch: EpochNumber,
+        view_number: ViewNumber,
+        epoch: EpochNumber,
         block_payload: T::BlockPayload,
-        _metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
         vid_commit: VidCommitment,
     ) {
-        let VidCommitment::V2(commitment) = vid_commit else {
-            warn!(%view, "payload with a non-V2 VID commitment; not stored");
-            return;
-        };
-        let encoded = block_payload.encode();
-        let written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
-        self.queued(written, StorageOutput::Payload(view, commitment), |m| {
-            &m.append_da
+        let storage = self.storage.clone();
+        let private_key = self.private_key.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_da.clone()));
+        let handle = self.tasks.spawn(async move {
+            let data = DaProposal2 {
+                encoded_transactions: block_payload.encode(),
+                metadata,
+                view_number,
+                epoch: Some(epoch),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            };
+            let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
+                error!("failed to sign DA proposal for storage");
+                return None;
+            };
+            let proposal = SignedProposal {
+                data,
+                signature,
+                _pd: PhantomData,
+            };
+            loop {
+                match storage.append_da2(&proposal, vid_commit).await {
+                    Ok(()) => {
+                        finish_measurement(timer);
+                        return None;
+                    },
+                    Err(err) => {
+                        warn!(%err, "failed to append DA proposal, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view_number).or_default().push(handle);
+    }
+
+    /// Persist the own certificate of the last block of an epoch (see
+    /// [`NewProtocolStorage::append_boundary_qc2`]). Nothing waits on it.
+    pub fn append_boundary_qc2(&mut self, qc: Certificate1<T>) {
+        let view = qc.view_number();
+        let storage = self.storage.clone();
+        // Not registered with the decided-view GC, which would abort a write
+        // still retrying once a decide passes the block: nothing else carries
+        // the certificate by then. A late write is harmless, since only a later
+        // certificate replaces the stored one.
+        self.tasks.spawn(async move {
+            loop {
+                match storage.append_boundary_qc2(qc.clone()).await {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append boundary qc, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
         });
     }
 
-    /// Persists the own certificate of the last block of an epoch. Nothing waits on it.
-    pub fn append_boundary_qc2(&mut self, qc: Certificate1<T>) {
-        if let Err(err) = store::put_boundary_qc(&mut self.pending.batch, &qc) {
-            error!(%err, view = %qc.view_number(), "failed to encode boundary qc");
-        }
-    }
-
-    /// Persists the locked QC; once durable, emits [`StorageOutput::HighQc`], which gates the
-    /// matching phase-2 vote.
+    /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
+    /// gates the matching phase-2 vote.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
+        let view = high_qc.view_number();
         let lock = LockView::of(&high_qc);
-        let written = store::put_locked_qc(&mut self.pending.batch, &high_qc);
-        self.queued(written, StorageOutput::HighQc(lock), |m| &m.append_high_qc);
+        let storage = self.storage.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_high_qc.clone()));
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage.append_high_qc2(high_qc.clone()).await {
+                    Ok(()) => {
+                        finish_measurement(timer);
+                        return Some(StorageOutput::HighQc(lock));
+                    },
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append high qc, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
     }
 
-    /// Persists the state certificate of the epoch root proposed in `view`. It counts as
-    /// decided once [`Self::decided`] passes `view`.
     pub fn append_state_cert(
         &mut self,
         view: ViewNumber,
         state_cert: LightClientStateUpdateCertificateV2<T>,
     ) {
+        let storage = self.storage.clone();
         let timer = self
             .metrics
             .as_ref()
             .map(|m| Measurement::start(m.append_state_cert.clone()));
-        match store::put_pending_state_cert(&mut self.pending.batch, view, &state_cert) {
-            Ok(()) => {
-                self.pending.timers.extend(timer);
-                self.state_certs.insert(view, state_cert);
-            },
-            Err(err) => error!(%err, %view, "failed to encode state certificate"),
-        }
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage.update_state_cert(state_cert.clone()).await {
+                    Ok(()) => {
+                        finish_measurement(timer);
+                        return None;
+                    },
+                    Err(err) => {
+                        warn!(%err, epoch = %state_cert.epoch, "failed to append state cert, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
     }
 
-    /// Persists the newest record of a validator's API service. Nothing waits on it.
-    pub fn append_service_record(&mut self, record: &SignedServiceRecord<T>) {
-        if let Err(err) = store::put_service_record(&mut self.pending.batch, record) {
-            error!(%err, signer = %record.signer, "failed to encode service record");
-        }
-    }
-
-    /// Deletes the records of the epochs before `epoch`.
-    pub fn drop_service_records(&mut self, epoch: EpochNumber) {
-        store::drop_service_records(&mut self.pending.batch, epoch);
-    }
-
+    /// Persist a decided upgrade certificate. Keyed at
+    /// `new_version_first_view` so the decided-view GC cannot abort the write
+    /// before the certificate takes effect.
     pub fn update_decided_upgrade_certificate(&mut self, cert: UpgradeCertificate<T>) {
-        if let Err(err) = store::put_upgrade_cert(&mut self.pending.batch, &cert) {
-            error!(%err, "failed to encode upgrade certificate");
-        }
+        let view = cert.data.new_version_first_view;
+        let storage = self.storage.clone();
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage
+                    .update_decided_upgrade_certificate(Some(cert.clone()))
+                    .await
+                {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, "failed to persist decided upgrade certificate, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
     }
 
-    /// `proposal` must already be validated: `state_cert`'s presence is not re-checked here,
-    /// only gated at write time by `state_cert_matches_parent` (received proposals) and
-    /// `maybe_propose` (self-proposed ones). A restart reads the stored proposals back without
+    /// `proposal` must already be validated: `state_cert`'s presence is not
+    /// re-checked here, only gated at write time by `state_cert_matches_parent`
+    /// (received proposals) and `maybe_propose` (self-proposed ones).
+    /// `seed_signed_proposals` reads persisted rows back on restart without
     /// re-checking, so that write-time gate is the only thing enforcing this.
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {
         let view = proposal.view_number;
         let commitment = proposal_commitment(&proposal);
-        let signed = SignedProposal {
-            data: proposal,
-            signature: self.signature.clone(),
-            _pd: PhantomData,
-        };
-        let written = store::put_proposal(&mut self.pending.batch, &signed);
-        self.queued(written, StorageOutput::Proposal(view, commitment), |m| {
-            &m.append_proposal
+        let storage = self.storage.clone();
+        let private_key = self.private_key.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_proposal.clone()));
+        let handle = self.tasks.spawn(async move {
+            let data = QuorumProposalWrapper::from(proposal);
+            let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
+                error!("failed to sign quorum proposal for storage");
+                return None;
+            };
+            let signed = SignedProposal {
+                data,
+                signature,
+                _pd: PhantomData,
+            };
+            loop {
+                match storage.append_proposal_wrapper(&signed).await {
+                    Ok(()) => {
+                        finish_measurement(timer);
+                        return Some(StorageOutput::Proposal(view, commitment));
+                    },
+                    Err(err) => {
+                        warn!(%err, "failed to append proposal, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
         });
+        self.handles.entry(view).or_default().push(handle);
     }
 
     pub fn record_action(&mut self, view: ViewNumber, kind: ActionKind) {
-        store::record_action(&mut self.pending.batch, view, kind);
-        self.queued(Ok(()), StorageOutput::Action(view, kind), |m| {
-            &m.record_action
+        let storage = self.storage.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.record_action.clone()));
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage.record_action(view, kind.into()).await {
+                    Ok(()) => {
+                        finish_measurement(timer);
+                        return Some(StorageOutput::Action(view, kind));
+                    },
+                    Err(err) => {
+                        warn!(%err, %view, ?kind, "failed to record action, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
         });
+        self.handles.entry(view).or_default().push(handle);
     }
 
-    /// Appends a decide to the decide log and moves the anchor: `leaves` newest first, with
-    /// the certificates that decided the newest, and this node's VID share and state of each.
-    pub fn append_decided(
-        &mut self,
-        leaves: &[Leaf2<T>],
-        cert1: &Certificate1<T>,
-        cert2: Option<&Certificate2<T>>,
-        vid_shares: &[Option<SignedProposal<T, VidDisperseShare2<T>>>],
-        states: &[Option<StateEntry<T>>],
-    ) {
-        let vid_common: Vec<_> = vid_shares
-            .iter()
-            .map(|share| share.as_ref().map(|s| s.data.common.clone()))
-            .collect();
-        let state_certs: Vec<_> = leaves
-            .iter()
-            .map(|leaf| self.state_cert(leaf.view_number()))
-            .collect();
-        match store::put_decided(
-            &mut self.pending.batch,
-            leaves,
-            cert1,
-            cert2,
-            &vid_common,
-            &state_certs,
-        ) {
-            Ok(()) => {
-                let next = leaves.iter().map(|l| l.height() + 1).max();
-                self.pending.next_height = self.pending.next_height.max(next);
-            },
-            Err(err) => {
-                error!(%err, view = %cert1.view_number(), "failed to encode decided leaves");
-                return;
-            },
-        }
-        let Some(decided_state) = &mut self.decided_state else {
-            return;
-        };
-        for (i, leaf) in leaves.iter().enumerate().rev() {
-            let writes = decided_state.decided(leaf, states.get(i).and_then(Option::as_ref));
-            if let Err(err) = store::put_app(&mut self.pending.batch, &writes) {
-                error!(%err, view = %leaf.view_number(), "failed to write the decided state");
-            }
-        }
-    }
-
-    /// Deletes the stored proposals and payloads of views before `view`.
-    pub fn gc(&mut self, view: ViewNumber) {
-        store::collect_garbage(&mut self.pending.batch, view);
-    }
-
-    /// Marks the state certificates of views up to `view` as decided.
-    pub fn decided(&mut self, view: ViewNumber) {
-        if let Err(err) =
-            self.store
-                .finalize_state_certs(&mut self.pending.batch, view, &self.state_certs)
-        {
-            warn!(%err, %view, "failed to finalize state certificates");
-        }
-        self.state_certs = self.state_certs.split_off(&(view + 1));
-    }
-
-    /// The undecided state certificate of the epoch root proposed in `view`, if any.
-    fn state_cert(&self, view: ViewNumber) -> Option<LightClientStateUpdateCertificateV2<T>> {
-        if let Some(cert) = self.state_certs.get(&view) {
-            return Some(cert.clone());
-        }
-        self.store
-            .pending_state_cert(view)
-            .inspect_err(|err| warn!(%err, %view, "failed to read a state certificate"))
-            .ok()
-            .flatten()
-    }
-
-    /// The next write that has become durable, or a change of whether the decide log is full.
-    ///
-    /// Starts applying the queued writes whenever no batch is being applied. Cancel-safe: a
-    /// batch in progress stays in progress.
-    pub async fn next(&mut self) -> Result<StorageOutput<T>, StorageError> {
+    pub async fn next(&mut self) -> Option<StorageOutput<T>> {
         loop {
-            if let Some(output) = self.durable.pop_front() {
-                return Ok(output);
-            }
-            if let Some(full) = self.decide_log_full_changed() {
-                return Ok(StorageOutput::DecideLogFull(full));
-            }
-            let idle = self.applying.is_none() && self.pending.is_empty();
-            // A clone, since `apply_next` borrows `self`. It has seen what the original has.
-            let mut decide_log_bytes = self.decide_log_bytes.clone();
-            tokio::select! {
-                applied = self.apply_next(), if !idle => applied?,
-                // The sender lives as long as the store, which this writer holds.
-                _ = decide_log_bytes.changed() => {},
+            match self.tasks.join_next().await? {
+                Ok(Some(output)) => return Some(output),
+                Ok(None) | Err(_) => continue,
             }
         }
     }
 
-    /// Applies every queued write, for shutdown.
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        let keep = self.handles.split_off(&view_number);
+        for handles in self.handles.values() {
+            for handle in handles {
+                handle.abort();
+            }
+        }
+        self.handles = keep;
+    }
+
+    /// Wait for all current storage writes to complete.
     pub async fn flush(mut self) {
-        info!("flushing storage during shutdown");
-        while self.applying.is_some() || !self.pending.is_empty() {
-            if let Err(err) = self.apply_next().await {
-                error!(%err, "storage failed during shutdown");
-                return;
+        info!(
+            tasks = self.tasks.len(),
+            "flushing storage tasks during shutdown"
+        );
+        while let Some(result) = self.tasks.join_next().await {
+            if let Err(err) = result {
+                warn!(%err, "storage task failed during shutdown");
             }
         }
         info!("storage flush complete");
     }
+}
 
-    /// Waits for the batch being applied, starting one from the queued writes if none is, and
-    /// moves its outputs to `durable`. A failed batch is started again after a delay.
-    ///
-    /// Cancel-safe: a batch in progress stays in progress.
-    async fn apply_next(&mut self) -> Result<(), StorageError> {
-        if self.applying.is_none() {
-            let pending = mem::take(&mut self.pending);
-            self.applying = Some(self.spawn(pending, Duration::ZERO));
-        }
-        let applying = self.applying.as_mut().expect("set above");
-        let applied = match applying.await {
-            Ok(applied) => applied,
-            Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
-            Err(_) => {
-                self.applying = None;
-                return Err(StorageError::Cancelled);
-            },
-        };
-        self.applying = None;
-        match applied.result {
-            Ok(()) => {
-                let Pending {
-                    outputs,
-                    next_height,
-                    ..
-                } = applied.pending;
-                if let Some(next_height) = next_height {
-                    self.store.announce(next_height);
-                }
-                self.durable.extend(outputs);
-            },
-            Err(err @ consensus_store::Error::Poisoned(_)) => return Err(err.into()),
-            Err(err) => {
-                warn!(%err, "failed to apply storage batch, retrying");
-                self.applying = Some(self.spawn(applied.pending, RETRY_DELAY));
-            },
-        }
-        Ok(())
+#[async_trait]
+#[cfg(any(test, feature = "testing"))]
+impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
+    async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
+        self.store_high_qc2(high_qc).await
     }
 
-    /// Whether the decide log is full, if that differs from what was last reported.
-    fn decide_log_full_changed(&mut self) -> Option<bool> {
-        let bytes = *self.decide_log_bytes.borrow_and_update();
-        if let Some(m) = &self.metrics {
-            m.decide_log_bytes
-                .set(usize::try_from(bytes).unwrap_or(usize::MAX));
-        }
-        let full = bytes >= self.decide_log_limit;
-        if full == self.decide_log_full {
-            return None;
-        }
-        self.decide_log_full = full;
-        if full {
-            warn!(
-                bytes,
-                limit = self.decide_log_limit,
-                "the decide log is full; holding vote2 until the ingester frees entries"
-            );
-        } else {
-            info!(bytes, "the decide log has room again");
-        }
-        Some(full)
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
+        Ok(self.high_qc_cloned().await)
     }
 
-    fn queued(
-        &mut self,
-        written: anyhow::Result<()>,
-        output: StorageOutput<T>,
-        histogram: impl FnOnce(&StorageMetrics) -> &Arc<dyn Histogram>,
-    ) {
-        if let Err(err) = written {
-            // Encoding failed: the write and its output are dropped, and whatever waits on
-            // the output waits forever, as for a write that never finishes.
-            error!(%err, ?output, "failed to encode storage write");
-            return;
-        }
-        if let Some(m) = &self.metrics {
-            self.pending
-                .timers
-                .push(Measurement::start(histogram(m).clone()));
-        }
-        self.pending.outputs.push(output);
+    async fn append_boundary_qc2(&self, qc: Certificate1<T>) -> anyhow::Result<()> {
+        self.update_boundary_qc2(qc).await
     }
 
-    fn spawn(&self, pending: Pending<T>, delay: Duration) -> JoinHandle<Applied<T>> {
-        let store = self.store.clone();
-        let apply_histogram = self.metrics.as_ref().map(|m| m.apply.clone());
-        tokio::task::spawn_blocking(move || {
-            std::thread::sleep(delay);
-            let timer = apply_histogram.map(Measurement::start);
-            let result = store.store().apply(&pending.batch);
-            drop(timer);
-            if result.is_ok()
-                && pending.next_height.is_some()
-                && let Err(err) = store.measure_decide_log()
-            {
-                warn!(%err, "failed to measure the decide log");
-            }
-            Applied { pending, result }
-        })
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
+        Ok(self.boundary_qc_cloned().await)
     }
 }

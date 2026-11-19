@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
+    sync::Arc,
+    time::Instant,
 };
 
 use alloy::primitives::Address;
@@ -9,10 +11,12 @@ use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
 use espresso_types::{
-    AuthenticatedValidatorMap, Header, Leaf, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
-    StakeTableHash,
+    AuthenticatedValidatorMap, BackoffParams, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{PersistenceOptions, SequencerPersistence, StateCertPersistence},
+    v0::traits::{
+        EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup, StateCertPersistence,
+    },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
@@ -25,34 +29,53 @@ use hotshot_query_service::{
         Transaction as _, VersionedDataSource,
         storage::{SerializableRetry, pruning::PrunerCfg, sql::StorageConnectionType},
     },
+    fetching::{
+        Provider,
+        request::{PayloadRequest, VidCommonRequest},
+    },
     serializable_retry,
 };
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidDisperseShare,
+        QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
+    event::{HotShotAction, LeafInfo},
     initializer::InitializerEpochInfo,
     message::{Proposal, convert_proposal},
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
-    traits::metrics::Metrics,
+    simple_vote::LockView,
+    traits::{
+        block_contents::{BlockHeader, BlockPayload},
+        metrics::Metrics,
+    },
+    vote::HasViewNumber,
 };
 use indexmap::IndexMap;
+use itertools::Itertools;
 use light_client::storage::LightClientDbOptions;
 use sqlx::{Executor, QueryBuilder, Row, query};
 
 use super::{
-    super::Options as SqlOptions,
-    qs::{Backend as _, Config, Db, DbKind, SerializableRetryConfig, SqlStorage, query_as},
+    super::{ConsensusPruningOptions, Options as SqlOptions, within_gap_fill_horizon},
+    qs::{
+        Backend as _, Config, Db, DbKind, Read, SerializableRetryConfig, SqlStorage, Transaction,
+        Write, query_as,
+    },
 };
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     api::options::Query,
-    persistence::{migrate_network_config, storage_probe::StorageProbe},
+    catchup::SqlStateCatchup,
+    persistence::{
+        migrate_network_config, persistence_metrics::PersistenceMetricsValue,
+        storage_probe::StorageProbe,
+    },
 };
 
 /// Node setup that differs between the SQL backends.
@@ -142,13 +165,29 @@ impl TryFrom<SqlOptions> for Options {
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
 
+    fn set_view_retention(&mut self, view_retention: u64) {
+        self.0.consensus_pruning.target_retention = view_retention;
+        self.0.consensus_pruning.minimum_retention = view_retention;
+    }
+
+    fn set_consensus_only(&mut self) {
+        self.0.consensus_only = true;
+    }
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = Config::try_from(&self.0)?;
         let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
 
         let probe = Db::storage_probe(&db, &self.0).await?;
 
-        let persistence = Persistence { db, probe };
+        let persistence = Persistence {
+            db,
+            gc_opt: self.0.consensus_pruning,
+            last_usage_check: Arc::default(),
+            consensus_only: self.0.consensus_only,
+            internal_metrics: PersistenceMetricsValue::default(),
+            probe,
+        };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.0.pool = Some(persistence.db.pool().into());
 
@@ -167,8 +206,46 @@ impl PersistenceOptions for Options {
 #[derive(Clone, Debug)]
 pub struct Persistence {
     pub(super) db: SqlStorage,
+    gc_opt: ConsensusPruningOptions,
+    /// When consensus storage usage was last measured, shared by clones.
+    last_usage_check: Arc<parking_lot::Mutex<Option<Instant>>>,
+    consensus_only: bool,
+    /// A reference to the internal metrics
+    internal_metrics: PersistenceMetricsValue,
     /// Startup findings about the filesystem and SQLite pragmas backing `db`, on SQLite only.
     pub(super) probe: Option<StorageProbe>,
+}
+
+/// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
+/// Transactions that fail with this code are safe to retry from scratch.
+const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
+
+#[derive(Debug)]
+struct DecidedLeaf {
+    info: LeafInfo<SeqTypes>,
+    cert: CertificatePair<SeqTypes>,
+}
+
+/// The decide for `chain`, newest leaf first; `cert2`, if any, finalizes the newest leaf only.
+fn decide_event_from_chain(
+    chain: Vec<DecidedLeaf>,
+    cert2: Option<Certificate2<SeqTypes>>,
+) -> Option<CoordinatorEvent<SeqTypes>> {
+    let Some(newest) = chain.first() else {
+        if cert2.is_some() {
+            tracing::warn!(
+                "decide_event_from_chain called with cert2 but no leaves; cert2 will be dropped"
+            );
+        }
+        return None;
+    };
+    let cert1 = newest.cert.qc().clone();
+    let leaf_infos = chain.into_iter().map(|leaf| leaf.info).collect();
+    Some(CoordinatorEvent::NewDecide {
+        leaf_infos,
+        cert1,
+        cert2,
+    })
 }
 
 impl Persistence {
@@ -219,10 +296,595 @@ impl Persistence {
         })
         .await
     }
+
+    /// The `last_processed_view` cursor: highest view with a generated decide event, or `None`.
+    async fn load_processed_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1")
+            .await?
+            .map(|row| ViewNumber::new(row.get::<i64, _>("last_processed_view") as u64)))
+    }
+
+    async fn generate_decide_events(&self, consumer: &impl EventConsumer) -> anyhow::Result<()> {
+        let mut last_processed_view: Option<i64> = serializable_retry!(self, || async {
+            Ok(self
+                .db
+                .read()
+                .await?
+                .fetch_optional("SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1")
+                .await?
+                .map(|row| row.get("last_processed_view")))
+        })
+        .await?;
+        // Seed the height-continuity check below from the leaf at the cursor; if retention
+        // pruning has since removed it, fall back to accepting the first row as before.
+        let mut last_processed_height: Option<u64> = match last_processed_view {
+            Some(view) => {
+                serializable_retry!(self, || async {
+                    self.db
+                        .read()
+                        .await?
+                        .fetch_optional(
+                            query("SELECT leaf FROM anchor_leaf2 WHERE view = $1").bind(view),
+                        )
+                        .await?
+                        .map(|row| -> anyhow::Result<u64> {
+                            let leaf_data: Vec<u8> = row.get("leaf");
+                            let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
+                            Ok(leaf.block_header().block_number())
+                        })
+                        .transpose()
+                })
+                .await?
+            },
+            None => None,
+        };
+        loop {
+            // In SQLite, overlapping read and write transactions can lead to database errors. To
+            // avoid this:
+            // - start a read transaction to query and collect all the necessary data.
+            // - Commit (or implicitly drop) the read transaction once the data is fetched.
+            // - use the collected data to generate a "decide" event for the consumer.
+            // - begin a write transaction to delete the data and update the event stream.
+
+            // Retry the entire read section on serialization failures (40001) via
+            // `serializable_retry!`. The closure returns `None` when there is no
+            // more work to do, which we propagate out of the outer function.
+            let Some((
+                from_view,
+                to_view,
+                leaves,
+                final_qc,
+                mut vid_shares,
+                mut da_proposals,
+                state_certs,
+                cert2,
+            )) = serializable_retry!(self, || async {
+                let mut tx = self.db.read().await?;
+
+                // Collect a chain of consecutive leaves, starting from the first view after the
+                // last decide. This will correspond to a decide event, and defines a range of
+                // views which can be garbage collected. This may even include views for which
+                // there was no leaf, for which we might still have artifacts like proposals that
+                // never finalized.
+                let from_view = match last_processed_view {
+                    Some(v) => v + 1,
+                    None => 0,
+                };
+                tracing::debug!(?from_view, "generate decide event");
+
+                // The newest persisted decide; bounds how far back a gap-fill can arrive.
+                let (watermark,): (Option<i64>,) = query_as("SELECT max(view) FROM anchor_leaf2")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+
+                let mut parent = last_processed_height;
+                let mut rows = query(
+                    "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY \
+                     view",
+                )
+                .bind(from_view)
+                .fetch(tx.as_mut());
+                let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
+                let mut final_qc = None;
+                while let Some(row) = rows.next().await {
+                    let row = match row {
+                        Ok(row) => row,
+                        Err(err) => {
+                            if err.as_database_error().is_some_and(|e| {
+                                e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE)
+                            }) {
+                                drop(rows);
+                                return Err(anyhow::Error::from(err));
+                            }
+                            // If there's an error getting a row, try generating an event with
+                            // the rows we do have.
+                            tracing::warn!("error loading row: {err:#}");
+                            break;
+                        },
+                    };
+
+                    let leaf_data: Vec<u8> = row.get("leaf");
+                    let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
+                    let qc_data: Vec<u8> = row.get("qc");
+                    let qc = bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&qc_data)?;
+                    let next_epoch_qc = match row.get::<Option<Vec<u8>>, _>("next_epoch_qc") {
+                        Some(bytes) => Some(bincode::deserialize::<
+                            NextEpochQuorumCertificate2<SeqTypes>,
+                        >(&bytes)?),
+                        None => None,
+                    };
+                    let height = leaf.block_header().block_number();
+
+                    // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
+                    // garbage collect any views for which we missed a leaf or decide event; at least
+                    // not right away, in case we need to recover that data later.
+                    if let Some(parent) = parent
+                        && height != parent + 1
+                    {
+                        if !leaves.is_empty() {
+                            tracing::debug!(
+                                height,
+                                parent,
+                                "ending decide event at non-consecutive leaf"
+                            );
+                            break;
+                        }
+                        // A height jump within `DECIDE_GAP_FILL_HORIZON` of the watermark
+                        // can still be gap-filled: hold the cursor (emit nothing) until that
+                        // decide upserts the missing row. Legacy or beyond-horizon gaps are
+                        // permanent; skip as before, leaving the missing block to the
+                        // consumer's own fetching.
+                        let row_view = leaf.view_number().u64();
+                        if height > parent + 1
+                            && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
+                            && watermark
+                                .is_some_and(|w| within_gap_fill_horizon(row_view, w as u64))
+                        {
+                            tracing::info!(
+                                height,
+                                parent,
+                                row_view,
+                                ?watermark,
+                                "waiting for gap-fill decide before advancing the decide cursor"
+                            );
+                            break;
+                        }
+                        // A first row at or below the cursor (a replayed decide) is accepted.
+                    }
+                    parent = Some(height);
+                    let cert = CertificatePair::new(qc, next_epoch_qc);
+                    final_qc = Some(cert.clone());
+                    leaves.push((leaf, cert));
+                }
+                drop(rows);
+
+                let Some(final_qc) = final_qc else {
+                    // End event processing when there are no more decided views.
+                    tracing::debug!(from_view, "no new leaves at decide");
+                    return Ok(None);
+                };
+
+                // Find the range of views encompassed by this leaf chain. All data in this range can be
+                // processed by the consumer and then deleted.
+                let from_view = leaves[0].0.view_number();
+                let to_view = leaves[leaves.len() - 1].0.view_number();
+
+                // Collect VID shares for the decide event.
+                let vid_rows = tx
+                    .fetch_all(
+                        query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
+                            .bind(from_view.u64() as i64)
+                            .bind(to_view.u64() as i64),
+                    )
+                    .await?;
+                let vid_shares = vid_rows
+                    .into_iter()
+                    .map(|row| {
+                        let view: i64 = row.get("view");
+                        let data: Vec<u8> = row.get("data");
+                        let vid_proposal = bincode::deserialize::<
+                            Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+                        >(&data)?;
+                        Ok((view as u64, vid_proposal))
+                    })
+                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+                // Collect DA proposals for the decide event.
+                let da_rows = tx
+                    .fetch_all(
+                        query(
+                            "SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2",
+                        )
+                        .bind(from_view.u64() as i64)
+                        .bind(to_view.u64() as i64),
+                    )
+                    .await?;
+                let da_proposals = da_rows
+                    .into_iter()
+                    .map(|row| {
+                        let view: i64 = row.get("view");
+                        let data: Vec<u8> = row.get("data");
+                        let da_proposal = bincode::deserialize::<
+                            Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+                        >(&data)?;
+                        Ok((view as u64, da_proposal.data))
+                    })
+                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+                // Collect state certs for the decide event.
+                let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
+                    .await
+                    .with_context(|| {
+                        format!("load_state_certs from_view={from_view:?} to_view={to_view:?}")
+                    })?;
+
+                let cert2_row = tx
+                    .fetch_optional(
+                        query("SELECT data FROM decided_cert2 WHERE view = $1")
+                            .bind(to_view.u64() as i64),
+                    )
+                    .await?;
+                let cert2 = cert2_row
+                    .map(|row| {
+                        let bytes: Vec<u8> = row.get("data");
+                        bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
+                            .context("deserializing decided cert2")
+                    })
+                    .transpose()?;
+                drop(tx);
+                Ok(Some((
+                    from_view,
+                    to_view,
+                    leaves,
+                    final_qc,
+                    vid_shares,
+                    da_proposals,
+                    state_certs,
+                    cert2,
+                )))
+            })
+            .await?
+            else {
+                return Ok(());
+            };
+
+            let to_height = leaves
+                .last()
+                .map(|(leaf, _)| leaf.block_header().block_number());
+
+            // Collate all the information by view number and construct a chain of leaves.
+            let chain = leaves
+                .into_iter()
+                // Go in reverse chronological order, as expected by Decide events.
+                .rev()
+                .map(|(mut leaf, cert)| {
+                    let view = leaf.view_number();
+
+                    // Include the VID share if available.
+                    let vid_proposal = vid_shares.remove(&view);
+                    if vid_proposal.is_none() {
+                        tracing::debug!(?view, "VID share not available at decide");
+                    }
+                    let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
+
+                    // Fill in the full block payload using the DA proposals we had persisted.
+                    if let Some(proposal) = da_proposals.remove(&view) {
+                        let payload =
+                            Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
+                        leaf.fill_block_payload_unchecked(payload);
+                    } else if view == ViewNumber::genesis() {
+                        // We don't get a DA proposal for the genesis view, but we know what the
+                        // payload always is.
+                        leaf.fill_block_payload_unchecked(Payload::empty().0);
+                    } else {
+                        tracing::debug!(?view, "DA proposal not available at decide");
+                    }
+
+                    let state_cert = state_certs.get(&view).cloned();
+
+                    let info = LeafInfo {
+                        leaf,
+                        vid_share,
+                        state_cert,
+                        // Note: the following fields are not used in Decide event processing,
+                        // and should be removed. For now, we just default them.
+                        state: Default::default(),
+                        delta: Default::default(),
+                    };
+                    DecidedLeaf { info, cert }
+                })
+                .collect();
+
+            tracing::debug!(
+                ?from_view,
+                ?to_view,
+                ?final_qc,
+                ?chain,
+                "generating decide event"
+            );
+
+            if let Some(event) = decide_event_from_chain(chain, cert2) {
+                consumer.handle_event(&event).await?;
+            }
+
+            let from_view_i64 = from_view.u64() as i64;
+            let to_view_i64 = to_view.u64() as i64;
+            let serialized_state_certs = state_certs
+                .into_iter()
+                .map(|(epoch, cert)| Ok((epoch as i64, bincode::serialize(&cert)?)))
+                .collect::<anyhow::Result<Vec<(i64, Vec<u8>)>>>()?;
+
+            // Now that we have definitely processed leaves up to `to_view`, we can update
+            // `last_processed_view` so we don't process these leaves again. We may still fail at
+            // this point, or shut down, and fail to complete this update. At worst this will lead
+            // to us sending a duplicate decide event the next time we are called; this is fine as
+            // the event consumer is required to be idempotent.
+            serializable_retry!(self, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "event_stream",
+                    ["id", "last_processed_view"],
+                    ["id"],
+                    [(1i32, to_view_i64)],
+                )
+                .await?;
+
+                // Store all the finalized state certs
+                for (epoch, state_cert_bytes) in &serialized_state_certs {
+                    tx.upsert(
+                        "finalized_state_cert",
+                        ["epoch", "state_cert"],
+                        ["epoch"],
+                        [(*epoch, state_cert_bytes.clone())],
+                    )
+                    .await?;
+                }
+
+                // Delete the data that has been fully processed.
+                tx.execute(
+                    query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM quorum_proposals2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM quorum_certificate2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM state_cert where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM decided_cert2 where view >= $1 AND view < $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+
+                // Clean up leaves, but do not delete the most recent one (all leaves with a view
+                // number less than the given value). This is necessary to ensure that, in case of
+                // a restart, we can resume from the last decided leaf.
+                tx.execute(
+                    query("DELETE FROM anchor_leaf2 WHERE view >= $1 AND view < $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+
+                tx.commit().await?;
+                Ok(())
+            })
+            .await?;
+            last_processed_view = Some(to_view_i64);
+            last_processed_height = to_height;
+        }
+    }
+
+    async fn skip_decide_events(&self, view: ViewNumber) -> anyhow::Result<()> {
+        let processed = self.load_processed_view().await?;
+        // A gap-fill decide reports the older view it filled. Writing that as the cursor would
+        // rewind it, and a later restart with the query module would resume from pruned views.
+        if processed.is_some_and(|processed| processed >= view) {
+            return Ok(());
+        }
+        let from_view = processed.map_or(ViewNumber::genesis(), |processed| processed + 1);
+        let state_certs = serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            Self::load_state_certs(&mut tx, from_view, view).await
+        })
+        .await?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "event_stream",
+                ["id", "last_processed_view"],
+                ["id"],
+                [(1i32, view.u64() as i64)],
+            )
+            .await?;
+            for (epoch, cert) in &state_certs {
+                tx.upsert(
+                    "finalized_state_cert",
+                    ["epoch", "state_cert"],
+                    ["epoch"],
+                    [(*epoch as i64, bincode::serialize(cert)?)],
+                )
+                .await?;
+            }
+            prune_to_view(&mut tx, view.u64()).await?;
+            tx.commit().await
+        })
+        .await
+    }
+
+    async fn load_state_certs(
+        tx: &mut Transaction<Read>,
+        from_view: ViewNumber,
+        to_view: ViewNumber,
+    ) -> anyhow::Result<BTreeMap<u64, LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        let rows = tx
+            .fetch_all(
+                query("SELECT view, state_cert FROM state_cert WHERE view >= $1 AND view <= $2")
+                    .bind(from_view.u64() as i64)
+                    .bind(to_view.u64() as i64),
+            )
+            .await?;
+
+        let mut result = BTreeMap::new();
+
+        for row in rows {
+            let data: Vec<u8> = row.get("state_cert");
+
+            let cert: LightClientStateUpdateCertificateV2<SeqTypes> = bincode::deserialize(&data)
+                .or_else(|err_v2| {
+                bincode::deserialize::<LightClientStateUpdateCertificateV1<SeqTypes>>(&data)
+                    .map(Into::into)
+                    .context(format!(
+                        "Failed to deserialize LightClientStateUpdateCertificate: with v1 and v2. \
+                         error: {err_v2}"
+                    ))
+            })?;
+
+            result.insert(cert.epoch.u64(), cert);
+        }
+
+        Ok(result)
+    }
+
+    /// Prune everything older than the target retention, then, at most once per usage check
+    /// interval, prune toward the minimum retention if storage is over the target usage.
+    #[tracing::instrument(skip(self))]
+    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
+        self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
+            .await?;
+
+        if !self.usage_check_due() {
+            return Ok(());
+        }
+        let usage = self.consensus_storage_usage().await?;
+        tracing::debug!(usage, "consensus storage usage after pruning");
+        if usage > self.gc_opt.target_usage {
+            tracing::warn!(
+                usage,
+                gc_opt = ?self.gc_opt,
+                "consensus storage is running out of space, pruning to minimum retention"
+            );
+            self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.minimum_retention))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn prune_below(&self, view: u64) -> anyhow::Result<()> {
+        // An empty write transaction still takes SQLite's write lock.
+        if view == 0 {
+            return Ok(());
+        }
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            prune_to_view(&mut tx, view).await?;
+            tx.commit().await
+        })
+        .await
+    }
+
+    /// Measured in a read transaction: on SQLite it scans every page of the pruned tables, and
+    /// holding the write lock that long stalls the vote and proposal writes consensus waits on.
+    async fn consensus_storage_usage(&self) -> anyhow::Result<u64> {
+        let usage_query = match Db::KIND {
+            DbKind::Sqlite => format!(
+                "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
+                PRUNE_TABLES
+                    .iter()
+                    .map(|table| format!("'{table}'"))
+                    .join(",")
+            ),
+            DbKind::Postgres => {
+                let table_sizes = PRUNE_TABLES
+                    .iter()
+                    .map(|table| format!("pg_table_size('{table}')"))
+                    .join(" + ");
+                format!("SELECT {table_sizes}")
+            },
+        };
+
+        let mut tx = self.db.read().await?;
+        let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+        Ok(usage as u64)
+    }
+
+    fn usage_check_due(&self) -> bool {
+        let now = Instant::now();
+        let mut last = self.last_usage_check.lock();
+        if last.is_some_and(|last| now.duration_since(last) < self.gc_opt.usage_check_interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+}
+
+const PRUNE_TABLES: &[&str] = &[
+    "anchor_leaf2",
+    "vid_share2",
+    "da_proposal2",
+    "quorum_proposals2",
+    "quorum_certificate2",
+    "state_cert",
+    "decided_cert2",
+];
+
+async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
+    tracing::debug!(view, "pruning consensus storage");
+
+    for table in PRUNE_TABLES {
+        let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
+            .bind(view as i64)
+            .execute(tx.as_mut())
+            .await
+            .context(format!("pruning {table}"))?;
+        if res.rows_affected() > 0 {
+            tracing::info!(
+                "garbage collected {} rows from {table}",
+                res.rows_affected()
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
+    fn into_catchup_provider(
+        self,
+        backoff: BackoffParams,
+    ) -> anyhow::Result<Arc<dyn StateCatchup>> {
+        Ok(Arc::new(SqlStateCatchup::new(Arc::new(self.db), backoff)))
+    }
+
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         tracing::info!("loading config from Postgres");
 
@@ -260,6 +922,101 @@ impl SequencerPersistence for Persistence {
             tx.commit().await
         })
         .await
+    }
+
+    async fn persist_decided_leaves(
+        &self,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        cert2: Option<&Certificate2<SeqTypes>>,
+        _consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        let leaf_chain: Vec<_> = leaf_chain.into_iter().collect();
+        // Keyed by the view of the newest leaf, which a re-vote's cert2 is later than.
+        let newest = leaf_chain
+            .iter()
+            .map(|(info, _)| info.leaf.view_number())
+            .max();
+        if let Some(cert2) = cert2
+            && newest.is_none()
+        {
+            tracing::warn!(view = %cert2.view_number, "cert2 without a decided leaf; not stored");
+        }
+        let cert2_row = cert2
+            .zip(newest)
+            .map(|(cert2, newest)| {
+                let data = bincode::serialize(cert2).context("serializing cert2")?;
+                anyhow::Ok((newest.u64() as i64, data))
+            })
+            .transpose()?;
+        let values = leaf_chain
+            .into_iter()
+            .map(|(info, cert)| {
+                // The leaf may come with a large payload attached. We don't care about this payload
+                // because we already store it separately, as part of the DA proposal. Storing it
+                // here contributes to load on the DB for no reason, so we remove it before
+                // serializing the leaf.
+                let mut leaf = info.leaf.clone();
+                leaf.unfill_block_payload();
+
+                // Keyed by the leaf's view, as everything joined with it is: the certificate of
+                // an epoch's last block may be a re-vote's, at a later view.
+                let view = leaf.view_number().u64() as i64;
+                let leaf_bytes = bincode::serialize(&leaf)?;
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        // Append the new leaves and their cert2. We do this in its own transaction because even if
+        // GC or the event consumer later fails, there is no need to abort the storage of the leaves.
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "anchor_leaf2",
+                ["view", "leaf", "qc", "next_epoch_qc"],
+                ["view"],
+                values.clone(),
+            )
+            .await?;
+            if let Some(row) = &cert2_row {
+                tx.upsert("decided_cert2", ["view", "data"], ["view"], [row.clone()])
+                    .await?;
+            }
+            tx.commit().await
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    async fn process_decided_events(
+        &self,
+        view: ViewNumber,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        let now = Instant::now();
+        if self.consensus_only {
+            self.skip_decide_events(view).await?;
+        } else {
+            // Generate events for the new leaves, then GC. On error `last_processed_view` is not
+            // advanced past the failure point, so no data is lost and the range is retried.
+            self.generate_decide_events(consumer).await?;
+
+            // Best-effort GC of data not included in any decide event; runs again at the next
+            // decide.
+            if let Err(err) = self.prune_to_retention(view).await {
+                tracing::warn!(?view, "pruning failed: {err:#}");
+            }
+        }
+        self.internal_metrics
+            .internal_process_decided_events_duration
+            .add_point(now.elapsed().as_secs_f64());
+
+        self.load_processed_view().await
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
@@ -453,6 +1210,143 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
+    async fn append_vid(
+        &self,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        let view = proposal.data.view_number().u64();
+        let payload_hash = proposal.data.payload_commitment();
+        let data_bytes = bincode::serialize(proposal).unwrap();
+
+        let now = Instant::now();
+        let res = serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "vid_share2",
+                ["view", "data", "payload_hash"],
+                ["view"],
+                [(view as i64, data_bytes.clone(), payload_hash.to_string())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
+        self.internal_metrics
+            .internal_append_vid_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
+    }
+
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
+        // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
+        //
+        // A timeout vote counts: a restarted node must not vote2 at a view it
+        // sent a timeout vote for.
+        if !matches!(
+            action,
+            HotShotAction::Propose | HotShotAction::Vote | HotShotAction::TimeoutVote
+        ) {
+            return Ok(());
+        }
+
+        serializable_retry!(self, || async {
+            let stmt = format!(
+                "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
+                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, \
+                 excluded.view)",
+                MAX_FN = Db::MAX_FN,
+            );
+
+            let mut tx = self.db.write().await?;
+            tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
+
+            if matches!(action, HotShotAction::Vote) {
+                let restart_view = view + 1;
+                let stmt = format!(
+                    "INSERT INTO restart_view (id, view) VALUES (0, $1)
+                    ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, \
+                     excluded.view)",
+                    MAX_FN = Db::MAX_FN,
+                );
+                tx.execute(query(&stmt).bind(restart_view.u64() as i64))
+                    .await?;
+            }
+
+            tx.commit().await
+        })
+        .await
+    }
+
+    async fn append_quorum_proposal2(
+        &self,
+        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        let view_number = proposal.data.view_number().u64();
+
+        let proposal_bytes = bincode::serialize(&proposal).context("serializing proposal")?;
+        let leaf_hash = Committable::commit(&Leaf2::from_quorum_proposal(&proposal.data));
+
+        // We also keep track of any QC we see in case we need it to recover our archival storage.
+        let justify_qc = proposal.data.justify_qc();
+        let justify_qc_bytes = bincode::serialize(&justify_qc).context("serializing QC")?;
+        let justify_qc_view = justify_qc.view_number.u64() as i64;
+        let justify_qc_leaf_commit = justify_qc.data.leaf_commit.to_string();
+
+        let now = Instant::now();
+        let res = serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "quorum_proposals2",
+                ["view", "leaf_hash", "data"],
+                ["view"],
+                [(
+                    view_number as i64,
+                    leaf_hash.to_string(),
+                    proposal_bytes.clone(),
+                )],
+            )
+            .await?;
+            tx.upsert(
+                "quorum_certificate2",
+                ["view", "leaf_hash", "data"],
+                ["view"],
+                [(
+                    justify_qc_view,
+                    justify_qc_leaf_commit.clone(),
+                    justify_qc_bytes.clone(),
+                )],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
+        self.internal_metrics
+            .internal_append_quorum2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
+    }
+
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let data = bincode::serialize(&cert2).context("serializing cert2")?;
+        let view_i64 = view.u64() as i64;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "decided_cert2",
+                ["view", "data"],
+                ["view"],
+                [(view_i64, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
+    }
+
     async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let row = self
             .db
@@ -469,6 +1363,36 @@ impl SequencerPersistence for Persistence {
         .transpose()
     }
 
+    async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        // Locks are ordered by epoch, then view.
+        let lock = LockView::of(&high_qc);
+        let data = bincode::serialize(&high_qc).context("serializing high_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            // Compare-and-set inside one write transaction so a stale
+            // concurrent write can never regress the stored view: under
+            // SERIALIZABLE a racing writer conflicts and retries; on SQLite
+            // writes are serialized.
+            let stored_view = query("SELECT data FROM high_qc2 WHERE id = true")
+                .fetch_optional(tx.as_mut())
+                .await?
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                        .context("deserializing existing high_qc2")
+                        .map(|qc| LockView::of(&qc))
+                })
+                .transpose()?;
+            if stored_view.is_some_and(|stored| stored >= lock) {
+                return Ok(());
+            }
+            tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, data.clone())])
+                .await?;
+            tx.commit().await
+        })
+        .await
+    }
+
     async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         let row = self
             .db
@@ -482,6 +1406,37 @@ impl SequencerPersistence for Persistence {
                 .context("deserializing high_qc2")
         })
         .transpose()
+    }
+
+    async fn append_boundary_qc2(&self, qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let lock = LockView::of(&qc);
+        let data = bincode::serialize(&qc).context("serializing boundary_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            // Compare-and-set inside one write transaction, as for `high_qc2`.
+            let stored = query("SELECT data FROM boundary_qc2 WHERE id = true")
+                .fetch_optional(tx.as_mut())
+                .await?
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                        .context("deserializing existing boundary_qc2")
+                        .map(|qc| LockView::of(&qc))
+                })
+                .transpose()?;
+            if stored.is_some_and(|stored| stored >= lock) {
+                return Ok(());
+            }
+            tx.upsert(
+                "boundary_qc2",
+                ["id", "data"],
+                ["id"],
+                [(true, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
@@ -565,6 +1520,37 @@ impl SequencerPersistence for Persistence {
             .ok()?
     }
 
+    async fn append_da2(
+        &self,
+        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+        vid_commit: VidCommitment,
+    ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
+        let data = &proposal.data;
+        let view = data.view_number().u64();
+        let data_bytes = bincode::serialize(proposal).unwrap();
+
+        let now = Instant::now();
+        let res = serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "da_proposal2",
+                ["view", "data", "payload_hash"],
+                ["view"],
+                [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
+        self.internal_metrics
+            .internal_append_da2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
+    }
+
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -635,6 +1621,28 @@ impl SequencerPersistence for Persistence {
                 Ok(drb_input)
             },
         }
+    }
+
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let view_number = state_cert.light_client_state.view_number as i64;
+        let state_cert_bytes = bincode::serialize(&state_cert)
+            .context("serializing light client state update certificate")?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "state_cert",
+                ["view", "state_cert"],
+                ["view"],
+                [(view_number, state_cert_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_state_cert(
@@ -719,6 +1727,8 @@ impl SequencerPersistence for Persistence {
     }
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.internal_metrics = PersistenceMetricsValue::new(metrics);
+
         if let Some(probe) = &self.probe {
             probe.register(&*metrics.subgroup("disk".into()));
         }
@@ -1287,10 +2297,95 @@ impl MembershipPersistence for Persistence {
     }
 }
 
+#[async_trait]
+impl Provider<SeqTypes, VidCommonRequest> for Persistence {
+    #[tracing::instrument(skip(self))]
+    async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
+        let mut tx = match self.db.read().await {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::warn!("could not open transaction: {err:#}");
+                return None;
+            },
+        };
+
+        let bytes = match query_as::<(Vec<u8>,)>(
+            "SELECT data FROM vid_share2 WHERE payload_hash = $1 LIMIT 1",
+        )
+        .bind(req.0.to_string())
+        .fetch_optional(tx.as_mut())
+        .await
+        {
+            Ok(Some((bytes,))) => bytes,
+            Ok(None) => return None,
+            Err(err) => {
+                tracing::error!("error loading VID share: {err:#}");
+                return None;
+            },
+        };
+
+        let share: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
+            match bincode::deserialize(&bytes) {
+                Ok(share) => share,
+                Err(err) => {
+                    tracing::warn!("error decoding VID share: {err:#}");
+                    return None;
+                },
+            };
+
+        match share.data {
+            VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
+            VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
+            VidDisperseShare::V2(vid) => Some(VidCommon::V2(vid.common)),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider<SeqTypes, PayloadRequest> for Persistence {
+    #[tracing::instrument(skip(self))]
+    async fn fetch(&self, req: PayloadRequest) -> Option<Payload> {
+        let mut tx = match self.db.read().await {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::warn!("could not open transaction: {err:#}");
+                return None;
+            },
+        };
+
+        let bytes = match query_as::<(Vec<u8>,)>(
+            "SELECT data FROM da_proposal2 WHERE payload_hash = $1 LIMIT 1",
+        )
+        .bind(req.0.to_string())
+        .fetch_optional(tx.as_mut())
+        .await
+        {
+            Ok(Some((bytes,))) => bytes,
+            Ok(None) => return None,
+            Err(err) => {
+                tracing::warn!("error loading DA proposal: {err:#}");
+                return None;
+            },
+        };
+
+        let proposal: Proposal<SeqTypes, DaProposal2<SeqTypes>> = match bincode::deserialize(&bytes)
+        {
+            Ok(proposal) => proposal,
+            Err(err) => {
+                tracing::error!("error decoding DA proposal: {err:#}");
+                return None;
+            },
+        };
+
+        Some(Payload::from_bytes(
+            &proposal.data.encoded_transactions,
+            &proposal.data.metadata,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod testing {
-    use std::sync::Arc;
-
     use super::{super::qs::testing::TmpDb, *};
     use crate::persistence::tests::TestablePersistence;
 
@@ -1302,6 +2397,20 @@ mod testing {
             Arc::new(TmpDb::init().await)
         }
 
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let mut tx = self.db.write().await?;
+            tx.execute(
+                query("INSERT INTO eqc (id, data) VALUES (true, $1)")
+                    .bind(bincode::serialize(&(high_qc, next_epoch_qc))?),
+            )
+            .await?;
+            tx.commit().await
+        }
+
         #[allow(refining_impl_trait)]
         fn options(db: &Self::Storage) -> Options {
             Options(super::super::tmp_options(db))
@@ -1311,13 +2420,21 @@ mod testing {
 
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
 
-    use espresso_types::{Leaf, NodeState, PubKey, ValidatedState};
+    use espresso_types::{Leaf, NodeState, PubKey, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
-        data::EpochNumber, simple_certificate::QuorumCertificate,
-        traits::signature_key::SignatureKey,
+        data::{
+            EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
+            vid_disperse::AvidMDisperseShare,
+        },
+        message::convert_proposal,
+        simple_certificate::QuorumCertificate,
+        traits::{EncodeBytes, signature_key::SignatureKey},
+        utils::EpochTransitionIndicator,
+        vid::avidm::{AvidMScheme, init_avidm_param},
     };
 
     use super::*;
@@ -1591,6 +2708,333 @@ mod test {
         );
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetching_providers() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        // Mock up some data.
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let leaf_payload = leaf.block_payload().unwrap();
+        let leaf_payload_bytes_arc = leaf_payload.encode();
+
+        let avidm_param = init_avidm_param(2).unwrap();
+        let weights = vec![1u32; 2];
+
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
+        let (payload_commitment, shares) =
+            AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
+                .unwrap();
+        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let vid_share = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: ViewNumber::new(0),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param.clone(),
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
+
+        let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header: leaf.block_header().clone(),
+                view_number: leaf.view_number(),
+                justify_qc: leaf.justify_qc().clone(),
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: None,
+                state_cert: None,
+            },
+        };
+        let quorum_proposal_signature =
+            BLSPubKey::sign(&privkey, &bincode::serialize(&quorum_proposal).unwrap())
+                .expect("Failed to sign quorum proposal");
+        let quorum_proposal = Proposal {
+            data: quorum_proposal,
+            signature: quorum_proposal_signature,
+            _pd: Default::default(),
+        };
+
+        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
+            .expect("Failed to sign block payload");
+        let da_proposal = Proposal {
+            data: DaProposal2::<SeqTypes> {
+                encoded_transactions: leaf_payload_bytes_arc,
+                metadata: leaf_payload.ns_table().clone(),
+                view_number: ViewNumber::new(0),
+                epoch: None,
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            },
+            signature: block_payload_signature,
+            _pd: Default::default(),
+        };
+
+        let mut next_quorum_proposal = quorum_proposal.clone();
+        next_quorum_proposal.data.proposal.view_number += 1;
+        next_quorum_proposal.data.proposal.justify_qc.view_number += 1;
+        next_quorum_proposal
+            .data
+            .proposal
+            .justify_qc
+            .data
+            .leaf_commit = Committable::commit(&leaf.clone());
+
+        // Add to database.
+        storage
+            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .await
+            .unwrap();
+        storage.append_vid(&vid_share).await.unwrap();
+        storage
+            .append_quorum_proposal2(&quorum_proposal)
+            .await
+            .unwrap();
+
+        // Add an extra quorum proposal so we have a QC pointing back at `leaf`.
+        storage
+            .append_quorum_proposal2(&next_quorum_proposal)
+            .await
+            .unwrap();
+
+        // Fetch it as if we were rebuilding an archive.
+        assert_eq!(
+            Some(VidCommon::V1(avidm_param)),
+            storage
+                .fetch(VidCommonRequest(vid_share.data.payload_commitment()))
+                .await
+        );
+        assert_eq!(
+            leaf_payload,
+            storage
+                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Test conditions that trigger pruning.
+    ///
+    /// This is a configurable test that can be used to test different configurations of GC,
+    /// `pruning_opt`. The test populates the database with some data for view 1, asserts that it is
+    /// retained for view 2, and then asserts that it is pruned by view 3. There are various
+    /// different configurations that can achieve this behavior, such that the data is retained and
+    /// then pruned due to different logic and code paths.
+    async fn test_pruning_helper(pruning_opt: ConsensusPruningOptions) {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.consensus_pruning = pruning_opt;
+        let storage = opt.create().await.unwrap();
+
+        let data_view = ViewNumber::new(1);
+
+        // Populate some data.
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let leaf_payload = leaf.block_payload().unwrap();
+        let leaf_payload_bytes_arc = leaf_payload.encode();
+
+        let avidm_param = init_avidm_param(2).unwrap();
+        let weights = vec![1u32; 2];
+
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
+        let (payload_commitment, shares) =
+            AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
+                .unwrap();
+
+        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let vid = convert_proposal(
+            AvidMDisperseShare::<SeqTypes> {
+                view_number: data_view,
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: None,
+                target_epoch: None,
+                common: avidm_param,
+            }
+            .to_proposal(&privkey)
+            .unwrap()
+            .clone(),
+        );
+        let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                epoch: None,
+                block_header: leaf.block_header().clone(),
+                view_number: data_view,
+                justify_qc: QuorumCertificate2::genesis(
+                    &ValidatedState::default(),
+                    &NodeState::mock(),
+                    TEST_VERSIONS.test,
+                )
+                .await,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                state_cert: None,
+            },
+        };
+        let quorum_proposal_signature =
+            BLSPubKey::sign(&privkey, &bincode::serialize(&quorum_proposal).unwrap())
+                .expect("Failed to sign quorum proposal");
+        let quorum_proposal = Proposal {
+            data: quorum_proposal,
+            signature: quorum_proposal_signature,
+            _pd: Default::default(),
+        };
+
+        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
+            .expect("Failed to sign block payload");
+        let da_proposal = Proposal {
+            data: DaProposal2::<SeqTypes> {
+                encoded_transactions: leaf_payload_bytes_arc.clone(),
+                metadata: leaf_payload.ns_table().clone(),
+                view_number: data_view,
+                epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            },
+            signature: block_payload_signature,
+            _pd: Default::default(),
+        };
+
+        tracing::info!(?vid, ?da_proposal, ?quorum_proposal, "append data");
+        storage.append_vid(&vid).await.unwrap();
+        storage
+            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .await
+            .unwrap();
+        storage
+            .append_quorum_proposal2(&quorum_proposal)
+            .await
+            .unwrap();
+
+        // Populate the view-indexed cert tables. Contents are opaque to the pruner (it deletes by
+        // `view`), so raw bytes suffice.
+        {
+            let mut tx = storage.db.write().await.unwrap();
+            tx.upsert(
+                "state_cert",
+                ["view", "state_cert"],
+                ["view"],
+                [(data_view.u64() as i64, b"state_cert".to_vec())],
+            )
+            .await
+            .unwrap();
+            tx.upsert(
+                "decided_cert2",
+                ["view", "data"],
+                ["view"],
+                [(data_view.u64() as i64, b"cert2".to_vec())],
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The first decide doesn't trigger any garbage collection, even though our usage exceeds
+        // the target, because of the minimum retention.
+        tracing::info!("decide view 1");
+        storage
+            .append_decided_leaves(data_view + 1, [], &NullEventConsumer)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_vid_share(data_view).await.unwrap().unwrap(),
+            vid
+        );
+        assert_eq!(
+            storage.load_da_proposal(data_view).await.unwrap().unwrap(),
+            da_proposal
+        );
+        assert_eq!(
+            storage.load_quorum_proposal(data_view).await.unwrap(),
+            quorum_proposal
+        );
+        assert!(view_row_exists(&storage, "state_cert", data_view).await);
+        assert!(view_row_exists(&storage, "decided_cert2", data_view).await);
+
+        // After another view, our data is beyond the minimum retention (though not the target
+        // retention) so it gets pruned.
+        tracing::info!("decide view 2");
+        storage
+            .append_decided_leaves(data_view + 2, [], &NullEventConsumer)
+            .await
+            .unwrap();
+        assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
+        assert!(storage.load_da_proposal(data_view).await.unwrap().is_none());
+        storage.load_quorum_proposal(data_view).await.unwrap_err();
+        assert!(!view_row_exists(&storage, "state_cert", data_view).await);
+        assert!(!view_row_exists(&storage, "decided_cert2", data_view).await);
+    }
+
+    /// Whether a view-indexed consensus table has a row at `view`.
+    async fn view_row_exists(storage: &Persistence, table: &str, view: ViewNumber) -> bool {
+        storage
+            .db
+            .read()
+            .await
+            .unwrap()
+            .fetch_optional(
+                query(&format!("SELECT view FROM {table} WHERE view = $1")).bind(view.u64() as i64),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_minimum_retention() {
+        test_pruning_helper(ConsensusPruningOptions {
+            // Use a very low target usage, to show that we still retain data up to the minimum
+            // retention even when usage is above target.
+            target_usage: 0,
+            minimum_retention: 1,
+            // Use a very high target retention, so that pruning is only triggered by the minimum
+            // retention.
+            target_retention: u64::MAX,
+            usage_check_interval: Duration::ZERO,
+        })
+        .await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_target_retention() {
+        test_pruning_helper(ConsensusPruningOptions {
+            target_retention: 1,
+            // Use a very low minimum retention, so that data is only kept around due to the target
+            // retention.
+            minimum_retention: 0,
+            // Use a very high target usage, so that pruning is only triggered by the target
+            // retention.
+            target_usage: u64::MAX,
+            usage_check_interval: Duration::ZERO,
+        })
+        .await
+    }
+
     /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
     ///
     /// Previously, `store_events` did nothing when given an empty events list (in fact,
@@ -1630,5 +3074,26 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// A gap-fill decide reports the older view it filled, after a newer decide already moved
+    /// the cursor past it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_consensus_only_decide_never_rewinds_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.set_consensus_only();
+        let storage = opt.create().await.unwrap();
+
+        for view in [10, 5] {
+            storage
+                .append_decided_leaves(ViewNumber::new(view), [], &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage.load_processed_view().await.unwrap(),
+            Some(ViewNumber::new(10))
+        );
     }
 }

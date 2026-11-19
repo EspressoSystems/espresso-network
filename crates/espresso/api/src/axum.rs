@@ -1642,6 +1642,14 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
             .map_err(ApiError::Internal)
     };
 
+    let status_success_rate = |State(state): State<StatusState>| async move {
+        state
+            .success_rate()
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
     let status_time_since_last_decide = |State(state): State<StatusState>| async move {
         state
             .time_since_last_decide()
@@ -1678,6 +1686,13 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
             get_with(status_block_height, |op| {
                 op.summary("Get latest committed block height")
                     .description("Get the height of the latest committed block.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_SUCCESS_RATE_ROUTE,
+            get_with(status_success_rate, |op| {
+                op.summary("Get view success rate")
+                    .description("Get the fraction of views which resulted in a committed block.")
             }),
         )
         .api_route(
@@ -4292,6 +4307,9 @@ mod tests {
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
+        async fn success_rate(&self) -> anyhow::Result<f64> {
+            unimplemented!()
+        }
         async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -4791,7 +4809,6 @@ mod tests {
             listener,
             "test",
             Router::new().route("/v1/status/block-height", get(|| async { "0" })),
-            None,
             Some(0),
         ));
 
@@ -4817,70 +4834,6 @@ mod tests {
             head.contains("access-control-allow-origin: *"),
             "no CORS header on 429: {head}"
         );
-    }
-
-    /// One port serves both protocols: a gRPC call, which the legacy URI rewrite would otherwise
-    /// move under `/v1`, and an HTTP request next to it.
-    #[tokio::test]
-    async fn serves_grpc_on_the_http_port() {
-        use tonic_reflection::pb::v1::{
-            ServerReflectionRequest, server_reflection_client::ServerReflectionClient,
-            server_reflection_request::MessageRequest, server_reflection_response::MessageResponse,
-        };
-
-        let reflection = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(crate::FILE_DESCRIPTOR_SET)
-            .build_v1()
-            .unwrap();
-        let mut grpc = tonic::service::Routes::builder();
-        grpc.add_service(reflection);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(crate::serve_router(
-            listener,
-            "test",
-            Router::new().route("/v1/status/block-height", get(|| async { "7" })),
-            Some(grpc.routes().into_axum_router()),
-            None,
-        ));
-
-        let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
-            .unwrap()
-            .connect()
-            .await
-            .unwrap();
-        let mut client = ServerReflectionClient::new(channel);
-        let request = ServerReflectionRequest {
-            host: String::new(),
-            message_request: Some(MessageRequest::ListServices(String::new())),
-        };
-        let mut responses = client
-            .server_reflection_info(futures::stream::iter([request]))
-            .await
-            .unwrap()
-            .into_inner();
-        let response = responses.message().await.unwrap().unwrap();
-        let Some(MessageResponse::ListServicesResponse(list)) = response.message_response else {
-            panic!("not a service list: {response:?}");
-        };
-        assert!(
-            list.service
-                .iter()
-                .any(|service| service.name.ends_with("NodeService")),
-            "{list:?}"
-        );
-
-        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
-        sock.write_all(
-            b"GET /status/block-height HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        )
-        .await
-        .unwrap();
-        let mut response = Vec::new();
-        sock.read_to_end(&mut response).await.unwrap();
-        let response = String::from_utf8_lossy(&response);
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        assert!(response.ends_with("7"), "{response}");
     }
 
     #[tokio::test]
@@ -5097,7 +5050,6 @@ mod tests {
             "/v2/node/participation/proposal",
             "/v2/node/participation/vote",
             "/v2/node/payload-size",
-            "/v2/node/peers",
             "/v2/node/stake-table",
             "/v2/node/sync-status",
             "/v2/node/transaction-count",
@@ -5105,6 +5057,7 @@ mod tests {
             "/v2/node/vid-share",
             "/v2/status/block-height",
             "/v2/status/keys",
+            "/v2/status/success-rate",
             "/v2/status/time-since-last-decide",
             "/v2/token/circulating-supply",
             "/v2/token/circulating-supply-ethereum",
@@ -5197,6 +5150,13 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetBlockHeightRequest>,
         ) -> Result<tonic::Response<crate::proto::BlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_success_rate(
+            &self,
+            _request: tonic::Request<crate::proto::GetSuccessRateRequest>,
+        ) -> Result<tonic::Response<crate::proto::SuccessRateResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
@@ -5350,13 +5310,6 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetVoteParticipationRequest>,
         ) -> Result<tonic::Response<crate::proto::ParticipationResponse>, tonic::Status> {
-            Err(tonic::Status::internal("mock"))
-        }
-
-        async fn get_peers(
-            &self,
-            _request: tonic::Request<crate::proto::GetPeersRequest>,
-        ) -> Result<tonic::Response<crate::proto::PeersResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }
@@ -6004,13 +5957,10 @@ mod tests {
 
         let descriptors = prost_types::FileDescriptorSet::decode(crate::FILE_DESCRIPTOR_SET)
             .expect("valid descriptor set");
-        // Services without HTTP bindings, which no route documents.
-        const GRPC_ONLY: &[&str] = &["ChainService"];
         let streaming: std::collections::BTreeSet<&str> = descriptors
             .file
             .iter()
             .flat_map(|file| &file.service)
-            .filter(|service| !GRPC_ONLY.contains(&service.name()))
             .flat_map(|service| &service.method)
             .filter(|method| method.server_streaming())
             .map(|method| method.name())
@@ -6253,7 +6203,7 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(crate::serve_router(listener, "test", router, None, None));
+        tokio::spawn(crate::serve_router(listener, "test", router, None));
 
         let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
         sock.write_all(
@@ -6361,8 +6311,8 @@ mod tests {
     }
 
     /// Regression test: the docs routes must exist in the app a serve mode actually builds, not
-    /// only in `create_router_v1` (which the serve modes don't call). Assembles a router the way the
-    /// serve modes do, wrapped in the same top-level routes and legacy-URI rewrite
+    /// only in `create_router_v1` (which the serve modes don't call). Assembles a router the way
+    /// `serve_axum_status` does, wrapped in the same top-level routes and legacy-URI rewrite
     /// layers as `serve_router`, and checks the docs are reachable and the spec reflects only
     /// the mounted modules.
     #[tokio::test]

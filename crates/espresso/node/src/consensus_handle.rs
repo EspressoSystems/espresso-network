@@ -1,9 +1,10 @@
-use std::{mem, sync::Arc};
+use std::{collections::HashMap, mem, sync::Arc};
 
 use anyhow::bail;
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
+use committable::Commitment;
 use espresso_api::error::SubmitError;
-use futures::{StreamExt, stream::BoxStream};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot_new_protocol::{
     block,
     client::{ClientApi, QueryError},
@@ -13,19 +14,23 @@ use hotshot_new_protocol::{
         error::{CoordinatorError, Severity},
     },
     message::OpaqueMessage,
+    state::UpdateLeaf,
+    storage::NewProtocolStorage,
 };
 use hotshot_types::{
-    data::{BlockNumber, EpochNumber, Leaf2, VidDisperseShare, ViewNumber},
+    data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::LeafInfo,
     initializer::HotShotInitializer,
-    message::UpgradeLock,
+    message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState,
         metrics::{Gauge, Metrics},
         node_implementation::NodeType,
+        signature_key::SignatureKey,
     },
+    utils::StateAndDelta,
 };
 use parking_lot::RwLock;
 use tokio::{select, spawn, sync::mpsc::UnboundedReceiver};
@@ -34,13 +39,13 @@ use tracing::{error, warn};
 
 /// The node's handle on consensus: the [`Coordinator`], run on its own task from
 /// [`start_consensus`](Self::start_consensus) on, and what the rest of the node reads from it.
-pub struct ConsensusHandle<T: NodeType> {
+pub struct ConsensusHandle<T: NodeType, S> {
     epoch_height: BlockNumber,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
     membership_coordinator: EpochMembershipCoordinator<T>,
     resting: Arc<RwLock<Resting<T>>>,
-    coordinator: Arc<RwLock<CoordinatorState<T>>>,
+    coordinator: Arc<RwLock<CoordinatorState<T, S>>>,
     /// Cancelled once the coordinator task has ended, however it ended.
     exited: CancellationToken,
 }
@@ -48,15 +53,16 @@ pub struct ConsensusHandle<T: NodeType> {
 /// What the readers serve once the coordinator has stopped: what it held when it stopped, written
 /// by its task on the way out, or the anchor if it never ran.
 struct Resting<T: NodeType> {
+    view: ViewNumber,
     leaf: Leaf2<T>,
     state: Arc<T::ValidatedState>,
 }
 
 #[allow(clippy::large_enum_variant)]
-enum CoordinatorState<T: NodeType> {
+enum CoordinatorState<T: NodeType, S> {
     Empty,
     Init {
-        coordinator: Coordinator<T>,
+        coordinator: Coordinator<T, S>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         event_tx: Sender<CoordinatorEvent<T>>,
         queue_len: Option<Arc<dyn Gauge>>,
@@ -70,18 +76,19 @@ enum CoordinatorState<T: NodeType> {
     },
 }
 
-impl<T: NodeType> CoordinatorState<T> {
+impl<T: NodeType, S> CoordinatorState<T, S> {
     fn take(&mut self) -> Self {
         mem::replace(self, Self::Empty)
     }
 }
 
-impl<T> ConsensusHandle<T>
+impl<T, S> ConsensusHandle<T, S>
 where
     T: NodeType,
+    S: NewProtocolStorage<T>,
 {
-    pub(crate) fn new(
-        coordinator: Coordinator<T>,
+    pub fn new(
+        coordinator: Coordinator<T, S>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         upgrade_lock: UpgradeLock<T>,
         membership_coordinator: EpochMembershipCoordinator<T>,
@@ -105,6 +112,7 @@ where
             upgrade_lock,
             membership_coordinator,
             resting: Arc::new(RwLock::new(Resting {
+                view: initializer.anchor_leaf().view_number(),
                 leaf: initializer.anchor_leaf().clone(),
                 state: initializer.anchor_state().clone(),
             })),
@@ -118,7 +126,7 @@ where
         }
     }
 
-    pub(crate) async fn start_consensus(&self) {
+    pub async fn start_consensus(&self) {
         if matches!(*self.coordinator.read(), CoordinatorState::Running { .. }) {
             return;
         }
@@ -152,20 +160,31 @@ where
         }
     }
 
-    pub(crate) fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
+    pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
         self.event_rx.activate_cloned().boxed()
     }
 
     /// Resolves once the coordinator task has ended, whether `shut_down` stopped it or it died
     /// on a critical error or a panic. Never resolves if consensus never started.
-    pub(crate) async fn stopped(&self) {
+    pub async fn stopped(&self) {
         self.exited.cancelled().await
     }
 
     /// Serves the resting state once the coordinator has been told to shut down, waiting for
     /// the state it leaves on the way out if a request fails meanwhile. Panics if the
     /// coordinator died instead: the node must not answer as if the chain had stopped.
-    pub(crate) async fn decided_leaf(&self) -> Leaf2<T> {
+    pub async fn current_view(&self) -> ViewNumber {
+        let Some(client_api) = self.client_api().await else {
+            return self.resting.read().view;
+        };
+        match client_api.current_view().await {
+            Ok(view) => view,
+            Err(err) => self.resting_unless_dead(err).await.view,
+        }
+    }
+
+    /// See [`Self::current_view`].
+    pub async fn decided_leaf(&self) -> Leaf2<T> {
         let Some(client_api) = self.client_api().await else {
             return self.resting.read().leaf.clone();
         };
@@ -175,8 +194,8 @@ where
         }
     }
 
-    /// See [`Self::decided_leaf`].
-    pub(crate) async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
+    /// See [`Self::current_view`].
+    pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         let Some(client_api) = self.client_api().await else {
             return Some(self.resting.read().state.clone());
         };
@@ -204,7 +223,7 @@ where
         self.resting.read()
     }
 
-    pub(crate) async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
+    pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         match self.client_api().await?.state(view).await {
             Ok(state) => state,
             Err(err) => {
@@ -214,7 +233,33 @@ where
         }
     }
 
-    pub(crate) async fn current_epoch(&self) -> Option<EpochNumber> {
+    pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
+        let Some(client_api) = self.client_api().await else {
+            return (None, None);
+        };
+        match client_api.state_and_delta(view).await {
+            Ok(state_and_delta) => state_and_delta,
+            Err(err) => {
+                warn!(%view, %err, "coordinator unavailable for state_and_delta");
+                (None, None)
+            },
+        }
+    }
+
+    pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
+        let Some(client_api) = self.client_api().await else {
+            return Vec::new();
+        };
+        match client_api.undecided_leaves().await {
+            Ok(leaves) => leaves,
+            Err(err) => {
+                warn!(%err, "coordinator unavailable for undecided_leaves");
+                Vec::new()
+            },
+        }
+    }
+
+    pub async fn current_epoch(&self) -> Option<EpochNumber> {
         let Some(client_api) = self.client_api().await else {
             return self.resting.read().leaf.epoch(*self.epoch_height);
         };
@@ -227,19 +272,99 @@ where
         }
     }
 
-    pub(crate) fn epoch_height(&self) -> BlockNumber {
+    pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
     }
 
-    pub(crate) fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
+    pub fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
         self.membership_coordinator.clone()
     }
 
-    pub(crate) fn upgrade_lock(&self) -> UpgradeLock<T> {
+    pub fn upgrade_lock(&self) -> UpgradeLock<T> {
         self.upgrade_lock.clone()
     }
 
-    pub(crate) async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
+    pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .proposal_participation(None)
+            .await
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for current_proposal_participation");
+            })
+            .unwrap_or_default()
+    }
+
+    pub async fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> HashMap<T::SignatureKey, f64> {
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .proposal_participation(Some(epoch))
+            .await
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for proposal_participation");
+            })
+            .unwrap_or_default()
+    }
+
+    pub async fn current_vote_participation(
+        &self,
+    ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .vote_participation(None)
+            .await
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for current_vote_participation");
+            })
+            .unwrap_or_default()
+    }
+
+    pub async fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        let Some(client_api) = self.client_api().await else {
+            return HashMap::new();
+        };
+        client_api
+            .vote_participation(Some(epoch))
+            .await
+            .inspect_err(|err| {
+                warn!(%err, "coordinator unavailable for vote_participation");
+            })
+            .unwrap_or_default()
+    }
+
+    pub async fn request_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> anyhow::Result<
+        BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
+    > {
+        let Some(client_api) = self.client_api().await else {
+            bail!("consensus is not running");
+        };
+        Ok(async move {
+            client_api
+                .request_proposal(view, leaf_commitment)
+                .await
+                .map(convert_proposal)
+                .map_err(anyhow::Error::new)
+        }
+        .boxed())
+    }
+
+    pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
         let Some(client_api) = self.client_api().await else {
             bail!("consensus is not running");
         };
@@ -257,9 +382,30 @@ where
             })
     }
 
+    pub async fn update_leaf(
+        &self,
+        leaf: Leaf2<T>,
+        state: Arc<T::ValidatedState>,
+        delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
+    ) -> anyhow::Result<()> {
+        let view = leaf.view_number();
+        let Some(client_api) = self.client_api().await else {
+            bail!("consensus is not running");
+        };
+        client_api
+            .update_leaf(UpdateLeaf {
+                view,
+                leaf,
+                state,
+                delta,
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     /// Stops the coordinator if it runs, and drops it if it never started so that nothing can
     /// start it afterwards; the readers serve the resting state from here on.
-    pub(crate) async fn shut_down(&self) {
+    pub async fn shut_down(&self) {
         self.membership_coordinator.cancel_all_drb();
         let running = match &*self.coordinator.read() {
             CoordinatorState::Running { shutdown, .. } => {
@@ -298,8 +444,8 @@ where
     }
 }
 
-async fn run_coordinator<T>(
-    mut coord: Coordinator<T>,
+async fn run_coordinator<T, S>(
+    mut coord: Coordinator<T, S>,
     mut external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
     tx: Sender<CoordinatorEvent<T>>,
     queue_len: Option<Arc<dyn Gauge>>,
@@ -308,6 +454,7 @@ async fn run_coordinator<T>(
     resting: Arc<RwLock<Resting<T>>>,
 ) where
     T: NodeType,
+    S: NewProtocolStorage<T>,
 {
     let _exited = exited.drop_guard();
     coord.start();
@@ -346,17 +493,22 @@ async fn run_coordinator<T>(
         .state(leaf.view_number())
         .map(|entry| entry.state.clone())
         .unwrap_or_else(|| Arc::new(T::ValidatedState::from_header(leaf.block_header())));
-    *resting.write() = Resting { leaf, state };
+    *resting.write() = Resting {
+        view: coord.current_view(),
+        leaf,
+        state,
+    };
     coord.stop().await;
 }
 
-async fn apply_input<T>(
-    coord: &mut Coordinator<T>,
+async fn apply_input<T, S>(
+    coord: &mut Coordinator<T, S>,
     tx: &Sender<CoordinatorEvent<T>>,
     it: Result<ConsensusInput<T>, CoordinatorError>,
 ) -> Result<(), CoordinatorError>
 where
     T: NodeType,
+    S: NewProtocolStorage<T>,
 {
     match it {
         Ok(it) => coord.apply_consensus(it),
@@ -386,12 +538,13 @@ where
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
 // state and delta only become available one level up, in `Coordinator`.
-fn consensus_event<T>(
-    coordinator: &Coordinator<T>,
+fn consensus_event<T, S>(
+    coordinator: &Coordinator<T, S>,
     output: &ConsensusOutput<T>,
 ) -> Option<CoordinatorEvent<T>>
 where
     T: NodeType,
+    S: NewProtocolStorage<T>,
 {
     match output {
         ConsensusOutput::LeafDecided {

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use espresso_types::{PubKey, SeqTypes};
+use espresso_types::{PubKey, SeqTypes, v0::traits::SequencerPersistence};
 use hotshot_new_protocol::client::ClientApi;
 use hotshot_types::{
     message::{Message, MessageKind},
@@ -38,14 +38,17 @@ pub enum OutboundMessage {
 }
 
 impl ExternalEventHandler {
-    pub async fn new(
+    pub async fn new<P>(
         tasks: &mut TaskList,
         request_response_sender: Sender<Bytes>,
         outbound_message_receiver: Receiver<OutboundMessage>,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         public_key: PubKey,
         dropped_messages: Arc<dyn Counter>,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        P: SequencerPersistence,
+    {
         // Spawn the outbound message handling loop
         tasks.spawn(
             "ExternalEventHandler",
@@ -86,11 +89,13 @@ impl ExternalEventHandler {
     }
 
     /// The main loop for sending outbound messages.
-    async fn outbound_message_loop(
+    async fn outbound_message_loop<P>(
         mut receiver: Receiver<OutboundMessage>,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         public_key: PubKey,
-    ) {
+    ) where
+        P: SequencerPersistence,
+    {
         while let Some(message) = receiver.recv().await {
             let Some(client_api) = consensus_handle.client_api().await else {
                 tracing::warn!("dropping an outbound message: consensus has shut down");

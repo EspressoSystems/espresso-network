@@ -3,14 +3,8 @@ pub mod v0;
 // Re-export the latest major version compatibility types.
 pub use v0::*;
 
-#[cfg(feature = "node")]
-pub mod decided_state;
 pub mod eth_signature_key;
-#[cfg(feature = "node")]
-pub mod null_catchup;
 mod reference_tests;
-#[cfg(feature = "node")]
-pub mod state_cert;
 
 /// Panics when compiled without the `node` feature. Node binaries call this at
 /// startup so a build without consensus support fails immediately instead of

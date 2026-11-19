@@ -1043,7 +1043,7 @@ async fn coordinator_maker_wires_the_tracer_to_the_block_builder() {
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
     let instance_state = TestInstanceState::default();
     let upgrade_lock = test_upgrade_lock::<TestTypes>();
-    let (membership, _storage, _client) =
+    let (membership, storage, _client) =
         mock_membership_with_num_nodes(10, epoch_height, public_key);
     let initializer = HotShotInitializer::from_genesis(
         instance_state,
@@ -1084,10 +1084,7 @@ async fn coordinator_maker_wires_the_tracer_to_the_block_builder() {
         .timeout_duration(Duration::from_secs(30))
         .empty_block_delay(Duration::ZERO)
         .block_sizes(sizes(512))
-        .store(crate::store::ConsensusStore::new(Arc::new(
-            consensus_store::mem::MemStore::new(),
-        )))
-        .restored(Default::default())
+        .storage(storage)
         .metrics(&NoMetrics)
         .consensus_metrics(ConsensusMetricsValue::new(&NoMetrics))
         .leader_tracer(tracer.handle())

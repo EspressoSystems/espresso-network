@@ -22,7 +22,6 @@ use espresso_types::{
     v0_4::{RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::future::{BoxFuture, Future};
-use hotshot_new_protocol::discovery::SignedServiceRecord;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
@@ -174,13 +173,6 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         &self,
         epoch: Option<EpochNumber>,
     ) -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>>;
-    /// The records the validators of `epoch`, or of the latest epoch with records, signed about
-    /// their API services, with the epoch they are for.
-    fn service_records(
-        &self,
-        epoch: Option<EpochNumber>,
-    ) -> impl Send + Future<Output = anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<T>>)>>>;
-
     /// Get the current proposal participation.
     fn current_proposal_participation(
         &self,
@@ -518,15 +510,6 @@ where
     ) -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>> {
         let this = self.clone();
         async move { (*this).get_block_reward(epoch).await }
-    }
-
-    fn service_records(
-        &self,
-        epoch: Option<EpochNumber>,
-    ) -> impl Send + Future<Output = anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<T>>)>>>
-    {
-        let this = self.clone();
-        async move { (*this).service_records(epoch).await }
     }
 
     fn current_proposal_participation(

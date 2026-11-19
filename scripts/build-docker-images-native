@@ -141,6 +141,7 @@ else
       espresso-dev-node
       nasty-client
       node-validator
+      orchestrator
       prover-service
       query-watchdog
       espresso-node

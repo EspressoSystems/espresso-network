@@ -38,7 +38,7 @@ pub mod sql {
     pub use super::storage::sql::{Migration, include_migrations, postgres, sqlite};
 }
 pub mod storage;
-pub(crate) mod update;
+mod update;
 
 pub use extension::ExtensibleDataSource;
 pub use fetching::{AvailabilityProvider, FetchingDataSource};
@@ -46,7 +46,7 @@ pub use fetching::{AvailabilityProvider, FetchingDataSource};
 pub use fs::FileSystemDataSource;
 #[cfg(feature = "metrics-data-source")]
 pub use metrics::MetricsDataSource;
-pub use update::{Transaction, UpdateDataSource, VersionedDataSource, genesis_vid};
+pub use update::{Transaction, UpdateDataSource, VersionedDataSource};
 
 #[cfg(any(test, feature = "testing"))]
 mod test_helpers {
@@ -1758,7 +1758,11 @@ pub mod status_tests {
         {
             // Check that block height is initially zero.
             assert_eq!(ds.block_height().await.unwrap(), 0);
-            // With no block decided, the elapsed time is the time since the Unix epoch.
+            // Before any view, check that the success rate returns NAN (since the block height,
+            // the numerator, is 0, and the view number, the denominator, is 0).
+            assert!(ds.success_rate().await.unwrap().is_nan());
+            // Since there is no block produced, "last_decided_time" metric is 0.
+            // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
             assert!(
                 (ds.elapsed_time_since_last_decide().await.unwrap() as i64
                     - chrono::Utc::now().timestamp())
@@ -1768,13 +1772,10 @@ pub mod status_tests {
             );
         }
 
-        // Decide genesis and a block with a transaction, proposed and decided 3 seconds ago,
-        // recording what the coordinator records on decide.
-        let decided_at = chrono::Utc::now().timestamp() as u64 - 3;
+        // Decide genesis and a block with a transaction, recording what the coordinator records
+        // on decide. The decide happened 3 seconds ago.
         let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
-        chain
-            .push_at([mock_transaction(vec![1, 2, 3])], decided_at)
-            .await;
+        chain.push([mock_transaction(vec![1, 2, 3])]).await;
         ds.handle_event(&chain.decide_event(0..=1, 0)).await;
         let tip = chain.tip().leaf.leaf();
         metrics.current_view.set(*tip.view_number() as usize + 1);
@@ -1782,10 +1783,19 @@ pub mod status_tests {
         metrics
             .last_synced_block_height
             .set(tip.block_header().block_number as usize);
-        metrics.last_decided_time.set(decided_at as usize);
+        metrics
+            .last_decided_time
+            .set(chrono::Utc::now().timestamp() as usize - 3);
 
-        let elapsed = ds.elapsed_time_since_last_decide().await.unwrap();
-        assert!((3..=4).contains(&elapsed), "{elapsed}");
+        {
+            // Check that the success rate has been updated.
+            let success_rate = ds.success_rate().await.unwrap();
+            assert!(success_rate.is_finite(), "{success_rate}");
+            assert!(success_rate > 0.0, "{success_rate}");
+        }
+
+        // Asserting that the elapsed time since the last block is at least 3 seconds
+        assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);
     }
 }
 

@@ -407,10 +407,6 @@ where
     async fn block_height(&self) -> QueryResult<usize> {
         self.data_source.block_height().await
     }
-
-    async fn elapsed_time_since_last_decide(&self) -> QueryResult<u64> {
-        self.data_source.elapsed_time_since_last_decide().await
-    }
 }
 
 #[async_trait]

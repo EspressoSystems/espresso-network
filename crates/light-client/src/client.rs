@@ -1,11 +1,6 @@
 use std::{collections::HashMap, future::Future, ops::Range};
 #[cfg(feature = "client")]
-use std::{
-    fmt::Debug,
-    pin::pin,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{fmt::Debug, pin::pin, time::Duration};
 
 use anyhow::Result;
 #[cfg(feature = "client")]
@@ -342,8 +337,7 @@ pub struct FallbackClient<T> {
     ///
     /// Requests to the [`FallbackClient`] will be tried on each client successively, falling back
     /// down the list until success.
-    #[builder(setter(into))]
-    clients: ClientList<T>,
+    clients: Vec<T>,
 }
 
 #[cfg(feature = "client")]
@@ -352,51 +346,8 @@ impl<T> FallbackClient<T> {
         Self::builder().clients(clients).build()
     }
 
-    /// A client over `clients`, which may be replaced while it runs.
-    pub fn shared(clients: ClientList<T>) -> Result<Self, FallbackClientBuilderError> {
-        Self::builder().clients(clients).build()
-    }
-
     pub fn builder() -> FallbackClientBuilder<T> {
         Default::default()
-    }
-}
-
-/// The clients of a [`FallbackClient`], in the order it tries them.
-///
-/// Clones share the list, so a [`replace`](Self::replace) through one reaches every
-/// [`FallbackClient`] built from another. A request that has started keeps the list it started
-/// with.
-#[cfg(feature = "client")]
-#[derive(Debug)]
-pub struct ClientList<T>(Arc<RwLock<Arc<Vec<T>>>>);
-
-#[cfg(feature = "client")]
-impl<T> ClientList<T> {
-    pub fn new(clients: Vec<T>) -> Self {
-        Self(Arc::new(RwLock::new(Arc::new(clients))))
-    }
-
-    pub fn replace(&self, clients: Vec<T>) {
-        *self.0.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(clients);
-    }
-
-    fn snapshot(&self) -> Arc<Vec<T>> {
-        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-}
-
-#[cfg(feature = "client")]
-impl<T> Clone for ClientList<T> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-#[cfg(feature = "client")]
-impl<T> From<Vec<T>> for ClientList<T> {
-    fn from(clients: Vec<T>) -> Self {
-        Self::new(clients)
     }
 }
 
@@ -406,8 +357,7 @@ where
     T: Client,
 {
     async fn block_height(&self) -> Result<u64> {
-        self.get_any(self.clients.snapshot().iter(), T::block_height)
-            .await
+        self.get_any(&self.clients, T::block_height).await
     }
 
     async fn get_leaves_in_range(
@@ -415,7 +365,7 @@ where
         start: usize,
         end: usize,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
+        self.get_any(&self.clients, |client| {
             client.get_leaves_in_range(start, end)
         })
         .await
@@ -425,17 +375,13 @@ where
         &self,
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
-            client.get_leaves_for_ranges(ranges)
-        })
-        .await
+        self.get_any(&self.clients, |client| client.get_leaves_for_ranges(ranges))
+            .await
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
-            client.header_proof(root, id)
-        })
-        .await
+        self.get_any(&self.clients, |client| client.header_proof(root, id))
+            .await
     }
 
     async fn leaf_proof(
@@ -444,14 +390,12 @@ where
         finalized: Option<u64>,
     ) -> Result<LeafProof> {
         let id = id.into();
-        self.get_any(self.clients.snapshot().iter(), |client| {
-            client.leaf_proof(id, finalized)
-        })
-        .await
+        self.get_any(&self.clients, |client| client.leaf_proof(id, finalized))
+            .await
     }
 
     async fn namespace_proof(&self, height: u64, namespace: NamespaceId) -> Result<NamespaceProof> {
-        self.get_any(self.clients.snapshot().iter(), |client: &T| {
+        self.get_any(&self.clients, |client: &T| {
             client.namespace_proof(height, namespace)
         })
         .await
@@ -463,7 +407,7 @@ where
         end: u64,
         namespace: NamespaceId,
     ) -> Result<Vec<NamespaceProof>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
+        self.get_any(&self.clients, |client| {
             client.namespace_proofs_in_range(start, end, namespace)
         })
         .await
@@ -475,38 +419,34 @@ where
         end: u64,
         namespaces: &[NamespaceId],
     ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
+        self.get_any(&self.clients, |client| {
             client.namespaces_proofs_in_range(start, end, namespaces)
         })
         .await
     }
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
-            client.payload_proof(height)
-        })
-        .await
+        self.get_any(&self.clients, |client| client.payload_proof(height))
+            .await
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
+        self.get_any(&self.clients, |client| {
             client.payload_proofs_in_range(start, end)
         })
         .await
     }
 
     async fn payload_proofs_for_ranges(&self, ranges: &[Range<u64>]) -> Result<Vec<PayloadProof>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
+        self.get_any(&self.clients, |client| {
             client.payload_proofs_for_ranges(ranges)
         })
         .await
     }
 
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
-        self.get_any(self.clients.snapshot().iter(), |client| {
-            client.stake_table_events(epoch)
-        })
-        .await
+        self.get_any(&self.clients, |client| client.stake_table_events(epoch))
+            .await
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
@@ -514,9 +454,7 @@ where
         // one has it. Once every peer has 404'd, `get_any` returns that not-found error, which we
         // map back to `Ok(None)` (absent). Any other error propagates so the fetch is retried.
         match self
-            .get_any(self.clients.snapshot().iter(), |client| {
-                client.cert2(height)
-            })
+            .get_any(&self.clients, |client| client.cert2(height))
             .await
         {
             Ok(cert2) => Ok(cert2),
@@ -528,8 +466,6 @@ where
 
 #[cfg(feature = "client")]
 impl<T> FallbackClient<T> {
-    /// Tries `get` on each of `clients`, a [`ClientList::snapshot`] the caller holds for the
-    /// whole request.
     async fn get_any<C, F>(
         &self,
         clients: impl IntoIterator<Item = C, IntoIter: Send>,

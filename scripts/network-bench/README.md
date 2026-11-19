@@ -67,7 +67,7 @@ just bench run --steps 4,8,12,16 --keep-going
 ```
 laptop                       EC2, one AZ, private IPs
 +--------------+  ssh/rsync  +-------------------------------------------------+
-| aws-bench    |------------>| ctl   anvil - deploy - relay                    |
+| aws-bench    |------------>| ctl   anvil - deploy - orchestrator - relay     |
 |  plan / run  |             |       agent-drive: load, metrics, heights       |
 |  tofu        |<--- out/ ---|       agent-host                                |
 +--------------+             |           |  submit / poll                      |
@@ -83,10 +83,10 @@ laptop                       EC2, one AZ, private IPs
 
 | Host        | Runs                                                                                                   |
 | ----------- | ------------------------------------------------------------------------------------------------------ |
-| `ctl`       | anvil, `deploy`, `stake`, relay, `state-prover`, `agent-drive`, `agent-host`                           |
+| `ctl`       | anvil, `deploy`, `stake`, orchestrator, relay, `state-prover`, `agent-drive`, `agent-host`             |
 | `node0`     | espresso-node `-- storage-sql -- http -- query ... -- light-client`, postgres container, `agent-host`  |
 | query nodes | with `--query-nodes K` (all nodes under `--chaos`), `node0..node{K-1}` run the same modules as `node0` |
-| `node1..`   | espresso-node `-- storage-fs -- http -- query -- status -- submit -- catchup -- config`, `agent-host`  |
+| `node1..`   | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`           |
 
 Modules shown are for `--consensus-storage fs` (default). With `journal`, both roles also get `storage-journal` first.
 
@@ -221,7 +221,7 @@ just bench aws run --tag release-x --latency decaf-2026 --netem full     # per-p
   [Latency model](#latency-model).
 - `--jitter-ratio` (default 0.0065): with `--netem full`, the floor of the jitter half-width as a ratio of the one-way
   delay.
-- Never shaped: `ctl` traffic (L1, relay, submit, metrics), RDS, ssh.
+- Never shaped: `ctl` traffic (orchestrator, L1, relay, submit, metrics), RDS, ssh.
 - Model and profiles: [Latency model](#latency-model).
 
 ### Chaos
@@ -257,8 +257,7 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
   takes any positive value; the heartbeat (50 tx/s of 12 B) does not depend on it.
   - `restart`: `docker restart`. `kill`: `docker kill`, `docker start` after `--chaos-kill-down` (60 s). `wipe`:
     container logs saved to `/opt/bench/espresso-node.wiped.log.gz`, container removed, journal and payload dir emptied,
-    container recreated from `node.env` (`recreate.sh`), started; it reads its stake table from
-    `genesis.toml` again. `mass-restart` (opt-in, e.g.
+    container recreated from `node-rejoin.env` (`recreate.sh`), started. `mass-restart` (opt-in, e.g.
     `--chaos-kinds restart,kill,wipe,mass-restart` or alone): `docker restart` of every node, or of `--chaos-mass-nodes`
     of them, in one tick, all ssh in parallel, to test recovery from storage. `mass-kill` (opt-in, same use):
     `docker kill` of the group, `docker start` after `--chaos-kill-down`.
@@ -279,7 +278,7 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
   least `--chaos-query-floor` (2) query nodes are up and the target and every faulty node keep 2 up peers; otherwise it
   waits for a recovery. Faulty counts stuck nodes and up nodes whose probe failed or is more than 2 blocks behind the
   tip; those are never targets.
-- Query nodes get `ESPRESSO_NODE_SYNC_STATUS_TTL=5s` in `node.env`; the default 5 min cache would
+- Query nodes get `ESPRESSO_NODE_SYNC_STATUS_TTL=5s` in `node.env` and `node-rejoin.env`; the default 5 min cache would
   report a wiped node as synced from its empty database.
 - Recovery gates, 2 consecutive 5 s ticks: a node rejoined when its height and voted view are near the tip of the up
   nodes; a query node then caught up when its height is near the up query nodes' tip and `sync-status` is fully synced
@@ -394,7 +393,7 @@ just bench aws run --tag chaos-dense --chaos --nodes 32 --query-nodes 3 --chaos-
 - L1 faults: anvil on ctl never stalls, reorgs or drops RPC.
 - Network faults: no partitions or latency spikes; `--latency` shaping is static, with `--netem full` a steady jitter
   and loss floor.
-- ctl services: state-relay-server, anvil and the load driver are never faulted.
+- ctl services: orchestrator, state-relay-server, anvil and the load driver are never faulted.
 - Host faults: no instance reboot, disk full, disk stalls or clock skew.
 - Byzantine behaviour: faulted nodes stop or lose state, they never equivocate or send bad data.
 - Faults at or above `f` from single kinds: they stay below the stake budget; liveness loss only through `mass-restart`
@@ -436,7 +435,7 @@ just bench aws run --fleet --prover   # the fleet's ctl needs 12288 MiB, e.g. up
   / `exited N at prover-started, LC height N`. A failed step does not fail the run.
 - Nodes find the light client through `StakeTableV3.lightClient()`; no node environment changes.
 - The prover container uses every `ctl` core (no `--cpus`, no `RAYON_NUM_THREADS`) at `--cpu-shares 2` (cgroup v2
-  `cpu.weight` 1, the minimum), so it yields to the relay and the load driver. `nice` would not: the
+  `cpu.weight` 1, the minimum), so it yields to the orchestrator, the relay and the load driver. `nice` would not: the
   load driver runs in its own systemd unit cgroup, and CFS weighs sibling cgroups before nice values. The `ctl` CPU
   noisy check is skipped with `--prover`. The config hash includes `--prover`.
 - SRS: ark-srs downloads its parameters on first use (`ctl` needs internet egress) into `/data/ark-srs` on `ctl`, which
@@ -514,8 +513,8 @@ just bench aws run --tag release-x --leader-trace
     - `net_node{N}.csv`: `t_ns,rx_bytes,tx_bytes`, `/proc/net/dev` of the default-route interface (resolved once at
       sampler start, as `ip -o -4 route show to default`).
     - Files are block-buffered; the last rows reach disk when the buffer fills or the agent stops.
-  - `node_id` in the file name and rows is the node's position in the genesis stake table, which is its host number.
-    Per-view plots name both the node id and the host directory it was collected from.
+  - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
+    directory it was collected from. Per-view plots name both.
   - `parent Cert1 wait` (header created until `proposal_assembled`): the proposal waits for the parent's Cert1, not
     leader-local work.
   - `parent state + header` includes the wait for the parent's validated state on the Built path (espresso-node). On the
@@ -861,15 +860,10 @@ Each step is judged over its second half. A step stopped early is judged over it
   `linux/amd64`). Recorded as `arch` in the manifest.
 - vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores). A Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
-- Stake: equal, from the genesis stake table. 5 nodes give quorum 4, so a lagging `node0` never stalls consensus.
-- Genesis stake table: one DA entry per node in node order, with the node's public keys from `bench-keys.jsonl` and its
-  cliquenet address (`<private IP>:9000`). The run's `genesis.toml` gets it when the run is shipped, so it is the file
-  the nodes start from; the config hash covers the genesis without it. A run with more nodes than `bench-keys.jsonl`
-  covers is refused by `plan`. There is no start barrier: each node starts consensus when it comes up.
+- Stake: equal, orchestrator self-registration. 5 nodes give quorum 4, so a lagging `node0` never stalls consensus.
 - Peers: every node has state peers. Query nodes set `ESPRESSO_NODE_API_PEERS` to the other query nodes; the single
   query node has none.
-- Keys: test mnemonic, index 20 + i. No `keygen`; the public keys are in `bench-keys.jsonl` (indices 20 to 219).
-  `stake-for-demo` only with `--epoch-height`.
+- Keys: test mnemonic, index 20 + i. No `keygen`. `stake-for-demo` only with `--epoch-height`.
 - Network: cliquenet over private IPs. The security group allows ssh from this machine's IP only (checkip).
 - Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` plus foundry and postgres. Preflight resolves
   digests, hosts pull by digest, the manifest records them.
@@ -894,7 +888,7 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> [shaping] -> services 
 | apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                              | last tf stderr line, destroy, exit 3                   |
 | provisioned | ssh and `cloud-init status --wait`, digests == manifest, render env/start.sh, rsync `/opt/bench`, start `agent-host`                         |                                                        |
 | shaping     | `--latency` only: one tc netem leaf per peer on every node, then ping probes against the expected RTT                                        | probe off by > max(2 ms, 10 %): collect, exit 3        |
-| services    | anvil (`eth_chainId`), deploy (code at genesis addresses), relay (`/healthcheck`), postgres (`pg_isready`)                                   |                                                        |
+| services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator and relay (`/healthcheck`), postgres (`pg_isready`)                  |                                                        |
 | nodes       | `docker create` all, `docker start` at one wall-clock instant, record spread                                                                 | spread >= 2 s: noisy                                   |
 | measuring   | `agent-drive` under `systemd-run`: wait heights, `netbench.drive_load`; laptop polls state, rsyncs every 60 s                                | agent error: collect, exit 3                           |
 | collecting  | stop agent, `docker stop`, per host logs.gz, inspect, cloud-init log, chrony, du, host.jsonl, pg stats, final rsync; each step under timeout |                                                        |
@@ -1019,7 +1013,7 @@ runs/01-run/             one measurement
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
-                         recreate.sh (--chaos), espresso-node.wiped.log.gz (wiped nodes)
+                         node-rejoin.env, recreate.sh (--chaos), espresso-node.wiped.log.gz (wiped nodes)
                          trace/ (--leader-trace: leader_trace_node*.csv, cpu_node*.csv, net_node*.csv)
                          pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
@@ -1065,7 +1059,7 @@ runs/01-run/             one measurement
 
 ### 100 nodes
 
-- `--nodes 100` grows: host map, genesis stake table and capacity, peer lists (3 per node).
+- `--nodes 100` grows: host map, orchestrator node count, genesis capacity, peer lists (3 per node).
 - Open: vCPU quota (100 x 16 + 8), capacity in one AZ, `--max-usd` ~ 80, ghcr pull storm (mirror on `ctl`), parallel
   metrics scrape, `metrics.jsonl` size.
 
@@ -1090,8 +1084,7 @@ scripts/network-bench/
   finalization_timeline.py timeline.svg of trace-plots
   leader_window.py       leader_window.png of trace-plots
   instance-types.md      leader block-build time and cost per block per instance type
-  genesis.toml           0.6, 100 MB blocks, 1 wei base fee, stake table of the local 3 nodes
-  bench-keys.jsonl       public keys of the AWS nodes (test mnemonic indices 20 to 219)
+  genesis.toml           0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml   local 3-node network
   justfile               `just bench <recipe>`; `aws` forwards to aws-bench
   aws/user-data.sh       cloud-init template, every host

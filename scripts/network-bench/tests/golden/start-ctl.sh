@@ -11,6 +11,10 @@ id=$(docker create --name deploy --network host --restart no --env-file /opt/ben
 jq --arg n deploy --arg i "$id" '. + {($n): $i}' /opt/bench/containers.json > /opt/bench/containers.json.tmp
 mv /opt/bench/containers.json.tmp /opt/bench/containers.json
 
+id=$(docker create --name orchestrator --network host --restart no --env-file /opt/bench/ctl.env ghcr.io/x/orchestrator:t@sha256:0000000000000000000000000000000000000000000000000000000000000000 /bin/orchestrator)
+jq --arg n orchestrator --arg i "$id" '. + {($n): $i}' /opt/bench/containers.json > /opt/bench/containers.json.tmp
+mv /opt/bench/containers.json.tmp /opt/bench/containers.json
+
 id=$(docker create --name state-relay-server --network host --restart no --env-file /opt/bench/ctl.env ghcr.io/x/state-relay-server:t@sha256:0000000000000000000000000000000000000000000000000000000000000000 /bin/state-relay-server)
 jq --arg n state-relay-server --arg i "$id" '. + {($n): $i}' /opt/bench/containers.json > /opt/bench/containers.json.tmp
 mv /opt/bench/containers.json.tmp /opt/bench/containers.json

@@ -17,12 +17,8 @@ espresso-node \
   -- follower -- catchup -- config -- submit -- explorer
 ```
 
-The `follower` module selects follower mode. It starts from the query module's `--peers` (`ESPRESSO_NODE_API_PEERS`),
-which must be set, and finds the API services of the validators through them: every minute it asks the first that
-answers for the records of the epoch of its newest stored block (gRPC `NodeService/GetPeers`, on the HTTP port), keeps
-the records signed by validators staked in that epoch, and adds their URLs after the configured ones. Its upstreams are
-all of these. Only a validator's API service lists records; a follower configured with other followers alone keeps just
-those. The follower needs:
+The `follower` module selects follower mode. Its upstreams are the query module's `--peers` (`ESPRESSO_NODE_API_PEERS`),
+which must be set. The follower needs:
 
 - the `storage-sql`, `http` and `query` modules: merklized state, rewards and the explorer need SQL storage;
 - an L1 RPC, for fee deposits and the stake table, like any node;
@@ -32,7 +28,8 @@ those. The follower needs:
   in `--state-peers` must serve `/v1/light-client/header/{root}/{height}` (SQL query nodes); otherwise the seed fails
   and the follower walks every epoch.
 
-It does not need staking keys or cliquenet; those options are ignored. `--state-peers` defaults to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to
+It does not need staking keys, an orchestrator or cliquenet; those options are ignored. `--state-peers` and
+`--config-peers` default to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to
 identify itself with.
 
 Tuning, as options of the `follower` module (the first two) and top-level options:
@@ -89,8 +86,8 @@ stake table and each epoch root's `next_stake_table_hash`), headers (Merkle incl
 and VID common (against the header), cert2 (threshold signature), state certificates (`validate_state_cert`), merklized
 state (recomputed locally).
 
-Trusted like a validator: the L1 RPC, and the genesis stake table in the genesis file (or, on a network started by an
-orchestrator, the network config the node stored back then). Pin `--light-client-genesis` to use another root of trust.
+Trusted like a validator: the L1 RPC, and the network config on first start (persisted, else fetched from
+`--config-peers`). Pin `--light-client-genesis` to stop trusting the peers for the root of trust.
 
 Not verified, liveness only: the upstreams' claimed block height and submit forwarding.
 

@@ -67,12 +67,10 @@ just demo-native                      # local network via process-compose
   `BlockId::finalized()`.
 - **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds
   `ValidatorMap`. Selection rules: `doc/agents/architecture.md`.
-- **Catchup** (`crates/espresso/node/src/catchup.rs`): `StatePeers` (HTTP, reliability scored), `ParallelStateCatchup`
-  (races all providers, first success wins; `StatePeers` is a fallback provider started after
-  `ESPRESSO_NODE_HTTP_CATCHUP_DELAY` when a request-response provider is present), and `SqlStateCatchup` (the query
-  service's own DB, used only by its state loop). Fetches fee/reward proofs, block frontier, chain config, leaf chain,
-  and `LightClientStateUpdateCertificateV2` state certs per epoch. Consensus restarts from the decided state in its store
-  (`crates/espresso/types/src/decided_state.rs`) and fetches only what that lacks.
+- **Catchup** (`crates/espresso/node/src/catchup.rs`): `SqlStateCatchup` (local DB), `StatePeers` (HTTP, reliability
+  scored), `ParallelStateCatchup` (races all providers, first success wins; `StatePeers` is a fallback provider started
+  after `ESPRESSO_NODE_HTTP_CATCHUP_DELAY` when a request-response provider is present). Fetches fee/reward proofs,
+  block frontier, chain config, leaf chain, and `LightClientStateUpdateCertificateV2` state certs per epoch.
 
 ## Key crates
 

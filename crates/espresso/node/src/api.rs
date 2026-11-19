@@ -1,8 +1,8 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     pin::Pin,
     sync::{Arc, OnceLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use ::light_client::{
@@ -16,7 +16,6 @@ use anyhow::{Context, bail, ensure};
 use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
-use consensus_api::{DecideLogClient, proto::ServiceRecordsRequest};
 use data_source::{
     CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StateCertDataSource,
     StateCertFetchingDataSource, SubmitDataSource,
@@ -34,6 +33,7 @@ use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
+    retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_3::{
@@ -46,7 +46,6 @@ use espresso_types::{
 };
 use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
-use hotshot_new_protocol::discovery::{RETAINED_EPOCHS, SignedServiceRecord};
 use hotshot_query_service::{
     availability::VidCommonQueryData,
     data_source::ExtensibleDataSource,
@@ -83,12 +82,16 @@ use crate::{
         context::{ApiContext, ConsensusSource, NodeLightClient},
         data_source::TokenDataSource,
     },
-    catchup::CatchupStorage,
+    catchup::{
+        CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
+        add_v2_reward_accounts_to_state,
+    },
     request_response::{
         RequestResponseProtocol,
+        data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
         request::{Request, Response},
     },
-    state_cert::{StateCertFetchError, ensure_cert_can_exist},
+    state_cert::{StateCertFetchError, ensure_cert_can_exist, validate_state_cert},
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::{SequencerApiVersion, SequencerContext};
@@ -126,48 +129,6 @@ struct ApiState {
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
-
-    service_records: ServiceRecordCache,
-}
-
-/// The records the validators signed about their API services, per epoch, as consensus last
-/// served them.
-///
-/// Records of the latest epoch can still change, so they are fetched again once older than
-/// [`LATEST_RECORDS_TTL`]; those of earlier epochs are kept. The cache holds the latest
-/// [`RETAINED_EPOCHS`] epochs, as consensus does.
-#[derive(Clone, Debug, Default)]
-struct ServiceRecordCache {
-    /// Per epoch, when the records were fetched, and the records.
-    epochs: Arc<parking_lot::Mutex<BTreeMap<EpochNumber, FetchedRecords>>>,
-}
-
-type FetchedRecords = (Instant, Vec<SignedServiceRecord<SeqTypes>>);
-
-/// How long the records of the latest epoch are served from the cache.
-const LATEST_RECORDS_TTL: Duration = Duration::from_secs(10);
-
-impl ServiceRecordCache {
-    /// The cached records of `epoch`, or of the latest cached epoch, if still fresh.
-    fn get(
-        &self,
-        epoch: Option<EpochNumber>,
-    ) -> Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)> {
-        let epochs = self.epochs.lock();
-        let (latest, _) = epochs.last_key_value()?;
-        let epoch = epoch.unwrap_or(*latest);
-        let (fetched, records) = epochs.get(&epoch)?;
-        (epoch < *latest || fetched.elapsed() < LATEST_RECORDS_TTL)
-            .then(|| (epoch, records.clone()))
-    }
-
-    fn insert(&self, epoch: EpochNumber, records: Vec<SignedServiceRecord<SeqTypes>>) {
-        let mut epochs = self.epochs.lock();
-        epochs.insert(epoch, (Instant::now(), records));
-        while epochs.len() as u64 > RETAINED_EPOCHS {
-            epochs.pop_first();
-        }
-    }
 }
 
 impl ApiState {
@@ -178,7 +139,6 @@ impl ApiState {
                 .max_capacity(1)
                 .time_to_live(Duration::from_secs(3600))
                 .build(),
-            service_records: ServiceRecordCache::default(),
         }
     }
 
@@ -278,13 +238,6 @@ impl<D: Sync> StakeTableDataSource<SeqTypes> for StorageState<D> {
     ) -> anyhow::Result<Option<RewardAmount>> {
         self.as_ref().get_block_reward(epoch).await
     }
-    async fn service_records(
-        &self,
-        epoch: Option<EpochNumber>,
-    ) -> anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)>> {
-        self.as_ref().service_records(epoch).await
-    }
-
     /// Get all the validator participation for the current epoch
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
         self.as_ref().current_proposal_participation().await
@@ -469,46 +422,6 @@ impl StakeTableDataSource<SeqTypes> for ApiState {
             .snapshot()
             .validators()
             .clone())
-    }
-
-    async fn service_records(
-        &self,
-        epoch: Option<EpochNumber>,
-    ) -> anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)>> {
-        let cache = &self.service_records;
-        if let Some(found) = cache.get(epoch) {
-            return Ok(Some(found));
-        }
-        // A follower runs no consensus and so has no records.
-        let Some(addr) = self.context().await.consensus_api_addr() else {
-            return Ok(None);
-        };
-        let mut client = DecideLogClient::connect(format!("http://{addr}"))
-            .await
-            .context("connecting to the consensus API")?;
-        let response = match client
-            .get_service_records(ServiceRecordsRequest {
-                epoch: epoch.map(|e| *e),
-            })
-            .await
-        {
-            Ok(response) => response.into_inner(),
-            Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-            Err(status) => return Err(anyhow::anyhow!("fetching service records: {status}")),
-        };
-        let records = response
-            .records
-            .iter()
-            .filter_map(|bytes| {
-                bincode::deserialize::<SignedServiceRecord<SeqTypes>>(bytes)
-                    .inspect_err(|err| tracing::warn!(%err, "undecodable service record"))
-                    .ok()
-            })
-            .filter(SignedServiceRecord::is_valid)
-            .collect::<Vec<_>>();
-        let epoch = EpochNumber::new(response.epoch);
-        cache.insert(epoch, records.clone());
-        Ok(Some((epoch, records)))
     }
 
     /// Get the current proposal participation.
@@ -734,7 +647,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
             ))),
             Ok(Ok(cert)) => {
                 // Validation errors should be mapped to ValidationError
-                espresso_types::state_cert::validate_state_cert(
+                validate_state_cert(
                     &cert,
                     &stake_table,
                     EpochNumber::new(epoch),
@@ -880,11 +793,33 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        let (tree, _) = self
+        // Check if we have the desired state in memory.
+        match self
+            .as_ref()
+            .get_accounts(instance, height, view, accounts)
+            .await
+        {
+            Ok(accounts) => return Ok(accounts),
+            Err(err) => {
+                tracing::info!("accounts not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        let (tree, leaf) = self
             .inner()
             .get_accounts(instance, height, view, accounts)
             .await
-            .context("could not fetch accounts from storage")?;
+            .context("accounts not in memory, and could not fetch from storage")?;
+        // If we successfully fetched accounts from storage, try to add them back into the in-memory
+        // state.
+
+        let handle = self.as_ref().consensus().await;
+        if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
+            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        }
+        tracing::info!(?view, "updated with fetched account state");
+
         Ok(tree)
     }
 
@@ -895,6 +830,15 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
+        // Check if we have the desired state in memory.
+        match self.as_ref().get_frontier(instance, height, view).await {
+            Ok(frontier) => return Ok(frontier),
+            Err(err) => {
+                tracing::info!("frontier is not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
         self.inner().get_frontier(instance, height, view).await
     }
 
@@ -932,11 +876,34 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let (tree, _) = self
+        // Check if we have the desired state in memory.
+        match self
+            .as_ref()
+            .get_reward_accounts_v2(instance, height, view, accounts)
+            .await
+        {
+            Ok(accounts) => return Ok(accounts),
+            Err(err) => {
+                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        let (tree, leaf) = self
             .inner()
             .get_reward_accounts_v2(instance, height, view, accounts)
             .await
-            .context("could not fetch accounts from storage")?;
+            .context("accounts not in memory, and could not fetch from storage")?;
+
+        // If we successfully fetched accounts from storage, try to add them back into the in-memory
+        // state.
+        let handle = self.as_ref().consensus().await;
+        if let Err(err) =
+            add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
+        {
+            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        }
+        tracing::info!(?view, "updated with fetched account state");
 
         Ok(tree)
     }
@@ -949,11 +916,34 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        let (tree, _) = self
+        // Check if we have the desired state in memory.
+        match self
+            .as_ref()
+            .get_reward_accounts_v1(instance, height, view, accounts)
+            .await
+        {
+            Ok(accounts) => return Ok(accounts),
+            Err(err) => {
+                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        let (tree, leaf) = self
             .inner()
             .get_reward_accounts_v1(instance, height, view, accounts)
             .await
-            .context("could not fetch accounts from storage")?;
+            .context("accounts not in memory, and could not fetch from storage")?;
+
+        // If we successfully fetched accounts from storage, try to add them back into the in-memory
+        // state.
+        let handle = self.as_ref().consensus().await;
+        if let Err(err) =
+            add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
+        {
+            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        }
+        tracing::info!(?view, "updated with fetched account state");
 
         Ok(tree)
     }
@@ -961,8 +951,14 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
     async fn get_reward_merkle_tree_v2(
         &self,
         height: u64,
-        _view: ViewNumber,
+        view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
+        match self.as_ref().get_reward_merkle_tree_v2(height, view).await {
+            Ok(tree) => return Ok(tree),
+            Err(err) => {
+                tracing::info!("reward merkle tree is not in memory, trying storage: {err:#}");
+            },
+        }
         self.inner()
             .load_serialized_reward_merkle_tree_v2(height)
             .await
@@ -989,23 +985,33 @@ impl NodeStateDataSource for ApiState {
 }
 
 impl CatchupDataSource for ApiState {
+    #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _accounts: &[FeeAccount],
+        height: u64,
+        view: ViewNumber,
+        accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        bail!("the API service serves state only from storage")
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
+        retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
     }
 
+    #[tracing::instrument(skip(self, _instance))]
     async fn get_frontier(
         &self,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
+        height: u64,
+        view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        bail!("the API service serves state only from storage")
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
+        let tree = &state.block_merkle_tree;
+        let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
+        Ok(frontier)
     }
 
     async fn get_chain_config(
@@ -1027,32 +1033,53 @@ impl CatchupDataSource for ApiState {
         }
     }
 
+    #[tracing::instrument(skip(self, _instance))]
     async fn get_reward_accounts_v2(
         &self,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _accounts: &[RewardAccountV2],
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        bail!("the API service serves state only from storage")
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
+
+        retain_v2_reward_accounts(&state.reward_merkle_tree_v2, accounts.iter().copied())
     }
 
+    #[tracing::instrument(skip(self, _instance))]
     async fn get_reward_accounts_v1(
         &self,
         _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _accounts: &[RewardAccountV1],
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        bail!("the API service serves state only from storage")
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
+
+        retain_v1_reward_accounts(&state.reward_merkle_tree_v1, accounts.iter().copied())
     }
 
     async fn get_reward_merkle_tree_v2(
         &self,
-        _height: u64,
-        _view: ViewNumber,
+        height: u64,
+        view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        bail!("the API service serves state only from storage")
+        let state = self.consensus().await.state(view).await.context(format!(
+            "state not available for height {height}, view {view}"
+        ))?;
+
+        let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
+            .inspect_err(
+            |err| tracing::debug!(%err, height, %view, "cannot serve reward merkle tree"),
+        )?;
+        let merkle_tree_bytes = bincode::serialize(&tree_data)
+            .context("Merkle tree serialization failed; this should never happen.")?;
+
+        Ok(merkle_tree_bytes)
     }
 
     async fn get_state_cert(
@@ -1792,11 +1819,12 @@ pub mod test_helpers {
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        light_client::LCV3StateSignatureRequestBody, new_protocol::CoordinatorEvent,
-        traits::metrics::NoMetrics,
+        event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
+        new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
     use http_client::{Client, error::ClientErr};
     use itertools::izip;
+    use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use staking_cli::{
         Transaction as StakingTransaction,
         demo::{DelegationConfig, StakingTransactions},
@@ -1813,8 +1841,8 @@ pub mod test_helpers {
         catchup::{NullStateCatchup, ParallelStateCatchup, StatePeers},
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, deploy_stake_table, wait_for_decide_on_handle,
-            wait_for_epochs,
+            TestConfig, TestConfigBuilder, decided_leaves, deploy_stake_table,
+            wait_for_decide_on_handle, wait_for_epochs,
         },
     };
 
@@ -2160,7 +2188,7 @@ pub mod test_helpers {
                                 opt.serve(|metrics, consumer, storage, _| {
                                     let cfg = cfg.clone();
                                     async move {
-                                        let node = cfg
+                                        Ok(cfg
                                             .init_node(
                                                 0,
                                                 state,
@@ -2173,32 +2201,26 @@ pub mod test_helpers {
                                                 upgrade,
                                                 upgrades_map,
                                             )
-                                            .await;
-                                        crate::api::context::ValidatorApi::at_genesis(node, upgrade)
-                                            .await
+                                            .await)
                                     }
                                     .boxed()
                                 })
                                 .await
                                 .unwrap()
-                                .node
                             } else {
-                                let mut ctx = cfg
-                                    .init_node(
-                                        i,
-                                        state,
-                                        persistence,
-                                        Some(state_peers),
-                                        None,
-                                        &NoMetrics,
-                                        STAKE_TABLE_CAPACITY_FOR_TEST,
-                                        NullEventConsumer,
-                                        upgrade,
-                                        upgrades_map,
-                                    )
-                                    .await;
-                                ingest_and_discard(&mut ctx);
-                                ctx
+                                cfg.init_node(
+                                    i,
+                                    state,
+                                    persistence,
+                                    Some(state_peers),
+                                    None,
+                                    &NoMetrics,
+                                    STAKE_TABLE_CAPACITY_FOR_TEST,
+                                    NullEventConsumer,
+                                    upgrade,
+                                    upgrades_map,
+                                )
+                                .await
                             }
                         }
                         .boxed()
@@ -2324,7 +2346,7 @@ pub mod test_helpers {
             catchup: C,
             upgrade: versions::Upgrade,
         ) -> SequencerContext<P::Persistence> {
-            let mut ctx = self
+            let ctx = self
                 .cfg
                 .init_node(
                     i,
@@ -2339,7 +2361,6 @@ pub mod test_helpers {
                     self.cfg.upgrades(),
                 )
                 .await;
-            ingest_and_discard(&mut ctx);
             ctx.start_consensus().await;
             ctx
         }
@@ -2362,34 +2383,6 @@ pub mod test_helpers {
         }
     }
 
-    /// Runs an ingester that stores nothing for `ctx`, a node without the query module, so that
-    /// its decide log is freed as on a node with one.
-    fn ingest_and_discard<P: SequencerPersistence>(ctx: &mut SequencerContext<P>) {
-        let addr = ctx.consensus_api_addr();
-        ctx.spawn("ingester", async move {
-            ingester::run::<SeqTypes>(addr, &DiscardSink::default()).await
-        });
-    }
-
-    /// The height after the last block appended, which is all it keeps.
-    #[derive(Default)]
-    struct DiscardSink(std::sync::atomic::AtomicU64);
-
-    #[async_trait]
-    impl ingester::Sink<SeqTypes> for DiscardSink {
-        async fn append(&self, block: ingester::Block<SeqTypes>) -> anyhow::Result<()> {
-            self.0.store(
-                block.leaf.height() + 1,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            Ok(())
-        }
-
-        async fn block_height(&self) -> anyhow::Result<u64> {
-            Ok(self.0.load(std::sync::atomic::Ordering::Relaxed))
-        }
-    }
-
     /// Adds node 0's API, if given, as a catchup provider alongside `catchup`. From epoch 3 the
     /// new protocol fetches epoch root leaves through catchup, so a node without storage or state
     /// peers would otherwise wedge at the first epoch boundary. Both providers are queried at
@@ -2407,7 +2400,7 @@ pub mod test_helpers {
                 &NoMetrics,
             )));
         }
-        ParallelStateCatchup::new(&providers)
+        ParallelStateCatchup::new(&providers, Duration::from_secs(5))
     }
 
     /// Deploys the stake table (with a mock light client) sized to the
@@ -2759,7 +2752,8 @@ pub mod test_helpers {
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
-        // that we set it up correctly. Wait for a (non-genesis) block to be sequenced.
+        // that we set it up correctly. Wait for a (non-genesis) block to be sequenced and then
+        // check the success rate metrics.
         while client
             .get::<u64>("status/block-height")
             .send()
@@ -2769,6 +2763,17 @@ pub mod test_helpers {
         {
             sleep(Duration::from_secs(1)).await;
         }
+        let success_rate = client
+            .get::<f64>("status/success-rate")
+            .send()
+            .await
+            .unwrap();
+        // If metrics are populating correctly, we should get a finite number. If not, we might get
+        // NaN or infinity due to division by 0.
+        assert!(success_rate.is_finite(), "{success_rate}");
+        // We know at least some views have been successful, since we finalized a block.
+        assert!(success_rate > 0.0, "{success_rate}");
+
         let keys: NodePublicKeys = client.get("status/keys").send().await.unwrap();
         let expected = network.server.validator_config();
         assert_eq!(keys.consensus_key, expected.public_key);
@@ -2866,27 +2871,143 @@ pub mod test_helpers {
             .await
             .unwrap();
     }
+
+    /// Test the catchup API with custom options.
+    ///
+    /// The `opt` function can be used to modify the [`Options`] which are used to start the server.
+    /// By default, the options are the minimal required to run this test (configuring a port and
+    /// enabling the catchup API). `opt` may add additional functionality (e.g. adding a query module
+    /// to test a different initialization path) but should not remove or modify the existing
+    /// functionality (e.g. removing the catchup module or changing the port).
+    pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
+
+        let options = opt(Options::with_port(port));
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        client.connect(None).await;
+
+        // Wait for a few blocks to be decided.
+        let mut events = network.server.event_stream();
+        loop {
+            if let Some(leaf_chain) = decided_leaves(&events.next().await.unwrap())
+                && leaf_chain
+                    .iter()
+                    .any(|LeafInfo { leaf, .. }| leaf.block_header().height() > 2)
+            {
+                break;
+            }
+        }
+
+        // Consensus keeps running: at 0.6 stopping it drops every in-memory state. So the
+        // leaf can be decided and garbage collected between reading its state and serving the
+        // request; retry on a fresh undecided leaf when that happens.
+        for attempt in 0.. {
+            assert!(attempt < 50, "never served catchup for an undecided state");
+            if try_undecided_catchup(&network, &client).await {
+                return;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Checks the catchup API against the newest undecided state, or returns `false` if there
+    /// is none or it went out of memory mid-check.
+    async fn try_undecided_catchup<P: PersistenceOptions, const NUM_NODES: usize>(
+        network: &TestNetwork<P, NUM_NODES>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+    ) -> bool {
+        let undecided = network.server.consensus_handle().undecided_leaves().await;
+        let Some(leaf) = undecided.iter().max_by_key(|leaf| leaf.height()) else {
+            return false;
+        };
+        let (height, view) = (leaf.height(), leaf.view_number());
+        let Some(state) = network.server.state(view).await else {
+            return false;
+        };
+
+        // Undecided fee state: absent account.
+        let Ok(res) = client
+            .get::<AccountQueryData>(&format!(
+                "catchup/{height}/{}/account/{:x}",
+                view.u64(),
+                Address::default()
+            ))
+            .send()
+            .await
+        else {
+            return false;
+        };
+        assert_eq!(res.balance, U256::ZERO);
+        assert_eq!(
+            res.proof
+                .verify(&state.fee_merkle_tree.commitment())
+                .unwrap(),
+            U256::ZERO,
+        );
+
+        // Undecided block state.
+        let Ok(res) = client
+            .get::<BlocksFrontier>(&format!("catchup/{height}/{}/blocks", view.u64()))
+            .send()
+            .await
+        else {
+            return false;
+        };
+        let root = &state.block_merkle_tree.commitment();
+        BlockMerkleTree::verify(root, root.size() - 1, res)
+            .unwrap()
+            .unwrap();
+        true
+    }
 }
 
 #[cfg(test)]
 mod api_tests {
-    use std::marker::PhantomData;
+    use std::{fmt::Debug, marker::PhantomData};
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
-    use espresso_types::{Header, NamespaceId, NamespaceProofQueryData, TEST_UPGRADE};
-    use futures::stream::StreamExt;
-    use hotshot_query_service::availability::{BlockQueryData, VidCommonQueryData};
+    use espresso_types::{
+        Header, Leaf2, NamespaceId, NamespaceProofQueryData, TEST_UPGRADE, ValidatedState,
+        traits::{EventConsumer, PersistenceOptions},
+    };
+    use futures::{future, stream::StreamExt};
+    use hotshot_query_service::availability::{
+        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
+    };
+    use hotshot_types::{
+        data::{
+            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+            VidDisperseShare, ns_table::parse_ns_table, vid_disperse::AvidmGf2DisperseShare,
+        },
+        event::LeafInfo,
+        message::Proposal,
+        simple_certificate::{CertificatePair, QuorumCertificate2},
+        traits::{EncodeBytes, signature_key::SignatureKey},
+        utils::EpochTransitionIndicator,
+        vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+    };
     use http_client::{Client, error::ClientErr};
     use test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, state_signature_test_helper, status_test_helper,
-        submit_test_helper,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
+        status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
     use vbs::version::StaticVersion;
+    use versions::NEW_PROTOCOL_VERSION;
 
-    use super::*;
-    use crate::testing::{TestConfigBuilder, wait_for_decide_on_handle};
+    use super::{update::ApiEventConsumer, *};
+    use crate::{
+        persistence::sql::DECIDE_GAP_FILL_HORIZON,
+        testing::{TestConfigBuilder, wait_for_decide_on_handle},
+    };
 
     #[rstest_reuse::template]
     #[rstest::rstest]
@@ -3070,6 +3191,343 @@ mod api_tests {
             assert_eq!(proof.transactions, &[]);
         }
     }
+
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub(crate) async fn catchup_test_with_query_module<D: TestableSequencerDataSource>(
+        _d: PhantomData<D>,
+    ) {
+        let storage = D::create_storage().await;
+        catchup_test_helper(|opt| D::options(&storage, opt)).await
+    }
+
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub async fn test_non_consecutive_decide_with_failing_event_consumer<D>(_d: PhantomData<D>)
+    where
+        D: TestableSequencerDataSource + Debug + 'static,
+    {
+        use hotshot_types::new_protocol::CoordinatorEvent;
+
+        #[derive(Clone, Copy, Debug)]
+        struct FailConsumer;
+
+        #[async_trait]
+        impl EventConsumer for FailConsumer {
+            async fn handle_event(&self, _: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+                bail!("mock error injection");
+            }
+        }
+
+        let (pubkey, privkey) = PubKey::generated_from_seed_indexed([0; 32], 1);
+
+        let storage = D::create_storage().await;
+        let persistence = D::persistence_options(&storage).create().await.unwrap();
+        let data_source: Arc<StorageState<_>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
+
+        // Create two non-consecutive leaf chains.
+        let mut chain1 = vec![];
+
+        let node_state = NodeState::mock().with_genesis_version(NEW_PROTOCOL_VERSION);
+        let genesis = Leaf2::genesis(&Default::default(), &node_state, TEST_UPGRADE.base).await;
+        let payload = genesis.block_payload().unwrap();
+        let payload_bytes_arc = payload.encode();
+
+        let avidm_param = init_avidm_gf2_param(2).unwrap();
+        let weights = vec![1u32; 2];
+
+        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.ns_table().encode());
+        let (payload_commitment, common, shares) =
+            AvidmGf2Scheme::ns_disperse(&avidm_param, &weights, &payload_bytes_arc, ns_table)
+                .unwrap();
+
+        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header: genesis.block_header().clone(),
+                view_number: ViewNumber::genesis(),
+                justify_qc: QuorumCertificate2::genesis(
+                    &ValidatedState::default(),
+                    &node_state,
+                    TEST_UPGRADE,
+                )
+                .await,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: None,
+                state_cert: None,
+            },
+        };
+        let mut qc =
+            QuorumCertificate2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE)
+                .await;
+
+        // Long enough that the gap at view 2 falls outside `DECIDE_GAP_FILL_HORIZON` of the newest
+        // decide, so the leaves after it are delivered rather than held for a gap-fill decide.
+        let chain_len = 3 + DECIDE_GAP_FILL_HORIZON;
+        let mut justify_qc = qc.clone();
+        for i in 0..chain_len {
+            *quorum_proposal.proposal.block_header.height_mut() = i;
+            quorum_proposal.proposal.view_number = ViewNumber::new(i);
+            quorum_proposal.proposal.justify_qc = justify_qc;
+            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            qc.view_number = leaf.view_number();
+            qc.data.leaf_commit = Committable::commit(&leaf);
+            justify_qc = qc.clone();
+            chain1.push((leaf.clone(), CertificatePair::non_epoch_change(qc.clone())));
+
+            // Include a quorum proposal for each leaf.
+            let quorum_proposal_signature =
+                PubKey::sign(&privkey, &bincode::serialize(&quorum_proposal).unwrap())
+                    .expect("Failed to sign quorum_proposal");
+            persistence
+                .append_quorum_proposal2(&Proposal {
+                    data: quorum_proposal.clone(),
+                    signature: quorum_proposal_signature,
+                    _pd: Default::default(),
+                })
+                .await
+                .unwrap();
+
+            // Include VID information for each leaf.
+            let share: VidDisperseShare<SeqTypes> = AvidmGf2DisperseShare {
+                view_number: leaf.view_number(),
+                payload_commitment,
+                share: shares[0].clone(),
+                recipient_key: pubkey,
+                epoch: Some(EpochNumber::new(0)),
+                target_epoch: Some(EpochNumber::new(0)),
+                common: common.clone(),
+            }
+            .into();
+
+            persistence
+                .append_vid(&share.to_proposal(&privkey).unwrap())
+                .await
+                .unwrap();
+
+            // Include payload information for each leaf.
+            let block_payload_signature =
+                PubKey::sign(&privkey, &payload_bytes_arc).expect("Failed to sign block payload");
+            let da_proposal_inner = DaProposal2::<SeqTypes> {
+                encoded_transactions: payload_bytes_arc.clone(),
+                metadata: payload.ns_table().clone(),
+                view_number: leaf.view_number(),
+                epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            };
+            let da_proposal = Proposal {
+                data: da_proposal_inner,
+                signature: block_payload_signature,
+                _pd: Default::default(),
+            };
+            persistence
+                .append_da2(&da_proposal, VidCommitment::V2(payload_commitment))
+                .await
+                .unwrap();
+        }
+        // Split into two chains.
+        let mut chain2 = chain1.split_off(2);
+        // Make non-consecutive (i.e. we skip a leaf).
+        chain2.remove(0);
+
+        // Decide 2 leaves, but fail in event processing.
+        let leaf_chain = chain1
+            .iter()
+            .map(|(leaf, qc)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        tracing::info!("decide with event handling failure");
+        persistence
+            .append_decided_leaves(
+                ViewNumber::new(1),
+                leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                &FailConsumer,
+            )
+            .await
+            .unwrap();
+
+        // Now decide remaining leaves successfully. We should now process a decide event for all
+        // the leaves.
+        let consumer = ApiEventConsumer::from(data_source.clone());
+        let leaf_chain = chain2
+            .iter()
+            .map(|(leaf, qc)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        tracing::info!("decide successfully");
+        persistence
+            .append_decided_leaves(
+                ViewNumber::new(chain_len - 1),
+                leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        // Check that the leaves were moved to archive storage, along with payload and VID
+        // information.
+        for (leaf, cert) in chain1.iter().chain(&chain2) {
+            tracing::info!(height = leaf.height(), "check archive");
+            let qd = data_source.get_leaf(leaf.height() as usize).await.await;
+            let stored_leaf: Leaf2 = qd.leaf().clone();
+            let stored_qc = qd.qc().clone();
+            assert_eq!(&stored_leaf, leaf);
+            assert_eq!(&stored_qc, cert.qc());
+
+            data_source
+                .get_block(leaf.height() as usize)
+                .await
+                .try_resolve()
+                .ok()
+                .unwrap();
+            data_source
+                .get_vid_common(leaf.height() as usize)
+                .await
+                .try_resolve()
+                .ok()
+                .unwrap();
+
+            // Check that all data has been garbage collected for the decided views.
+            assert!(
+                persistence
+                    .load_da_proposal(leaf.view_number())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                persistence
+                    .load_vid_share(leaf.view_number())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                persistence
+                    .load_quorum_proposal(leaf.view_number())
+                    .await
+                    .is_err()
+            );
+        }
+
+        // Check that data has _not_ been garbage collected for the missing view.
+        assert!(
+            persistence
+                .load_da_proposal(ViewNumber::new(2))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            persistence
+                .load_vid_share(ViewNumber::new(2))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        persistence
+            .load_quorum_proposal(ViewNumber::new(2))
+            .await
+            .unwrap();
+    }
+
+    #[rstest_reuse::apply(testable_sequencer_data_source)]
+    pub async fn test_decide_missing_data<D>(_d: PhantomData<D>)
+    where
+        D: TestableSequencerDataSource + Debug + 'static,
+    {
+        use ark_serialize::CanonicalDeserialize;
+
+        let storage = D::create_storage().await;
+        let persistence = D::persistence_options(&storage).create().await.unwrap();
+        let data_source: Arc<StorageState<_>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
+        let consumer = ApiEventConsumer::from(data_source.clone());
+
+        let node_state = NodeState::mock().with_genesis_version(NEW_PROTOCOL_VERSION);
+        let mut qc =
+            QuorumCertificate2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE)
+                .await;
+        let leaf = Leaf2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE.base).await;
+
+        // Append the genesis leaf. We don't use this for the test, because the update function will
+        // automatically fill in the missing data for genesis. We just append this to get into a
+        // consistent state to then append the leaf from view 1, which will have missing data.
+        tracing::info!(?leaf, ?qc, "decide genesis leaf");
+        persistence
+            .append_decided_leaves(
+                leaf.view_number(),
+                [(
+                    &leaf_info(leaf.clone()),
+                    CertificatePair::non_epoch_change(qc.clone()),
+                )],
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        // Create another leaf, with missing data. We have to use a different payload commitment,
+        // otherwise the database will be able to combine the empty payload from the genesis block
+        // with this header, and the payload will not actually be missing.
+        let mut block_header = leaf.block_header().clone();
+        *block_header.height_mut() += 1;
+        *block_header.payload_commitment_mut() = VidCommitment::V2(
+            CanonicalDeserialize::deserialize_uncompressed_unchecked([1u8; 32].as_slice()).unwrap(),
+        );
+        let qp = QuorumProposalWrapper {
+            proposal: QuorumProposal2 {
+                block_header,
+                view_number: leaf.view_number() + 1,
+                justify_qc: qc.clone(),
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: None,
+                state_cert: None,
+            },
+        };
+
+        let leaf = Leaf2::from_quorum_proposal(&qp);
+        qc.view_number = leaf.view_number();
+        qc.data.leaf_commit = Committable::commit(&leaf);
+
+        // Decide a leaf without the corresponding payload or VID.
+        tracing::info!(?leaf, ?qc, "append leaf 1");
+        persistence
+            .append_decided_leaves(
+                leaf.view_number(),
+                [(
+                    &leaf_info(leaf.clone()),
+                    CertificatePair::non_epoch_change(qc),
+                )],
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        // Check that we still processed the leaf.
+        assert_eq!(leaf, data_source.get_leaf(1).await.await.leaf().clone());
+        assert!(data_source.get_vid_common(1).await.is_pending());
+        assert!(data_source.get_block(1).await.is_pending());
+    }
+
+    fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
+        LeafInfo {
+            leaf,
+            vid_share: None,
+            state: Default::default(),
+            delta: None,
+            state_cert: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3106,6 +3564,7 @@ mod test {
         NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
         StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, TEST_UPGRADE, ValidatedState,
         ValidatorLeaderCounts,
+        config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
@@ -3136,6 +3595,7 @@ mod test {
         types::HeightIndexed,
     };
     use hotshot_types::{
+        ValidatorConfig,
         addr::NetAddr,
         data::EpochNumber,
         epoch_membership::EpochMembershipCoordinator,
@@ -3165,8 +3625,8 @@ mod test {
         update_commission, update_network_config,
     };
     use test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, node_storage, state_signature_test_helper,
-        status_test_helper, submit_test_helper, wait_for_committee,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, node_storage,
+        state_signature_test_helper, status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
     use tokio::{
@@ -3265,6 +3725,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn state_signature_test_without_query_module() {
         state_signature_test_helper(|opt| opt).await
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn catchup_test_without_query_module() {
+        catchup_test_helper(|opt| opt).await
     }
 
     #[apply(sql_data_sources)]
@@ -4024,7 +4489,7 @@ mod test {
         let _late = api
             .serve(|metrics, consumer, storage, _| {
                 async move {
-                    let node = cfg
+                    Ok(cfg
                         .init_node(
                             LATE,
                             ValidatedState::default(),
@@ -4037,14 +4502,12 @@ mod test {
                             TEST_UPGRADE,
                             upgrades_map,
                         )
-                        .await;
-                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
+                        .await)
                 }
                 .boxed()
             })
             .await
-            .unwrap()
-            .node;
+            .unwrap();
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{late_port}").parse().unwrap());
@@ -4117,6 +4580,7 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
+                tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -4536,6 +5000,49 @@ mod test {
             .await
             .unwrap();
         assert_eq!(chain, new_chain);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_config() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url.clone());
+
+        let options = Options::with_port(port).config(Default::default());
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        client.connect(None).await;
+
+        // Fetch a network config from the API server. The first peer URL is bogus, to test the
+        // failure/retry case.
+        let peers = StatePeers::<StaticVersion<0, 1>>::from_urls(
+            vec!["https://notarealnode.network".parse().unwrap(), url],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        );
+
+        // Fetch the config from node 1, a different node than the one running the service.
+        let validator =
+            ValidatorConfig::generated_from_seed_indexed([0; 32], 1, U256::from(1), false);
+        let config = peers.fetch_config(validator.clone()).await.unwrap();
+
+        // Check the node-specific information in the recovered config is correct.
+        assert_eq!(config.node_index, 1);
+
+        // Check the public information is also correct (with respect to the node that actually
+        // served the config, for public keys).
+        pretty_assertions::assert_eq!(
+            serde_json::to_value(PublicHotShotConfig::from(config.config)).unwrap(),
+            serde_json::to_value(PublicHotShotConfig::from(
+                network.cfg.hotshot_config().clone()
+            ))
+            .unwrap()
+        );
     }
 
     #[apply(sql_data_sources)]
@@ -5598,11 +6105,13 @@ mod test {
 
         let genesis = follower_genesis(&network.cfg, &genesis_state, NEW_PROTOCOL);
         let params = FollowerParams {
-            bootstrap: vec![api_url.clone()],
+            upstreams: vec![api_url.clone()],
+            config_peers: None,
             catchup: CatchupParams {
                 state_peers: vec![api_url.clone()],
                 backoff: Default::default(),
                 base_timeout: Duration::from_secs(2),
+                local_timeout: Duration::from_secs(5),
                 http_delay: Duration::ZERO,
             },
             bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
@@ -5793,7 +6302,6 @@ mod test {
             chain_config,
             stake_table: StakeTableConfig {
                 capacity: hotshot.stake_table_capacity,
-                genesis: Vec::new(),
             },
             accounts: [(
                 TestConfig::<N>::builder_key().fee_account(),
@@ -5834,7 +6342,7 @@ mod test {
             .enable_query_module(
                 Options::with_port(port),
                 Query {
-                    peers: params.bootstrap.clone(),
+                    peers: params.upstreams.clone(),
                     ..Default::default()
                 },
             )
@@ -7382,7 +7890,7 @@ mod test {
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
                 async move {
-                    let node = cfg
+                    Ok(cfg
                         .init_node(
                             1,
                             state,
@@ -7400,14 +7908,12 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await;
-                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
+                        .await)
                 }
                 .boxed()
             })
             .await
-            .unwrap()
-            .node;
+            .unwrap();
         node_0.start_consensus().await;
 
         let mut events = network.peers[2].event_stream();
@@ -7427,7 +7933,7 @@ mod test {
             .serve(|metrics, consumer, storage, _| {
                 let cfg = network.cfg.clone();
                 async move {
-                    let node = cfg
+                    Ok(cfg
                         .init_node(
                             1,
                             state,
@@ -7445,14 +7951,12 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await;
-                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
+                        .await)
                 }
                 .boxed()
             })
             .await
-            .unwrap()
-            .node;
+            .unwrap();
         node_0.start_consensus().await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
@@ -8118,7 +8622,7 @@ mod test {
         let query_node = opt
             .serve(move |metrics, consumer, storage, _| {
                 async move {
-                    let node = cfg
+                    Ok(cfg
                         .init_node(
                             1,
                             genesis_state,
@@ -8131,14 +8635,12 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await;
-                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
+                        .await)
                 }
                 .boxed()
             })
             .await
-            .expect("query node should start")
-            .node;
+            .expect("query node should start");
         query_node.start_consensus().await;
         query_node
     }
@@ -8329,7 +8831,7 @@ mod test {
                 let node_0_persistence = node_0_persistence.clone();
                 let state = state.clone();
                 async move {
-                    let node = cfg
+                    Ok(cfg
                         .init_node(
                             1,
                             state,
@@ -8347,14 +8849,12 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await;
-                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
+                        .await)
                 }
                 .boxed()
             })
             .await
-            .unwrap()
-            .node;
+            .unwrap();
         node_0.start_consensus().await;
 
         let mut events = network.peers[2].event_stream();
@@ -10578,6 +11078,20 @@ mod test {
                     .collect(),
                 fixed_leader_for_gpuvid: v1_hotshot.fixed_leader_for_gpuvid as u64,
                 num_bootstrap: v1_hotshot.num_bootstrap as u64,
+                commit_sha: v1_config.commit_sha().to_string(),
+                indexed_da: v1_config.indexed_da(),
+                builder: match v1_config.builder() {
+                    hotshot_types::network::BuilderType::External => {
+                        espresso_api::proto::BuilderType::External
+                    },
+                    hotshot_types::network::BuilderType::Simple => {
+                        espresso_api::proto::BuilderType::Simple
+                    },
+                    hotshot_types::network::BuilderType::Random => {
+                        espresso_api::proto::BuilderType::Random
+                    },
+                }
+                .into(),
                 ..Default::default()
             }
         );
@@ -12435,7 +12949,7 @@ mod test {
                 let new_persistence = new_persistence.clone();
                 let state = state.clone();
                 async move {
-                    let node = cfg
+                    Ok(cfg
                         .init_node(
                             1,
                             state,
@@ -12453,14 +12967,12 @@ mod test {
                             TEST_UPGRADE,
                             Default::default(),
                         )
-                        .await;
-                    crate::api::context::ValidatorApi::at_genesis(node, TEST_UPGRADE).await
+                        .await)
                 }
                 .boxed()
             })
             .await
-            .unwrap()
-            .node;
+            .unwrap();
         node_0.start_consensus().await;
 
         let mut events = node_0.event_stream();
@@ -13610,9 +14122,11 @@ mod test {
             )
             .await?;
 
-            // Status endpoints. Block height is stable since consensus is stopped;
-            // time-since-last-decide and metrics vary by wall-clock so we only check for a 2xx.
+            // Status endpoints. Block height and success rate are stable since consensus is
+            // stopped; time-since-last-decide and metrics vary by wall-clock so we only
+            // check for a 2xx.
             assert_json_endpoint(&http, api_port, "status/block-height").await?;
+            assert_json_endpoint(&http, api_port, "status/success-rate").await?;
             assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
             assert_endpoint_ok(&http, api_port, "status/metrics").await?;
 

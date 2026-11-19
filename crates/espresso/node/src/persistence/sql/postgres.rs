@@ -92,10 +92,12 @@ pub(crate) fn tmp_options(db: &qs::testing::TmpDb) -> SqlOptions {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
 
     use committable::Committable as _;
     use espresso_types::{
-        Header, Leaf, Leaf2, NodeState, Payload, Transaction as Tx, traits::PersistenceOptions as _,
+        Header, Leaf, Leaf2, NodeState, Payload, Transaction as Tx,
+        traits::{PersistenceOptions as _, SequencerPersistence as _},
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
@@ -106,6 +108,7 @@ mod test {
     };
     use hotshot_types::{
         data::{QuorumProposal, ViewNumber},
+        event::HotShotAction,
         simple_certificate::QuorumCertificate,
         traits::block_contents::{BlockHeader, BlockPayload as _},
     };
@@ -232,6 +235,34 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_postgres_read_ns_table_v0_3() {
         test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(0)).await;
+    }
+
+    /// Verify that concurrent calls to `record_action` all succeed under
+    /// PostgreSQL SERIALIZABLE isolation. `self.serializable_backoff.retry_if` handles any
+    /// 40001 serialization failures that arise when many tasks race to update
+    /// the same row.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_record_action_concurrent() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Arc::new(Persistence::connect(&tmp).await);
+
+        let handles: Vec<_> = (0u64..20)
+            .map(|i| {
+                let storage = Arc::clone(&storage);
+                tokio::spawn(async move {
+                    storage
+                        .record_action(ViewNumber::new(i), HotShotAction::Vote)
+                        .await
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        let latest = storage.load_latest_acted_view().await.unwrap();
+        assert_eq!(latest, Some(ViewNumber::new(19)));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

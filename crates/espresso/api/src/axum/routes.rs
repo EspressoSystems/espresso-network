@@ -145,6 +145,7 @@ pub mod v1 {
     pub const FEE_STATE_BALANCE_LATEST_ROUTE: &str = "/v1/fee-state/fee-balance/latest/{address}";
 
     pub const STATUS_BLOCK_HEIGHT_ROUTE: &str = "/v1/status/block-height";
+    pub const STATUS_SUCCESS_RATE_ROUTE: &str = "/v1/status/success-rate";
     pub const STATUS_TIME_SINCE_LAST_DECIDE_ROUTE: &str = "/v1/status/time-since-last-decide";
     pub const STATUS_METRICS_ROUTE: &str = "/v1/status/metrics";
     pub const STATUS_KEYS_ROUTE: &str = "/v1/status/keys";
@@ -582,6 +583,7 @@ pub mod v1 {
 
     // Status
     path_fn!(status_block_height, STATUS_BLOCK_HEIGHT_ROUTE);
+    path_fn!(status_success_rate, STATUS_SUCCESS_RATE_ROUTE);
     path_fn!(
         status_time_since_last_decide,
         STATUS_TIME_SINCE_LAST_DECIDE_ROUTE

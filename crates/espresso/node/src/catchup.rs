@@ -11,33 +11,38 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
-pub use espresso_types::null_catchup::NullStateCatchup;
 use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Header, LcContractFinalizedState, Leaf2,
-    NodeState, SeqTypes,
+    NodeState, SeqTypes, ValidatedState,
+    config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
         ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
         RewardMerkleTreeV1,
     },
     v0_4::{
-        PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2, RewardMerkleTreeV2,
-        forgotten_accounts_include,
+        PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
+        RewardMerkleCommitmentV2, RewardMerkleTreeV2, forgotten_accounts_include,
     },
 };
 use futures::{
     StreamExt,
-    future::{Future, TryFuture, TryFutureExt},
+    future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
+    ValidatorConfig,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::metrics::{Counter, CounterFamily, Metrics},
+    traits::{
+        ValidatedState as ValidatedStateTrait,
+        metrics::{Counter, CounterFamily, Metrics},
+    },
     utils::verify_leaf_chain,
 };
 use http_client::{Request, error::ClientErr};
@@ -53,7 +58,9 @@ use url::Url;
 use vbs::version::StaticVersionType;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-use crate::api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data};
+use crate::api::{
+    BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data, context::ConsensusSource,
+};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -243,6 +250,32 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
             backoff,
             base_timeout,
         }
+    }
+
+    #[tracing::instrument(skip(self, my_own_validator_config))]
+    pub async fn fetch_config(
+        &self,
+        my_own_validator_config: ValidatorConfig<SeqTypes>,
+    ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
+        self.backoff()
+            .retry(self, move |provider, retry| {
+                let my_own_validator_config = my_own_validator_config.clone();
+                async move {
+                    let cfg: PublicNetworkConfig = provider
+                        .fetch(retry, |client| {
+                            let url = client.url.join(&paths::config_hotshot()).unwrap();
+
+                            reqwest::get(url.clone())
+                        })
+                        .await?
+                        .json()
+                        .await?;
+                    cfg.into_network_config(my_own_validator_config)
+                        .context("fetched config, but failed to convert to private config")
+                }
+                .boxed()
+            })
+            .await
     }
 }
 
@@ -702,6 +735,8 @@ pub(crate) trait CatchupStorage: Sync {
     }
 }
 
+impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
+
 impl<T, S> CatchupStorage for hotshot_query_service::data_source::ExtensibleDataSource<T, S>
 where
     T: CatchupStorage,
@@ -996,6 +1031,126 @@ where
     }
 }
 
+/// Disable catchup entirely.
+#[derive(Clone, Debug)]
+pub struct NullStateCatchup {
+    backoff: BackoffParams,
+    chain_configs: HashMap<Commitment<ChainConfig>, ChainConfig>,
+}
+
+impl Default for NullStateCatchup {
+    fn default() -> Self {
+        Self {
+            backoff: BackoffParams::disabled(),
+            chain_configs: Default::default(),
+        }
+    }
+}
+
+impl NullStateCatchup {
+    /// Add a chain config preimage which can be fetched by hash during STF evaluation.
+    ///
+    /// [`NullStateCatchup`] is used to disable catchup entirely when evaluating the STF, which
+    /// requires the [`ValidatedState`](espresso_types::ValidatedState) to be pre-seeded with all
+    /// the dependencies of STF evaluation. However, the STF also depends on having the preimage of
+    /// various [`ChainConfig`] commitments, which are not stored in the
+    /// [`ValidatedState`](espresso_types::ValidatedState), but which instead must be supplied by a
+    /// separate preimage oracle. Thus, [`NullStateCatchup`] may be populated with a set of
+    /// [`ChainConfig`]s, which it can feed to the STF during evaluation.
+    pub fn add_chain_config(&mut self, cf: ChainConfig) {
+        self.chain_configs.insert(cf.commit(), cf);
+    }
+}
+
+#[async_trait]
+impl StateCatchup for NullStateCatchup {
+    async fn try_fetch_leaf(
+        &self,
+        _retry: usize,
+        _coordinator: EpochMembershipCoordinator<SeqTypes>,
+        _height: u64,
+    ) -> anyhow::Result<Leaf2> {
+        bail!("state catchup is disabled")
+    }
+
+    async fn try_fetch_accounts(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _fee_merkle_tree_root: FeeMerkleCommitment,
+        _account: &[FeeAccount],
+    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_remember_blocks_merkle_tree(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _mt: &mut BlockMerkleTree,
+    ) -> anyhow::Result<()> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_fetch_chain_config(
+        &self,
+        _retry: usize,
+        commitment: Commitment<ChainConfig>,
+    ) -> anyhow::Result<ChainConfig> {
+        self.chain_configs
+            .get(&commitment)
+            .copied()
+            .context(format!("chain config {commitment} not available"))
+    }
+
+    async fn try_fetch_reward_merkle_tree_v2(
+        &self,
+        _retry: usize,
+        _height: u64,
+        _view: ViewNumber,
+        _reward_merkle_tree_root: RewardMerkleCommitmentV2,
+        _accounts: Arc<Vec<RewardAccountV2>>,
+    ) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_fetch_reward_accounts_v1(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _fee_merkle_tree_root: RewardMerkleCommitmentV1,
+        _account: &[RewardAccountV1],
+    ) -> anyhow::Result<Vec<RewardAccountProofV1>> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_fetch_state_cert(
+        &self,
+        _retry: usize,
+        _epoch: u64,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
+        bail!("state catchup is disabled");
+    }
+
+    fn backoff(&self) -> &BackoffParams {
+        &self.backoff
+    }
+
+    fn name(&self) -> String {
+        "NullStateCatchup".into()
+    }
+
+    fn is_local(&self) -> bool {
+        true
+    }
+}
+
 /// Catchup that sends each request once, for a caller that retries on its own.
 ///
 /// The `fetch_*` methods of a [`ParallelStateCatchup`] race the `fetch_*` methods of its providers,
@@ -1154,14 +1309,14 @@ struct Provider {
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Provider>>>,
     backoff: BackoffParams,
-    /// How long a request may take on a local provider, if bounded.
-    local_timeout: Option<Duration>,
+    /// Timeout for local provider requests
+    local_timeout: Duration,
     fallback_delay: Duration,
 }
 
 impl ParallelStateCatchup {
-    /// Create a new [`ParallelStateCatchup`] with the given providers.
-    pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
+    /// Create a new [`ParallelStateCatchup`] with the given providers and local timeout.
+    pub fn new(providers: &[Arc<dyn StateCatchup>], local_timeout: Duration) -> Self {
         Self {
             providers: Arc::new(Mutex::new(
                 providers
@@ -1173,15 +1328,9 @@ impl ParallelStateCatchup {
                     .collect(),
             )),
             backoff: BackoffParams::disabled(),
-            local_timeout: None,
+            local_timeout,
             fallback_delay: Duration::ZERO,
         }
-    }
-
-    /// Bounds how long a request may take on a local provider.
-    pub fn with_local_timeout(mut self, timeout: Duration) -> Self {
-        self.local_timeout = Some(timeout);
-        self
     }
 
     /// Delay before fallback providers start; see [`Provider::fallback`].
@@ -1228,16 +1377,13 @@ impl ParallelStateCatchup {
             let name = catchup.name();
             futures.push(AbortOnDropHandle::new(tokio::spawn(async move {
                 let result = if catchup.is_local() {
-                    match local_timeout {
-                        Some(local_timeout) => timeout(local_timeout, closure(catchup))
-                            .await
-                            .unwrap_or_else(|_| {
-                                let err = format!("{name} timed out after {local_timeout:?}");
-                                tracing::warn!("{err}");
-                                Err(anyhow::anyhow!(err))
-                            }),
-                        None => closure(catchup).await,
-                    }
+                    timeout(local_timeout, closure(catchup))
+                        .await
+                        .unwrap_or_else(|_| {
+                            let err = format!("{name} timed out after {local_timeout:?}");
+                            tracing::warn!("{err}");
+                            Err(anyhow::anyhow!(err))
+                        })
                 } else {
                     if fallback && has_primary_remote {
                         sleep(fallback_delay).await;
@@ -1550,6 +1696,14 @@ impl StateCatchup for ParallelStateCatchup {
         self.providers.lock().iter().all(|p| p.catchup.is_local())
     }
 
+    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        // The copy shares the provider list, so it also sees providers added later.
+        Some(Arc::new(Self {
+            local_timeout,
+            ..self.clone()
+        }))
+    }
+
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         retry: usize,
@@ -1581,6 +1735,147 @@ impl StateCatchup for ParallelStateCatchup {
     }
 }
 
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+pub async fn add_fee_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
+    view: &ViewNumber,
+    accounts: &[FeeAccount],
+    tree: &FeeMerkleTree,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let (state, delta) = match existing_state {
+        Some(existing) => {
+            let mut state = (*existing).clone();
+            for account in accounts {
+                if let Some((proof, _)) = FeeAccountProof::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+            (Arc::new(state), delta)
+        },
+        None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.fee_merkle_tree = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus_handle
+        .update_leaf(leaf, state, delta)
+        .await
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
+}
+
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+pub async fn add_v2_reward_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
+    view: &ViewNumber,
+    accounts: &[RewardAccountV2],
+    tree: &RewardMerkleTreeV2,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let (state, delta) = match existing_state {
+        Some(existing) => {
+            let mut state = (*existing).clone();
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProofV2::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v2) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+            (Arc::new(state), delta)
+        },
+        None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.reward_merkle_tree_v2 = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus_handle
+        .update_leaf(leaf, state, delta)
+        .await
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
+}
+
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+pub async fn add_v1_reward_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
+    view: &ViewNumber,
+    accounts: &[RewardAccountV1],
+    tree: &RewardMerkleTreeV1,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
+    let (state, delta) = match existing_state {
+        Some(existing) => {
+            let mut state = (*existing).clone();
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProofV1::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree_v1) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+            (Arc::new(state), delta)
+        },
+        None => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.reward_merkle_tree_v1 = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus_handle
+        .update_leaf(leaf, state, delta)
+        .await
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -1588,7 +1883,7 @@ mod test {
         time::Instant,
     };
 
-    use espresso_types::ValidatedState;
+    use espresso_types::v0::mock::MockStateCatchup;
     use hotshot_types::traits::metrics::NoMetrics;
     use test_utils::reserve_tcp_port;
 
@@ -1608,7 +1903,7 @@ mod test {
             Duration::from_secs(1),
             &NoMetrics,
         );
-        let peers = ParallelStateCatchup::new(&[Arc::new(peer)]);
+        let peers = ParallelStateCatchup::new(&[Arc::new(peer)], Duration::from_secs(1));
         let chain_config = ChainConfig::default().commit();
         assert!(
             timeout(
@@ -1670,7 +1965,7 @@ mod test {
             BASE_TIMEOUT,
             &NoMetrics,
         );
-        let peers = ParallelStateCatchup::new(&[Arc::new(peer)]);
+        let peers = ParallelStateCatchup::new(&[Arc::new(peer)], Duration::from_secs(1));
 
         let start = Instant::now();
         let res = SingleAttemptCatchup::new(peers, 4)
@@ -1683,6 +1978,39 @@ mod test {
             elapsed >= 5 * BASE_TIMEOUT,
             "the peer got only {elapsed:?} to answer"
         );
+    }
+
+    /// A copy with a longer local timeout waits that long on a slow local provider, where the
+    /// original gives up on it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn with_local_timeout_waits_longer_on_local_providers() {
+        let slow = MockStateCatchup::default().with_delay(Duration::from_millis(500));
+        let catchup = ParallelStateCatchup::new(&[Arc::new(slow)], Duration::from_millis(50));
+        let chain_config = ChainConfig::default().commit();
+        // There is no remote provider, so a local read cut short fails.
+        assert!(
+            catchup
+                .try_fetch_chain_config(0, chain_config)
+                .await
+                .is_err()
+        );
+
+        let longer = catchup
+            .with_local_timeout(Duration::from_secs(5))
+            .expect("a parallel catchup has a local timeout");
+        longer
+            .try_fetch_chain_config(0, chain_config)
+            .await
+            .expect("the local provider answers within the longer timeout");
+
+        // The copy shares the provider list, so it also sees providers added later.
+        catchup.add_provider(Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
+            vec!["http://127.0.0.1:1".parse().unwrap()],
+            BackoffParams::default(),
+            Duration::from_secs(1),
+            &NoMetrics,
+        )));
+        assert!(!longer.is_local());
     }
 
     #[test]
@@ -1822,8 +2150,7 @@ mod test {
     async fn test_remote_result_does_not_wait_for_local() {
         let local = DelayedCatchup::provider(true, Duration::from_secs(60));
         let remote = DelayedCatchup::provider(false, Duration::ZERO);
-        let catchup =
-            ParallelStateCatchup::new(&[local, remote]).with_local_timeout(Duration::from_secs(30));
+        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
 
         let config = ChainConfig::default();
         timeout(
@@ -1839,8 +2166,7 @@ mod test {
     async fn test_local_result_does_not_wait_for_remote() {
         let local = DelayedCatchup::provider(true, Duration::ZERO);
         let remote = DelayedCatchup::provider(false, Duration::from_secs(60));
-        let catchup =
-            ParallelStateCatchup::new(&[local, remote]).with_local_timeout(Duration::from_secs(30));
+        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
 
         let config = ChainConfig::default();
         timeout(
@@ -1856,7 +2182,7 @@ mod test {
     #[tokio::test(start_paused = true)]
     async fn test_unsupported_provider_fails() {
         let provider = DelayedCatchup::provider(true, Duration::ZERO);
-        let catchup = ParallelStateCatchup::new(&[provider]);
+        let catchup = ParallelStateCatchup::new(&[provider], Duration::from_secs(30));
         let root = BlockMerkleTree::new(32).commitment();
         let lc_contract_state = LcContractFinalizedState {
             height: 1,
@@ -1883,8 +2209,7 @@ mod test {
     async fn test_all_providers_failing_reports_every_error() {
         let local = DelayedCatchup::provider(true, Duration::ZERO);
         let remote = DelayedCatchup::provider(false, Duration::ZERO);
-        let catchup =
-            ParallelStateCatchup::new(&[local, remote]).with_local_timeout(Duration::from_secs(30));
+        let catchup = ParallelStateCatchup::new(&[local, remote], Duration::from_secs(30));
 
         let err = format!("{:#}", catchup.fetch_state_cert(1).await.unwrap_err());
         assert_eq!(err.matches("unsupported").count(), 2, "{err}");
@@ -1898,7 +2223,8 @@ mod test {
         primary: Arc<dyn StateCatchup>,
         fallback: Arc<dyn StateCatchup>,
     ) -> ParallelStateCatchup {
-        let catchup = ParallelStateCatchup::new(&[primary]).with_fallback_delay(FALLBACK_DELAY);
+        let catchup = ParallelStateCatchup::new(&[primary], Duration::from_secs(30))
+            .with_fallback_delay(FALLBACK_DELAY);
         catchup.add_fallback_provider(fallback);
         catchup
     }
@@ -1950,7 +2276,8 @@ mod test {
     #[tokio::test(start_paused = true)]
     async fn test_fallback_delay_is_decided_per_call() {
         let (fallback, fallback_calls) = DelayedCatchup::counted(false, Duration::ZERO);
-        let catchup = ParallelStateCatchup::new(&[]).with_fallback_delay(FALLBACK_DELAY);
+        let catchup = ParallelStateCatchup::new(&[], Duration::from_secs(30))
+            .with_fallback_delay(FALLBACK_DELAY);
         catchup.add_fallback_provider(fallback);
         let config = ChainConfig::default();
 

@@ -308,11 +308,13 @@ async fn l1_block(provider: &impl Provider, number: u64) -> anyhow::Result<Block
 /// The node is its own only peer: it serves catchup from the state it derived itself.
 fn replay_params(own_url: url::Url) -> FollowerParams {
     FollowerParams {
-        bootstrap: vec![],
+        upstreams: vec![],
+        config_peers: None,
         catchup: CatchupParams {
             state_peers: vec![own_url],
             backoff: Default::default(),
             base_timeout: Duration::from_secs(2),
+            local_timeout: Duration::from_secs(5),
             http_delay: Duration::ZERO,
         },
         bootstrap_epoch_catchup_timeout: Duration::from_secs(30),

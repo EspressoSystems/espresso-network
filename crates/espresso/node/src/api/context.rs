@@ -1,6 +1,6 @@
 //! [`ApiState`](super::ApiState) reaches consensus and node-wide state only through
-//! [`ApiContext`], so the same API modules can be served by a validator ([`ValidatorApi`]) or by
-//! a node that follows the chain without taking part in consensus.
+//! [`ApiContext`], so the same API modules can be served by a validator ([`SequencerContext`])
+//! or by a node that follows the chain without taking part in consensus.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -11,27 +11,24 @@ use ::light_client::{
 };
 use async_lock::RwLock;
 use async_trait::async_trait;
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::{MembershipPersistence, SequencerPersistence, StateCertPersistence},
 };
-use futures::{FutureExt, future::BoxFuture};
+use futures::future::BoxFuture;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
     ValidatorConfig,
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, VidShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
+    utils::StateAndDelta,
 };
 
 use crate::{
-    SequencerContext,
-    api::update::{DecideSink, IngestSink, TrackedSink},
-    chain_view::ChainView,
-    context::TaskList,
-    follower::FollowerHandle,
+    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
     state_signature::StateSignatureMemStorage,
 };
 
@@ -43,11 +40,21 @@ pub type Delta = <ValidatedState as hotshot_types::traits::ValidatedState<SeqTyp
 pub trait ConsensusSource: Send + Sync + 'static {
     async fn decided_leaf(&self) -> Leaf2;
     async fn decided_state(&self) -> Option<Arc<ValidatedState>>;
+    async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>>;
+    async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes>;
+    async fn undecided_leaves(&self) -> Vec<Leaf2>;
     async fn current_epoch(&self) -> Option<EpochNumber>;
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes>;
     async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes>;
     /// The commitment the accepting node reports, which the submit API returns.
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>>;
+    /// How catchup pushes a state it recovered from storage back into memory.
+    async fn update_leaf(
+        &self,
+        leaf: Leaf2,
+        state: Arc<ValidatedState>,
+        delta: Option<Arc<Delta>>,
+    ) -> anyhow::Result<()>;
     async fn current_proposal_participation(&self) -> HashMap<PubKey, f64>;
     async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64>;
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64>;
@@ -62,20 +69,6 @@ pub trait ApiContext: Send + Sync + 'static {
     fn network_config(&self) -> NetworkConfig<SeqTypes>;
     fn validator_config(&self) -> Option<&ValidatorConfig<SeqTypes>>;
     fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>>;
-
-    /// Where this node serves the ingester API, if it runs consensus.
-    fn consensus_api_addr(&self) -> Option<std::net::SocketAddr> {
-        None
-    }
-
-    /// What the ingester writes the blocks of this node's consensus to: `sink`, followed by
-    /// whatever else the API service keeps up with the blocks it stores.
-    fn ingest_sink(
-        &self,
-        sink: Arc<dyn DecideSink>,
-    ) -> BoxFuture<'static, anyhow::Result<Arc<dyn ingester::Sink<SeqTypes>>>> {
-        async move { Ok(Arc::new(IngestSink(sink)) as Arc<dyn ingester::Sink<SeqTypes>>) }.boxed()
-    }
 
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
@@ -93,81 +86,102 @@ pub trait ApiContext: Send + Sync + 'static {
         Self: Sized;
 }
 
-/// The API context of a validator: the API service's own view of the chain, which it keeps up
-/// with the blocks it ingests from this node's consensus, and the few things only consensus has.
-#[derive(Clone)]
-pub(crate) struct ValidatorApi<P: SequencerPersistence> {
-    pub(crate) node: SequencerContext<P>,
-    pub(crate) api: FollowerHandle<P>,
-    pub(crate) view: Arc<ChainView<P>>,
-}
+#[async_trait]
+impl<P: SequencerPersistence> ConsensusSource for ConsensusHandle<SeqTypes, Arc<P>> {
+    async fn decided_leaf(&self) -> Leaf2 {
+        ConsensusHandle::decided_leaf(self).await
+    }
 
-#[cfg(any(test, feature = "testing"))]
-impl<P: SequencerPersistence> ValidatorApi<P> {
-    /// The API service of a node that starts at genesis, sharing the node's storage.
-    pub(crate) async fn at_genesis(
-        node: SequencerContext<P>,
-        upgrade: versions::Upgrade,
-    ) -> anyhow::Result<Self> {
-        let (api, view) = crate::follower::api_service(
-            node.node_state(),
-            node.persistence(),
-            node.network_config(),
-            upgrade,
-            crate::follower::SubmitTo::Consensus(node.consensus_api_addr()),
-        )
-        .await?;
-        Ok(Self { node, api, view })
+    async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
+        ConsensusHandle::decided_state(self).await
+    }
+
+    async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>> {
+        ConsensusHandle::state(self, view).await
+    }
+
+    async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes> {
+        ConsensusHandle::state_and_delta(self, view).await
+    }
+
+    async fn undecided_leaves(&self) -> Vec<Leaf2> {
+        ConsensusHandle::undecided_leaves(self).await
+    }
+
+    async fn current_epoch(&self) -> Option<EpochNumber> {
+        ConsensusHandle::current_epoch(self).await
+    }
+
+    async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+        ConsensusHandle::membership_coordinator(self)
+    }
+
+    async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        ConsensusHandle::upgrade_lock(self)
+    }
+
+    async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
+        let commitment = tx.commit();
+        ConsensusHandle::submit_transaction(self, tx).await?;
+        Ok(commitment)
+    }
+
+    async fn update_leaf(
+        &self,
+        leaf: Leaf2,
+        state: Arc<ValidatedState>,
+        delta: Option<Arc<Delta>>,
+    ) -> anyhow::Result<()> {
+        ConsensusHandle::update_leaf(self, leaf, state, delta).await
+    }
+
+    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
+        ConsensusHandle::current_proposal_participation(self).await
+    }
+
+    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        ConsensusHandle::proposal_participation(self, epoch).await
+    }
+
+    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+        ConsensusHandle::current_vote_participation(self).await
+    }
+
+    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        ConsensusHandle::vote_participation(self, epoch).await
     }
 }
 
-impl<P: SequencerPersistence> ApiContext for ValidatorApi<P> {
+impl<P> ApiContext for SequencerContext<P>
+where
+    P: SequencerPersistence,
+{
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
-        self.api.consensus()
+        self.consensus_handle()
     }
 
     fn membership(&self) -> Arc<dyn MembershipPersistence> {
-        self.api.membership()
+        SequencerContext::persistence(self)
     }
 
     fn state_certs(&self) -> Arc<dyn StateCertPersistence> {
-        self.api.state_certs()
+        SequencerContext::persistence(self)
     }
 
     fn node_state(&self) -> NodeState {
-        self.api.node_state()
+        SequencerContext::node_state(self)
     }
 
     fn network_config(&self) -> NetworkConfig<SeqTypes> {
-        self.api.network_config()
+        SequencerContext::network_config(self)
     }
 
     fn validator_config(&self) -> Option<&ValidatorConfig<SeqTypes>> {
-        Some(self.node.validator_config())
+        Some(SequencerContext::validator_config(self))
     }
 
     fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>> {
-        Some(self.node.state_signatures())
-    }
-
-    fn consensus_api_addr(&self) -> Option<std::net::SocketAddr> {
-        Some(self.node.consensus_api_addr())
-    }
-
-    /// Continues the chain view from the newest stored block, so that it has a decided block
-    /// before the ingester stores the next.
-    fn ingest_sink(
-        &self,
-        sink: Arc<dyn DecideSink>,
-    ) -> BoxFuture<'static, anyhow::Result<Arc<dyn ingester::Sink<SeqTypes>>>> {
-        let view = self.view.clone();
-        async move {
-            if let Some(leaf) = sink.last_leaf().await? {
-                view.resume(&leaf).await;
-            }
-            Ok(Arc::new(TrackedSink { sink, view }) as Arc<dyn ingester::Sink<SeqTypes>>)
-        }
-        .boxed()
+        Some(SequencerContext::state_signatures(self))
     }
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {
@@ -181,7 +195,7 @@ impl<P: SequencerPersistence> ApiContext for ValidatorApi<P> {
         timeout: Duration,
     ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
         super::request_vid_shares(
-            self.node.request_response_protocol.clone(),
+            self.request_response_protocol.clone(),
             block_number,
             vid_common,
             timeout,
@@ -189,9 +203,6 @@ impl<P: SequencerPersistence> ApiContext for ValidatorApi<P> {
     }
 
     fn with_task_list(self, tasks: TaskList) -> Self {
-        Self {
-            node: self.node.with_task_list(tasks),
-            ..self
-        }
+        SequencerContext::with_task_list(self, tasks)
     }
 }

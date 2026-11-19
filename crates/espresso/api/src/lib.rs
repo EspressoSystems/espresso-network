@@ -72,8 +72,7 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 
 /// Start Axum HTTP server with combined v1 and v2 APIs
 ///
-/// This serves both APIs at /v1/* and /v2/* from a single state implementation, and v2 over gRPC
-/// on the same port, so one URL reaches the API service whichever protocol a client speaks.
+/// This serves both APIs at /v1/* and /v2/* from a single state implementation.
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
@@ -116,13 +115,11 @@ where
         + ExplorerService
         + CatchupService
         + LightClientService
-        + Clone
         + Send
         + Sync
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let grpc = grpc_router(state.clone(), modules)?;
     let state = std::sync::Arc::new(state);
     let mut router = axum::router_reward(state.clone())
         .merge(axum::router_availability(state.clone()))
@@ -148,29 +145,7 @@ where
     let router = axum::finish_v1_docs(router)
         .merge(router_v2(state, modules))
         .merge(axum::router_v2_docs());
-    serve_router(listener, "v1 and v2", router, Some(grpc), max_connections).await
-}
-
-/// Serves the v2 REST routes of `rest` and the gRPC services of `grpc` on `listener`, with the
-/// layers [`serve_axum`] gives v2 and gRPC reflection added.
-///
-/// A server that implements part of v2 puts each service's `rest::*_service_rest_router` in
-/// `rest` and the matching gRPC server in `grpc`.
-pub async fn serve_v2(
-    listener: tokio::net::TcpListener,
-    rest: ::axum::Router,
-    mut grpc: ::tonic::service::RoutesBuilder,
-    max_connections: Option<usize>,
-) -> anyhow::Result<()> {
-    let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
-        .build_v1()?;
-    grpc.add_service(reflection);
-    let rest = rest
-        .layer(::axum::middleware::from_fn(axum::v2_refuse_post_query))
-        .layer(::axum::middleware::from_fn(axum::v2_error_envelope));
-    let grpc = grpc.routes().into_axum_router();
-    serve_router(listener, "v2", rest, Some(grpc), max_connections).await
+    serve_router(listener, "v1 and v2", router, max_connections).await
 }
 
 /// The v2 REST routes exactly as [`serve_axum`] mounts them. Extracted so the test asserting
@@ -287,13 +262,45 @@ where
         listener,
         "fs",
         axum::finish_v1_docs(router),
-        None,
         max_connections,
     )
     .await
 }
 
-/// Serve the bare API (no query module): only the HotShot modules are available,
+/// Serve the status-only API: no availability/node/token data source is available, so only
+/// status and the HotShot modules (submit, catchup, state-signature, config) can
+/// be served. State-signature is always on; the rest follow `Options`.
+pub async fn serve_axum_status<S>(
+    port: u16,
+    state: S,
+    modules: OptionalModules,
+    max_connections: Option<usize>,
+) -> anyhow::Result<()>
+where
+    S: v1::StatusApi
+        + v1::SubmitApi
+        + v1::CatchupApi
+        + v1::StateSignatureApi
+        + v1::ConfigApi
+        + Send
+        + Sync
+        + 'static,
+{
+    let listener = bind_api(port).await?;
+    let state = std::sync::Arc::new(state);
+    let router =
+        axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
+    let router = merge_hotshot_modules(router, &state, modules);
+    serve_router(
+        listener,
+        "status",
+        axum::finish_v1_docs(router),
+        max_connections,
+    )
+    .await
+}
+
+/// Serve the bare API (no query or status module): only the HotShot modules are available,
 /// since the only app state is the HotShot handle. State-signature is always on; the rest follow
 /// `Options`, matching `Options::init_hotshot_modules`.
 pub async fn serve_axum_bare<S>(
@@ -319,7 +326,6 @@ where
         listener,
         "bare",
         axum::finish_v1_docs(router),
-        None,
         max_connections,
     )
     .await
@@ -356,13 +362,10 @@ async fn bind_api(port: u16) -> anyhow::Result<tokio::net::TcpListener> {
     Ok(tokio::net::TcpListener::bind(&addr).await?)
 }
 
-/// A request whose content type starts with `application/grpc` goes to `grpc`, ahead of the HTTP
-/// layers: the legacy URI rewrite would otherwise move its path under `/v1`.
 async fn serve_router(
     listener: tokio::net::TcpListener,
     mode: &str,
     router: ::axum::Router,
-    grpc: Option<::axum::Router>,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()> {
     let mut router = axum::with_top_level_routes(router);
@@ -375,34 +378,17 @@ async fn serve_router(
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
     // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
     // rewrite before routing, per the axum-documented pattern for this case.
-    let http = tower::util::MapRequestLayer::new(axum::rewrite_legacy_uri).layer(router);
-    let app = tower::service_fn(move |request: ::axum::extract::Request| {
-        let grpc = grpc.clone().filter(|_| is_grpc(&request));
-        let http = http.clone();
-        async move {
-            match grpc {
-                Some(grpc) => tower::ServiceExt::oneshot(grpc, request).await,
-                None => tower::ServiceExt::oneshot(http, request).await,
-            }
-        }
-    });
+    let router = tower::util::MapRequestLayer::new(axum::rewrite_legacy_uri).layer(router);
 
     tracing::info!(
         "Axum API server listening on {:?} ({} mode)",
         listener.local_addr()?,
         mode
     );
-    ::axum::serve(listener, ::axum::ServiceExt::into_make_service(app)).await?;
+    ::axum::serve(listener, ::axum::ServiceExt::into_make_service(router)).await?;
 
     tracing::info!("Axum server stopped");
     Ok(())
-}
-
-fn is_grpc(request: &::axum::extract::Request) -> bool {
-    request
-        .headers()
-        .get(::axum::http::header::CONTENT_TYPE)
-        .is_some_and(|value| value.as_bytes().starts_with(b"application/grpc"))
 }
 
 /// Shared budget: a request holds a slot until its handler returns, excess gets 429. A stream
@@ -415,9 +401,9 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
         .layer(::axum::Extension(axum::RequestLimit(semaphore)))
 }
 
-/// The v2 gRPC services. The gated services follow their module flag like the REST side; the
+/// Start Tonic gRPC server. The gated services follow their module flag like the REST side; the
 /// reflection service still lists them, so a disabled deployment answers them with `Unimplemented`.
-fn grpc_router<S>(state: S, modules: OptionalModules) -> anyhow::Result<::axum::Router>
+pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
     S: StatusService
         + TokenService
@@ -434,13 +420,16 @@ where
         + LightClientService
         + Clone,
 {
+    use ::tonic::transport::Server;
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let mut routes = ::tonic::service::Routes::builder();
-    routes
+    let router = Server::builder()
         .add_service(StatusServiceServer::new(state.clone()))
         .add_service(TokenServiceServer::new(state.clone()))
         .add_service(NodeServiceServer::new(state.clone()))
@@ -451,21 +440,22 @@ where
         .add_service(StateSignatureServiceServer::new(state.clone()))
         .add_service(CatchupServiceServer::new(state.clone()))
         .add_service(LightClientServiceServer::new(state.clone()))
-        .add_service(reflection_service);
-    if modules.submit {
-        // tonic's 4 MiB default would refuse a transaction the REST route and the block size
-        // limit accept.
-        routes.add_service(
+        .add_service(reflection_service)
+        .add_optional_service(modules.submit.then(|| {
+            // tonic's 4 MiB default would refuse a transaction the REST route and the block size
+            // limit accept.
             SubmitServiceServer::new(state.clone())
-                .max_decoding_message_size(http_wire::MAX_REQUEST_BODY_BYTES),
-        );
-    }
-    if modules.explorer {
-        routes.add_service(ExplorerServiceServer::new(state.clone()));
-    }
-    if modules.config {
-        routes.add_service(ConfigServiceServer::new(state));
-    }
+                .max_decoding_message_size(http_wire::MAX_REQUEST_BODY_BYTES)
+        }))
+        .add_optional_service(
+            modules
+                .explorer
+                .then(|| ExplorerServiceServer::new(state.clone())),
+        )
+        .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 
-    Ok(routes.routes().into_axum_router())
+    tracing::info!("gRPC server listening on {}", addr);
+    router.serve(addr).await?;
+
+    Ok(())
 }

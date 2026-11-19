@@ -21,7 +21,7 @@ testing = [
     "hotshot-query-service/testing",
     "hotshot-new-protocol/testing",
 ]
-benchmarking = ["dep:csv"]
+benchmarking = []
 
 [dependencies]
 alloy = { workspace = true }
@@ -29,6 +29,7 @@ anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 async-broadcast = { workspace = true }
+async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
@@ -39,12 +40,10 @@ bincode = { workspace = true }
 blake3 = { workspace = true }
 byteorder = { workspace = true }
 chrono = { workspace = true }
-bs58 = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
 committable = { workspace = true }
-consensus-api = { workspace = true }
-csv = { workspace = true, optional = true }
+csv = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 disco-types = { workspace = true }
@@ -53,7 +52,6 @@ dyn-clone = { workspace = true }
 either = { workspace = true }
 espresso-api = { path = "../api" }
 espresso-contract-deployer = { workspace = true }
-espresso-genesis = { workspace = true }
 espresso-keyset = { workspace = true }
 espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
@@ -61,13 +59,13 @@ espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-new-protocol = { workspace = true }
+hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
-ingester = { workspace = true }
 itertools = { workspace = true }
 jf-advz = { workspace = true }
 jf-crhf = { workspace = true }
@@ -100,7 +98,7 @@ time = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
-tonic = { workspace = true, features = ["tls-ring", "tls-webpki-roots"] }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
@@ -115,6 +113,7 @@ vergen = { workspace = true }
 
 [dev-dependencies]
 bitvec = { workspace = true }
+bs58 = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Keep in sync with `[features] testing`.

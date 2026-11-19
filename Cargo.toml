@@ -7,19 +7,22 @@ members = [
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
+    "crates/a2/api-service",
+    "crates/a2/chain-store",
+    "crates/a2/consensus",
+    "crates/a2/consensus-api",
+    "crates/a2/consensus-node",
+    "crates/a2/consensus-store",
+    "crates/a2/consensus-store-redb",
+    "crates/a2/genesis",
+    "crates/a2/ingester",
     "crates/alloy-compat",
-    "crates/api-service",
-    "crates/chain-store",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
-    "crates/consensus-api",
-    "crates/consensus-store",
-    "crates/consensus-store-redb",
     "crates/espresso/api",
     "crates/espresso/deploy",
     "crates/espresso/dev-node",
-    "crates/espresso/genesis",
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
@@ -31,11 +34,11 @@ members = [
     "crates/hotshot/example-types",
     "crates/hotshot/new-protocol",
     "crates/hotshot/new-protocol/bench",
+    "crates/hotshot/orchestrator",
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/http-client",
     "crates/http-wire",
-    "crates/ingester",
     "crates/light-client",
     "crates/light-client-query-service",
     "crates/node-metrics",
@@ -65,18 +68,21 @@ default-members = [
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
+    "crates/a2/api-service",
+    "crates/a2/chain-store",
+    "crates/a2/consensus",
+    "crates/a2/consensus-api",
+    "crates/a2/consensus-node",
+    "crates/a2/consensus-store",
+    "crates/a2/consensus-store-redb",
+    "crates/a2/genesis",
+    "crates/a2/ingester",
     "crates/alloy-compat",
-    "crates/api-service",
-    "crates/chain-store",
     "crates/client",
     "crates/cliquenet",
     "crates/cliquenet-types",
-    "crates/consensus-api",
-    "crates/consensus-store",
-    "crates/consensus-store-redb",
     "crates/espresso/api",
     "crates/espresso/deploy",
-    "crates/espresso/genesis",
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
@@ -86,9 +92,9 @@ default-members = [
     "crates/hotshot-state-prover",
     "crates/hotshot/example-types",
     "crates/hotshot/new-protocol",
+    "crates/hotshot/orchestrator",
     "crates/hotshot/types",
     "crates/hotshot/utils",
-    "crates/ingester",
     "crates/light-client",
     "crates/light-client-query-service",
     "crates/node-metrics",
@@ -143,6 +149,7 @@ ark-srs = "0.3.3"
 ark-std = "0.5"
 assert_cmd = "2.0.17"
 async-broadcast = "0.7.0"
+async-channel = "2"
 async-lock = "3"
 async-once-cell = "0.5"
 async-trait = "0.1"
@@ -173,10 +180,11 @@ cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
 ] }
-chain-store = { path = "crates/chain-store" }
-consensus-api = { path = "crates/consensus-api" }
-consensus-store = { path = "crates/consensus-store" }
-consensus-store-redb = { path = "crates/consensus-store-redb" }
+chain-store = { path = "crates/a2/chain-store" }
+consensus = { path = "crates/a2/consensus" }
+consensus-api = { path = "crates/a2/consensus-api" }
+consensus-store = { path = "crates/a2/consensus-store" }
+consensus-store-redb = { path = "crates/a2/consensus-store-redb" }
 crc32fast = "1.5"
 criterion = "0.8.1"
 csv = "1"
@@ -197,7 +205,7 @@ erased-serde = "0.4"
 escargot = "0.5.10"
 espresso-api = { path = "crates/espresso/api" }
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
-espresso-genesis = { path = "crates/espresso/genesis" }
+espresso-genesis = { path = "crates/a2/genesis" }
 espresso-keyset = { path = "crates/espresso/keyset" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 espresso-node = { path = "crates/espresso/node", default-features = false }
@@ -215,6 +223,7 @@ hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
+hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "crates/hotshot-query-service" }
 hotshot-query-service-types = { path = "crates/hotshot-query-service-types" }
 hotshot-state-prover = { path = "crates/hotshot-state-prover" }
@@ -226,7 +235,6 @@ http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }
-ingester = { path = "crates/ingester" }
 insta = { version = "1.43", features = ["yaml"] }
 itertools = "0.14"
 jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-advz-v0.2.4", features = [
@@ -335,6 +343,7 @@ rust_decimal = "1.36.0"
 rustix = { version = "1", features = ["time"] }
 schemars = "0.9"
 serde = { version = "1.0", features = ["derive", "rc"] }
+serde-inline-default = "0.2"
 serde_bytes = { version = "0.11" }
 serde_json = "1.0.113"
 serde_urlencoded = "0.7"

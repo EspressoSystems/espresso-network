@@ -9,9 +9,9 @@ use std::{
 };
 
 use bon::{Builder, bon};
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use hotshot_types::{
-    consensus::ConsensusMetricsValue,
+    consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     initializer::HotShotInitializer,
@@ -32,20 +32,22 @@ use hotshot_types::{
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
-use tokio::{select, sync::mpsc};
+use tokio::{
+    select,
+    sync::{mpsc, oneshot},
+};
 use tracing::{debug, error, info, warn};
 use versions::Version;
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
-    client::{ClientApi, ClientRequest, CoordinatorClient},
+    client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
-    discovery::{RETAINED_EPOCHS, ServiceBook, ServiceRecord},
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
     helpers::{ViewEpoch, proposal_commitment, validated_state_cert},
@@ -61,8 +63,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
-    storage::{DEFAULT_DECIDE_LOG_LIMIT, DecidedState, Storage},
-    store::{ConsensusStore, DiskStore, Restored},
+    storage::{NewProtocolStorage, Storage},
     upgrade::UpgradeProtocol,
     vid::{
         BuiltDispersal, ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser,
@@ -104,7 +105,7 @@ const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, S = DiskStore> {
+pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Cliquenet<T>,
@@ -140,6 +141,8 @@ pub struct Coordinator<T: NodeType, S = DiskStore> {
     node_id: KeyPrefix,
     timer: Timer,
     #[builder(skip)]
+    pending_proposal_fetches: PendingProposalFetches<T>,
+    #[builder(skip)]
     /// Proposals asked for, with the view this node was in when it last asked.
     requested_missing_proposals: HashMap<ProposalFetchKey<T>, ViewNumber>,
     #[builder(default = Fetcher::new(public_key.clone()))]
@@ -152,10 +155,13 @@ pub struct Coordinator<T: NodeType, S = DiskStore> {
     #[builder(skip)]
     built_dispersals: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), BuiltDispersal<T>>,
     metrics: Option<metrics::Metrics>,
+    #[builder(default)]
+    participation: ParticipationTracker<T>,
     #[builder(skip)]
     voted_view: Option<ViewNumber>,
-    /// View of the last timer fire that counted towards the timeout metrics, so a re-fire for
-    /// the same (stuck) view doesn't double-count it.
+    /// View of the last timer fire that counted towards participation and
+    /// timeout metrics, so a re-fire for the same (stuck) view doesn't
+    /// double-count it.
     #[builder(skip)]
     last_timeout_view: Option<ViewNumber>,
     #[builder(skip)]
@@ -166,22 +172,13 @@ pub struct Coordinator<T: NodeType, S = DiskStore> {
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
-    /// The newest record of each staked validator's API service.
-    #[builder(default)]
-    service_book: ServiceBook<T>,
-    /// What this node's records say about its API service, with the key to sign one for each
-    /// epoch.
-    service_record: Option<(ServiceRecord, <T::SignatureKey as SignatureKey>::PrivateKey)>,
-    /// The epoch this node last sent its record for.
-    #[builder(skip)]
-    service_record_epoch: Option<EpochNumber>,
 }
 
 #[bon]
 impl<T, S> Coordinator<T, S>
 where
     T: NodeType,
-    S: consensus_store::Store,
+    S: NewProtocolStorage<T>,
 {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     #[allow(clippy::too_many_arguments)]
@@ -197,23 +194,19 @@ where
         timeout_duration: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
-        store: ConsensusStore<T, S>,
-        /// What the store held on start, from [`ConsensusStore::load`].
-        restored: Restored<T>,
+        storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
+        /// Locked QC persisted on a prior run; restored so the lock survives restart.
+        locked_qc: Option<Certificate1<T>>,
+        /// Boundary certificate persisted on a prior run (see
+        /// [`ConsensusOutput::PersistBoundaryQc`]).
+        boundary_qc: Option<Certificate1<T>>,
         /// `Certificate2` of the anchor persisted on a prior run.
         anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
-        /// How many bytes the decide log may take up before this node holds its vote2.
-        #[builder(default = DEFAULT_DECIDE_LOG_LIMIT)]
-        decide_log_limit: u64,
-        /// What the application keeps of the latest decided state.
-        decided_state: Option<Box<dyn DecidedState<T>>>,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
-        /// What this node's records say about its API service; the epoch is set per record.
-        service_record: Option<ServiceRecord>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -272,8 +265,8 @@ where
         );
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
-        for p in restored.proposals.values() {
-            state_manager.seed_from_header(p.data.clone());
+        for p in initializer.saved_proposals().values() {
+            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
         }
         state_manager.seed_state(
             anchor_view,
@@ -286,20 +279,26 @@ where
         let reconstructed_blocks =
             std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
                 .chain(
-                    restored
-                        .proposals
+                    initializer
+                        .saved_proposals()
                         .iter()
-                        .map(|(view, p)| (*view, p.data.block_header.clone())),
+                        .map(|(view, p)| (*view, p.data.block_header().clone())),
                 )
                 .filter_map(|(view, header)| match header.payload_commitment() {
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
-                })
-                .collect::<Vec<_>>();
+                });
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         // They are kept signed, so this node can serve them to a peer fetching
         // them, as one fetching an epoch's boundary block for a re-vote.
-        let saved_proposals = restored.proposals.into_values();
+        let saved_proposals = initializer
+            .saved_proposals()
+            .values()
+            .map(|p| SignedProposal {
+                data: message::Proposal::from(p.data.clone()),
+                signature: p.signature.clone(),
+                _pd: std::marker::PhantomData,
+            });
         consensus.seed_signed_proposals(saved_proposals);
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
@@ -308,13 +307,12 @@ where
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         // Restore the persisted lock; it can be newer than the anchor QC, so
         // this must run after `seed_parent`.
-        if let Some(locked_qc) = restored.locked_qc {
+        if let Some(locked_qc) = locked_qc {
             consensus.seed_locked_cert(locked_qc);
         }
-        if let Some(boundary_qc) = restored.boundary_qc {
+        if let Some(boundary_qc) = boundary_qc {
             consensus.seed_boundary_cert(boundary_qc);
         }
-        consensus.seed_stored_payloads(restored.payloads);
         if let Some(anchor_cert2) = anchor_cert2 {
             consensus.seed_anchor_cert2(anchor_cert2);
         }
@@ -335,19 +333,16 @@ where
             upgrade_lock.set_decided_upgrade_cert(cert.clone());
         }
 
-        // A restarted node starts after both the anchor and the last view it voted in, so it
-        // neither votes twice in a view nor starts behind its anchor.
-        let start_view = restored
-            .restart_view
-            .map_or(anchor_view, |view| view.max(anchor_view));
         consensus.resume_from_restart(
             anchor_view,
-            start_view,
-            restored.acted_view.unwrap_or_else(ViewNumber::genesis),
+            initializer.start_view(),
+            initializer.last_actioned_view(),
         );
-        if let Some(state_cert) = restored.state_cert {
+        if let Some(state_cert) = initializer.state_cert().cloned() {
             consensus.seed_state_cert(state_cert);
         }
+
+        let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
 
         let mut vid_disperser = VidDisperser::new(
             membership_coordinator.clone(),
@@ -366,9 +361,6 @@ where
 
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
-
-        let service_book = ServiceBook::new(restored.service_records);
-        let service_record = service_record.map(|record| (record, private_key.clone()));
 
         Self::builder()
             .consensus(consensus)
@@ -451,22 +443,13 @@ where
                 membership_coordinator.epoch_length(),
                 upgrade_lock,
             ))
-            .storage({
-                let storage = Storage::new(store, &private_key)
-                    .with_metrics(metrics)
-                    .with_decide_log_limit(decide_log_limit);
-                match decided_state {
-                    Some(decided_state) => storage.with_decided_state(decided_state),
-                    None => storage,
-                }
-            })
+            .storage(Storage::new(storage, private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view))
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
+            .participation(participation)
             .external_tx(external_tx)
-            .service_book(service_book)
-            .maybe_service_record(service_record)
             .build()
     }
 
@@ -574,6 +557,9 @@ where
                     if self.last_timeout_view != Some(view) {
                         self.last_timeout_view = Some(view);
                         let leader = self.leader(view, epoch);
+                        if let Some(leader) = leader.clone() {
+                            self.participation.leader_missed(leader, epoch);
+                        }
                         if let Some(m) = &self.metrics {
                             m.consensus.number_of_timeouts.add(1);
                             if leader.as_ref() == Some(&self.public_key) {
@@ -766,10 +752,7 @@ where
                     self.vid_reconstructor.retire_view(out.view);
                     return Ok(self.on_payload_obtained(out))
                 },
-                stored = self.storage.next() => {
-                    let stored = stored.map_err(|e| {
-                        CoordinatorError::critical(ErrorSource::Message(e.to_string()))
-                    })?;
+                Some(stored) = self.storage.next() => {
                     return Ok(ConsensusInput::Stored(stored))
                 },
                 Some(result) = self.epoch_manager.next() => match result {
@@ -889,12 +872,7 @@ where
                 debug!(%node, %epoch, "request drb result");
                 self.epoch_manager.request_drb_result(epoch);
             },
-            ConsensusOutput::LeafDecided {
-                leaves,
-                cert1,
-                cert2,
-                vid_shares,
-            } => {
+            ConsensusOutput::LeafDecided { leaves, cert1, .. } => {
                 info!(
                     %node,
                     view = %cert1.view_number(),
@@ -911,14 +889,6 @@ where
                             VidCommitment::V0(_) | VidCommitment::V1(_) => None,
                         }
                     }));
-                // Before gc, which deletes the payloads the decide log entries share, and the
-                // states of the decided leaves.
-                let states: Vec<_> = leaves
-                    .iter()
-                    .map(|leaf| self.state_manager.state_of(leaf.commit()).cloned())
-                    .collect();
-                self.storage
-                    .append_decided(&leaves, &cert1, cert2.as_ref(), &vid_shares, &states);
                 // `leaves` is ordered newest first.
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
@@ -931,6 +901,8 @@ where
                     }
                 }
                 for leaf in leaves.into_iter().rev() {
+                    self.participation
+                        .on_leaf_decided(&leaf, &self.membership_coordinator);
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
             },
@@ -1014,6 +986,7 @@ where
             } => {
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "proposal paired with vid share");
+                self.storage.append_vid(vid_share.clone());
                 self.storage.append_proposal(proposal.data.clone());
                 // Same gate as the in-memory store in `Consensus::apply`: persisting
                 // unconditionally writes a `state_cert` row under a view the sender
@@ -1128,6 +1101,11 @@ where
                     "send vote1"
                 );
                 self.record_voted_view(view);
+                if let Some(epoch) = vote1.vote.data.epoch
+                    && let Some(leader) = self.leader(view, epoch)
+                {
+                    self.participation.leader_proposed(leader, epoch);
+                }
                 crate::trace_leader_event!(
                     self.consensus.tracer,
                     view,
@@ -1262,40 +1240,10 @@ where
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
                 let resend = self.block_builder.on_view_changed(view);
+                self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
                 if let Some(resend) = resend {
                     self.send_transactions(resend, epoch)?;
-                }
-
-                // Each epoch can bring committee members that do not have this node's record yet,
-                // and drops an epoch out of the retained window.
-                if self.service_record_epoch.is_none_or(|sent| sent < epoch) {
-                    self.service_record_epoch = Some(epoch);
-                    if let Some((template, private_key)) = &self.service_record {
-                        let record = ServiceRecord {
-                            epoch,
-                            ..template.clone()
-                        };
-                        match record.sign::<T>(self.public_key.clone(), private_key) {
-                            Ok(signed) => {
-                                self.storage.append_service_record(&signed);
-                                self.service_book.insert(signed.clone());
-                                if let Err(err) = self.broadcast_in(
-                                    self.slot_for(view),
-                                    MessageType::ServiceRecord(signed),
-                                    "service record",
-                                ) {
-                                    warn!(%node, %err, "failed to send the service record");
-                                }
-                            },
-                            Err(err) => error!(%node, %err, "failed to sign the service record"),
-                        }
-                    }
-                    if let Some(oldest) = epoch.checked_sub(RETAINED_EPOCHS - 1) {
-                        let oldest = EpochNumber::new(oldest);
-                        self.service_book.drop_before(oldest);
-                        self.storage.drop_service_records(oldest);
-                    }
                 }
 
                 // Proactively fetch the DRB for the next epoch so
@@ -1872,6 +1820,7 @@ where
                     view = %proposal.data.view_number,
                     "recv proposal fetch response"
                 );
+                self.pending_proposal_fetches.resolve(&proposal);
                 self.maybe_validate_fetched_proposal(*proposal);
                 None
             },
@@ -1915,23 +1864,6 @@ where
                     {
                         warn!(%node, %sender, %view, %err, "failed to send payload request");
                     }
-                }
-                None
-            },
-            MessageType::ServiceRecord(record) => {
-                let epoch = record.record.epoch;
-                let staked = is_epoch_admissible(epoch, self.consensus.current_epoch())
-                    && self
-                        .membership_coordinator
-                        .stake_table_for_epoch(epoch)
-                        .is_ok_and(|members| members.has_stake(&record.signer));
-                if !staked {
-                    debug!(%node, %sender, signer = %record.signer, "service record of an unstaked key");
-                    return None;
-                }
-                if self.service_book.insert(record.clone()) {
-                    debug!(%node, signer = %record.signer, url = %record.record.api_url, "recv service record");
-                    self.storage.append_service_record(&record);
                 }
                 None
             },
@@ -2096,6 +2028,9 @@ where
 
     fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
         match request {
+            ClientRequest::CurrentView(tx) => {
+                let _ = tx.send(self.consensus.current_view());
+            },
             ClientRequest::CurrentEpoch(tx) => {
                 let _ = tx.send(self.consensus.current_epoch());
             },
@@ -2106,8 +2041,29 @@ where
                 let view = self.consensus.last_decided_leaf().view_number();
                 let _ = tx.send(self.state(view).map(|s| s.state.clone()));
             },
+            ClientRequest::UndecidedLeaves(tx) => {
+                let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
+            },
             ClientRequest::GetState { view, respond } => {
                 let _ = respond.send(self.state(view).map(|s| s.state.clone()));
+            },
+            ClientRequest::GetStateAndDelta { view, respond } => {
+                let _ = respond.send(match self.state(view) {
+                    Some(s) => (Some(s.state.clone()), s.delta.clone()),
+                    None => (None, None),
+                });
+            },
+            ClientRequest::ProposalParticipation { epoch, respond } => {
+                let _ = respond.send(match epoch {
+                    Some(epoch) => self.participation.proposal_participation(epoch),
+                    None => self.participation.current_proposal_participation(),
+                });
+            },
+            ClientRequest::VoteParticipation { epoch, respond } => {
+                let _ = respond.send(match epoch {
+                    Some(epoch) => self.participation.vote_participation(epoch),
+                    None => self.participation.current_vote_participation(),
+                });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 let forward = match self.block_builder.on_submit_transaction(tx) {
@@ -2123,6 +2079,28 @@ where
                 if let Some(forward) = forward {
                     self.send_transactions(forward, self.consensus.current_epoch())?;
                 }
+            },
+            ClientRequest::UpdateLeaf { update, respond } => {
+                self.state_manager.update_state(update);
+                let _ = respond.send(());
+            },
+            ClientRequest::RequestProposal {
+                view,
+                leaf_commitment,
+                respond,
+            } => {
+                if let Some(proposal) = self.consensus.signed_proposal(view, leaf_commitment) {
+                    let _ = respond.send(Ok(proposal.clone()));
+                    return Ok(());
+                }
+                if !self
+                    .pending_proposal_fetches
+                    .contains_request(view, leaf_commitment)
+                {
+                    self.broadcast_proposal_fetch(view)?;
+                }
+                self.pending_proposal_fetches
+                    .push(view, leaf_commitment, respond);
             },
             ClientRequest::SendExternalMessage {
                 payload,
@@ -2355,11 +2333,11 @@ where
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view);
                 self.cert_verifiers.gc(decide_floor, epoch);
+                self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key, _| key.view > view);
                 self.fetcher.gc(view);
                 self.state_manager.gc(view);
-                self.storage.decided(view);
                 self.storage
                     .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());
                 self.vid_reconstructor
@@ -2659,6 +2637,9 @@ struct PendingDa<T: NodeType> {
     hashes: Vec<Commitment<T::Transaction>>,
 }
 
+type ProposalFetchResponseSender<T> =
+    oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct ProposalFetchKey<T: NodeType> {
     view: ViewNumber,
@@ -2670,6 +2651,62 @@ impl<T: NodeType> ProposalFetchKey<T> {
         Self {
             view,
             leaf_commitment,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PendingProposalFetches<T: NodeType> {
+    pending: HashMap<ProposalFetchKey<T>, Vec<ProposalFetchResponseSender<T>>>,
+}
+
+impl<T: NodeType> PendingProposalFetches<T> {
+    fn prune_closed(&mut self) {
+        self.pending.retain(|_, responders| {
+            responders.retain(|respond| !respond.is_closed());
+            !responders.is_empty()
+        });
+    }
+
+    fn contains_request(
+        &mut self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> bool {
+        self.prune_closed();
+        self.pending
+            .contains_key(&ProposalFetchKey::new(view, leaf_commitment))
+    }
+
+    fn push(
+        &mut self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        respond: ProposalFetchResponseSender<T>,
+    ) {
+        self.pending
+            .entry(ProposalFetchKey::new(view, leaf_commitment))
+            .or_default()
+            .push(respond);
+    }
+
+    fn gc(&mut self, view: ViewNumber) {
+        self.pending.retain(|key, responders| {
+            responders.retain(|respond| !respond.is_closed());
+            key.view >= view && !responders.is_empty()
+        });
+    }
+
+    fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {
+        self.prune_closed();
+        let view = proposal.data.view_number;
+        let leaf_commitment = proposal_commitment(&proposal.data);
+        let key = ProposalFetchKey::new(view, leaf_commitment);
+
+        if let Some(responders) = self.pending.remove(&key) {
+            for respond in responders {
+                let _ = respond.send(Ok(proposal.clone()));
+            }
         }
     }
 }

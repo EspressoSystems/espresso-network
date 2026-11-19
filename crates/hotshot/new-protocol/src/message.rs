@@ -29,7 +29,6 @@ pub use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    discovery::SignedServiceRecord,
     helpers::proposal_commitment,
     message::payload::PayloadFetchMessage,
     proposal::{
@@ -796,8 +795,6 @@ pub enum MessageType<T: NodeType, S> {
     ProposalFetch(ProposalFetchMessage<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
     PayloadFetch(PayloadFetchMessage),
-    /// The sender's record of its API service; see [`crate::discovery`].
-    ServiceRecord(SignedServiceRecord<T>),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
@@ -809,7 +806,6 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
             Self::PayloadFetch(r) => MessageType::PayloadFetch(r),
-            Self::ServiceRecord(r) => MessageType::ServiceRecord(r),
         }
     }
 }
@@ -849,8 +845,6 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
             MessageType::PayloadFetch(message) => message.view_number(),
-            // Records are about epochs, not views.
-            MessageType::ServiceRecord(_) => ViewNumber::genesis(),
         }
     }
 }

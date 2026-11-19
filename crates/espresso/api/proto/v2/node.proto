@@ -365,44 +365,6 @@ message ParticipationResponse {
   repeated ParticipationEntry participation = 1;
 }
 
-message GetPeersRequest {
-  // The latest epoch with records when absent
-  optional uint64 epoch = 1;
-}
-
-message ServiceRecord {
-  // The validator that signed the record, staked in the record's epoch
-  BLSPublicKey signer = 1;
-
-  // The epoch the record is for
-  uint64 epoch = 7;
-
-  // URL of the validator's API service
-  string api_url = 2;
-
-  // Ed25519 public key, 32 bytes, the API service authenticates requests with; absent if it has
-  // none
-  optional bytes api_key = 3;
-
-  // Orders a validator's records: a higher sequence number replaces a lower one
-  uint64 sequence = 4;
-
-  // The bytes the validator signed: the tag "espresso-service-record-v1" followed by the bincode
-  // encoding of the epoch, URL, key and sequence number
-  bytes signed_message = 5;
-
-  // BLS signature over signed_message, TaggedBase64
-  string signature = 6;
-}
-
-message PeersResponse {
-  // Sorted by signer
-  repeated ServiceRecord peers = 1;
-
-  // The epoch the records are for
-  uint64 epoch = 2;
-}
-
 service NodeService {
   // Count the transactions in a block range, optionally in one namespace
   rpc GetTransactionCount(GetTransactionCountRequest) returns (TransactionCountResponse) {
@@ -471,12 +433,5 @@ service NodeService {
   // Get, per validator, the votes it cast as a fraction of an epoch's views
   rpc GetVoteParticipation(GetVoteParticipationRequest) returns (ParticipationResponse) {
     option (google.api.http) = {get: "/v2/node/participation/vote"};
-  }
-
-  // Get the API services of the validators of an epoch, from the records they signed for it and
-  // sent to this node's consensus. A client checks each signature against that epoch's stake table
-  // rather than trusting this node. Not found if the node has no records for the epoch
-  rpc GetPeers(GetPeersRequest) returns (PeersResponse) {
-    option (google.api.http) = {get: "/v2/node/peers"};
   }
 }

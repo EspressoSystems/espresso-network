@@ -268,16 +268,11 @@ pub struct Consensus<T: NodeType> {
 
     /// Storage confirmations; sends are gated on these facts.
     stored_proposals: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
-    /// Blocks whose payload is on disk, by the view they were proposed in.
-    stored_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
+    stored_vids: BTreeSet<ViewNumber>,
     stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
     /// Highest locked QC confirmed persisted; gates release of phase-2 votes.
     stored_high_qc: Option<LockView>,
-
-    /// Whether the decide log is full. Vote2 waits while it is, so a node whose ingester falls
-    /// behind stops helping to decide blocks it cannot deliver.
-    decide_log_full: bool,
 
     /// Messages constructed and accounted for in `voted_*_views` /
     /// `proposed_views`, awaiting their storage confirmations. A pending vote2
@@ -375,8 +370,6 @@ struct PendingVote2<T: NodeType> {
     lock: LockView,
     /// The view the voted block was proposed at; a re-vote's is earlier.
     block_view: ViewNumber,
-    /// The payload commitment of the voted block, whose payload must be on disk first.
-    block_commitment: VidCommitment2,
 }
 
 /// A timeout vote awaiting its storage confirmation.
@@ -459,11 +452,10 @@ impl<T: NodeType> Consensus<T> {
             voted_2_views: BTreeSet::new(),
             vote1_parent: BTreeMap::new(),
             stored_proposals: BTreeMap::new(),
-            stored_payloads: BTreeSet::new(),
+            stored_vids: BTreeSet::new(),
             stored_actions: BTreeSet::new(),
             requested_actions: BTreeSet::new(),
             stored_high_qc: None,
-            decide_log_full: false,
             pending_vote1: BTreeMap::new(),
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
@@ -541,12 +533,6 @@ impl<T: NodeType> Consensus<T> {
         for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
         }
-    }
-
-    /// Seed the blocks whose payload storage holds on restart, so vote2 on them does not wait
-    /// for a write that already happened.
-    pub fn seed_stored_payloads(&mut self, payloads: BTreeSet<(ViewNumber, VidCommitment2)>) {
-        self.stored_payloads.extend(payloads);
     }
 
     /// Seed proposals loaded from storage on restart, keeping each one's signature.
@@ -1377,9 +1363,7 @@ impl<T: NodeType> Consensus<T> {
                 self.signed_proposals = self.signed_proposals.split_off(&(view, c));
                 self.vid_shares = self.vid_shares.split_off(&view);
                 self.stored_proposals = self.stored_proposals.split_off(&view);
-                self.stored_payloads = self
-                    .stored_payloads
-                    .split_off(&(view, VidCommitment2::default()));
+                self.stored_vids = self.stored_vids.split_off(&view);
                 self.stored_actions = self.stored_actions.split_off(&(view, ActionKind::Vote));
                 self.requested_actions =
                     self.requested_actions.split_off(&(view, ActionKind::Vote));
@@ -3420,29 +3404,15 @@ impl<T: NodeType> Consensus<T> {
                     .or_default()
                     .push(commitment);
             },
+            StorageOutput::Vid(view) => {
+                self.stored_vids.insert(view);
+            },
             StorageOutput::Action(view, kind) => {
                 self.stored_actions.insert((view, kind));
-            },
-            StorageOutput::Payload(view, commitment) => {
-                self.stored_payloads.insert((view, commitment));
-                // A re-vote at a later view can wait on this payload; re-check all.
-                let pending: Vec<ViewEpoch> = self.pending_vote2.keys().copied().collect();
-                for key in pending {
-                    self.release_vote2_at(key, outbox);
-                }
-                return;
             },
             StorageOutput::HighQc(lock) => {
                 self.bump_stored_high_qc(lock);
                 // A newly persisted lock can unblock vote2 across many views; re-check all.
-                let pending: Vec<ViewEpoch> = self.pending_vote2.keys().copied().collect();
-                for key in pending {
-                    self.release_vote2_at(key, outbox);
-                }
-                return;
-            },
-            StorageOutput::DecideLogFull(full) => {
-                self.decide_log_full = full;
                 let pending: Vec<ViewEpoch> = self.pending_vote2.keys().copied().collect();
                 for key in pending {
                     self.release_vote2_at(key, outbox);
@@ -3521,9 +3491,7 @@ impl<T: NodeType> Consensus<T> {
             self.pending_vote2.remove(&key);
             return;
         }
-        if self.decide_log_full
-            || !self.vote2_persisted(view, pending.block_view, pending.block_commitment)
-            || !self.high_qc_persisted(pending.lock)
+        if !self.vote2_persisted(view, pending.block_view) || !self.high_qc_persisted(pending.lock)
         {
             return;
         }
@@ -3547,20 +3515,10 @@ impl<T: NodeType> Consensus<T> {
     /// phase-2 vote. A restart-barred view persisted both before the crash:
     /// its vote is re-cast, but its Vote action is never re-recorded. A
     /// re-vote disperses nothing, so it has no share of its own to wait for.
-    /// Whether everything a vote2 at `view` depends on is on disk: the vote, and the payload of
-    /// the voted block. The payload also stands in for this node's VID share, which it
-    /// determines, and an ingester can pick it up before the block is final.
-    fn vote2_persisted(
-        &self,
-        view: ViewNumber,
-        block_view: ViewNumber,
-        block_commitment: VidCommitment2,
-    ) -> bool {
+    fn vote2_persisted(&self, view: ViewNumber, block_view: ViewNumber) -> bool {
         view <= self.restart_barred_view
             || (self.stored_actions.contains(&(view, ActionKind::Vote))
-                && self
-                    .stored_payloads
-                    .contains(&(block_view, block_commitment)))
+                && (block_view != view || self.stored_vids.contains(&view)))
     }
 
     /// See [`Self::timeout_vote_bar`].
@@ -4028,10 +3986,7 @@ impl<T: NodeType> Consensus<T> {
         let required = self
             .lock_view()
             .expect("locked_cert is set before voting in phase 2");
-        if !self.decide_log_full
-            && self.vote2_persisted(view, block_view, proposal_block_commitment)
-            && self.high_qc_persisted(required)
-        {
+        if self.vote2_persisted(view, block_view) && self.high_qc_persisted(required) {
             outbox.push_back(ConsensusOutput::SendVote2(vote));
         } else {
             if view > self.restart_barred_view {
@@ -4043,7 +3998,6 @@ impl<T: NodeType> Consensus<T> {
                     vote,
                     lock: required,
                     block_view,
-                    block_commitment: proposal_block_commitment,
                 },
             );
         }

@@ -1,21 +1,22 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
-use consensus_store::mem::MemStore;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewChangeEvidence2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewChangeEvidence2, ViewNumber,
+    },
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate2,
     simple_vote::QuorumData2,
-    traits::signature_key::SignatureKey,
+    traits::{signature_key::SignatureKey, storage::Storage as _},
     upgrade_config::UpgradeConfig,
 };
 use tokio::sync::mpsc;
@@ -27,7 +28,6 @@ use crate::{
     client::CoordinatorClient,
     consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
-    discovery::{ServiceBook, ServiceRecord},
     epoch::EpochManager,
     helpers::test_upgrade_lock,
     message::{Certificate1, OpaqueMessage, Proposal},
@@ -35,7 +35,6 @@ use crate::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
-    store::ConsensusStore,
     upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -63,13 +62,12 @@ pub async fn build_test_coordinator(
     network: Cliquenet<TestTypes>,
     membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
-    store: ConsensusStore<TestTypes, MemStore>,
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
     upgrade: UpgradeSetup,
     external_tx: mpsc::UnboundedSender<OpaqueMessage<BLSPubKey>>,
-) -> Coordinator<TestTypes, MemStore> {
+) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
@@ -91,13 +89,11 @@ pub async fn build_test_coordinator(
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
 
-    // A node restarting with persistent storage resumes from the anchor in
-    // its consensus store, as in production; otherwise it starts from genesis.
-    let restored = store.load().expect("load consensus store");
-    let restart_anchor = restored
-        .anchor
-        .clone()
-        .map(|anchor| (anchor.leaf, anchor.cert1));
+    // A node restarting with persistent storage resumes from its persisted
+    // decided anchor (mirroring production's `Coordinator::maker`, which
+    // gets the anchor from the `HotShotInitializer`); otherwise it starts
+    // from genesis.
+    let restart_anchor = storage.anchor_leaf().await;
     let initial_leaf = restart_anchor
         .as_ref()
         .map(|(leaf, _)| leaf.clone())
@@ -178,17 +174,24 @@ pub async fn build_test_coordinator(
         state_manager.seed_state(anchor_view, Arc::new(anchor_state), anchor_leaf.clone());
         let reconstructed = reconstructed_blocks(
             std::iter::once((anchor_view, anchor_leaf.block_header().clone())).chain(
-                restored
-                    .proposals
-                    .iter()
-                    .map(|(view, p)| (*view, p.data.block_header.clone())),
+                storage
+                    .proposals_cloned()
+                    .await
+                    .into_iter()
+                    .map(|(view, p)| (view, p.data.block_header().clone())),
             ),
         );
         // Seed persisted proposals before `seed_parent` so its authoritative
         // anchor wins (mirrors `Coordinator::maker`).
-        consensus.seed_signed_proposals(restored.proposals.values().cloned());
+        consensus.seed_proposals(
+            storage
+                .proposals_cloned()
+                .await
+                .into_values()
+                .map(|p| Proposal::from(p.data.clone())),
+        );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
-        if let Some(cert2) = restored.anchor.as_ref().and_then(|a| a.cert2.clone()) {
+        if let Some(cert2) = storage.cert2(anchor_view).await {
             consensus.seed_anchor_cert2(cert2);
         }
         anchor_view
@@ -210,47 +213,38 @@ pub async fn build_test_coordinator(
         ViewNumber::genesis()
     };
 
-    // As in `Coordinator::maker`: restore the lock, the boundary certificate
-    // and the stored payloads, and never act again in a view acted in before.
-    if let Some(locked_qc) = restored.locked_qc {
-        consensus.seed_locked_cert(locked_qc);
-    }
-    if let Some(boundary_qc) = restored.boundary_qc {
-        consensus.seed_boundary_cert(boundary_qc);
-    }
-    consensus.seed_stored_payloads(restored.payloads);
-    let restart_view = restored
-        .restart_view
-        .map_or(anchor_view, |view| view.max(anchor_view));
-    consensus.resume_from_restart(
-        anchor_view,
-        restart_view,
-        restored.acted_view.unwrap_or_else(ViewNumber::genesis),
-    );
+    // Restarted nodes must not act again in views they acted in before.
+    let restart_view = storage.restart_view().await;
+    let last_actioned_view = storage.last_actioned_view().await;
+    consensus.resume_from_restart(anchor_view, restart_view, last_actioned_view);
 
     // A leader proposing on an epoch-root parent QC right after restart
-    // needs the persisted light-client state cert.
-    if let Some(state_cert) = restored.state_cert {
+    // needs the persisted light-client state cert (as in production, where
+    // it arrives via `HotShotInitializer::state_cert`).
+    if let Some(state_cert) = storage.state_cert_cloned().await {
         consensus.seed_state_cert(state_cert);
     }
 
-    let genesis_signed = SignedProposal::<TestTypes, Proposal<TestTypes>> {
-        data: genesis_proposal.clone(),
+    let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
+        proposal: QuorumProposal2 {
+            block_header: genesis_leaf.block_header().clone(),
+            view_number: ViewNumber::genesis(),
+            epoch: Some(EpochNumber::genesis()),
+            justify_qc: genesis_cert1.clone(),
+            next_epoch_justify_qc: None,
+            upgrade_certificate: None,
+            view_change_evidence: None,
+            next_drb_result: None,
+            state_cert: None,
+        },
+    };
+    let genesis_signed = SignedProposal::<TestTypes, QuorumProposalWrapper<TestTypes>> {
+        data: genesis_wrapper,
         signature: BLSPubKey::sign(&private_key, &[]).expect("sign genesis"),
         _pd: PhantomData,
     };
-    let mut batch = consensus_store::Batch::new();
-    crate::store::put_proposal(&mut batch, &genesis_signed).expect("encode genesis proposal");
-    consensus_store::Store::apply(store.store().as_ref(), &batch).expect("seed genesis proposal");
-    // The application storage too: its leaf fetcher serves the genesis leaf
-    // to peers catching up on the first epochs' stake tables.
-    let genesis_wrapper = SignedProposal {
-        data: QuorumProposalWrapper::from(genesis_proposal.clone()),
-        signature: genesis_signed.signature.clone(),
-        _pd: PhantomData,
-    };
     storage
-        .append_proposal_wrapper(&genesis_wrapper)
+        .append_proposal_wrapper(&genesis_signed)
         .await
         .expect("seed genesis proposal");
 
@@ -265,14 +259,6 @@ pub async fn build_test_coordinator(
         epoch_length(epoch_height),
         upgrade_lock.clone(),
     );
-
-    let service_record = ServiceRecord {
-        epoch: EpochNumber::genesis(),
-        api_url: format!("http://node{node_index}.test:24000"),
-        api_key: None,
-        sequence: 1,
-    };
-    let service_book = ServiceBook::new(store.load().expect("load").service_records);
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -299,15 +285,13 @@ pub async fn build_test_coordinator(
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .share_validator(share_validator)
-        .storage(crate::storage::Storage::new(store, &private_key))
+        .storage(crate::storage::Storage::new(storage, private_key))
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .external_tx(external_tx)
         .timer(Timer::new(view_timeout, ViewNumber::genesis()))
         .public_key(public_key)
-        .service_book(service_book)
-        .service_record((service_record, private_key.clone()))
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).

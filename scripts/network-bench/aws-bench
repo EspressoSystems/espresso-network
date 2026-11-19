@@ -254,6 +254,7 @@ GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
 # Rebuilt from --tag; these are the only components the tag under test controls.
 IMAGE_COMPONENTS = (
     "espresso-node",
+    "orchestrator",
     "state-relay-server",
     "deploy",
     "staking-cli",
@@ -272,6 +273,7 @@ SUPPORT_IMAGES = {
 ROLE_IMAGES: dict[str, tuple[str, ...]] = {
     "ctl": (
         "deploy",
+        "orchestrator",
         "state-relay-server",
         "staking-cli",
         "prover-service",
@@ -294,6 +296,7 @@ PROXY_ADDRESS_KEYS = (
     "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS",
 )
 NODE_API_PORT = 8080
+NODE_TONIC_PORT = 8081
 CLIQUENET_PORT = 9000
 # From .env; render_ctl_env asserts these still match the parsed file.
 # The bench's own postgres container, independent of .env.
@@ -322,10 +325,8 @@ STORAGE_MODULES: dict[tuple[ConsensusStorage, NodeRole], tuple[str, ...]] = {
 }
 # `light-client` serves the readers of `--clients` and the query nodes fetching from each other
 # through ESPRESSO_NODE_API_PEERS; it adds routes only.
-# Every node runs `query`: its ingester frees the consensus store's decide log, without which the
-# node stops voting.
 API_MODULES: dict[NodeRole, tuple[str, ...]] = {
-    "validator": ("http", "query", "status", "submit", "catchup", "config"),
+    "validator": ("http", "status", "submit", "catchup", "config"),
     "query": ("http", "query", "submit", "catchup", "config", "light-client"),
 }
 # `--prune` runs node0's pruner this often; a run deletes everything past the retention.
@@ -352,15 +353,12 @@ AGENT_PYTHON = (
 SCRIPT_DIR = Path(__file__).resolve().parent
 # On a host the script lives in /opt/bench, whose parents[1] is "/"; only the laptop reads it.
 REPO_ROOT = SCRIPT_DIR.parents[1]
-# Public keys of the BENCH_MNEMONIC indices from KEY_INDEX_BASE on, one JSON object per line
-# (`index`, `stake_table_key`, `state_ver_key`, `x25519_key`). Python cannot derive them, so the
-# file bounds the node count of a run.
-BENCH_KEYS = SCRIPT_DIR / "bench-keys.jsonl"
 USER_DATA_TEMPLATE = SCRIPT_DIR / "aws" / "user-data.sh"
 TERRAFORM_SRC = SCRIPT_DIR / "aws" / "terraform"
 # Rendered per host after `tofu apply`, shipped to /opt/bench next to netbench.py and aws-bench.
 SHIPPED_HOST_FILES = (
     "node.env",
+    "node-rejoin.env",
     "recreate.sh",
     "ctl.env",
     "stake.env",
@@ -546,7 +544,7 @@ CLOUD_INIT_TIMEOUT_S = 900
 # cloud-init 23.4+ exits 2 for "done with recoverable errors", e.g. deprecation warnings.
 CLOUD_INIT_OK_RCS = (0, 2)
 GATE_RETRY_S = 2.0
-# Per support service (anvil, relay, postgres) to answer after `docker start`.
+# Per support service (anvil, orchestrator, relay, postgres) to answer after `docker start`.
 GATE_TIMEOUT_S = 120.0
 # Contract deployment: 7 deploy steps at anvil's 1 s block time, with margin.
 DEPLOY_TIMEOUT_S = 300
@@ -1384,12 +1382,6 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     if cfg.prover and cfg.nodes > PROVER_STAKE_TABLE_CAPACITY:
         raise Refused(
             f"--prover supports at most {PROVER_STAKE_TABLE_CAPACITY} nodes: {cfg.nodes}"
-        )
-    if cfg.nodes > len(bench_keys()):
-        raise Refused(
-            f"--nodes {cfg.nodes} exceeds the {len(bench_keys())} nodes whose public keys "
-            f"{BENCH_KEYS.name} holds (mnemonic indices {KEY_INDEX_BASE} to "
-            f"{KEY_INDEX_BASE + len(bench_keys()) - 1}); add the keys of the further indices"
         )
     check_submit_nodes(cfg)
     check_slow_nodes(cfg)
@@ -2391,9 +2383,8 @@ def render_genesis(
     they are deterministic from the deployer nonce. `max_block_size` goes into both chain
     configs. `protocol_version` goes into `base_version` and `upgrade_version`, so the network
     runs it from genesis; `genesis_version` stays the template's. `epoch_height` replaces the
-    template's when given. The template's genesis stake table is dropped: the fleet's replaces
-    it when the run is shipped (`genesis_with_stake_table`)."""
-    text = strip_stake_table(template.decode())
+    template's when given."""
+    text = template.decode()
     text, size_n = re.subn(
         r'(?m)^max_block_size = ".*"$', f'max_block_size = "{max_block_size}"', text
     )
@@ -2429,57 +2420,6 @@ def render_genesis(
                 f"expected 1 epoch_height field in genesis template, replaced {epoch_n}"
             )
     return text.encode()
-
-
-def genesis_with_stake_table(genesis: bytes, hosts: dict[str, HostInfo]) -> bytes:
-    """`genesis` with the fleet's genesis stake table in place of any it has: in node order,
-    one DA entry of stake 1 per node with the keys of its mnemonic index and its cliquenet
-    address."""
-    names = _node_names(hosts)
-    keys = bench_keys()
-    if len(names) > len(keys):
-        raise ValueError(f"{len(names)} nodes, but {BENCH_KEYS.name} has {len(keys)}")
-    entries = [
-        "\n# The fleet's nodes in node order at their private IPs, written when the run is"
-        " shipped.\n"
-    ]
-    for name, key in zip(names, keys):
-        p2p_addr = _cliquenet_address(hosts[name])
-        entries.append(
-            "\n[[stake_table.genesis]]\n"
-            f"stake_table_key = {json.dumps(key['stake_table_key'])}\n"
-            f"state_ver_key = {json.dumps(key['state_ver_key'])}\n"
-            "stake = 1\n"
-            "da = true\n"
-            f"connect_info = {{ x25519_key = {json.dumps(key['x25519_key'])}, "
-            f"p2p_addr = {json.dumps(p2p_addr)} }}\n"
-        )
-    return (strip_stake_table(genesis.decode()) + "".join(entries)).encode()
-
-
-def strip_stake_table(text: str) -> str:
-    """`text` without its genesis stake table: everything from the first
-    `[[stake_table.genesis]]` on, and the comment directly above it."""
-    match = re.search(r"(?m)^\[\[stake_table\.genesis\]\]$", text)
-    if match is None:
-        return text
-    lines = text[: match.start()].rstrip().splitlines()
-    while lines and lines[-1].startswith("#"):
-        lines.pop()
-    return "\n".join(lines).rstrip() + "\n"
-
-
-@cache
-def bench_keys() -> list[dict[str, Any]]:
-    """BENCH_KEYS in node order: entry `i` holds the keys of mnemonic index KEY_INDEX_BASE + i."""
-    keys = [json.loads(line) for line in BENCH_KEYS.read_text().splitlines() if line]
-    for i, key in enumerate(keys):
-        if key["index"] != KEY_INDEX_BASE + i:
-            raise ValueError(
-                f"{BENCH_KEYS.name} line {i + 1}: index {key['index']}, "
-                f"expected {KEY_INDEX_BASE + i}"
-            )
-    return keys
 
 
 def parse_dotenv(text: str) -> dict[str, str]:
@@ -2524,11 +2464,6 @@ def _node_url(info: HostInfo) -> str:
     return f"http://{info['private_ip']}:{NODE_API_PORT}"
 
 
-def _cliquenet_address(info: HostInfo) -> str:
-    """The address a node advertises and its peers dial."""
-    return f"{info['private_ip']}:{CLIQUENET_PORT}"
-
-
 def _journal_max_bytes(host: HostSpec) -> int:
     """Usable disk after RESERVED_GB, times JOURNAL_MAX_BYTES_FRACTION; halved on the query
     role, which shares the disk with Postgres."""
@@ -2547,6 +2482,7 @@ def render_node_env(
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
     prune: int | None = None,
+    config_peers: bool = False,
     chaos: bool = False,
 ) -> str:
     self_info = hosts[host["name"]]
@@ -2561,10 +2497,10 @@ def render_node_env(
         "ESPRESSO_NODE_KEY_MNEMONIC": BENCH_MNEMONIC,
         "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
         "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS": f"0.0.0.0:{CLIQUENET_PORT}",
-        "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": _cliquenet_address(self_info),
+        "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": f"{self_info['private_ip']}:{CLIQUENET_PORT}",
         "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
-        # No builder runs in the bench; leaders build empty blocks themselves.
-        "ESPRESSO_BUILDER_URLS": "http://localhost:1",
+        "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
+        "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}",
         "ESPRESSO_L1_PROVIDER": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_L1_PORT')}",
         "ESPRESSO_L1_WS_PROVIDER": f"ws://{ctl_info['private_ip']}:{env_port('ESPRESSO_L1_PORT')}",
         "ESPRESSO_STATE_RELAY_SERVER_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_STATE_RELAY_SERVER_PORT')}",
@@ -2575,15 +2511,17 @@ def render_node_env(
         "RUST_LOG": "info",
         "RUST_LOG_FORMAT": "json",
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
-        "ESPRESSO_NODE_CONSENSUS_STORE_PATH": "/store/consensus",
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
-        "ESPRESSO_NODE_PUBLIC_API_URL": _node_url(self_info),
     }
     if consensus_storage == "journal":
         env["ESPRESSO_NODE_JOURNAL_MAX_BYTES"] = str(_journal_max_bytes(host))
     # A required value left empty risks a clap parse error; omit rather than pass "".
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
+        if config_peers:
+            # A wiped node has no persisted config; with this it fetches it from peers instead
+            # of waiting on the orchestrator.
+            env["ESPRESSO_NODE_CONFIG_PEERS"] = env["ESPRESSO_NODE_STATE_PEERS"]
     if host["role"] == "query":
         # The query service fetches data it missed from the other query nodes.
         # Rotated to start after this node so catch-up fetches do not all hit the first peer.
@@ -2698,6 +2636,10 @@ def render_ctl_env(
 ) -> str:
     node0 = hosts["node0"]
     env = {k: v for k, v in dotenv.items() if k not in PROXY_ADDRESS_KEYS}
+    env["ESPRESSO_ORCHESTRATOR_NUM_NODES"] = str(cfg.nodes)
+    # No builder runs on ctl; leaders fall back to an empty block after the timeout.
+    env["ESPRESSO_ORCHESTRATOR_BUILDER_URLS"] = "http://localhost:1"
+    env["ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT"] = "100ms"
     env["ESPRESSO_API_NODE_URL"] = _node_url(node0)
     if cfg.prover:
         env["ESPRESSO_STAKE_TABLE_CAPACITY"] = str(stake_table_capacity(cfg))
@@ -2725,7 +2667,7 @@ def render_stake_env(hosts: dict[str, HostInfo], dotenv: dict[str, str]) -> str:
     }
     for i, name in enumerate(_node_names(hosts)):
         key = f"ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{i}"
-        env[key] = _cliquenet_address(hosts[name])
+        env[key] = f"{hosts[name]['private_ip']}:{CLIQUENET_PORT}"
     return "".join(f"{key}={value}\n" for key, value in env.items())
 
 
@@ -2833,6 +2775,7 @@ def render_start_sh(
         )
         for name, binary in (
             ("deploy", "/bin/deploy"),
+            ("orchestrator", "/bin/orchestrator"),
             ("state-relay-server", "/bin/state-relay-server"),
         ):
             image = images[name]
@@ -3064,7 +3007,8 @@ def render_recreate_sh(
     query_engine: QueryEngine = "postgres",
     cores: int | None = None,
 ) -> str:
-    """Recreates the espresso-node container with the same arguments as start.sh."""
+    """Recreates the espresso-node container from `node-rejoin.env`; same arguments as start.sh
+    otherwise."""
     argv = node_create_argv(
         host,
         images,
@@ -3072,7 +3016,7 @@ def render_recreate_sh(
         leader_trace,
         consensus_storage,
         query_engine,
-        f"{BENCH_DIR}/node.env",
+        f"{BENCH_DIR}/node-rejoin.env",
         cores,
     )
     return "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n" + _docker_create(
@@ -4430,7 +4374,7 @@ def measure_run(run: Run) -> None:
             fleet,
             run.manifest_path,
             "services",
-            f"anvil, deploy, {'stake, ' if staking(run.cfg) else ''}relay, "
+            f"anvil, deploy, {'stake, ' if staking(run.cfg) else ''}orchestrator, relay, "
             f"{run.cfg.query_engine}",
         )
         start_support(
@@ -5748,9 +5692,7 @@ def run_config_hash(
     latency_meta: nb.LatencyMeta | None = None,
 ) -> str:
     """Load config plus what else changes the measured system: image digests, the fleet's
-    shape, the query database placement, the rendered genesis and the latency matrix. The
-    genesis is the one `render_run` writes, without the stake table: that table follows from
-    the node count and the hosts' private IPs, which do not change the measured system."""
+    shape, the query database placement, the rendered genesis and the latency matrix."""
     # staking-cli and prover-service joined the images later; a digest counts only for runs
     # that use it.
     digests = {
@@ -6049,19 +5991,21 @@ def render_host_files(
             if cfg.query_db == "rds" and pg is not None:
                 node_env.touch(mode=0o600)
                 node_env.chmod(0o600)
-            node_env.write_text(
-                render_node_env(
-                    spec,
-                    hosts,
-                    pg,
-                    (*trace_env(cfg), *cfg.node_env),
-                    cfg.consensus_storage,
-                    cfg.query_engine,
-                    cfg.prune,
-                    chaos=cfg.chaos is not None,
-                )
+            env_args = (
+                spec,
+                hosts,
+                pg,
+                (*trace_env(cfg), *cfg.node_env),
+                cfg.consensus_storage,
+                cfg.query_engine,
+                cfg.prune,
             )
-            if cfg.chaos is not None:
+            chaos = cfg.chaos is not None
+            node_env.write_text(render_node_env(*env_args, chaos=chaos))
+            if chaos:
+                (host_dir / "node-rejoin.env").write_text(
+                    render_node_env(*env_args, config_peers=True, chaos=chaos)
+                )
                 (host_dir / "recreate.sh").write_text(
                     render_recreate_sh(
                         spec,
@@ -6239,11 +6183,6 @@ def ship_agents(remote: Remote) -> str:
 
 
 def ship(remote: Remote, run_dir: Path) -> None:
-    """The run's files to every host. The fleet's stake table goes into the run's genesis.toml
-    first, so the run dir keeps the genesis the nodes start from."""
-    genesis = run_dir / "genesis.toml"
-    genesis.write_bytes(genesis_with_stake_table(genesis.read_bytes(), remote.hosts))
-
     def send(host: str) -> None:
         host_dir = run_dir / "hosts" / host
         files = [host_dir / f for f in SHIPPED_HOST_FILES if (host_dir / f).exists()]
@@ -6417,7 +6356,7 @@ def support_plan(
 ) -> list[SupportStart]:
     """The support services in start order, each with the check that gates the next. The rds
     instance is only checked: it is already running. SQLite has no database service. With
-    `stake`, every node is staked and the L1 finalized before the relay starts."""
+    `stake`, every node is staked and the L1 finalized before the orchestrator starts."""
     plan: list[SupportStart] = [
         GateStart(
             kind="gate",
@@ -6472,6 +6411,14 @@ def support_plan(
         GateStart(
             kind="gate",
             host="ctl",
+            container="orchestrator",
+            what="orchestrator healthcheck",
+            gate_cmd=f"curl -sf http://localhost:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}/healthcheck",
+            timeout_s=GATE_TIMEOUT_S,
+        ),
+        GateStart(
+            kind="gate",
+            host="ctl",
             container="state-relay-server",
             what="relay healthcheck",
             gate_cmd=f"curl -sf http://localhost:{env_port('ESPRESSO_STATE_RELAY_SERVER_PORT')}/healthcheck",
@@ -6521,7 +6468,7 @@ def start_support(
     stake: bool = False,
 ) -> None:
     """On ctl, in order and each gated on a check: anvil, contract deployment, staking (with
-    `stake`), relay; then Postgres on each query host (the rds instance is only gated, it is already
+    `stake`), orchestrator, relay; then Postgres on each query host (the rds instance is only gated, it is already
     running; SQLite has no such step)."""
     for step in support_plan(query_db, contracts, query_engine, query_hosts, stake):
         host = step["host"]
@@ -7097,7 +7044,7 @@ def poll_agent(
 # Containers `render_start_sh` creates per role that write to the journal or answer queries;
 # postgres stays up so that `collect_hosts` can still ask it for statistics.
 FREEZE_CONTAINERS = {
-    "ctl": ("anvil", "state-relay-server", "state-prover"),
+    "ctl": ("anvil", "orchestrator", "state-relay-server", "state-prover"),
     "query": ("espresso-node",),
     "validator": ("espresso-node",),
 }

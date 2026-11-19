@@ -17,7 +17,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     coordinator::metrics::{Measurement, finish_measurement, ignore_measurement},
@@ -27,6 +27,13 @@ use crate::{
 
 /// Validated states stay this many views below the decided view so peers can serve catchup.
 const STATE_GC_MARGIN: u64 = 8;
+
+pub struct UpdateLeaf<T: NodeType> {
+    pub view: ViewNumber,
+    pub leaf: Leaf2<T>,
+    pub state: Arc<T::ValidatedState>,
+    pub delta: Option<Delta<T>>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateRequest<T: NodeType> {
@@ -168,11 +175,6 @@ impl<T: NodeType> StateManager<T> {
             .iter()
             .find(|(_, entry)| entry.leaf.view_number() == view)
             .map(|(_, entry)| entry)
-    }
-
-    /// The state of the leaf with this commitment.
-    pub fn state_of(&self, leaf: Commitment<Leaf2<T>>) -> Option<&StateEntry<T>> {
-        self.validated_states.get(&leaf)
     }
 
     /// Get the leaf for a given view
@@ -407,6 +409,33 @@ impl<T: NodeType> StateManager<T> {
             .insert((view, parent_commitment), handle);
     }
 
+    /// Provide an externally-obtained validated state.
+    ///
+    /// An update without a delta only enriches an existing entry and is
+    /// otherwise dropped.
+    pub fn update_state(&mut self, update: UpdateLeaf<T>) {
+        let UpdateLeaf {
+            view,
+            leaf,
+            state,
+            delta,
+        } = update;
+        let commitment = leaf.commit();
+        if delta.is_none() {
+            if self.validated_states.contains_key(&commitment) {
+                self.insert_state(view, state, delta, leaf);
+            } else {
+                debug!(%view, %commitment, "dropping delta-less update: no entry for leaf");
+            }
+            return;
+        }
+        self.insert_state(view, state, delta, leaf);
+        if let Some(in_flight) = self.state_requests.remove(&commitment) {
+            in_flight.handle.abort();
+        }
+        self.start_pending(commitment);
+    }
+
     /// Get the next output.
     pub async fn next(&mut self) -> Option<StateManagerOutput<T>> {
         loop {
@@ -528,7 +557,7 @@ impl<T: NodeType> StateManager<T> {
     /// have no delta. States produced by `validate_and_apply_header` carry a delta representing
     /// the state transition. This method prevents a `from_header` state from overwriting a
     /// fully validated state that already has a delta.
-    pub(crate) fn insert_state(
+    fn insert_state(
         &mut self,
         view: ViewNumber,
         state: Arc<T::ValidatedState>,

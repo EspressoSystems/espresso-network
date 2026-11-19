@@ -1,6 +1,5 @@
-use consensus_store::mem::MemStore;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 
 use crate::coordinator::Coordinator;
 
-pub type MockCoordinator = Coordinator<TestTypes, MemStore>;
+pub type MockCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;

@@ -1540,6 +1540,13 @@ where
         Ok(h as u64)
     }
 
+    async fn success_rate(&self) -> anyhow::Result<f64> {
+        let ds = &*self.data_source;
+        hotshot_query_service::status::StatusDataSource::success_rate(ds)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         hotshot_query_service::status::StatusDataSource::elapsed_time_since_last_decide(ds)
@@ -1577,6 +1584,20 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockHeightResponse { height }))
+    }
+
+    async fn get_success_rate(
+        &self,
+        _request: tonic::Request<proto::GetSuccessRateRequest>,
+    ) -> Result<tonic::Response<proto::SuccessRateResponse>, tonic::Status> {
+        let rate = <Self as v1::StatusApi>::success_rate(self)
+            .await
+            .map_err(to_status)?;
+        // A fresh node computes 0/0 and a restarted one height/0 until its first view tick
+        // (the view gauge is in-memory, the height persisted). protoJSON cannot encode a
+        // non-finite double and the generated deserializer rejects `null`, so clamp to zero.
+        let rate = if rate.is_finite() { rate } else { 0. };
+        Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
     }
 
     async fn get_time_since_last_decide(
@@ -2129,30 +2150,6 @@ where
         .map_err(to_status)?;
         Ok(tonic::Response::new(fractions.into()))
     }
-
-    async fn get_peers(
-        &self,
-        request: tonic::Request<proto::GetPeersRequest>,
-    ) -> Result<tonic::Response<proto::PeersResponse>, tonic::Status> {
-        let epoch = request
-            .into_inner()
-            .epoch
-            .map(hotshot_types::data::EpochNumber::new);
-        let (epoch, records) = self
-            .data_source
-            .service_records(epoch)
-            .await
-            .map_err(to_status)?
-            .ok_or_else(|| tonic::Status::not_found("no service records for the epoch"))?;
-        let peers = records
-            .into_iter()
-            .map(crate::peers::listed_record)
-            .collect();
-        Ok(tonic::Response::new(proto::PeersResponse {
-            peers,
-            epoch: *epoch,
-        }))
-    }
 }
 
 // These stay here rather than in the api crate's `render` for the same reason as the stake table
@@ -2164,21 +2161,25 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
         // a setting v2 silently never serves; the `_` bindings are the deliberate drops. The guard
         // stops at this level, as the storage and module structs below are read field by field.
         let crate::options::PublicNodeConfig {
+            orchestrator_url,
             cliquenet_bind_address,
             cliquenet_advertise_address,
             public_api_url,
             builder_urls,
             state_relay_server_url,
             state_peers,
+            config_peers,
             is_da,
             genesis_file,
             genesis: _,
             identity,
             catchup_base_timeout: _,
+            local_catchup_timeout: _,
             http_catchup_delay: _,
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
             follower,
+            proposal_fetcher: _,
             l1: _,
             l1_provider_count,
             l1_ws_provider_count,
@@ -2229,6 +2230,12 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
             state_relay_server_url: state_relay_server_url.to_string(),
             state_peers: state_peers.iter().map(ToString::to_string).collect(),
+            config_peers: config_peers
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            orchestrator_url: orchestrator_url.to_string(),
             // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
             // literal and its serde impl does not, so v1 serves the unbracketed form.
             cliquenet_bind_address: cliquenet_bind_address.unbracketed_string(),
@@ -2258,6 +2265,7 @@ impl From<crate::options::StorageConfig> for proto::NodeStorage {
             .into(),
             fs: storage.fs.map(|fs| proto::FsStorage {
                 path: fs.path.display().to_string(),
+                consensus_view_retention: fs.consensus_view_retention,
             }),
             sql: storage.sql.map(Into::into),
         }
@@ -2296,6 +2304,11 @@ impl From<crate::options::SqlStorageConfig> for proto::SqlStorage {
                 interval_ms: sql.pruning.interval.map(millis),
                 pages: sql.pruning.pages,
             }),
+            consensus_pruning: Some(proto::ConsensusPruningConfig {
+                target_retention: sql.consensus_pruning.target_retention,
+                minimum_retention: sql.consensus_pruning.minimum_retention,
+                target_usage: sql.consensus_pruning.target_usage,
+            }),
         }
     }
 }
@@ -2306,6 +2319,7 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
             http: modules.http.map(|http| proto::HttpModule {
                 port: http.port.into(),
                 max_connections: http.max_connections.map(|max| max as u64),
+                tonic_port: http.tonic_port.map(u32::from),
             }),
             query: modules.query.map(|query| proto::QueryModule {
                 peers: query.peers.iter().map(ToString::to_string).collect(),
@@ -6215,6 +6229,8 @@ mod tests {
         }
 
         let opt = parse_options_with(&[
+            "--config-peers",
+            "https://peer1.test,https://peer2.test",
             "--cliquenet-bind-address",
             "[2001:db8::1]:9999",
             "--",
@@ -6297,6 +6313,7 @@ mod tests {
                     // still reads ESPRESSO_NODE_STORAGE_PATH.
                     fs: cfg.storage.fs.as_ref().map(|fs| proto::FsStorage {
                         path: fs.path.display().to_string(),
+                        consensus_view_retention: fs.consensus_view_retention,
                     }),
                     sql: None,
                 }),
@@ -6305,6 +6322,8 @@ mod tests {
                 builder_urls: strings(&cfg.builder_urls),
                 state_relay_server_url: cfg.state_relay_server_url.to_string(),
                 state_peers: strings(&cfg.state_peers),
+                config_peers: strings(cfg.config_peers.as_deref().unwrap()),
+                orchestrator_url: cfg.orchestrator_url.to_string(),
                 cliquenet_bind_address: cfg.cliquenet_bind_address.unbracketed_string(),
                 cliquenet_advertise_address: cfg
                     .cliquenet_advertise_address
@@ -6320,6 +6339,7 @@ mod tests {
                     http: Some(proto::HttpModule {
                         port: 24000,
                         max_connections: None,
+                        tonic_port: None,
                     }),
                     query: Some(proto::QueryModule {
                         peers: vec![
@@ -6366,6 +6386,7 @@ mod tests {
         );
         // IPv6 because that is the only case where NetAddr's Display and its serde impl
         // disagree, and v1 goes through serde.
+        assert_eq!(runtime.config_peers.len(), 2);
         assert_eq!(runtime.cliquenet_bind_address, "2001:db8::1:9999");
     }
 
@@ -6374,11 +6395,18 @@ mod tests {
     #[test]
     fn hotshot_config_renders_the_fields_a_test_network_leaves_empty() {
         use espresso_types::config::PublicNetworkConfig;
-        use hotshot_types::{PeerConfig, VersionedDaCommittee, network::NetworkConfig};
+        use hotshot_types::{
+            PeerConfig, VersionedDaCommittee,
+            network::{BuilderType, NetworkConfig},
+        };
 
         let committee_member = PeerConfig::<SeqTypes>::test_default();
 
-        let mut network_config = NetworkConfig::<SeqTypes>::default();
+        let mut network_config = NetworkConfig::<SeqTypes> {
+            commit_sha: "deadbeef".to_string(),
+            builder: BuilderType::Random,
+            ..Default::default()
+        };
         network_config.config.da_committees = vec![VersionedDaCommittee {
             start_version: vbs::version::Version { major: 0, minor: 6 },
             start_epoch: 10,
@@ -6387,6 +6415,8 @@ mod tests {
 
         let served: proto::HotshotConfigResponse = PublicNetworkConfig::from(network_config).into();
 
+        assert_eq!(served.commit_sha, "deadbeef");
+        assert_eq!(served.builder, proto::BuilderType::Random as i32);
         // The version renders as v1's `version_ser` writes it, not as `Debug`.
         let da_committee = &served.da_committees[0];
         assert_eq!(served.da_committees.len(), 1);
@@ -6483,11 +6513,17 @@ mod tests {
                         .map(|interval| interval.as_millis() as u64),
                     pages: sql.pruning.pages,
                 }),
+                consensus_pruning: Some(proto::ConsensusPruningConfig {
+                    target_retention: sql.consensus_pruning.target_retention,
+                    minimum_retention: sql.consensus_pruning.minimum_retention,
+                    target_usage: sql.consensus_pruning.target_usage,
+                }),
             })
         );
         // The defaults these come from are non-zero, so the comparisons above are not vacuous.
         let served = storage.sql.unwrap();
         assert!(served.statement_timeout_ms > 0);
+        assert!(served.consensus_pruning.unwrap().target_retention > 0);
     }
 
     fn assert_matches_v1_rendering<E, I, T, const ARITY: usize>(

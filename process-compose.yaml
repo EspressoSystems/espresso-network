@@ -14,8 +14,7 @@ x-availability:
     restart: exit_on_failure
 
 environment:
-  # No builder runs here; leaders build empty blocks themselves.
-  - ESPRESSO_BUILDER_URLS=http://localhost:1
+  - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_API_NODE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
@@ -154,6 +153,25 @@ processes:
         condition: process_completed
     availability: *exit-ok
 
+  orchestrator:
+    command: orchestrator
+    environment:
+      # No builder runs here; leaders fall back to an empty block after the timeout below.
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-100ms}
+    readiness_probe:
+      http_get:
+        scheme: http
+        host: localhost
+        port: ${ESPRESSO_ORCHESTRATOR_PORT}
+        path: /healthcheck
+      initial_delay_seconds: 0
+      period_seconds: 1
+      timeout_seconds: 1
+      success_threshold: 1
+      failure_threshold: 100
+    availability: *exit-ok
+
   state-relay-server:
     command: state-relay-server
     readiness_probe:
@@ -195,12 +213,12 @@ processes:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_0_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_0_TONIC_PORT}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq0-lc
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq0-consensus
       - ESPRESSO_NODE_POSTGRES_HOST=localhost
       - ESPRESSO_NODE_POSTGRES_PORT=${ESPRESSO_NODE_0_DB_PORT}
       - ESPRESSO_NODE_POSTGRES_USER=root
@@ -221,6 +239,8 @@ processes:
       - ESPRESSO_NODE_IDENTITY_LONGITUDE=-74.0060
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/
     depends_on:
+      orchestrator:
+        condition: process_healthy
       demo-l1-network:
         condition: process_healthy
       state-relay-server:
@@ -248,12 +268,12 @@ processes:
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1-lc
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1-consensus
       - ESPRESSO_NODE_POSTGRES_HOST=localhost
       - ESPRESSO_NODE_POSTGRES_PORT=${ESPRESSO_NODE_1_DB_PORT}
       - ESPRESSO_NODE_POSTGRES_USER=root
@@ -275,6 +295,8 @@ processes:
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_1_API_PORT}/
       - ESPRESSO_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_L1_PORT}
     depends_on:
+      orchestrator:
+        condition: process_healthy
       demo-l1-network:
         condition: process_healthy
       state-relay-server:
@@ -296,16 +318,16 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: espresso-node -- http -- config -- query
+    command: espresso-node -- http -- config
     environment:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_2_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_2_TONIC_PORT}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-lc
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-consensus
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_2}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_2}
@@ -321,6 +343,8 @@ processes:
       - ESPRESSO_NODE_IDENTITY_LONGITUDE=104.1954
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_2_API_PORT}/
     depends_on:
+      orchestrator:
+        condition: process_healthy
       demo-l1-network:
         condition: process_healthy
       state-relay-server:
@@ -346,13 +370,13 @@ processes:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_3_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_3_TONIC_PORT}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3-lc
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3-consensus
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_3}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_3}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_3}
@@ -368,6 +392,8 @@ processes:
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_3_API_PORT}/
       - ESPRESSO_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_L1_PORT}
     depends_on:
+      orchestrator:
+        condition: process_healthy
       demo-l1-network:
         condition: process_healthy
       state-relay-server:
@@ -392,13 +418,13 @@ processes:
       - ESPRESSO_NODE_EMBEDDED_DB=true
       - ESPRESSO_NODE_LIGHTWEIGHT=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_4_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_4_TONIC_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4-lc
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4-consensus
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_4}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_4}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_4}
@@ -414,6 +440,8 @@ processes:
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_4_API_PORT}/
       - ESPRESSO_NODE_IS_DA=true
     depends_on:
+      orchestrator:
+        condition: process_healthy
       demo-l1-network:
         condition: process_healthy
       state-relay-server:

@@ -47,12 +47,13 @@ use futures::{
     stream::{BoxStream, StreamExt},
 };
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::{
-    PeerConfig, PeerConnectInfo,
+    PeerConfig,
     data::EpochNumber,
     event::LeafInfo,
     light_client::StateKeyPair,
-    network::PeerConfigKeys,
+    network::NetworkConfig,
     new_protocol::CoordinatorEvent,
     signature_key::{BLSPrivKey, BLSPubKey},
     simple_vote::HasEpoch,
@@ -65,7 +66,11 @@ use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
 use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    task::{JoinHandle, spawn},
+    time::{sleep, timeout},
+};
+use vec1::vec1;
 use versions::NEW_PROTOCOL_VERSION;
 
 /// Bound on each per-node recovery wait after a restart.
@@ -229,7 +234,7 @@ async fn slow_test_restart_new_protocol_rolling_and_full() {
 #[derive(Clone, Copy, Debug)]
 struct NetworkParams<'a> {
     genesis_file: &'a Path,
-    builder_port: u16,
+    orchestrator_port: u16,
     l1_provider: &'a str,
     peer_ports: &'a [u16],
     api_ports: &'a [u16],
@@ -273,9 +278,6 @@ impl NodeParams {
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
-
-    /// Kept across restarts, like `storage`, and deleted with the node.
-    _consensus_store: tempfile::TempDir,
     context: Option<SequencerContext<<S::Options as PersistenceOptions>::Persistence>>,
     modules: Modules,
     opt: Options,
@@ -294,31 +296,31 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
-        let consensus_store = tempfile::tempdir().unwrap();
         let opt = S::options(&storage, opts);
 
-        // Every node runs the query module, whose ingester frees the decide log. Query nodes
-        // also fetch from their peers and serve the light client.
-        let peers = if node.is_query && node.query_peers {
-            network
-                .api_ports
-                .iter()
-                .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
-                .collect()
-        } else {
-            vec![]
-        };
+        // Storage options stay set even without the query module, matching how
+        // a production validator runs (`storage-sql` without `query`); only the
+        // public node config reads them here.
         let mut modules = Modules {
             http: Some(api::options::Http::with_port(node.api_port)),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
-            query: Some(Query {
-                peers,
-                ..Default::default()
-            }),
             ..Default::default()
         };
         if node.is_query {
+            let peers = if node.query_peers {
+                network
+                    .api_ports
+                    .iter()
+                    .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
+                    .collect()
+            } else {
+                vec![]
+            };
+            modules.query = Some(Query {
+                peers,
+                ..Default::default()
+            });
             modules.light_client = Some(Default::default());
         }
 
@@ -343,10 +345,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .to_string(),
             "--genesis-file",
             &network.genesis_file.display().to_string(),
-            "--builder-urls",
-            &format!("http://localhost:{}", network.builder_port),
-            "--public-api-url",
-            &format!("http://localhost:{}", node.api_port),
+            "--orchestrator-url",
+            &format!("http://localhost:{}", network.orchestrator_port),
             "--cliquenet-bind-address",
             &format!("0.0.0.0:{}", node.cliquenet_port),
             "--cliquenet-advertise-address",
@@ -363,13 +363,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             "1s",
             "--bootstrap-epoch-catchup-timeout",
             "2s",
-            "--consensus-store-path",
-            &consensus_store.path().display().to_string(),
         ]);
         opt.is_da = node.is_da;
         Self {
             storage,
-            _consensus_store: consensus_store,
             modules,
             opt,
             num_nodes: network.peer_ports.len(),
@@ -635,8 +632,17 @@ struct TestNetwork {
     regular_nodes: Vec<TestNode<SqlDataSource>>,
     tmp: TempDir,
     builder_port: u16,
+    orchestrator_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
     anvil: AnvilFillProvider,
+}
+
+impl Drop for TestNetwork {
+    fn drop(&mut self) {
+        if let Some(task) = self.orchestrator_task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl TestNetwork {
@@ -673,7 +679,6 @@ impl TestNetwork {
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig {
                 capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
-                genesis: Vec::new(),
             },
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
@@ -714,20 +719,13 @@ impl TestNetwork {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        genesis.stake_table.genesis = node_params
-            .iter()
-            .map(|node| PeerConfigKeys {
-                stake_table_key: PubKey::from_private(&node.staking_key),
-                state_ver_key: node.state_key.ver_key(),
-                stake: 1,
-                da: node.is_da,
-                connect_info: Some(PeerConnectInfo {
-                    x25519_key: node.x25519_key.public_key(),
-                    p2p_addr: node.cliquenet_advertise_addr().parse().unwrap(),
-                }),
-            })
-            .collect();
+        let orchestrator_port = reserve_tcp_port().unwrap();
         let builder_port = reserve_tcp_port().unwrap();
+        let orchestrator_task = Some(start_orchestrator(
+            orchestrator_port,
+            &node_params,
+            builder_port,
+        ));
 
         let anvil_port = reserve_tcp_port().unwrap();
         let anvil = Anvil::new()
@@ -754,7 +752,7 @@ impl TestNetwork {
         };
         let network_params = NetworkParams {
             genesis_file: &genesis_file_path,
-            builder_port,
+            orchestrator_port,
             l1_provider: &anvil_endpoint,
             api_ports: &api_ports,
             peer_ports: &peer_ports,
@@ -773,6 +771,7 @@ impl TestNetwork {
             .await,
             tmp,
             builder_port,
+            orchestrator_task,
             anvil,
         };
 
@@ -1272,6 +1271,36 @@ impl TestNetwork {
     fn num_nodes(&self) -> usize {
         self.da_nodes.len() + self.regular_nodes.len()
     }
+}
+
+fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> JoinHandle<()> {
+    // We don't run a builder in these tests, so use a very short timeout before nodes decide to
+    // build an empty block on their own.
+    let builder_timeout = Duration::from_millis(100);
+    // These tests frequently have nodes down and views failing, so we use a fairly short view
+    // timeout.
+    let view_timeout = Duration::from_secs(2);
+
+    let num_nodes = nodes.len();
+    let mut config = NetworkConfig::<SeqTypes> {
+        indexed_da: false,
+        ..Default::default()
+    };
+    config.config.num_nodes_with_stake = num_nodes.try_into().unwrap();
+    config.config.da_staked_committee_size = num_nodes;
+    config.config.known_nodes_with_stake = vec![];
+    config.config.known_da_nodes = vec![];
+    config.config.next_view_timeout = view_timeout.as_millis() as u64;
+    config.config.builder_timeout = builder_timeout;
+    config.config.builder_urls = vec1![format!("http://localhost:{builder_port}").parse().unwrap()];
+
+    let bind = format!("http://0.0.0.0:{port}").parse().unwrap();
+    spawn(async move {
+        match run_orchestrator(config, bind).await {
+            Ok(()) => tracing::warn!("orchestrator exited"),
+            Err(err) => tracing::error!(%err, "orchestrator failed"),
+        }
+    })
 }
 
 fn builder_key_pair() -> EthKeyPair {

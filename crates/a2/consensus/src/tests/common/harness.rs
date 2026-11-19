@@ -1,0 +1,446 @@
+use std::{sync::Arc, time::Duration};
+
+use consensus_store::mem::MemStore;
+use hotshot_example_types::{
+    node_types::{TEST_VERSIONS, TestTypes},
+    state_types::{TestInstanceState, TestValidatedState},
+};
+use hotshot_types::{
+    PeerConnectInfo,
+    data::{EpochNumber, Leaf2, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
+    signature_key::BLSPubKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    upgrade_config::UpgradeConfig,
+};
+use tokio::sync::mpsc;
+
+use super::{
+    coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+    utils::{
+        epoch_length, mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
+        record_output_leaders,
+    },
+};
+use crate::{
+    block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
+    consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    coordinator::{error::Severity, timer::Timer},
+    epoch::EpochManager,
+    helpers::test_upgrade_lock,
+    logging::KeyPrefix,
+    message::{Certificate1, Message},
+    network::{Cliquenet, Role},
+    outbox::Outbox,
+    proposal::{ProposalValidator, VidShareValidator},
+    state::StateManager,
+    tests::common::mock::MockCoordinator,
+    trace,
+    upgrade::UpgradeProtocol,
+    vid::{VidDisperser, VidReconstructor},
+    vote::VoteCollector,
+};
+
+const HARNESS_NUM_NODES: usize = 10;
+const HARNESS_EPOCH_HEIGHT: u64 = 10;
+
+/// Ceiling on `process_until*`, so a predicate that never holds fails here
+/// with the collected inputs instead of hanging until nextest kills the test.
+const PROCESS_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Test harness that spawns consensus + mock coordinator and provides
+/// helpers to send events and collect results.
+pub(crate) struct TestHarness {
+    coordinator: MockCoordinator,
+    connect_info: PeerConnectInfo,
+    membership: EpochMembershipCoordinator<TestTypes>,
+    outputs: Outbox<ConsensusOutput<TestTypes>>,
+    /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
+    trace: trace::Recorder,
+}
+
+impl TestHarness {
+    pub async fn new(node_index: u64) -> Self {
+        // Default timer must be long enough to not fire during tests even
+        // under heavy CPU load (e.g. full test suite running in parallel)
+        // and through multi-epoch scenarios where catchup walks through
+        // several epoch roots.
+        Self::new_with_timer(node_index, Duration::from_secs(30)).await
+    }
+
+    pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        Self::new_with(node_index, timer_duration, test_upgrade_lock()).await
+    }
+
+    /// A harness whose nodes run under `upgrade_lock` rather than the fixed
+    /// version of [`test_upgrade_lock`].
+    pub async fn new_with_upgrade_lock(
+        node_index: u64,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
+        Self::new_with(node_index, Duration::from_secs(30), upgrade_lock).await
+    }
+
+    async fn new_with(
+        node_index: u64,
+        timer_duration: Duration,
+        upgrade_lock: UpgradeLock<TestTypes>,
+    ) -> Self {
+        let epoch_height = 10;
+        crate::logging::init_test_logging();
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
+            [0u8; 32], node_index,
+        );
+        let state_private_key = state_key_pair.sign_key_ref().clone();
+        let instance = Arc::new(TestInstanceState::default());
+        let (membership, _storage, client) =
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
+
+        let epoch_manager = EpochManager::new(epoch_length(10), membership.clone());
+
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_one_honest_collector =
+            VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+
+        let genesis_state = TestValidatedState::default();
+        // Use the same version as `TestViewGenerator` (vid2) so the genesis
+        // leaf commitment matches the `parent_commitment` carried by the
+        // first proposal from `TestData`.
+        let genesis_leaf =
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
+
+        let consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key.clone(),
+            state_private_key,
+            10,
+            upgrade_lock.clone(),
+            genesis_leaf.clone(),
+            epoch_length(epoch_height),
+        );
+
+        let vid_reconstruction_task = VidReconstructor::new();
+
+        let block_config = BlockBuilderConfig {
+            empty_block_delay: Duration::from_secs(1),
+            ..BlockBuilderConfig::default()
+        };
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
+            membership.clone(),
+            block_config,
+            upgrade_lock.clone(),
+        );
+
+        let genesis_qc = build_genesis_cert1(&genesis_leaf);
+        let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+        state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+
+        let proposal_validator = ProposalValidator::new(
+            membership.clone(),
+            epoch_length(epoch_height),
+            upgrade_lock.clone(),
+            Some(&genesis_qc),
+        );
+        let share_validator = VidShareValidator::new(
+            membership.clone(),
+            epoch_length(epoch_height),
+            upgrade_lock.clone(),
+        );
+
+        let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
+            .expect("keypair derivation should succeed");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let connect_info = PeerConnectInfo {
+            x25519_key: keypair.public_key(),
+            p2p_addr: addr.clone(),
+        };
+        let network = Cliquenet::create(
+            "test-harness",
+            public_key,
+            keypair,
+            addr,
+            vec![],
+            None,
+            upgrade_lock.clone(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .expect("cliquenet creation should succeed");
+
+        let vid_disperse_task = VidDisperser::new(
+            membership.clone(),
+            network.sender().clone(),
+            public_key,
+            private_key.clone(),
+        );
+
+        let membership_handle = membership.clone();
+        let coordinator = MockCoordinator::builder()
+            .consensus(consensus)
+            .network(network)
+            .state_manager(state_manager)
+            .vote1_collector(vote1_collector)
+            .vote2_collector(vote2_collector)
+            .timeout_collector(timeout_collector)
+            .timeout_one_honest_collector(timeout_one_honest_collector)
+            .timeout3_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+            .timeout_one_honest3_collector(VoteCollector::new(
+                membership.clone(),
+                upgrade_lock.clone(),
+            ))
+            .epoch_root_collector(epoch_root_collector)
+            .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+            .upgrade_protocol(UpgradeProtocol::new(
+                UpgradeConfig::default(),
+                upgrade_lock.clone(),
+                public_key,
+                private_key.clone(),
+            ))
+            .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
+            .vid_disperser(vid_disperse_task)
+            .vid_reconstructor(vid_reconstruction_task)
+            .epoch_manager(epoch_manager)
+            .block_builder(block_builder)
+            .proposal_validator(proposal_validator)
+            .share_validator(share_validator)
+            .storage(crate::storage::Storage::new(
+                crate::store::ConsensusStore::new(Arc::new(MemStore::new())),
+                &private_key,
+            ))
+            .client(client)
+            .membership_coordinator(membership)
+            .outbox(Outbox::new())
+            .external_tx(mpsc::unbounded_channel().0)
+            .timer(Timer::new(timer_duration, ViewNumber::genesis() + 1))
+            .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
+            .build();
+        Self {
+            coordinator,
+            connect_info,
+            membership: membership_handle,
+            outputs: Outbox::new(),
+            trace: trace::Recorder::for_current_test(),
+        }
+    }
+
+    pub fn message<S>(&mut self, m: Message<TestTypes, S>) {
+        if let Some(input) = self.coordinator.on_network_message(m.into_unchecked()) {
+            self.apply_and_process(input);
+        }
+    }
+
+    pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
+        let consensus = self.coordinator.consensus();
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            consensus.cert1_at(ViewNumber::genesis()),
+            consensus.epoch_length.get(),
+        );
+        record_leader(&mut self.trace, consensus, &input);
+        record_fallback_anchor(&mut self.trace, consensus);
+        let before = self.trace.before(consensus, &input);
+        self.coordinator.apply_consensus(input.clone());
+        record_output_leaders(
+            &mut self.trace,
+            self.coordinator.consensus(),
+            self.coordinator.outbox().iter(),
+        );
+        // The outbox was drained at the end of the previous call, so it now holds
+        // exactly what this input drew — which is what a trace step is.
+        self.trace.record(
+            self.coordinator.consensus(),
+            before,
+            &input,
+            self.coordinator.outbox().iter(),
+        );
+        self.outputs
+            .extend(self.coordinator.outbox().iter().cloned());
+        for out in self.coordinator.outbox_mut().take() {
+            if let Err(err) = self.coordinator.process_consensus_output(out) {
+                panic!("unexpected error: {err}")
+            }
+        }
+    }
+
+    /// Process events from the coordinator until `predicate` is satisfied.
+    ///
+    /// Each event is immediately applied and appended to the collected list.
+    /// The predicate is checked after every event; once it returns `true`
+    /// the collected inputs are returned.
+    ///
+    /// This avoids any assumption about the order or number of events
+    /// produced by asynchronous coordinator subsystems (proposal validator,
+    /// VID reconstructor, vote collectors, state manager, timer).
+    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
+    where
+        P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
+    {
+        let mut inputs = Vec::new();
+        let deadline = tokio::time::Instant::now() + PROCESS_DEADLINE;
+        while !pred(&inputs) {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                panic!(
+                    "predicate not satisfied within {PROCESS_DEADLINE:?} at view {}; inputs so \
+                     far: {inputs:?}",
+                    self.coordinator.current_view()
+                )
+            };
+            match next {
+                Ok(input) => {
+                    self.apply_and_process(input.clone());
+                    inputs.push(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {
+                    // Non-critical errors (e.g., epoch root computation failures
+                    // in the test environment) are expected and skipped.
+                },
+            }
+        }
+        inputs
+    }
+
+    /// Process events from the coordinator until the collected outputs
+    /// satisfy `predicate`. Use for outputs that are gated on storage
+    /// confirmations (votes, proposals) and thus need extra loop turns
+    /// after their triggering input has been observed.
+    pub async fn process_until_output<P>(&mut self, pred: P)
+    where
+        P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
+    {
+        let deadline = tokio::time::Instant::now() + PROCESS_DEADLINE;
+        while !pred(&self.outputs) {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                panic!(
+                    "predicate not satisfied within {PROCESS_DEADLINE:?} at view {}; outputs so \
+                     far: {:?}",
+                    self.coordinator.current_view(),
+                    self.outputs
+                )
+            };
+            match next {
+                Ok(input) => self.apply_and_process(input),
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
+    /// Process events for `duration` and return the inputs that arrived.
+    ///
+    /// For negative assertions: something that must not happen produces no
+    /// event to wait for, so the test bounds the wait itself. Pair it with a
+    /// positive control, or a window too short to reach the event makes the
+    /// assertion vacuous.
+    pub async fn process_for(&mut self, duration: Duration) -> Vec<ConsensusInput<TestTypes>> {
+        let deadline = tokio::time::Instant::now() + duration;
+        let mut inputs = Vec::new();
+        loop {
+            let next = tokio::time::timeout_at(deadline, self.coordinator.next_consensus_input());
+            let Ok(next) = next.await else {
+                return inputs;
+            };
+            match next {
+                Ok(input) => {
+                    self.apply_and_process(input.clone());
+                    inputs.push(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
+    pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
+        &self.outputs
+    }
+
+    pub fn current_view(&self) -> hotshot_types::data::ViewNumber {
+        self.coordinator.current_view()
+    }
+
+    /// Seed the genesis QC and proposal as `Coordinator::maker` does, and return
+    /// the QC. The harness otherwise starts without them.
+    pub fn seed_genesis(&mut self) -> Certificate1<TestTypes> {
+        let consensus = self.coordinator.consensus_mut();
+        let genesis_leaf = consensus.last_decided_leaf().clone();
+        let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf);
+        consensus.seed_parent(genesis_cert1.clone(), genesis_proposal, std::iter::empty());
+        genesis_cert1
+    }
+
+    pub fn coordinator(&self) -> &MockCoordinator {
+        &self.coordinator
+    }
+
+    /// Direct mutable coordinator access, for tests that need to drain
+    /// `next_consensus_input` without applying the inputs
+    /// (`process_until` applies everything it collects).
+    pub fn coordinator_mut(&mut self) -> &mut MockCoordinator {
+        &mut self.coordinator
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does, and
+    /// note the placement in the trace.
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        let consensus = self.coordinator.consensus();
+        self.trace.preamble(
+            consensus.public_key(),
+            consensus.last_decided_leaf(),
+            consensus.cert1_at(ViewNumber::genesis()),
+            consensus.epoch_length.get(),
+        );
+        self.trace.placed(view, epoch);
+        self.coordinator.consensus_mut().set_view(view, epoch);
+    }
+
+    /// This node's key and how a peer reaches it over the network.
+    pub fn connect_info(&self) -> (BLSPubKey, PeerConnectInfo) {
+        (
+            *self.coordinator.consensus().public_key(),
+            self.connect_info.clone(),
+        )
+    }
+
+    /// Add a peer that receives this node's broadcasts. The harness starts
+    /// with none, so by default nothing it sends leaves the node.
+    pub fn add_peer(&mut self, key: BLSPubKey, info: PeerConnectInfo) {
+        self.coordinator
+            .network_mut()
+            .add_peers(
+                Role::Active,
+                vec![(key, (info.x25519_key.into(), info.p2p_addr))],
+            )
+            .expect("network should accept the peer");
+    }
+
+    /// The membership this harness's coordinator resolves epochs through.
+    ///
+    /// Tests register the epochs they need: only the genesis epoch resolves
+    /// out of the box, and a vote naming an epoch that does not resolve is
+    /// buffered rather than judged, which hides the checks that judge it.
+    pub fn membership(&self) -> &EpochMembershipCoordinator<TestTypes> {
+        &self.membership
+    }
+}

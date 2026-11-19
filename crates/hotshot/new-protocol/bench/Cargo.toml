@@ -11,7 +11,6 @@ name = "new-protocol-bench-node"
 path = "src/bin/node.rs"
 
 [dependencies]
-consensus-store = { workspace = true, features = ["testing"] }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }

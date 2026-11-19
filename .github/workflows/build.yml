@@ -261,6 +261,7 @@ jobs:
           - nasty-client
           - new-protocol-bench-node
           - node-validator
+          - orchestrator
           - prover-service
           - query-watchdog
           - espresso-node
@@ -389,6 +390,7 @@ jobs:
           - nasty-client
           - new-protocol-bench-node
           - node-validator
+          - orchestrator
           - prover-service
           - query-watchdog
           - espresso-node
@@ -486,6 +488,7 @@ jobs:
           - nasty-client
           - new-protocol-bench-node
           - node-validator
+          - orchestrator
           - prover-service
           - query-watchdog
           - espresso-node

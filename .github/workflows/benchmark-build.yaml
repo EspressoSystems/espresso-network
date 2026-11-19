@@ -46,6 +46,7 @@ jobs:
           name: x86_64-unknown-linux-gnu-services-bench
           retention-days: 1
           path: |
+            target/release/orchestrator
             target/release/state-relay-server
             target/release/state-prover
             target/release/espresso-node
@@ -86,6 +87,7 @@ jobs:
           name: aarch64-unknown-linux-gnu-services-bench
           retention-days: 1
           path: |
+            target/release/orchestrator
             target/release/state-relay-server
             target/release/state-prover
             target/release/espresso-node
@@ -111,6 +113,7 @@ jobs:
       espresso-node-tag: ${{ steps.espresso-node.outputs.tags }}
       state-relay-server-tag: ${{ steps.state-relay-server.outputs.tags }}
       prover-service-tag: ${{ steps.prover-service.outputs.tags }}
+      orchestrator-tag: ${{ steps.orchestrator.outputs.tags }}
       submit-transactions-tag: ${{ steps.submit-transactions.outputs.tags }}
       deploy-tag: ${{ steps.deploy.outputs.tags }}
       nasty-client-tag: ${{ steps.nasty-client.outputs.tags }}
@@ -174,6 +177,15 @@ jobs:
           images: |
             ghcr.io/espressosystems/espresso-network/prover-service
             ghcr.io/espressosystems/espresso-sequencer/prover-service
+          flavor: suffix=bench
+
+      - name: Generate orchestrator docker metadata
+        uses: docker/metadata-action@v6
+        id: orchestrator
+        with:
+          images: |
+            ghcr.io/espressosystems/espresso-network/orchestrator
+            ghcr.io/espressosystems/espresso-sequencer/orchestrator
           flavor: suffix=bench
 
       - name: Generate submit-transactions docker metadata
@@ -273,6 +285,16 @@ jobs:
           tags: ${{ steps.prover-service.outputs.tags }}
           labels: ${{ steps.prover-service.outputs.labels }}
 
+      - name: Build and push orchestrator docker
+        uses: docker/build-push-action@v7
+        with:
+          context: ./
+          file: ./docker/orchestrator.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.orchestrator.outputs.tags }}
+          labels: ${{ steps.orchestrator.outputs.labels }}
+
       - name: Build and push submit-transactions docker
         uses: docker/build-push-action@v7
         with:
@@ -339,6 +361,7 @@ jobs:
           docker pull ${{ needs.build-dockers.outputs.espresso-node-tag }}
           docker pull ${{ needs.build-dockers.outputs.state-relay-server-tag }}
           docker pull ${{ needs.build-dockers.outputs.prover-service-tag }}
+          docker pull ${{ needs.build-dockers.outputs.orchestrator-tag }}
           docker pull ${{ needs.build-dockers.outputs.submit-transactions-tag }}
           docker pull ${{ needs.build-dockers.outputs.deploy-tag }}
           docker pull ${{ needs.build-dockers.outputs.nasty-client-tag }}
@@ -348,6 +371,7 @@ jobs:
           docker tag ${{ needs.build-dockers.outputs.espresso-node-tag }} ghcr.io/espressosystems/espresso-network/espresso-node:main
           docker tag ${{ needs.build-dockers.outputs.state-relay-server-tag }} ghcr.io/espressosystems/espresso-network/state-relay-server:main
           docker tag ${{ needs.build-dockers.outputs.prover-service-tag }} ghcr.io/espressosystems/espresso-network/prover-service:main
+          docker tag ${{ needs.build-dockers.outputs.orchestrator-tag }} ghcr.io/espressosystems/espresso-network/orchestrator:main
           docker tag ${{ needs.build-dockers.outputs.submit-transactions-tag }} ghcr.io/espressosystems/espresso-network/submit-transactions:main
           docker tag ${{ needs.build-dockers.outputs.deploy-tag }} ghcr.io/espressosystems/espresso-network/deploy:main
           docker tag ${{ needs.build-dockers.outputs.nasty-client-tag }} ghcr.io/espressosystems/espresso-network/nasty-client:main

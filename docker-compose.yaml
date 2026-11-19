@@ -47,6 +47,7 @@ services:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     environment:
+      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
       - ESPRESSO_API_NODE_URL=http://espresso-node-0:${ESPRESSO_NODE_0_API_PORT}
@@ -209,6 +210,22 @@ services:
       deploy-espresso-contracts:
         condition: service_completed_successfully
 
+  orchestrator:
+    image: ghcr.io/espressosystems/espresso-network/orchestrator:${DOCKER_TAG:-main}
+    ports:
+      - "$ESPRESSO_ORCHESTRATOR_PORT:$ESPRESSO_ORCHESTRATOR_PORT"
+    environment:
+      # No builder runs here; leaders fall back to an empty block after the timeout below.
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_ORCHESTRATOR_PORT
+      - ESPRESSO_ORCHESTRATOR_NUM_NODES
+      - ESPRESSO_ORCHESTRATOR_START_DELAY
+      - ESPRESSO_ORCHESTRATOR_NEXT_VIEW_TIMEOUT
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-100ms}
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+      - ASYNC_STD_THREAD_COUNT
+
   state-relay-server:
     image: ghcr.io/espressosystems/espresso-network/state-relay-server:${DOCKER_TAG:-main}
     ports:
@@ -275,9 +292,8 @@ services:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/docker/demo-ff.toml}
-      # No builder runs here; leaders build empty blocks themselves.
-      - ESPRESSO_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
+      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_0_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -294,7 +310,6 @@ services:
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_0
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=/store/consensus
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_0
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
@@ -313,6 +328,8 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
+      orchestrator:
+        condition: service_healthy
       demo-l1-network:
         condition: service_healthy
       espresso-node-db-0:
@@ -331,9 +348,8 @@ services:
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/docker/demo-ff.toml}
-      # No builder runs here; leaders build empty blocks themselves.
-      - ESPRESSO_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
+      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_1_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
@@ -351,7 +367,6 @@ services:
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_1
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_1
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=/store/consensus
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_1
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
@@ -370,6 +385,8 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
+      orchestrator:
+        condition: service_healthy
       demo-l1-network:
         condition: service_healthy
       espresso-node-db-1:
@@ -383,17 +400,14 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_2_API_PORT:$ESPRESSO_NODE_2_API_PORT"
-    command: espresso-node -- http -- config -- query
+    command: espresso-node -- http -- config
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/docker/demo-ff.toml}
-      # No builder runs here; leaders build empty blocks themselves.
-      - ESPRESSO_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
+      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_2_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
-      - ESPRESSO_NODE_API_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
       - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
-      - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
       - ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE
@@ -401,7 +415,6 @@ services:
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_2
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=/store/consensus
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_2
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-2:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
@@ -420,6 +433,8 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
+      orchestrator:
+        condition: service_healthy
       demo-l1-network:
         condition: service_healthy
       state-relay-server:
@@ -437,9 +452,8 @@ services:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/docker/demo-ff.toml}
-      # No builder runs here; leaders build empty blocks themselves.
-      - ESPRESSO_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
+      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_3_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
@@ -453,7 +467,6 @@ services:
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_3
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_3
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=/store/consensus
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_3
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-3:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
@@ -471,6 +484,8 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
+      orchestrator:
+        condition: service_healthy
       demo-l1-network:
         condition: service_healthy
       state-relay-server:
@@ -486,9 +501,8 @@ services:
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=true
       - LIGHT_CLIENT_DB_PATH=/store/lc
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/docker/demo-ff.toml}
-      # No builder runs here; leaders build empty blocks themselves.
-      - ESPRESSO_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
+      - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_4_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -500,7 +514,6 @@ services:
       - ESPRESSO_STATE_RELAY_SERVER_URL=http://state-relay-server:${ESPRESSO_STATE_RELAY_SERVER_PORT}
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_4
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_4
-      - ESPRESSO_NODE_CONSENSUS_STORE_PATH=/store/consensus
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=$ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_4
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-4:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
@@ -518,6 +531,8 @@ services:
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
     depends_on:
+      orchestrator:
+        condition: service_healthy
       demo-l1-network:
         condition: service_healthy
       state-relay-server:
@@ -530,7 +545,7 @@ services:
     ports:
       - "$ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT:8080"
     environment:
-      - ESPRESSO_SUBMIT_TRANSACTIONS_NUM_NODES
+      - ESPRESSO_ORCHESTRATOR_NUM_NODES
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=8080
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
@@ -548,7 +563,7 @@ services:
     ports:
       - "$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT:8080"
     environment:
-      - ESPRESSO_SUBMIT_TRANSACTIONS_NUM_NODES
+      - ESPRESSO_ORCHESTRATOR_NUM_NODES
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=8080
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK

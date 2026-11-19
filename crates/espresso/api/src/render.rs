@@ -35,6 +35,7 @@ use hotshot_types::{
     HotShotConfig, PeerConfig,
     data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
     light_client::LCV3StateSignatureRequestBody,
+    network::BuilderType,
     simple_certificate::{
         Certificate2, CertificatePair, SimpleCertificate, SuccessThreshold, Threshold,
         TimeoutCertificate2, TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
@@ -823,7 +824,15 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
                 .collect(),
             fixed_leader_for_gpuvid: fixed_leader_for_gpuvid as u64,
             num_bootstrap: num_bootstrap as u64,
-            // The deprecated orchestrator, CDN and libp2p fields stay at their empty defaults.
+            commit_sha: public_config.commit_sha().to_string(),
+            indexed_da: public_config.indexed_da(),
+            builder: match public_config.builder() {
+                BuilderType::External => proto::BuilderType::External,
+                BuilderType::Simple => proto::BuilderType::Simple,
+                BuilderType::Random => proto::BuilderType::Random,
+            }
+            .into(),
+            // The deprecated CDN and libp2p fields stay at their empty defaults.
             ..Default::default()
         }
     }

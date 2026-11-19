@@ -28,10 +28,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = manifest_dir.join("proto");
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 
-    // Generate message types, the tonic server traits and the clients in one pass. The types get
-    // no serde derives: JSON is canonical protoJSON, implemented by the pbjson pass below.
+    // Generate message types plus the tonic server traits in one pass. The types get no serde
+    // derives: JSON is canonical protoJSON, implemented by the pbjson pass below. Clients are
+    // skipped because nothing in the workspace consumes this API over gRPC; the REST handlers and
+    // the node's service impls only need the server side.
     tonic_prost_build::configure()
         .out_dir(&out_dir)
+        .build_client(false)
         // google.api types back the HTTP annotations consumed at build time by tonic-rest-build.
         // Nothing references them at runtime, so point them at a crate that does not exist: if a
         // future proto ever puts one in a message field, the result is an unresolved-crate error

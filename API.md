@@ -20,10 +20,9 @@ None of it is committed:
   Swagger UI at `/v2` and Scalar at `/v2/scalar` (produced by the hand-written build-script module
   `crates/espresso/api/build/openapi.rs`)
 
-One implementation of a tonic service trait therefore serves both transports, on one port: `serve_axum` mounts the
-generated `*_rest_router` functions under `/v2/...`, and `grpc_router` registers the tonic servers plus gRPC reflection
-(the descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`). A request whose content type is
-`application/grpc` goes to the tonic servers; every other request goes to the HTTP router.
+One implementation of a tonic service trait therefore serves both transports: `serve_axum` mounts the generated
+`*_rest_router` functions under `/v2/...`, and `serve_tonic` registers the tonic servers plus gRPC reflection (the
+descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
@@ -43,9 +42,8 @@ generated `*_rest_router` functions under `/v2/...`, and `grpc_router` registers
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
   the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
-  modules. The genesis and the catchup and L1 tuning stay on v1, and the L1 URLs are reported as a
-  count because they can carry credentials. Nodes of older releases joining through `--config-peers` still fetch the full
-  config from v1.
+  modules. The genesis and the catchup, proposal-fetcher and L1 tuning stay on v1, and the L1 URLs are reported as a
+  count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from v1.
   Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
   routes with a 404 in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
@@ -171,7 +169,7 @@ path against the mounted v2 router.
    ```
 
    For a request against a running node, start one with SQL storage (v2 is only mounted by `serve_axum`) and curl the
-   route. gRPC can be exercised with `grpcurl -plaintext` against the same port; reflection is enabled.
+   route. gRPC can be exercised with `grpcurl` against the tonic port; reflection is enabled.
 
 ### Adding a new service
 
@@ -180,14 +178,14 @@ path against the mounted v2 router.
 2. Regenerate as above.
 3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
 4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
-   `grpc_router`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
-   `grpc_router`.
+   `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
+   `serve_tonic`.
 5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
    routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
    OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
 
 A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`: mount it behind that flag in
-`router_v2` and `grpc_router` (`add_service` under the flag), register its paths when the flag is off as
+`router_v2` and `serve_tonic` (`add_optional_service`), register its paths when the flag is off as
 `router_config_disabled` does so they still answer in the error envelope, and enable the flag in
 `v2_documented_routes_are_mounted`.
 

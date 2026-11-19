@@ -7,17 +7,19 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{PersistenceOptions, SequencerPersistence, StateCertPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot_types::{
-    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidDisperseShare},
+    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::{DrbInput, DrbResult},
+    event::{HotShotAction, LeafInfo},
     initializer::InitializerEpochInfo,
     message::Proposal,
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate2, UpgradeCertificate,
+        Certificate2, CertificatePair, LightClientStateUpdateCertificateV2,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::metrics::Metrics,
 };
@@ -30,6 +32,10 @@ pub struct Options;
 #[async_trait]
 impl PersistenceOptions for Options {
     type Persistence = NoStorage;
+
+    fn set_view_retention(&mut self, _: u64) {}
+
+    fn set_consensus_only(&mut self) {}
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         Ok(NoStorage)
@@ -51,6 +57,29 @@ impl SequencerPersistence for NoStorage {
 
     async fn save_config(&self, _: &NetworkConfig) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn persist_decided_leaves(
+        &self,
+        leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        _cert2: Option<&Certificate2<SeqTypes>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        // The iterator is not `Send`, so build the event before awaiting.
+        let event = {
+            let mut leaves = leaves.into_iter();
+            let Some((newest, cert)) = leaves.next() else {
+                return Ok(());
+            };
+            CoordinatorEvent::NewDecide {
+                leaf_infos: std::iter::once(newest.clone())
+                    .chain(leaves.map(|(info, _)| info.clone()))
+                    .collect(),
+                cert1: cert.qc().clone(),
+                cert2: None,
+            }
+        };
+        consumer.handle_event(&event).await
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
@@ -97,6 +126,21 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn append_vid(
+        &self,
+        _proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn record_action(&self, _view: ViewNumber, _action: HotShotAction) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn append_quorum_proposal2(
+        &self,
+        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn store_upgrade_certificate(
         &self,
         _decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
@@ -111,6 +155,14 @@ impl SequencerPersistence for NoStorage {
         NextEpochQuorumCertificate2<SeqTypes>,
     )> {
         None
+    }
+
+    async fn append_da2(
+        &self,
+        _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+        _vid_commit: VidCommitment,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn store_drb_result(
@@ -130,6 +182,13 @@ impl SequencerPersistence for NoStorage {
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         Ok(Vec::new())
+    }
+
+    async fn add_state_cert(
+        &self,
+        _state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn load_state_cert(

@@ -981,8 +981,7 @@ fn write_json<T: NodeType>(write: &StorageOutput<T>) -> String {
             "proposal",
             obj(&[("v", view_json(*view)), ("c", ident(commit))]),
         ),
-        // The payload stands in for the share it determines.
-        StorageOutput::Payload(view, _) => tagged("share", obj(&[("v", view_json(*view))])),
+        StorageOutput::Vid(view) => tagged("share", obj(&[("v", view_json(*view))])),
         StorageOutput::Action(view, kind) => {
             let kind = match kind {
                 ActionKind::Vote => "vote",
@@ -993,9 +992,6 @@ fn write_json<T: NodeType>(write: &StorageOutput<T>) -> String {
                 "action",
                 obj(&[("v", view_json(*view)), ("kind", quoted(kind))]),
             )
-        },
-        StorageOutput::DecideLogFull(_) => {
-            unreachable!("nothing held back waits on the decide log")
         },
         StorageOutput::HighQc(lock) => tagged(
             "lock",

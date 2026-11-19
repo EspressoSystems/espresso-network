@@ -132,9 +132,9 @@ struct Options {
     #[clap(env = "ESPRESSO_API_NODE_URLS", value_delimiter = ',', num_args = 1..,)]
     urls: Vec<Url>,
 
-    /// The number of nodes, for the benchmark results output
+    /// Relay num_nodes for benchmark results output
     #[cfg(feature = "benchmarking")]
-    #[clap(short, long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_NUM_NODES")]
+    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
     num_nodes: NonZeroUsize,
 
     /// The first block that benchmark starts counting in

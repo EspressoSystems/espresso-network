@@ -975,28 +975,36 @@ dependencies = [
  "anyhow",
  "async-lock",
  "async-trait",
+ "axum",
  "bincode",
  "bytes",
  "chain-store",
  "clap",
  "committable",
+ "consensus",
  "consensus-api",
  "espresso-api",
  "espresso-genesis",
  "espresso-types",
  "futures",
- "hotshot-new-protocol",
+ "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
+ "http-wire",
  "indexmap 2.14.0",
  "jf-merkle-tree-compat",
  "light-client",
+ "prost",
  "reqwest 0.12.28",
  "serde_json",
  "tagged-base64",
  "tokio",
  "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tonic-reflection",
+ "tower 0.4.13",
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
@@ -1629,6 +1637,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "435a87a52755b8f27fcf321ac4f04b2802e337c8c4872923137471ec39c37532"
 dependencies = [
  "event-listener",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-channel"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "924ed96dd52d1b75e9c1a3e6275715fd320f5f9439fb5a4a11fa51f4221158d2"
+dependencies = [
+ "concurrent-queue",
  "event-listener-strategy",
  "futures-core",
  "pin-project-lite",
@@ -2631,6 +2651,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "concurrent-queue"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "config"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2650,6 +2679,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "consensus"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-broadcast",
+ "async-trait",
+ "bincode",
+ "bitvec 1.1.0",
+ "bon",
+ "cliquenet",
+ "committable",
+ "consensus",
+ "consensus-api",
+ "consensus-store",
+ "consensus-store-redb",
+ "futures",
+ "hotshot-contract-adapter",
+ "hotshot-example-types",
+ "hotshot-types",
+ "hotshot-utils",
+ "parking_lot",
+ "quickcheck",
+ "rand 0.8.6",
+ "rayon",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "tempfile",
+ "test-utils",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "vbs",
+ "versions",
+ "vid",
+]
+
+[[package]]
 name = "consensus-api"
 version = "0.1.0"
 dependencies = [
@@ -2663,6 +2735,26 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "consensus-node"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "bincode",
+ "committable",
+ "consensus",
+ "espresso-types",
+ "hotshot-types",
+ "jf-merkle-tree-compat",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "versions",
 ]
 
 [[package]]
@@ -3932,6 +4024,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "async-broadcast",
+ "async-channel",
  "async-lock",
  "async-once-cell",
  "async-trait",
@@ -3947,7 +4040,6 @@ dependencies = [
  "clap",
  "client",
  "committable",
- "consensus-api",
  "csv",
  "derivative",
  "derive_more 2.1.1",
@@ -3958,7 +4050,6 @@ dependencies = [
  "escargot",
  "espresso-api",
  "espresso-contract-deployer",
- "espresso-genesis",
  "espresso-keyset",
  "espresso-macros",
  "espresso-telemetry",
@@ -3968,13 +4059,13 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-example-types",
  "hotshot-new-protocol",
+ "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-types",
  "http-client",
  "http-wire",
  "include_dir",
  "indexmap 2.14.0",
- "ingester",
  "insta",
  "itertools 0.14.0",
  "jf-advz",
@@ -4143,7 +4234,6 @@ dependencies = [
  "sha3 0.10.9",
  "static_assertions",
  "tagged-base64",
- "tempfile",
  "test-log",
  "test-server",
  "test-utils",
@@ -5004,9 +5094,6 @@ dependencies = [
  "bon",
  "cliquenet",
  "committable",
- "consensus-api",
- "consensus-store",
- "consensus-store-redb",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-example-types",
@@ -5026,7 +5113,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "tonic",
  "tracing",
  "tracing-subscriber 0.3.23",
  "vbs",
@@ -5045,7 +5131,6 @@ dependencies = [
  "clap",
  "cliquenet",
  "committable",
- "consensus-store",
  "csv",
  "hotshot-example-types",
  "hotshot-new-protocol",
@@ -5057,6 +5142,30 @@ dependencies = [
  "tokio",
  "tracing",
  "versions",
+]
+
+[[package]]
+name = "hotshot-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-lock",
+ "axum",
+ "clap",
+ "csv",
+ "futures",
+ "hotshot-example-types",
+ "hotshot-types",
+ "http-client",
+ "http-wire",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tower 0.4.13",
+ "tracing",
+ "vbs",
 ]
 
 [[package]]
@@ -5110,7 +5219,6 @@ dependencies = [
  "tempfile",
  "test-log",
  "test-utils",
- "thiserror 2.0.18",
  "time",
  "tokio",
  "tracing",
@@ -5239,6 +5347,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
+ "serde-inline-default",
  "serde_bytes",
  "serde_json",
  "sha2 0.10.9",
@@ -5731,6 +5840,7 @@ dependencies = [
  "futures",
  "hotshot-query-service",
  "hotshot-types",
+ "jf-advz",
  "serde",
  "test-utils",
  "thiserror 2.0.18",
@@ -9029,6 +9139,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-inline-default"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59fb1bedd774187d304179493b0d3c41fbe97b04b14305363f68d2bdf5e47cb9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9338,6 +9459,7 @@ dependencies = [
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
+ "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-types",
  "http-client",
@@ -9357,6 +9479,7 @@ dependencies = [
  "tracing",
  "url",
  "vbs",
+ "vec1",
  "versions",
 ]
 

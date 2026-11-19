@@ -2,22 +2,23 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
 use std::{cmp::max, collections::BTreeMap};
-use std::{collections::BTreeSet, fmt::Debug, ops::Range, sync::Arc};
+use std::{collections::BTreeSet, fmt::Debug, ops::Range, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
-use anyhow::{Context, ensure};
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 #[cfg(feature = "node")]
-use hotshot_new_protocol::store::Restored;
+use hotshot_new_protocol::storage::NewProtocolStorage;
 #[cfg(feature = "node")]
-use hotshot_types::simple_certificate::Certificate2;
+use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 #[cfg(feature = "node")]
 use hotshot_types::{
-    data::{DaProposal2, QuorumProposalWrapper, VidDisperseShare},
+    data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::DrbInput,
+    event::{HotShotAction, LeafInfo},
     initializer::{HotShotInitializer, InitializerEpochInfo},
     message::Proposal,
     simple_certificate::{
@@ -297,6 +298,12 @@ pub trait StateCatchup: Send + Sync {
     /// Returns the name of the catchup provider.
     fn name(&self) -> String;
 
+    /// A copy of this provider that waits up to `local_timeout` on its local providers, or `None`
+    /// if it has no such timeout.
+    fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        None
+    }
+
     /// The block Merkle root of the header at `lc_contract_state.height`, accepted by
     /// `LcContractFinalizedState::verify_header`. One attempt. An implementation returns a verified
     /// value and the caller installs it without checking again. Default: unsupported error.
@@ -501,6 +508,10 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).is_local()
     }
 
+    fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
+        (**self).with_local_timeout(local_timeout)
+    }
+
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         retry: usize,
@@ -529,6 +540,8 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
+    fn set_view_retention(&mut self, view_retention: u64);
+    fn set_consensus_only(&mut self);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
 }
@@ -640,14 +653,21 @@ pub trait StateCertPersistence: Send + Sync + 'static {
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + MembershipPersistence + StateCertPersistence
 {
-    /// Load the network config a node stored when an orchestrator or a config peer gave it one.
+    /// Use this storage as a state catchup backend, if supported.
+    fn into_catchup_provider(
+        self,
+        _backoff: BackoffParams,
+    ) -> anyhow::Result<Arc<dyn StateCatchup>> {
+        bail!("state catchup is not implemented for this persistence type");
+    }
+
+    /// Load the orchestrator config from storage.
     ///
-    /// Returns `None` if no config exists. Fails with `Err` if it could not be determined whether
-    /// a config exists or not.
+    /// Returns `None` if no config exists (we are joining a network for the first time). Fails with
+    /// `Err` if it could not be determined whether a config exists or not.
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>>;
 
-    /// Save a network config to storage, as a node did when an orchestrator or a config peer
-    /// gave it one.
+    /// Save the orchestrator config to storage.
     async fn save_config(&self, cfg: &NetworkConfig) -> anyhow::Result<()>;
 
     /// Load the highest view saved with [`save_voted_view`](Self::save_voted_view).
@@ -688,19 +708,17 @@ pub trait SequencerPersistence:
     /// if there is no saved state). Also returns the anchor view number, which can be used as a
     /// reference point to process any events which were not processed before a previous shutdown,
     /// if applicable,.
-    ///
-    /// The safety state (actions, lock, undecided proposals, upgrade and state certificates)
-    /// comes from the consensus store, as `restored`, and so may the state at its anchor, as
-    /// `anchor_state`; this storage provides the rest.
     async fn load_consensus_state(
         &self,
         state: NodeState,
         upgrade: Upgrade,
-        restored: &Restored<SeqTypes>,
-        anchor_state: Option<ValidatedState>,
-    ) -> anyhow::Result<HotShotInitializer<SeqTypes>> {
+    ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
-        let highest_voted_view = match restored.acted_view {
+        let highest_voted_view = match self
+            .load_latest_acted_view()
+            .await
+            .context("loading last voted view")?
+        {
             Some(view) => {
                 tracing::info!(?view, "starting with last actioned view");
                 view
@@ -711,7 +729,11 @@ pub trait SequencerPersistence:
             },
         };
 
-        let restart_view = match restored.restart_view {
+        let restart_view = match self
+            .load_restart_view()
+            .await
+            .context("loading restart view")?
+        {
             Some(view) => {
                 tracing::info!(?view, "starting from saved view");
                 view
@@ -729,11 +751,11 @@ pub trait SequencerPersistence:
                 .map(|c| c.config.epoch_height)
                 .unwrap_or_default()
         });
-        let anchor = restored
-            .anchor
-            .as_ref()
-            .map(|a| (a.leaf.clone(), CertificatePair::new(a.cert1.clone(), None)));
-        let (leaf, cert_pair) = match anchor {
+        let (leaf, cert_pair, anchor_view) = match self
+            .load_anchor_leaf()
+            .await
+            .context("loading anchor leaf")?
+        {
             Some((leaf, cert_pair)) => {
                 tracing::info!(?leaf, ?cert_pair, "starting from saved leaf");
                 let high_qc = cert_pair.qc().clone();
@@ -759,7 +781,8 @@ pub trait SequencerPersistence:
                     );
                 }
 
-                (leaf, cert_pair)
+                let anchor_view = leaf.view_number();
+                (leaf, cert_pair, Some(anchor_view))
             },
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
@@ -773,6 +796,7 @@ pub trait SequencerPersistence:
                     )
                     .await,
                     CertificatePair::new(genesis_qc, None),
+                    None,
                 )
             },
         };
@@ -784,18 +808,22 @@ pub trait SequencerPersistence:
             high_qc = extended_high_qc;
         }
 
-        if let Some(running_high_qc) = &restored.locked_qc
+        if let Some(running_high_qc) = self
+            .load_high_qc2()
+            .await
+            .context("loading persisted high qc")?
             && running_high_qc.view_number() > high_qc.view_number()
         {
-            high_qc = running_high_qc.clone();
+            high_qc = running_high_qc;
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
             genesis_validated_state
         } else {
-            // Otherwise, what the store kept of it, and catchup fetches the rest.
-            anchor_state.unwrap_or_else(|| ValidatedState::from_header(leaf.block_header()))
+            // Otherwise, we will have to construct a sparse state and fetch missing data during
+            // catchup.
+            ValidatedState::from_header(leaf.block_header())
         };
 
         // If we are not starting from genesis, we start from the view following the maximum view
@@ -804,27 +832,25 @@ pub trait SequencerPersistence:
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
         let restart_view = max(restart_view, leaf.view_number());
 
-        let saved_proposals = restored
-            .proposals
-            .iter()
-            .map(|(view, p)| {
-                let wrapper = Proposal {
-                    data: QuorumProposalWrapper::from(p.data.clone()),
-                    signature: p.signature.clone(),
-                    _pd: std::marker::PhantomData,
-                };
-                (*view, wrapper)
-            })
-            .collect();
+        let saved_proposals = self
+            .load_quorum_proposals()
+            .await
+            .context("loading saved proposals")?;
 
-        let upgrade_certificate = restored.upgrade_cert.clone();
+        let upgrade_certificate = self
+            .load_upgrade_certificate()
+            .await
+            .context("loading upgrade certificate")?;
 
         let start_epoch_info = self
             .load_start_epoch_info()
             .await
             .context("loading start epoch info")?;
 
-        let state_cert = restored.state_cert.clone();
+        let state_cert = self
+            .load_state_cert()
+            .await
+            .context("loading light client state update certificate")?;
 
         tracing::warn!(
             ?leaf,
@@ -835,21 +861,168 @@ pub trait SequencerPersistence:
             "loaded consensus state"
         );
 
-        Ok(HotShotInitializer::load(
-            state,
-            epoch_height,
-            start_epoch_info,
-            (leaf, Some(Arc::new(validated_state))),
-            restart_view,
-            high_qc,
-            highest_voted_view,
-            saved_proposals,
-            upgrade_certificate,
-            state_cert,
+        Ok((
+            HotShotInitializer::load(
+                state,
+                epoch_height,
+                start_epoch_info,
+                (leaf, Some(Arc::new(validated_state))),
+                restart_view,
+                high_qc,
+                highest_voted_view,
+                saved_proposals,
+                upgrade_certificate,
+                state_cert,
+            ),
+            anchor_view,
         ))
     }
 
+    /// Decode a consensus decide event and persist its leaves, for the consensus event loop.
+    /// Returns the decided view on a decide so the caller can wake a background task to run
+    /// [`process_decided_events`](Self::process_decided_events); `None` otherwise.
+    ///
+    /// This is the persist-only half of a decide: query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Tests that want the synchronous
+    /// persist-then-process behavior use [`append_decided_leaves`](Self::append_decided_leaves).
+    async fn persist_event(
+        &self,
+        event: &CoordinatorEvent<SeqTypes>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> Option<ViewNumber> {
+        match event {
+            CoordinatorEvent::NewDecide {
+                leaf_infos,
+                cert1,
+                cert2,
+            } => {
+                let first = leaf_infos.first()?;
+                let decided_view = first.leaf.view_number();
+
+                // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
+                // next older leaf.
+                let certifying_qcs = std::iter::once(cert1.clone())
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
+                    .take(leaf_infos.len())
+                    .map(CertificatePair::non_epoch_change);
+
+                if let Err(err) = self
+                    .persist_decided_leaves(
+                        leaf_infos.iter().zip(certifying_qcs),
+                        cert2.as_ref(),
+                        consumer,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "failed to save decided leaves from new protocol, chain may not be up to \
+                         date: {err:#}"
+                    );
+                    return None;
+                }
+                Some(decided_view)
+            },
+            _ => None,
+        }
+    }
+
+    /// Append decided leaves to persistent storage and emit a corresponding event.
+    ///
+    /// `consumer` will be sent a `Decide` event containing all decided leaves in persistent storage
+    /// up to and including `view`. If available in persistent storage, full block payloads and VID
+    /// info will also be included for each leaf.
+    ///
+    /// Once the new decided leaves have been processed, old data up to `view` will be garbage
+    /// collected The consumer's handling of this event is a prerequisite for the completion of
+    /// garbage collection: if the consumer fails to process the event, no data is deleted. This
+    /// ensures that, if called repeatedly, all decided leaves ever recorded in consensus storage
+    /// will eventually be passed to the consumer.
+    ///
+    /// Note that the converse is not true: if garbage collection fails, it is not guaranteed that
+    /// the consumer hasn't processed the decide event. Thus, in rare cases, some events may be
+    /// processed twice, or the consumer may get two events which share a subset of their data.
+    /// Thus, it is the consumer's responsibility to make sure its handling of each leaf is
+    /// idempotent.
+    ///
+    /// If the consumer fails to handle the new decide event, it may be retried, or simply postponed
+    /// until the next decide, at which point all persisted leaves from the failed GC run will be
+    /// included in the event along with subsequently decided leaves.
+    ///
+    /// This functionality is useful for keeping a separate view of the blockchain in sync with the
+    /// consensus storage. For example, the `consumer` could be used for moving data from consensus
+    /// storage to long-term archival storage.
+    ///
+    /// Convenience combinator: [`persist_decided_leaves`](Self::persist_decided_leaves) then
+    /// [`process_decided_events`](Self::process_decided_events). Production drives the two halves on
+    /// separate tasks; tests and back-compat callers use this synchronous form.
+    async fn append_decided_leaves(
+        &self,
+        decided_view: ViewNumber,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        self.persist_decided_leaves(leaf_chain, None, consumer)
+            .await?;
+        // Leaves are persisted; processing failures are non-fatal here and retried in production.
+        if let Err(err) = self.process_decided_events(decided_view, consumer).await {
+            tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
+        }
+        Ok(())
+    }
+
+    /// Persist decided leaves only (the critical, must-not-lag half of a decide; also the
+    /// anchor for restart recovery). Query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Backends with no replayable storage
+    /// (e.g. `NoStorage`) may instead forward decide events to `consumer` here.
+    ///
+    /// `cert2` finalizes the newest leaf of `leaf_chain`. It is persisted atomically with the
+    /// leaves, so [`process_decided_events`](Self::process_decided_events) never sees that leaf
+    /// without it.
+    async fn persist_decided_leaves(
+        &self,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        cert2: Option<&Certificate2<SeqTypes>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()>;
+
+    /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
+    /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
+    /// consensus without losing data.
+    ///
+    /// Returns the highest view confirmed processed (the cursor), or `None` if nothing was
+    /// processed, so the caller can track real progress. Errors are propagated; the failed range
+    /// is retried on the next call.
+    ///
+    /// Default returns `Some(decided_view)`: backends with no replayable storage (e.g. `NoStorage`)
+    /// forward events synchronously in `persist_decided_leaves` and are always caught up here.
+    async fn process_decided_events(
+        &self,
+        decided_view: ViewNumber,
+        _consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(Some(decided_view))
+    }
+
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>>;
+    async fn append_vid(
+        &self,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+    ) -> anyhow::Result<()>;
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
+
+    async fn append_quorum_proposal2(
+        &self,
+        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
+    ) -> anyhow::Result<()>;
+
+    /// Persist cert2 for the given view.
+    async fn append_cert2(
+        &self,
+        _view: ViewNumber,
+        _cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     /// Load a persisted cert2 by view, if any.
     async fn load_cert2(
@@ -859,13 +1032,30 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
-    /// Load the persisted locked QC of the new protocol, if any.
+    /// Persist the new protocol's locked QC, written before each phase-2 vote.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set: a
+    /// write whose view is not newer than the stored one is a no-op. This lets
+    /// concurrent, retried writes race without ever regressing the persisted lock.
+    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted locked QC, if any.
     async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         Ok(None)
     }
 
-    /// Load the persisted epoch boundary certificate of the new protocol: the own `Certificate1`
-    /// of the last block of an epoch, if any.
+    /// Persist the new protocol's latest epoch boundary certificate: the own
+    /// `Certificate1` of the last block of an epoch, at the block's view.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set,
+    /// ordered by epoch, then view, like [`Self::append_high_qc2`].
+    async fn append_boundary_qc2(&self, _qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted boundary certificate, if any.
     async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
         Ok(None)
     }
@@ -890,6 +1080,12 @@ pub trait SequencerPersistence:
         }
     }
 
+    async fn append_da2(
+        &self,
+        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+        vid_commit: VidCommitment,
+    ) -> anyhow::Result<()>;
+
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -897,6 +1093,10 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()>;
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics);
 }
@@ -929,6 +1129,41 @@ impl EventConsumer for NullEventConsumer {
 #[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
+    async fn append_vid(
+        &self,
+        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        (**self).append_vid(proposal).await
+    }
+
+    async fn append_da2(
+        &self,
+        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+        vid_commit: VidCommitment,
+    ) -> anyhow::Result<()> {
+        (**self).append_da2(proposal, vid_commit).await
+    }
+
+    async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
+        (**self).record_action(view, action).await
+    }
+
+    async fn append_proposal_wrapper(
+        &self,
+        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        (**self).append_quorum_proposal2(proposal).await
+    }
+
+    async fn update_decided_upgrade_certificate(
+        &self,
+        decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        (**self)
+            .store_upgrade_certificate(decided_upgrade_certificate)
+            .await
+    }
+
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -951,6 +1186,37 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
         (**self).load_drb_input(epoch).await
+    }
+
+    async fn update_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        (**self).add_state_cert(state_cert).await
+    }
+}
+
+#[cfg(feature = "node")]
+#[async_trait]
+impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
+    async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        // Writes are spawned concurrently and retried, so a stale write can land
+        // after a newer one. The backend applies a monotonic compare-and-set
+        // atomically, so such a stale write is a no-op and never regresses the
+        // persisted view.
+        (**self).append_high_qc2(high_qc).await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_high_qc2().await
+    }
+
+    async fn append_boundary_qc2(&self, qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_boundary_qc2(qc).await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_boundary_qc2().await
     }
 }
 

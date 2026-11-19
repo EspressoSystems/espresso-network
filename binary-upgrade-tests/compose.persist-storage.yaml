@@ -1,7 +1,6 @@
 # Overlay applied to every scenario:
 # 1. Persistent storage on nodes 2, 3, 4 so recreated containers keep their
-#    orchestrator-cached config (avoids 403 "no longer registering new keys"),
-#    and their consensus store, which holds their votes and locks.
+#    orchestrator-cached config (avoids 403 "no longer registering new keys").
 # 2. Hub topology (all non-archival peers catch up via 0, 1) + light-client
 #    module on the archival pair, since UPGRADE's query fetcher hits
 #    /light-client/leaf/N which doesn't exist on non-archival peers
@@ -33,14 +32,13 @@ services:
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-3:$ESPRESSO_NODE_3_API_PORT,http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-3:$ESPRESSO_NODE_3_API_PORT,http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
 
-  # `query` is required from the consensus store on: its ingester frees the
-  # decide log. `status` lets roll_node poll node 2's block height.
+  # Add `status` (only requires `http`) so roll_node can poll node 2's block
+  # height; it has no `query` module to expose /node/block-height.
   espresso-node-2:
-    command: espresso-node -- http -- storage-fs -- status -- query
+    command: espresso-node -- http -- storage-fs -- status
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-2:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
-      ESPRESSO_NODE_CONSENSUS_STORE_PATH: /var/lib/espresso/consensus
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
     volumes:
@@ -50,7 +48,6 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-3:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
-      ESPRESSO_NODE_CONSENSUS_STORE_PATH: /var/lib/espresso/consensus
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
@@ -61,7 +58,6 @@ services:
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-4:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
-      ESPRESSO_NODE_CONSENSUS_STORE_PATH: /var/lib/espresso/consensus
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}

@@ -123,6 +123,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           path: |
+            target/debug/orchestrator
             target/debug/state-relay-server
             target/debug/state-prover
             target/debug/espresso-node
@@ -327,7 +328,12 @@ jobs:
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration
-          # Often enough that `max_consecutive_blocks_without_tx` does not trip.
+          # Dominates seconds-per-block on an idle demo chain, and these legs are
+          # bound by block count; the view round trip sets the rest (~490ms floor
+          # observed at 250ms). Reaches the orchestrator through the interpolation
+          # in process-compose.yaml; a `.env` entry would shadow it.
+          ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT: 250ms
+          # Must move with it, or `max_consecutive_blocks_without_tx` trips.
           ESPRESSO_SUBMIT_TRANSACTIONS_DELAY: 200ms
         run: |
           cargo nextest run --archive-file nextest-archive-integration.tar.zst --verbose --no-fail-fast --nocapture \

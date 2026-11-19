@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use consensus_store::mem::MemStore;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -96,7 +95,7 @@ impl TestHarness {
         );
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
-        let (membership, _storage, client) =
+        let (membership, storage, client) =
             mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
 
         let epoch_manager = EpochManager::new(epoch_length(10), membership.clone());
@@ -213,10 +212,7 @@ impl TestHarness {
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .share_validator(share_validator)
-            .storage(crate::storage::Storage::new(
-                crate::store::ConsensusStore::new(Arc::new(MemStore::new())),
-                &private_key,
-            ))
+            .storage(crate::storage::Storage::new(storage, private_key))
             .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())

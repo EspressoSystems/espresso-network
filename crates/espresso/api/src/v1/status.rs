@@ -43,6 +43,7 @@ mod x25519_tagged {
 #[async_trait]
 pub trait StatusApi {
     async fn block_height(&self) -> anyhow::Result<u64>;
+    async fn success_rate(&self) -> anyhow::Result<f64>;
     async fn time_since_last_decide(&self) -> anyhow::Result<u64>;
 
     async fn metrics(&self) -> anyhow::Result<String>;

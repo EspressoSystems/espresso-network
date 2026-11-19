@@ -9,6 +9,7 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     BlockMerkleCommitment, BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, ValidatedState, get_l1_deposits,
+    v0::traits::PersistenceOptions as _,
     v0_1::IterableFeeInfo,
     v0_3::{
         REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
@@ -66,7 +67,7 @@ use crate::{
         data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
         options::{self, Query, get_public_env_vars, init_query_data_source},
         state::NodeApiStateImpl,
-        update::{ApiEventConsumer, ApiSink, DecideSink},
+        update::{ApiEventConsumer, ApiSink},
     },
     catchup::{CatchupStorage, NullStateCatchup},
     context::TaskList,
@@ -161,9 +162,16 @@ pub(in crate::api) async fn init_query_module(
     Box<dyn Metrics>,
     Box<dyn ApiSink>,
     Option<RequestResponseStorage>,
-    Option<Arc<dyn DecideSink>>,
 )> {
-    // Missing data comes from peers.
+    let mut provider = Provider::default();
+
+    // Use the database itself as a fetching provider: sometimes we can fetch data that is
+    // missing from the query service from ephemeral consensus storage.
+    let db_provider = mod_opt.clone().create().await?;
+    provider = provider
+        .with_block_provider(db_provider.clone())
+        .with_vid_common_provider(db_provider);
+    // If that fails, fetch missing data from peers.
     let light_client_db = mod_opt.light_client_db(&query_opt)?;
     let light_client = Arc::new(LightClientProvider::new(
         query_opt.peers,
@@ -171,7 +179,7 @@ pub(in crate::api) async fn init_query_module(
         query_opt.light_client,
         light_client_db,
     )?);
-    let provider = Provider::default().with_provider(Arc::clone(&light_client));
+    provider = provider.with_provider(Arc::clone(&light_client));
 
     let ranges_concurrency = mod_opt.ranges_concurrency;
     let ds = DataSource::create(mod_opt.clone(), provider, false).await?;
@@ -224,6 +232,7 @@ pub(in crate::api) async fn init_query_module(
     if let Some(ranges_concurrency) = ranges_concurrency {
         api_state = api_state.with_ranges_concurrency(ranges_concurrency);
     }
+    let tonic_state = api_state.clone();
     tasks.spawn("API server", async move {
         if let Err(e) = espresso_api::serve_axum(port, api_state, modules, max_connections).await {
             tracing::error!("Axum server error: {}", e);
@@ -231,12 +240,18 @@ pub(in crate::api) async fn init_query_module(
         anyhow::Ok(())
     });
 
-    let consumer = ApiEventConsumer::from(ds);
+    if let Some(tonic_port) = api.http.tonic_port {
+        tasks.spawn("Tonic gRPC server", async move {
+            if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
+                tracing::error!("Tonic gRPC server error: {}", e);
+            }
+        });
+    }
+
     Ok((
         registry,
-        Box::new(consumer.clone()),
+        Box::new(ApiEventConsumer::from(ds)),
         Some(RequestResponseStorage::Sql(inner_storage)),
-        Some(Arc::new(consumer)),
     ))
 }
 

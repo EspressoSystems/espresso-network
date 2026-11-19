@@ -1,13 +1,21 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
+use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
+    message::Proposal as SignedProposal,
+    traits::{
+        leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
+    utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{block::SubmitError, coordinator::error::CoordinatorError};
+use crate::{
+    block::SubmitError, coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf,
+};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -15,6 +23,11 @@ pub struct ClientApi<T: NodeType> {
 }
 
 impl<T: NodeType> ClientApi<T> {
+    pub async fn current_view(&self) -> Result<ViewNumber, QueryError> {
+        let (tx, rx) = oneshot::channel();
+        self.call(ClientRequest::CurrentView(tx), rx).await
+    }
+
     pub async fn current_epoch(&self) -> Result<EpochNumber, QueryError> {
         let (tx, rx) = oneshot::channel();
         self.call(ClientRequest::CurrentEpoch(tx), rx).await
@@ -30,6 +43,11 @@ impl<T: NodeType> ClientApi<T> {
         self.call(ClientRequest::DecidedState(tx), rx).await
     }
 
+    pub async fn undecided_leaves(&self) -> Result<Vec<Leaf2<T>>, QueryError> {
+        let (tx, rx) = oneshot::channel();
+        self.call(ClientRequest::UndecidedLeaves(tx), rx).await
+    }
+
     pub async fn state(
         &self,
         view: ViewNumber,
@@ -39,11 +57,46 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
+    pub async fn state_and_delta(&self, view: ViewNumber) -> Result<StateAndDelta<T>, QueryError> {
+        let (tx, rx) = oneshot::channel();
+        self.call(ClientRequest::GetStateAndDelta { view, respond: tx }, rx)
+            .await
+    }
+
+    pub async fn update_leaf(&self, update: UpdateLeaf<T>) -> Result<(), QueryError> {
+        let (tx, rx) = oneshot::channel();
+        self.call(
+            ClientRequest::UpdateLeaf {
+                update,
+                respond: tx,
+            },
+            rx,
+        )
+        .await
+    }
+
     pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
             .await?
             .map_err(QueryError::from)
+    }
+
+    pub async fn request_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> Result<SignedProposal<T, Proposal<T>>, QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(
+            ClientRequest::RequestProposal {
+                view,
+                leaf_commitment,
+                respond,
+            },
+            rx,
+        )
+        .await?
     }
 
     pub async fn send_external_message(
@@ -61,6 +114,27 @@ impl<T: NodeType> ClientApi<T> {
             rx,
         )
         .await?
+    }
+
+    /// Proposal participation ratios; `None` queries the current epoch.
+    pub async fn proposal_participation(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Result<HashMap<T::SignatureKey, f64>, QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::ProposalParticipation { epoch, respond }, rx)
+            .await
+    }
+
+    /// Vote participation ratios; `None` queries the current epoch.
+    pub async fn vote_participation(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Result<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>, QueryError>
+    {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::VoteParticipation { epoch, respond }, rx)
+            .await
     }
 
     async fn call<A>(
@@ -111,16 +185,40 @@ impl<T: NodeType> CoordinatorClient<T> {
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ClientRequest<T: NodeType> {
+    CurrentView(oneshot::Sender<ViewNumber>),
     CurrentEpoch(oneshot::Sender<EpochNumber>),
     DecidedLeaf(oneshot::Sender<Leaf2<T>>),
     DecidedState(oneshot::Sender<Option<Arc<T::ValidatedState>>>),
+    UndecidedLeaves(oneshot::Sender<Vec<Leaf2<T>>>),
     GetState {
         view: ViewNumber,
         respond: oneshot::Sender<Option<Arc<T::ValidatedState>>>,
     },
+    GetStateAndDelta {
+        view: ViewNumber,
+        respond: oneshot::Sender<StateAndDelta<T>>,
+    },
+    ProposalParticipation {
+        epoch: Option<EpochNumber>,
+        respond: oneshot::Sender<HashMap<T::SignatureKey, f64>>,
+    },
+    VoteParticipation {
+        epoch: Option<EpochNumber>,
+        respond:
+            oneshot::Sender<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>>,
+    },
+    UpdateLeaf {
+        update: UpdateLeaf<T>,
+        respond: oneshot::Sender<()>,
+    },
     SubmitTransaction {
         tx: T::Transaction,
         respond: oneshot::Sender<Result<(), SubmitError>>,
+    },
+    RequestProposal {
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
     },
     SendExternalMessage {
         payload: Vec<u8>,

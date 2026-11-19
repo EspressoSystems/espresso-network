@@ -1634,20 +1634,7 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
-        // The coordinator writes a reconstructed block's payload as it hands
-        // the block to consensus; simulate the storage confirmation.
-        let stored_payload = match &input {
-            ConsensusInput::BlockReconstructed {
-                view,
-                payload_commitment,
-                ..
-            } => Some(StorageOutput::Payload(*view, *payload_commitment)),
-            _ => None,
-        };
         self.apply_recorded(input, &mut outbox);
-        if let Some(stored) = stored_payload {
-            self.apply_recorded(ConsensusInput::Stored(stored), &mut outbox);
-        }
         self.drain_outbox(&mut outbox).await;
     }
 
@@ -1718,27 +1705,30 @@ impl ConsensusHarness {
                     self.apply_recorded(input, outbox);
                 }
             },
-            // The coordinator persists the proposal, and a leader also the
-            // payload of its own block; simulate the storage confirmations.
-            ConsensusOutput::PersistProposal(proposal)
-            | ConsensusOutput::ProposalPaired { proposal, .. } => {
+            ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
                 let commitment = proposal_commitment(&proposal.data);
                 self.apply_recorded(
                     ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
                     outbox,
                 );
-                if matches!(output, ConsensusOutput::PersistProposal(_))
-                    && let VidCommitment::V2(payload) =
-                    hotshot_types::traits::block_contents::BlockHeader::<TestTypes>::payload_commitment(
-                        &proposal.data.block_header,
-                    )
-                {
-                    self.apply_recorded(
-                        ConsensusInput::Stored(StorageOutput::Payload(view, payload)),
-                        outbox,
-                    );
-                }
+            },
+            // The coordinator persists a paired proposal and VID share;
+            // simulate the storage confirmations.
+            ConsensusOutput::ProposalPaired {
+                proposal,
+                vid_share,
+            } => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.apply_recorded(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+                self.apply_recorded(
+                    ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
+                    outbox,
+                );
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::for_epoch(&self.membership_coordinator, req.epoch);

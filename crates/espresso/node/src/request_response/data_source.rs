@@ -32,6 +32,9 @@ use request_response::data_source::DataSource as DataSourceTrait;
 use super::request::{Request, Response};
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeV2Data},
+    catchup::{
+        add_fee_accounts_to_state, add_v1_reward_accounts_to_state, add_v2_reward_accounts_to_state,
+    },
     consensus_handle::ConsensusHandle,
 };
 
@@ -92,7 +95,7 @@ pub trait RequestStorage: Send + Sync {
 
 #[derive(Clone)]
 pub struct DataSource<P: SequencerPersistence> {
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -126,11 +129,25 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                 }
 
                 // Fall back to storage
-                let (merkle_tree, _) = self
+                let (merkle_tree, leaf) = self
                     .sql_storage("accounts")?
                     .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
                     .await
                     .with_context(|| "failed to get accounts from sql storage")?;
+
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_fee_accounts_to_state(
+                    &*self.consensus_handle,
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
+                }
 
                 Ok(Response::Accounts(merkle_tree))
             },
@@ -200,7 +217,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                 }
 
                 // Fall back to storage
-                let (merkle_tree, _) = self
+                let (merkle_tree, leaf) = self
                     .sql_storage("reward accounts")?
                     .get_reward_accounts_v2(
                         &self.node_state,
@@ -210,6 +227,20 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                     )
                     .await
                     .with_context(|| "failed to get accounts from sql storage")?;
+
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_v2_reward_accounts_to_state(
+                    &*self.consensus_handle,
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
+                }
 
                 Ok(Response::RewardAccountsV2(merkle_tree))
             },
@@ -226,7 +257,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                 }
 
                 // Fall back to storage
-                let (merkle_tree, _) = self
+                let (merkle_tree, leaf) = self
                     .sql_storage("v1 reward accounts")?
                     .get_reward_accounts_v1(
                         &self.node_state,
@@ -236,6 +267,23 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                     )
                     .await
                     .with_context(|| "failed to get v1 reward accounts from sql storage")?;
+
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_v1_reward_accounts_to_state(
+                    &*self.consensus_handle,
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        ?view,
+                        "Cannot update fetched v1 reward account state: {err:#}"
+                    );
+                }
 
                 Ok(Response::RewardAccountsV1(merkle_tree))
             },

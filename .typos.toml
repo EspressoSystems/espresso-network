@@ -1,5 +1,6 @@
 [files]
 extend-exclude = [
+  "data/initial_stake_table.toml",
   ".env",
   "*.json",
   "**/*.pdf",
@@ -9,6 +10,7 @@ extend-exclude = [
   "contracts/lib",
   "contracts/rust/adapter/src/bindings",
   "crates/node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
+  "crates/hotshot/orchestrator/run-config.toml",
   "crates/hotshot/types/src/light_client.rs",
   "lean",
   "crates/light-client-query-service/genesis/*.toml",
@@ -17,9 +19,11 @@ extend-exclude = [
   "crates/espresso/node/src/genesis.rs",
   "*.snap",
   "data/insta_snapshots",
-  "data/genesis/**/*.toml",
-  "scripts/network-bench/genesis.toml",
-  "scripts/network-bench/bench-keys.jsonl",
+  "data/initial_stake_table.toml",
+  "data/initial_staging_stake_table.toml",
+  "data/genesis/staging.toml",
+  "data/genesis/staging-new.toml",
+  "data/genesis/demo-da-committees.toml",
   "tests/proof_of_stake.rs",
 ]
 

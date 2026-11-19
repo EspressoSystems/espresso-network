@@ -3,31 +3,31 @@
 //! decides to, so every API module serves them unchanged.
 //!
 //! The light client's root of trust is its genesis stake table. Unless
-//! [`FollowerOptions::light_client_genesis`] pins one, it is derived from the network config: the
-//! genesis stake table of the genesis file, or the config a node of a network started by an
-//! orchestrator stored back then. Neither comes from the upstreams it verifies.
+//! [`FollowerOptions::light_client_genesis`] pins one, it is derived from the network config, and
+//! a follower starting on an empty database fetches that config from its config peers, which
+//! default to the very upstreams it verifies. Pin the genesis wherever the upstreams are not
+//! trusted on first start.
 
-use std::{cmp::max, collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{cmp::max, collections::HashMap, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient, LightClientMetrics,
-    client::{ClientList, FallbackClient, QueryServiceClient},
+    client::{FallbackClient, QueryServiceClient},
     state::{Genesis as LightClientGenesis, LightClientOptions},
     storage::LightClientDbOptions,
 };
 use alloy::primitives::U256;
-use anyhow::{Context, anyhow, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use consensus_api::{ConsensusNodeClient, proto::SubmitTransactionRequest};
 use derivative::Derivative;
 use espresso_api::error::SubmitError;
 use espresso_types::{
     Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
     ValidatedState,
     traits::MembershipPersistence,
-    v0::traits::{SequencerPersistence, StateCertPersistence},
+    v0::traits::{SequencerPersistence, StateCatchup, StateCertPersistence},
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
@@ -37,13 +37,20 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     ValidatorConfig,
-    consensus::ParticipationTracker,
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, VidShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
-    traits::{ValidatedState as _, metrics::Metrics, storage::Storage},
-    utils::{epoch_from_block_number, root_block_in_epoch},
+    traits::{
+        ValidatedState as _,
+        election::{Membership, MembershipSnapshot},
+        metrics::Metrics,
+        storage::Storage,
+    },
+    utils::{
+        StateAndDelta, epoch_from_block_number, is_epoch_root, is_transition_block,
+        root_block_in_epoch,
+    },
 };
 use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
@@ -55,19 +62,17 @@ use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
-    CatchupParams, Genesis, L1Params, NodeStateParts, SequencerApiVersion,
+    CatchupParams, Genesis, L1Params, LoadedNetworkConfig, NodeStateParts, SequencerApiVersion,
     api::{
         DecideSink,
-        context::{ApiContext, ConsensusSource, NodeLightClient},
+        context::{ApiContext, ConsensusSource, Delta, NodeLightClient},
         light_client_genesis,
     },
     apply_genesis_overrides,
-    chain_view::{ChainView, Participation},
     context::TaskList,
     init_node_state,
     lc_contract_seed::LcContractSeed,
-    load_network_config,
-    peers::PeerSet,
+    load_or_fetch_network_config,
     state_signature::StateSignatureMemStorage,
 };
 
@@ -100,8 +105,9 @@ impl FollowerOptions {
 
 #[derive(Clone, Debug)]
 pub struct FollowerParams {
-    /// The API services to start from. The follower finds the others through them.
-    pub bootstrap: Vec<Url>,
+    pub upstreams: Vec<Url>,
+    /// The upstreams when unset.
+    pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub options: FollowerOptions,
@@ -113,7 +119,7 @@ pub struct FollowerParams {
 #[derivative(Debug(bound = ""))]
 pub struct FollowerHandle<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
-    consensus: Arc<ApiChain>,
+    consensus: Arc<FollowerConsensus>,
     #[derivative(Debug = "ignore")]
     light_client: Option<Arc<NodeLightClient>>,
     node_state: NodeState,
@@ -212,109 +218,41 @@ where
     Arc<P>: Storage<SeqTypes>,
 {
     params.options.validate()?;
-    let peers = PeerSet::new(params.bootstrap.clone());
-    // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
-    let replay = params.bootstrap.is_empty();
-    let (mut handle, view) = init_api_service(
-        &genesis,
-        params.catchup.clone(),
-        !replay,
-        &*metrics,
-        persistence,
-        l1_params,
-        SubmitTo::Peers(peers.clone()),
-    )
-    .await?;
-    if !replay {
-        handle.tasks.lock().spawn(
-            "peer set",
-            peers.clone().run(
-                view.coordinator.clone(),
-                view.decided.subscribe(),
-                view.epoch_height,
-            ),
-        );
-    }
 
-    let source: Arc<dyn ChainSource> = match upstream {
-        #[cfg(any(test, feature = "testing"))]
-        Upstream::Replay(source) => source,
-        Upstream::LightClient(light_client_metrics) => {
-            let light_client = Arc::new(
-                connect_light_client(
-                    &params.options,
-                    peers.clients(),
-                    &handle.network_config,
-                    genesis.chain_config.chain_id,
-                    light_client_metrics,
-                )
-                .await?,
-            );
-            handle.light_client = Some(light_client.clone());
-            light_client
-        },
-    };
-
-    let next = sink
-        .block_height()
-        .await
-        .context("reading the height the query database has reached")?;
-    if let Some(leaf) = sink
-        .last_leaf()
-        .await
-        .context("reading the newest stored block")?
-    {
-        view.resume(&leaf).await;
-    }
-    let follower = Follower {
-        source,
-        sink: Arc::new(sink),
-        view,
-        options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
-        next,
-    };
-    follower.catch_up_at_startup().await;
-    handle
-        .tasks
-        .lock()
-        .spawn("light client follower", follower.run());
-    Ok(handle)
-}
-
-/// The API service's own view of the chain, which it keeps up with the blocks it stores: its
-/// handle for the API, and the [`ChainView`] to feed each stored block to.
-///
-/// Its stake tables come from L1 and the blocks it stores, not from consensus, and it takes
-/// transactions to `submit`.
-pub(crate) async fn init_api_service<P>(
-    genesis: &Genesis,
-    catchup: CatchupParams,
-    seed_from_lc_contract: bool,
-    metrics: &dyn Metrics,
-    persistence: P,
-    l1_params: L1Params,
-    submit: SubmitTo,
-) -> anyhow::Result<(FollowerHandle<P>, Arc<ChainView<P>>)>
-where
-    P: SequencerPersistence + MembershipPersistence,
-    Arc<P>: Storage<SeqTypes>,
-{
-    // The API service has no stake, so any key serves as its identity in the network config.
+    // A follower has no stake, so any key serves as its identity in the network config.
     let validator_config = ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
         rand::random(),
         0,
         U256::ONE,
         false,
     );
-    let mut network_config =
-        load_network_config(&persistence, genesis, &validator_config.public_key).await?;
-    apply_genesis_overrides(&mut network_config, genesis);
-    // From genesis rather than the network config, as `init_node_state` reads it.
+    let config_peers = params
+        .config_peers
+        .clone()
+        .unwrap_or_else(|| params.upstreams.clone());
+    let (mut network_config, fetched) = match load_or_fetch_network_config(
+        &persistence,
+        Some(config_peers),
+        &validator_config,
+        params.catchup.backoff,
+        params.catchup.base_timeout,
+    )
+    .await?
+    {
+        Some(LoadedNetworkConfig::Persisted(config)) => (config, false),
+        Some(LoadedNetworkConfig::Fetched(config)) => (config, true),
+        None => bail!("a follower needs peers to fetch the network config from"),
+    };
+    apply_genesis_overrides(&mut network_config, &genesis);
+    if fetched {
+        persistence.save_config(&network_config).await?;
+    }
+    // From genesis rather than the network config, as `init_node_state` reads it: the light
+    // client verifies epochs, so a follower cannot run without them.
     let epoch_height = genesis.epoch_height.unwrap_or_default();
     ensure!(
         epoch_height > 0,
-        "an API service needs a positive epoch_height in genesis"
+        "a follower needs a positive epoch_height in genesis"
     );
     let upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
 
@@ -323,65 +261,66 @@ where
         state_catchup: _,
         persistence,
     } = init_node_state(
-        genesis,
+        &genesis,
         &network_config,
         l1_params,
-        catchup,
+        params.catchup.clone(),
         persistence,
-        None,
-        metrics,
+        &*metrics,
     )
     .await?;
     let coordinator = node_state.coordinator.clone();
 
-    // Far behind the chain, the coordinator seeds its stake tables from the LC contract rather
-    // than walking every epoch from the last one it holds.
-    let backfill = seed_from_lc_contract
-        .then(|| LcContractSeed::new(&node_state.chain_config, metrics))
-        .flatten()
-        .map(|seed| seed.install(&coordinator));
-    let (handle, view) =
-        api_service(node_state, persistence, network_config, upgrade, submit).await?;
-    if let Some(backfill) = backfill {
-        handle
-            .tasks
-            .lock()
-            .spawn("stake table backfill", backfill.run(coordinator));
+    // A replay node has no upstreams (`legacy_chain::replay_params`) and walks.
+    let mut stake_table_backfill = None;
+    if !params.upstreams.is_empty()
+        && let Some(seed) = LcContractSeed::new(&node_state.chain_config, &*metrics)
+    {
+        stake_table_backfill = Some(seed.install(&coordinator));
     }
-    Ok((handle, view))
-}
 
-/// The API service over `node_state`, whose membership it keeps up with the blocks it stores.
-pub(crate) async fn api_service<P: SequencerPersistence>(
-    node_state: NodeState,
-    persistence: Arc<P>,
-    network_config: NetworkConfig<SeqTypes>,
-    upgrade: versions::Upgrade,
-    submit: SubmitTo,
-) -> anyhow::Result<(FollowerHandle<P>, Arc<ChainView<P>>)> {
-    let coordinator = node_state.coordinator.clone();
-    let epoch_height = node_state.epoch_height.unwrap_or_default();
+    let (source, light_client): (Arc<dyn ChainSource>, _) = match upstream {
+        #[cfg(any(test, feature = "testing"))]
+        Upstream::Replay(source) => (source, None),
+        Upstream::LightClient(light_client_metrics) => {
+            let light_client = Arc::new(
+                connect_light_client(
+                    &params.options,
+                    &params.upstreams,
+                    &network_config,
+                    genesis.chain_config.chain_id,
+                    fetched,
+                    light_client_metrics,
+                )
+                .await?,
+            );
+            (light_client.clone(), Some(light_client))
+        },
+    };
+
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
     let upgrade_lock =
         UpgradeLock::from_certificate(upgrade, &persistence.load_upgrade_certificate().await?);
 
     let (decided, decided_rx) = watch::channel(None);
-    let chain_config = Arc::new(RwLock::new(node_state.chain_config));
-    let participation = Arc::new(Mutex::new(Participation::new(ParticipationTracker::new(
-        &coordinator,
-        EpochNumber::genesis(),
-    ))));
-    let consensus = ApiChain {
+    let chain_config = Arc::new(RwLock::new(genesis.chain_config));
+    let consensus = FollowerConsensus {
         decided: decided_rx,
         chain_config: chain_config.clone(),
         coordinator: coordinator.clone(),
         upgrade_lock: upgrade_lock.clone(),
-        participation: participation.clone(),
-        submit,
+        upstreams: params.upstreams,
         epoch_height,
     };
-    let view = Arc::new(ChainView {
+
+    let next = sink
+        .block_height()
+        .await
+        .context("reading the height the query database has reached")?;
+    let follower = Follower {
+        source,
+        sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
         state_catchup: node_state.state_catchup.clone(),
@@ -389,17 +328,28 @@ pub(crate) async fn api_service<P: SequencerPersistence>(
         chain_config,
         upgrade_lock,
         epoch_height,
-        participation,
-    });
-    let handle = FollowerHandle {
+        options: params.options,
+        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        next,
+    };
+    let mut tasks = TaskList::default();
+    follower.catch_up_at_startup().await;
+    if let Some(backfill) = stake_table_backfill {
+        tasks.spawn(
+            "stake table backfill",
+            backfill.run(follower.coordinator.clone()),
+        );
+    }
+    tasks.spawn("light client follower", follower.run());
+
+    Ok(FollowerHandle {
         consensus: Arc::new(consensus),
-        light_client: None,
+        light_client,
         node_state,
         persistence,
         network_config,
-        tasks: Arc::new(Mutex::new(TaskList::default())),
-    };
-    Ok((handle, view))
+        tasks: Arc::new(Mutex::new(tasks)),
+    })
 }
 
 impl<P: SequencerPersistence> FollowerContext<P> {
@@ -516,27 +466,17 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
 }
 
 /// Behind an `Arc` in [`FollowerHandle`], as the API's `ConsensusSource`.
-struct ApiChain {
+struct FollowerConsensus {
     decided: watch::Receiver<Option<LeafQueryData<SeqTypes>>>,
     chain_config: Arc<RwLock<ChainConfig>>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
     upgrade_lock: UpgradeLock<SeqTypes>,
-    participation: Arc<Mutex<Participation>>,
-    submit: SubmitTo,
+    upstreams: Vec<Url>,
     epoch_height: u64,
 }
 
-/// Where an API service hands submitted transactions.
-pub(crate) enum SubmitTo {
-    /// The API services of other nodes, for a follower.
-    Peers(Arc<PeerSet>),
-
-    /// The node's own consensus, at its consensus API.
-    Consensus(SocketAddr),
-}
-
 #[async_trait]
-impl ConsensusSource for ApiChain {
+impl ConsensusSource for FollowerConsensus {
     async fn decided_leaf(&self) -> Leaf2 {
         let mut decided = self.decided.clone();
         let leaf = decided
@@ -556,6 +496,18 @@ impl ConsensusSource for ApiChain {
         Some(Arc::new(state))
     }
 
+    async fn state(&self, _view: ViewNumber) -> Option<Arc<ValidatedState>> {
+        None
+    }
+
+    async fn state_and_delta(&self, _view: ViewNumber) -> StateAndDelta<SeqTypes> {
+        (None, None)
+    }
+
+    async fn undecided_leaves(&self) -> Vec<Leaf2> {
+        Vec::new()
+    }
+
     async fn current_epoch(&self) -> Option<EpochNumber> {
         let decided = self.decided.borrow();
         decided
@@ -572,32 +524,8 @@ impl ConsensusSource for ApiChain {
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
-        let upstreams = match &self.submit {
-            SubmitTo::Peers(peers) => peers.urls(),
-            SubmitTo::Consensus(addr) => {
-                let commitment = tx.commit();
-                let mut client = ConsensusNodeClient::connect(format!("http://{addr}"))
-                    .await
-                    .context("connecting to the consensus node API")?;
-                let request = SubmitTransactionRequest {
-                    transaction: bincode::serialize(&tx)?,
-                };
-                return match client.submit_transaction(request).await {
-                    Ok(_) => Ok(commitment),
-                    Err(status) => Err(match status.code() {
-                        tonic::Code::InvalidArgument => {
-                            SubmitError::Invalid(status.message().into()).into()
-                        },
-                        tonic::Code::ResourceExhausted => {
-                            SubmitError::Overloaded(status.message().into()).into()
-                        },
-                        _ => anyhow!("submitting to consensus: {status}"),
-                    }),
-                };
-            },
-        };
         let mut last_err = anyhow!("no upstream query nodes to forward the transaction to");
-        for upstream in upstreams.iter() {
+        for upstream in &self.upstreams {
             let client = Client::<ClientErr, SequencerApiVersion>::new(upstream.clone());
             let result = client
                 .post::<Commitment<Transaction>>("submit/submit")
@@ -627,36 +555,43 @@ impl ConsensusSource for ApiChain {
         Err(last_err)
     }
 
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.participation
-            .lock()
-            .tracker
-            .current_proposal_participation()
+    async fn update_leaf(
+        &self,
+        _leaf: Leaf2,
+        _state: Arc<ValidatedState>,
+        _delta: Option<Arc<Delta>>,
+    ) -> anyhow::Result<()> {
+        // The follower keeps no in-memory state per view; catchup serves from storage.
+        Ok(())
     }
 
-    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.participation
-            .lock()
-            .tracker
-            .proposal_participation(epoch)
+    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
+        HashMap::new()
+    }
+
+    async fn proposal_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        HashMap::new()
     }
 
     async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        self.participation
-            .lock()
-            .tracker
-            .current_vote_participation()
+        HashMap::new()
     }
 
-    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.participation.lock().tracker.vote_participation(epoch)
+    async fn vote_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
+        HashMap::new()
     }
 }
 
 struct Follower<P> {
     source: Arc<dyn ChainSource>,
     sink: Arc<dyn DecideSink>,
-    view: Arc<ChainView<P>>,
+    persistence: Arc<P>,
+    coordinator: EpochMembershipCoordinator<SeqTypes>,
+    state_catchup: Arc<dyn StateCatchup>,
+    decided: watch::Sender<Option<LeafQueryData<SeqTypes>>>,
+    chain_config: Arc<RwLock<ChainConfig>>,
+    upgrade_lock: UpgradeLock<SeqTypes>,
+    epoch_height: u64,
     options: FollowerOptions,
     bootstrap_epoch_catchup_timeout: Duration,
     next: u64,
@@ -757,12 +692,63 @@ impl<P: SequencerPersistence> Follower<P> {
         {
             info = info.with_cert2(cert2);
         }
-        self.sink
-            .append(info, None)
-            .await
-            .context("storing block")?;
+        self.sink.append(info).await.context("storing block")?;
 
-        self.view.track(&leaf).await
+        self.track_upgrade(leaf.leaf()).await;
+        self.track_epoch(leaf.leaf()).await?;
+        self.track_chain_config(leaf.header()).await;
+        self.decided.send_replace(Some(leaf));
+        Ok(())
+    }
+
+    /// As a validator does on decide, so the API validates state certificates against the version
+    /// the network runs.
+    async fn track_upgrade(&self, leaf: &Leaf2) {
+        let Some(cert) = leaf.upgrade_certificate() else {
+            return;
+        };
+        if self.upgrade_lock.decided_upgrade_cert().as_ref() == Some(cert) {
+            return;
+        }
+        tracing::warn!(
+            height = leaf.height(),
+            version = ?cert.data.new_version,
+            "the network decided an upgrade"
+        );
+        self.upgrade_lock.set_decided_upgrade_cert(cert.clone());
+        if let Err(err) = self
+            .persistence
+            .store_upgrade_certificate(Some(cert.clone()))
+            .await
+        {
+            tracing::warn!(
+                height = leaf.height(),
+                "cannot persist the upgrade certificate: {err:#}"
+            );
+        }
+    }
+
+    /// Awaited, so the transition block finds the stake table it supplies a DRB for, and a
+    /// failed derivation fails the block and is retried with it. Nothing is redone when the
+    /// membership already knows the result, as after a restart or a catchup walk.
+    async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
+        let height = leaf.height();
+        let Some(epoch) = leaf.epoch(self.epoch_height) else {
+            return Ok(());
+        };
+        if is_epoch_root(height, self.epoch_height) && !self.has_stake_table(epoch + 2) {
+            self.coordinator
+                .add_epoch_root(leaf.block_header().clone())
+                .await
+                .map_err(|err| anyhow!("deriving the stake table of epoch {}: {err}", epoch + 2))?;
+        }
+        if is_transition_block(height, self.epoch_height)
+            && let Some(drb) = leaf.next_drb_result
+            && !self.has_drb(epoch + 1)
+        {
+            self.coordinator.supply_drb(epoch + 1, drb);
+        }
+        Ok(())
     }
 
     /// Requests the stake tables and the DRB the first poll needs, within one catchup timeout. A
@@ -778,9 +764,8 @@ impl<P: SequencerPersistence> Follower<P> {
             tracing::warn!(from, "startup stake table catchup failed: {err:#}");
         }
         // Background, so endpoints that need this epoch's DRB find it soon.
-        let epoch = epoch_from_block_number(from, self.view.epoch_height);
+        let epoch = epoch_from_block_number(from, self.epoch_height);
         let _ = self
-            .view
             .coordinator
             .membership_for_epoch(EpochNumber::new(epoch));
     }
@@ -801,21 +786,55 @@ impl<P: SequencerPersistence> Follower<P> {
     /// held: the DRB step after the install can fail or run long, and a follower supplies DRB
     /// results itself from the next transition block on.
     async fn require_stake_table(&self, height: u64, deadline: Instant) -> anyhow::Result<()> {
-        let needed = needed_stake_table_epoch(height, self.view.epoch_height);
-        if needed <= self.view.coordinator.membership().first_epoch() + 1 {
+        let needed = needed_stake_table_epoch(height, self.epoch_height);
+        if needed <= self.coordinator.membership().first_epoch() + 1 {
             return Ok(());
         }
         let outcome =
-            match timeout_at(deadline, self.view.coordinator.wait_for_stake_table(needed)).await {
+            match timeout_at(deadline, self.coordinator.wait_for_stake_table(needed)).await {
                 Ok(Ok(_)) => return Ok(()),
                 Ok(Err(err)) => format!("failed: {err}"),
                 Err(_) => "timed out".to_string(),
             };
         ensure!(
-            self.view.has_stake_table(needed),
+            self.has_stake_table(needed),
             "the catchup to the stake table of epoch {needed} {outcome}"
         );
         Ok(())
+    }
+
+    fn has_stake_table(&self, epoch: EpochNumber) -> bool {
+        self.coordinator.membership().snapshot(epoch).is_some()
+    }
+
+    fn has_drb(&self, epoch: EpochNumber) -> bool {
+        self.coordinator
+            .membership()
+            .snapshot(epoch)
+            .is_some_and(|snapshot| snapshot.has_drb())
+    }
+
+    /// Keep the resolved chain config current, so `submit` enforces the right block size.
+    async fn track_chain_config(&self, header: &Header) {
+        let resolvable = header.chain_config();
+        if resolvable.commit() == self.chain_config.read().await.commit() {
+            return;
+        }
+        let resolved = match resolvable.resolve() {
+            Some(chain_config) => Ok(chain_config),
+            None => {
+                self.state_catchup
+                    .fetch_chain_config(resolvable.commit())
+                    .await
+            },
+        };
+        match resolved {
+            Ok(chain_config) => *self.chain_config.write().await = chain_config,
+            Err(err) => tracing::warn!(
+                height = header.height(),
+                "cannot resolve the chain config: {err:#}"
+            ),
+        }
     }
 }
 
@@ -869,9 +888,10 @@ impl ChainSource for NodeLightClient {
 
 async fn connect_light_client(
     options: &FollowerOptions,
-    clients: ClientList<QueryServiceClient>,
+    upstreams: &[Url],
     network_config: &NetworkConfig<SeqTypes>,
     chain_id: ChainId,
+    config_fetched: bool,
     metrics: LightClientMetrics,
 ) -> anyhow::Result<NodeLightClient> {
     let db = options
@@ -880,10 +900,24 @@ async fn connect_light_client(
         .connect()
         .await
         .context("opening the light client database")?;
-    let client = FallbackClient::shared(clients)?;
+    let client = FallbackClient::new(
+        upstreams
+            .iter()
+            .cloned()
+            .map(QueryServiceClient::new)
+            .collect(),
+    )?;
     let genesis = match options.light_client_genesis.clone() {
         Some(genesis) => genesis,
-        None => light_client_genesis(network_config, chain_id),
+        None => {
+            if config_fetched {
+                tracing::warn!(
+                    "deriving the light client's root of trust from a network config fetched from \
+                     peers; pin a light client genesis unless those peers are trusted"
+                );
+            }
+            light_client_genesis(network_config, chain_id)
+        },
     };
     Ok(
         LightClient::from_genesis_with_options(db, client, genesis, options.light_client.clone())

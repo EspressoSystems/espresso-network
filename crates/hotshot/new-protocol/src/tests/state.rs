@@ -18,7 +18,7 @@ use hotshot_types::{
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
     message::Proposal,
-    state::{HeaderRequest, StateManager, StateManagerOutput, StateRequest},
+    state::{HeaderRequest, StateManager, StateManagerOutput, StateRequest, UpdateLeaf},
     tests::common::utils::{TestData, TestView},
 };
 
@@ -182,17 +182,70 @@ async fn test_header_request_after_missing_parent_validates() {
     assert_eq!(count_header_created(&outputs), 1);
 }
 
-/// Inserts the state of `view` as if it had been validated.
-fn insert_validated(manager: &mut StateManager<TestTypes>, view: &TestView) {
+fn leaf_update(view: &TestView, delta: bool) -> UpdateLeaf<TestTypes> {
     let proposal: Proposal<TestTypes> = view.proposal.data.clone();
-    manager.insert_state(
-        view.view_number,
-        Arc::new(
+    UpdateLeaf {
+        view: view.view_number,
+        state: Arc::new(
             <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header),
         ),
-        Some(Arc::new(TestStateDelta {})),
-        proposal.into(),
-    );
+        delta: delta.then(|| Arc::new(TestStateDelta {})),
+        leaf: proposal.into(),
+    }
+}
+
+/// A delta-less update neither aborts an in-flight validation nor releases queued work.
+#[tokio::test]
+async fn test_update_state_without_delta_keeps_in_flight_validation() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.update_state(leaf_update(&test_data.views[0], false));
+
+    assert!(!manager.validated_contains_view(test_data.views[0].view_number));
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 2);
+}
+
+/// A delta-less update for an existing stub keeps the stub and starts nothing.
+#[tokio::test]
+async fn test_update_state_without_delta_existing_stub() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+    let update = leaf_update(&test_data.views[0], false);
+    let state = update.state.clone();
+    manager.update_state(update);
+
+    let entry = manager.get_state(test_data.views[0].view_number).unwrap();
+    assert!(entry.delta.is_none());
+    assert!(Arc::ptr_eq(&entry.state, &state), "stub state is replaced");
+    assert!(manager.next().await.is_none());
+}
+
+/// A delta-less update for an unknown leaf inserts nothing and releases nothing.
+#[tokio::test]
+async fn test_update_state_without_delta_missing_entry() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.update_state(leaf_update(&test_data.views[0], false));
+
+    assert!(!manager.validated_contains_view(test_data.views[0].view_number));
+    assert!(manager.next().await.is_none());
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.next().await.expect("parent validates");
+    manager.next().await.expect("queued request survived");
+    assert!(manager.validated_contains_view(test_data.views[1].view_number));
 }
 
 /// `seed_decided` runs work queued on the decided leaf.
@@ -684,9 +737,8 @@ async fn test_gc_retains_validated_states_within_margin() {
     let decided = &test_data.views[10];
     let at = |below: u64| test_data.views[10 - below as usize].view_number;
 
-    for below in [8, 9] {
-        insert_validated(&mut manager, &test_data.views[10 - below]);
-    }
+    manager.update_state(leaf_update(&test_data.views[10 - 8], true));
+    manager.update_state(leaf_update(&test_data.views[10 - 9], true));
     manager.seed_from_header(test_data.views[9].proposal.data.clone());
     manager.gc(decided.view_number);
 

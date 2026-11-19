@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package espresso.a2.v1;
+
+// The chain as an API service keeps it, for other API services to fill their stores from.
+//
+// Records are in the chain store's own encoding, so that the receiver can check each one exactly:
+// a leaf against the parent commitment of the leaf after it, and a payload against its header.
+// gRPC only; clients reading the chain use the availability service.
+service ChainService {
+  // The records of the heights `from` up to `until`, in height order. Heights the server does not
+  // have are left out, and the client asks another server for them.
+  rpc GetRecords(GetRecordsRequest) returns (stream ChainRecord);
+}
+
+message GetRecordsRequest {
+  // First height (inclusive)
+  optional uint64 from = 1;
+
+  // Height just past the last one (exclusive)
+  optional uint64 until = 2;
+
+  // Leave out payloads and VID common data, for a client that wants only certificates
+  bool skip_payloads = 3;
+}
+
+message ChainRecord {
+  uint64 height = 1;
+
+  // The item: the leaf and the certificate that certifies it, bincode-encoded after a format byte
+  bytes item = 2;
+
+  // The payload as the block encodes it; absent if the server does not have it
+  optional bytes payload = 3;
+
+  // The VID common data, encoded as the item is; absent if the server does not have it
+  optional bytes vid_common = 4;
+
+  // The certificate that decided the block directly, encoded as the item is; absent if none did or
+  // the server does not have it
+  optional bytes cert2 = 5;
+
+  // The light client state certificate of an epoch root, encoded as the item is; absent if the
+  // block is no epoch root or the server does not have it
+  optional bytes state_cert = 6;
+}
+
+// The API services of the validators, as the records they signed name them.
+service DiscoveryService {
+  // The records of the epoch asked for, or of the latest epoch with records, newest per
+  // validator. Not found if there are none.
+  rpc GetPeers(GetPeersRequest) returns (PeersResponse);
+}
+
+message GetPeersRequest {
+  // The latest epoch with records when absent
+  optional uint64 epoch = 1;
+}
+
+message ServiceRecord {
+  // The BLS key of the validator that signed the record, staked in the record's epoch,
+  // TaggedBase64
+  string signer = 1;
+
+  // The epoch the record is for
+  uint64 epoch = 2;
+
+  // URL of the validator's API service
+  string api_url = 3;
+
+  // Ed25519 public key, 32 bytes, the API service authenticates requests with; absent if it has
+  // none
+  optional bytes api_key = 4;
+
+  // Orders a validator's records: a higher sequence number replaces a lower one
+  uint64 sequence = 5;
+
+  // The bytes the validator signed: the tag "espresso-service-record-v1" followed by the bincode
+  // encoding of the epoch, URL, key and sequence number
+  bytes signed_message = 6;
+
+  // BLS signature over signed_message, TaggedBase64
+  string signature = 7;
+}
+
+message PeersResponse {
+  repeated ServiceRecord peers = 1;
+
+  // The epoch the records are for
+  uint64 epoch = 2;
+}

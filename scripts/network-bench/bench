@@ -87,7 +87,7 @@ LOCAL_TOPOLOGY: nb.Topology = {
     },
     "query_node": "node0",
 }
-# From .env: API, tonic, cliquenet, anvil, postgres and relay.
+# From .env: API, tonic, cliquenet, anvil, postgres, orchestrator and relay.
 PORTS = (
     24000,
     24001,
@@ -100,6 +100,7 @@ PORTS = (
     11002,
     8545,
     5432,
+    30001,
     30011,
 )
 # Exact /proc/<pid>/comm names (truncated to 15 chars) of the processes the network runs.
@@ -107,6 +108,7 @@ PROCESS_NAMES = (
     "process-compose",
     "espresso-node",
     "espresso-node-s",
+    "orchestrator",
     "state-relay-ser",
     "deploy",
     "anvil",
@@ -116,6 +118,7 @@ PROCESS_NAMES = (
 PROCESS_LABELS = {
     "postgres": "postgres",
     "anvil": "anvil",
+    "orchestrator": "orchestrator",
     "state-relay-ser": "relay",
     "process-compose": "process-compose",
 }
@@ -699,6 +702,7 @@ def command_output(cmd: list[str]) -> str:
 def binary_info(bin_dir: Path) -> dict[str, dict[str, Any]]:
     names = (
         "espresso-node",
+        "orchestrator",
         "state-relay-server",
         "deploy",
     )

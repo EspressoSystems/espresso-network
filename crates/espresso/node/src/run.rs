@@ -16,9 +16,8 @@ use super::{
     persistence,
 };
 use crate::{
-    api::context::ValidatorApi,
     default_telemetry_endpoint,
-    follower::{FollowerContext, FollowerParams, SubmitTo, init_api_service, init_follower_node},
+    follower::{FollowerContext, FollowerParams, init_follower_node},
     keyset::KeySet,
 };
 
@@ -289,33 +288,29 @@ where
         cliquenet_bind_addr: opt.cliquenet_bind_address,
         cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
+        orchestrator_url: opt.orchestrator_url,
         builder_urls: opt.builder_urls,
         state_relay_server_url: opt.state_relay_server_url,
         public_api_url: opt.public_api_url,
-        api_public_key: opt.api_public_key,
         private_staking_key: staking,
         private_state_key: state,
+        config_peers: opt.config_peers,
         catchup: CatchupParams {
             state_peers: opt.state_peers,
             backoff: opt.catchup_backoff,
             base_timeout: opt.catchup_base_timeout,
+            local_timeout: opt.local_catchup_timeout,
             http_delay: opt.http_catchup_delay,
         },
     };
 
+    let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
     let leader_trace_dir = opt.leader_trace_dir.clone();
-    let consensus_store_path = opt.consensus_store_path.clone();
-    let consensus_api_addr = opt.consensus_api_addr;
-    let decide_log_limit = opt.decide_log_limit;
 
-    // Only the query module's ingester frees the decide log. Without it the log fills, and
-    // the node stops voting.
-    anyhow::ensure!(
-        modules.query.is_some(),
-        "the query module is required: it ingests the decided chain, without which this node \
-         stops voting"
-    );
+    if modules.query.is_none() {
+        storage_opt.set_consensus_only();
+    }
     let persistence = storage_opt.create().await?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
@@ -324,20 +319,10 @@ where
     let ctx = match modules.http.take() {
         Some(http_opt) => {
             let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
-            // The API service keeps its own view of the chain, from L1 and the blocks it
-            // ingests, rather than asking consensus.
-            let api_persistence = storage_opt.create().await?;
-            let api_l1_params = L1Params {
-                urls: l1_params.urls.clone(),
-                options: l1_params.options.clone(),
-            };
-            let api_catchup = network_params.catchup.clone();
-            let api_genesis = genesis.clone();
-            let validator = http_opt
+            http_opt
                 .serve(move |metrics, consumer, storage, _| {
                     async move {
-                        let api_metrics = metrics.subgroup("api".into());
-                        let node = init_node(
+                        init_node(
                             genesis,
                             network_params,
                             metrics,
@@ -347,29 +332,15 @@ where
                             consumer,
                             opt.is_da,
                             opt.identity,
+                            proposal_fetcher_config,
                             empty_block_delay,
                             leader_trace_dir,
-                            consensus_store_path,
-                            consensus_api_addr,
-                            decide_log_limit,
                         )
-                        .await?;
-                        let (api, view) = init_api_service(
-                            &api_genesis,
-                            api_catchup,
-                            true,
-                            &*api_metrics,
-                            api_persistence,
-                            api_l1_params,
-                            SubmitTo::Consensus(node.consensus_api_addr()),
-                        )
-                        .await?;
-                        Ok(ValidatorApi { node, api, view })
+                        .await
                     }
                     .boxed()
                 })
-                .await?;
-            validator.node
+                .await?
         },
         None => {
             init_node(
@@ -382,11 +353,9 @@ where
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
+                proposal_fetcher_config,
                 empty_block_delay,
                 leader_trace_dir,
-                consensus_store_path,
-                consensus_api_addr,
-                decide_log_limit,
             )
             .await?
         },
@@ -484,10 +453,7 @@ mod test {
         PubKey, Upgrade, UpgradeType,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
     };
-    use hotshot_types::{
-        light_client::StateKeyPair, network::PeerConfigKeys, traits::signature_key::SignatureKey,
-        x25519,
-    };
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
     use http_client::{Client, Url, error::ClientErr};
     use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
@@ -504,7 +470,7 @@ mod test {
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_startup_serves_api_before_consensus() {
+    async fn test_startup_before_orchestrator() {
         let (pub_key, priv_key) = PubKey::generated_from_seed_indexed([0; 32], 0);
         let state_key = StateKeyPair::generate_from_seed_indexed([0; 32], 0);
         let x25519_kp = x25519::Keypair::generate().unwrap();
@@ -516,16 +482,7 @@ mod test {
         let genesis_file = tmp.path().join("genesis.toml");
         let genesis = Genesis {
             chain_config: Default::default(),
-            stake_table: StakeTableConfig {
-                capacity: 10,
-                genesis: vec![PeerConfigKeys {
-                    stake_table_key: pub_key,
-                    state_ver_key: state_key.ver_key(),
-                    stake: 1,
-                    da: true,
-                    connect_info: None,
-                }],
-            },
+            stake_table: StakeTableConfig { capacity: 10 },
             accounts: Default::default(),
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
@@ -584,14 +541,11 @@ mod test {
             &format!("127.0.0.1:{port2}"),
             "--genesis-file",
             &genesis_file.display().to_string(),
-            "--consensus-store-path",
-            &tmp.path().join("consensus").display().to_string(),
-            "--public-api-url",
-            &format!("http://localhost:{port1}"),
         ]);
 
-        // Start the sequencer in a background task. This process will not complete, because no L1
-        // is running, but it should at least start up the API server and populate some metrics.
+        // Start the sequencer in a background task. This process will not complete, because it will
+        // be waiting for the orchestrator, but it should at least start up the API server and
+        // populate some metrics.
         tracing::info!(port = %port1, "starting sequencer");
         let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
         let task = spawn(async move {
@@ -608,7 +562,8 @@ mod test {
             }
         });
 
-        // The healthcheck should eventually come up even though the node is waiting for L1.
+        // The healthcheck should eventually come up even though the node is waiting for the
+        // orchestrator.
         tracing::info!("waiting for API to start");
         let url: Url = format!("http://localhost:{port1}").parse().unwrap();
         let client = Client::<ClientErr, SequencerApiVersion>::new(url.clone());

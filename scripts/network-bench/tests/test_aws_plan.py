@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import threading
-import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -1160,102 +1159,6 @@ def test_protocol_version_flag_defaults_and_differs_in_the_config_hash():
     assert len(hashes) == 2
 
 
-def test_render_genesis_drops_the_template_stake_table():
-    template = (HERE / "genesis.toml").read_text()
-    assert template.count("[[stake_table.genesis]]") == 3
-    rendered = awsb.render_genesis(template.encode(), 10, "50mb", "0.6").decode()
-    assert "stake_table.genesis" not in rendered
-    assert "127.0.0.1" not in rendered
-    assert rendered.endswith("[l1_finalized]\nnumber = 0\n")
-    assert tomllib.loads(rendered)["stake_table"] == {"capacity": 10}
-
-
-def genesis_entries(genesis: bytes) -> list[dict[str, Any]]:
-    return tomllib.loads(genesis.decode())["stake_table"]["genesis"]
-
-
-def test_genesis_with_stake_table_has_one_entry_per_node_in_node_order():
-    template = (HERE / "genesis.toml").read_bytes()
-    genesis = awsb.render_genesis(template, 10, "50mb", "0.6")
-    hosts = fleet(12, 3)
-    keys = {
-        key["index"]: key
-        for key in map(json.loads, (HERE / "bench-keys.jsonl").read_text().splitlines())
-    }
-    entries = genesis_entries(awsb.genesis_with_stake_table(genesis, hosts))
-    assert len(entries) == 12
-    for i, entry in enumerate(entries):
-        key = keys[awsb.KEY_INDEX_BASE + i]
-        assert entry == {
-            "stake_table_key": key["stake_table_key"],
-            "state_ver_key": key["state_ver_key"],
-            "stake": 1,
-            "da": True,
-            "connect_info": {
-                "x25519_key": key["x25519_key"],
-                "p2p_addr": f"10.0.0.{i + 2}:{awsb.CLIQUENET_PORT}",
-            },
-        }
-        spec = {"name": f"node{i}", "role": hosts[f"node{i}"]["role"]}
-        env = parse_env(awsb.render_node_env(spec, hosts, awsb.pg_endpoint()))
-        advertised = env["ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS"]
-        assert entry["connect_info"]["p2p_addr"] == advertised
-
-
-def test_genesis_with_stake_table_replaces_any_table_it_has():
-    template = (HERE / "genesis.toml").read_bytes()
-    once = awsb.genesis_with_stake_table(template, fleet(4))
-    assert "127.0.0.1" not in once.decode()
-    assert len(genesis_entries(once)) == 4
-    assert awsb.genesis_with_stake_table(once, fleet(4)) == once
-    assert len(genesis_entries(awsb.genesis_with_stake_table(once, fleet(2)))) == 2
-
-
-def test_ship_writes_the_fleet_stake_table_into_the_run_genesis_first(
-    isolated: Path,
-):
-    run_dir = isolated / "run"
-    run_dir.mkdir()
-    template = (HERE / "genesis.toml").read_bytes()
-    (run_dir / "genesis.toml").write_bytes(
-        awsb.render_genesis(template, 10, "50mb", "0.6")
-    )
-    runner = Scripted({})
-    hosts = fleet(3)
-    awsb.ship(awsb.Remote(runner, Path("run"), Path("~/.ssh/id"), hosts), run_dir)
-    shipped = (run_dir / "genesis.toml").read_bytes()
-    assert [e["connect_info"]["p2p_addr"] for e in genesis_entries(shipped)] == [
-        f"10.0.0.{i + 2}:{awsb.CLIQUENET_PORT}" for i in range(3)
-    ]
-    rsyncs = [call for call in runner.calls if call[0] == "rsync"]
-    assert len(rsyncs) == len(hosts)
-    assert all(str(run_dir / "genesis.toml") in call for call in rsyncs)
-
-
-def test_a_run_with_more_nodes_than_bench_keys_is_refused():
-    covered = len(awsb.bench_keys())
-    assert covered == 200
-    awsb.plan_hosts(small_cfg(nodes=covered))
-    with pytest.raises(awsb.Refused, match=r"--nodes 201 exceeds .* bench-keys\.jsonl"):
-        awsb.plan_hosts(small_cfg(nodes=covered + 1))
-
-
-@pytest.mark.usefixtures("preflighted")
-def test_plan_refuses_a_run_larger_than_bench_keys(fleet_dir):
-    assert (
-        cmd_plan_exit(plan_args(nodes="201"), FakeRunner(states=[]))
-        == awsb.EXIT_REFUSED
-    )
-    assert not (fleet_dir / "runs").exists()
-
-
-def test_bench_keys_follow_the_mnemonic_index_of_each_node():
-    keys = awsb.bench_keys()
-    assert [key["index"] for key in keys] == [
-        awsb.KEY_INDEX_BASE + i for i in range(len(keys))
-    ]
-
-
 @pytest.mark.usefixtures("preflighted")
 def test_plan_writes_the_max_block_size_into_the_run_genesis(fleet_dir):
     args = plan_args()
@@ -1664,9 +1567,10 @@ def test_ctl_env_unsets_proxy_addresses(ctl_env):
     assert "ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS" in ctl_env
 
 
-def test_node_env_disables_the_builder():
-    for name in ("node0", "node1"):
-        assert node_env(name)["ESPRESSO_BUILDER_URLS"] == "http://localhost:1"
+def test_ctl_env_orchestrator_nodes_and_builder_disabled(ctl_env):
+    assert ctl_env["ESPRESSO_ORCHESTRATOR_NUM_NODES"] == "5"
+    assert ctl_env["ESPRESSO_ORCHESTRATOR_BUILDER_URLS"] == "http://localhost:1"
+    assert ctl_env["ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT"] == "100ms"
 
 
 def test_ctl_env_has_no_unsubstituted_reference(ctl_env):

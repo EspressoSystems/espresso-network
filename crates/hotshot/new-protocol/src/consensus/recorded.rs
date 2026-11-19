@@ -102,15 +102,15 @@ impl<T: NodeType> Consensus<T> {
             let view = key.0;
             let barred = view <= self.restart_barred_view;
             let vote = action(view, ActionKind::Vote).filter(|_| !barred);
-            let payload = (pending.block_view, pending.block_commitment);
-            let payload = (!barred && !self.stored_payloads.contains(&payload))
-                .then_some(StorageOutput::Payload(payload.0, payload.1));
+            let share =
+                (!barred && pending.block_view == view && !self.stored_vids.contains(&view))
+                    .then_some(StorageOutput::Vid(view));
             let lock = (!self.high_qc_persisted(pending.lock))
                 .then_some(StorageOutput::HighQc(pending.lock));
             HeldBack::new(
                 HeldKind::Vote2,
                 *key,
-                vote.into_iter().chain(payload).chain(lock),
+                vote.into_iter().chain(share).chain(lock),
             )
         });
         let proposal = self.pending_proposal.iter().map(|(key, message)| {

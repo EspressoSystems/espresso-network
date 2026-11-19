@@ -15,12 +15,9 @@
 use async_trait::async_trait;
 
 use crate::{
-    QueryResult,
+    QueryError, QueryResult,
     metrics::PrometheusMetrics,
-    status::{
-        HasMetrics, StatusDataSource,
-        data_source::{metrics_err, seconds_since},
-    },
+    status::{HasMetrics, StatusDataSource},
 };
 
 /// A minimal data source for the status API provided in this crate, with no persistent storage.
@@ -61,18 +58,11 @@ impl StatusDataSource for MetricsDataSource {
         let last_synced_height = self
             .consensus_metrics()?
             .get_gauge("last_synced_block_height")
-            .map_err(metrics_err)?
+            .map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?
             .get();
         Ok(last_synced_height)
-    }
-
-    async fn elapsed_time_since_last_decide(&self) -> QueryResult<u64> {
-        let last_decided_time = self
-            .consensus_metrics()?
-            .get_gauge("last_decided_time")
-            .map_err(metrics_err)?
-            .get();
-        seconds_since(last_decided_time as u64)
     }
 }
 

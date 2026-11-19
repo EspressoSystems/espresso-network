@@ -59,6 +59,23 @@ def test_wipe_script_steps():
     ]
 
 
+# TEST:rejoin-env-config-peers-ok
+def test_rejoin_env_config_peers():
+    hosts = fleet(8, 2)
+    spec = {"name": "node4", "role": "validator"}
+
+    def env(**kw):
+        text = awsb.render_node_env(spec, hosts, None, query_engine="sqlite", **kw)
+        return dict(line.split("=", 1) for line in text.splitlines())
+
+    assert "ESPRESSO_NODE_CONFIG_PEERS" not in env()
+    rejoin = env(config_peers=True)
+    assert rejoin["ESPRESSO_NODE_CONFIG_PEERS"] == rejoin["ESPRESSO_NODE_STATE_PEERS"]
+    assert {
+        k: v for k, v in rejoin.items() if k != "ESPRESSO_NODE_CONFIG_PEERS"
+    } == env()
+
+
 # TEST:recreate-sh-same-argv-ok
 @pytest.mark.parametrize("role", ["query", "validator"])
 def test_recreate_sh_same_argv(role):
@@ -75,7 +92,7 @@ def test_recreate_sh_same_argv(role):
         ]
         return line
 
-    assert create(recreate) == create(start)
+    assert create(recreate) == create(start).replace("node.env", "node-rejoin.env")
     assert recreate.startswith("#!/usr/bin/env bash\nset -eEu")
     assert "containers.json" in recreate
 
@@ -144,12 +161,14 @@ def test_chaos_nodes_without_query_nodes_makes_every_node_a_query_node():
     assert cfg.query_nodes == 4
 
 
-def test_chaos_node_env_sets_the_sync_status_ttl(tmp_path: Path):
+def test_chaos_rejoin_and_node_env_set_the_sync_status_ttl(tmp_path: Path):
     render(tmp_path, chaos_cfg())
-    text = (tmp_path / "hosts/node0/node.env").read_text()
-    assert "ESPRESSO_NODE_SYNC_STATUS_TTL=5s\n" in text
-    assert "ESPRESSO_NODE_API_PEERS=" in text
-    assert "SYNC_STATUS_TTL" not in (tmp_path / "hosts/node5/node.env").read_text()
+    for file in ("node.env", "node-rejoin.env"):
+        text = (tmp_path / "hosts/node0" / file).read_text()
+        assert "ESPRESSO_NODE_SYNC_STATUS_TTL=5s\n" in text
+        assert "ESPRESSO_NODE_API_PEERS=" in text
+        text = (tmp_path / "hosts/node5" / file).read_text()
+        assert "SYNC_STATUS_TTL" not in text
     plain = tmp_path / "plain"
     render(plain, dataclasses.replace(chaos_cfg(), chaos=None))
     assert "SYNC_STATUS_TTL" not in (plain / "hosts/node0/node.env").read_text()
@@ -445,15 +464,18 @@ def render(run_dir: Path, cfg: Any) -> None:
     awsb.render_host_files(run_dir, cfg, manifest, fleet(7, 3))
 
 
-def test_render_host_files_writes_recreate_sh_only_for_chaos(tmp_path: Path):
+def test_render_host_files_writes_rejoin_files_only_for_chaos(tmp_path: Path):
     render(tmp_path, chaos_cfg())
     for name in ("node0", "node5"):
-        recreate = (tmp_path / "hosts" / name / "recreate.sh").read_text()
-        assert "--env-file /opt/bench/node.env" in recreate
+        assert (tmp_path / "hosts" / name / "node-rejoin.env").exists()
+        assert (
+            "node-rejoin.env" in (tmp_path / "hosts" / name / "recreate.sh").read_text()
+        )
     assert not (tmp_path / "hosts/ctl/recreate.sh").exists()
     plain = tmp_path / "plain"
     render(plain, dataclasses.replace(chaos_cfg(), chaos=None))
     assert not (plain / "hosts/node0/recreate.sh").exists()
+    assert not (plain / "hosts/node0/node-rejoin.env").exists()
 
 
 def test_render_host_files_pins_only_the_slow_nodes_also_on_recreate(tmp_path: Path):

@@ -48,9 +48,9 @@ async fn assert_upgraded(runner: &TestRunner) {
         assert_eq!(cert.data.old_version, NEW_PROTOCOL_VERSION);
         assert_eq!(cert.data.new_version, version(0, 7));
     }
-    for (i, store) in runner.node_stores().iter().enumerate() {
+    for (i, storage) in runner.node_storages().iter().enumerate() {
         assert!(
-            store.load().unwrap().upgrade_cert.is_some(),
+            storage.decided_upgrade_certificate().await.is_some(),
             "node {i} did not persist the decided upgrade certificate"
         );
     }

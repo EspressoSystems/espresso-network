@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use espresso_types::{PubKey, SeqTypes};
+use espresso_types::{PubKey, SeqTypes, traits::SequencerPersistence};
 use hotshot_new_protocol::network::Sender;
 use hotshot_types::{
     data::EpochNumber,
@@ -19,8 +19,8 @@ use super::request::Request;
 use crate::consensus_handle::ConsensusHandle;
 
 #[derive(Clone)]
-pub struct RecipientSource {
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes>>,
+pub struct RecipientSource<P: SequencerPersistence> {
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     /// A copy of the membership coordinator
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
@@ -36,7 +36,7 @@ pub struct RecipientSource {
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
 /// intended recipients for a given request
 #[async_trait]
-impl RecipientSourceTrait<Request, PubKey> for RecipientSource {
+impl<P: SequencerPersistence> RecipientSourceTrait<Request, PubKey> for RecipientSource<P> {
     async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
         let current_epoch = self
             .consensus_handle
