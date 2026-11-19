@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{EpochVersion, Header, config::PublicNetworkConfig};
-use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
+use hotshot_types::epoch::EpochLength;
 use http_client::{Client, Url};
 use light_client::state::Genesis;
 use light_client_query_service::{LogFormat, init_logging};
@@ -45,7 +45,8 @@ impl Options {
             .send()
             .await
             .context("fetching HotShot config")?;
-        let epoch_height = config.hotshot_config().blocks_per_epoch();
+        let epoch_length = EpochLength::try_from(config.hotshot_config().blocks_per_epoch())
+            .context("reading the epoch height from the HotShot config")?;
 
         // We know the upgrade to proof of stake must have occurred before the first epoch.
         let upper_bound_pos = config.hotshot_config().epoch_start_block();
@@ -80,7 +81,7 @@ impl Options {
             }
         }
         let upgrade_block = start + 1;
-        let start_epoch = epoch_from_block_number(upgrade_block, epoch_height);
+        let start_epoch = epoch_length.epoch_of(upgrade_block);
         tracing::info!("found upgrade to PoS at block {upgrade_block}, epoch {start_epoch}");
 
         // Start from the third epoch, since we need the prior epoch's root to have the upgraded
@@ -101,8 +102,8 @@ impl Options {
             .chain_id;
 
         Ok(Genesis {
-            epoch_height,
-            first_epoch_with_dynamic_stake_table: EpochNumber::new(start_epoch),
+            epoch_height: epoch_length,
+            first_epoch_with_dynamic_stake_table: start_epoch,
             stake_table: config
                 .hotshot_config()
                 .known_nodes_with_stake()
