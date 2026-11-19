@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let genesis = Genesis::load(&options.genesis_file)
         .await
         .context("loading the genesis file")?;
-    let state = node_state(&genesis, options.l1_provider)
+    let state = node_state(&genesis, options.l1_provider, store.clone())
         .await
         .context("building the node state")?;
     let membership = Membership::new(&state)?;

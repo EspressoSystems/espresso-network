@@ -8,9 +8,9 @@ use tokio::{sync::watch, task::JoinHandle, time::sleep};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
-    Backend, Column, Part, Row,
+    AppWrite, Backend, Column, Part, Row,
     proto::{self, store_client::StoreClient},
-    service::{MAX_MESSAGE_SIZE, parts_from, parts_to},
+    service::{MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to},
 };
 
 /// How long the client waits before following the store's changes again after the stream failed.
@@ -220,6 +220,46 @@ impl Backend for RemoteBackend {
     async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
         self.client()
             .mark_certs_checked(proto::EpochRequest { epoch })
+            .await
+            .map_err(status)?;
+        self.wrote();
+        Ok(())
+    }
+
+    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        let response = self
+            .client()
+            .app_get(proto::AppGetRequest {
+                table: table.to_string(),
+                key: key.to_vec(),
+            })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().data.map(Bytes::from))
+    }
+
+    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        let response = self
+            .client()
+            .app_entries(proto::AppEntriesRequest {
+                table: table.to_string(),
+                from: from.to_vec(),
+            })
+            .await
+            .map_err(status)?;
+        Ok(response
+            .into_inner()
+            .entries
+            .into_iter()
+            .map(|entry| (entry.key.into(), entry.value.into()))
+            .collect())
+    }
+
+    async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+        self.client()
+            .app_write(proto::AppWriteRequest {
+                writes: writes.into_iter().map(app_write_to).collect(),
+            })
             .await
             .map_err(status)?;
         self.wrote();

@@ -2760,6 +2760,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bincode",
+ "chain-store",
  "clap",
  "committable",
  "consensus",

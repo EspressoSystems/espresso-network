@@ -9,7 +9,7 @@ use futures::{Stream, stream};
 use tonic::{Request, Response, Status};
 
 use crate::{
-    Backend, Column, Part, Row,
+    AppWrite, Backend, Column, Part, Row,
     proto::{self, store_server::StoreServer},
 };
 
@@ -209,6 +209,56 @@ impl proto::store_server::Store for StoreService {
         Ok(Response::new(proto::Done {}))
     }
 
+    async fn app_get(
+        &self,
+        request: Request<proto::AppGetRequest>,
+    ) -> Result<Response<proto::MaybeBytes>, Status> {
+        let r = request.into_inner();
+        let data = self
+            .backend
+            .app_get(&r.table, &r.key)
+            .await
+            .map_err(internal)?;
+        Ok(Response::new(proto::MaybeBytes {
+            data: data.map(|d| d.to_vec()),
+        }))
+    }
+
+    async fn app_entries(
+        &self,
+        request: Request<proto::AppEntriesRequest>,
+    ) -> Result<Response<proto::AppEntriesResponse>, Status> {
+        let r = request.into_inner();
+        let entries = self
+            .backend
+            .app_entries(&r.table, &r.from)
+            .await
+            .map_err(internal)?;
+        Ok(Response::new(proto::AppEntriesResponse {
+            entries: entries
+                .into_iter()
+                .map(|(key, value)| proto::AppEntry {
+                    key: key.to_vec(),
+                    value: value.to_vec(),
+                })
+                .collect(),
+        }))
+    }
+
+    async fn app_write(
+        &self,
+        request: Request<proto::AppWriteRequest>,
+    ) -> Result<Response<proto::Done>, Status> {
+        let writes = request
+            .into_inner()
+            .writes
+            .into_iter()
+            .map(app_write_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.backend.app_write(writes).await.map_err(internal)?;
+        Ok(Response::new(proto::Done {}))
+    }
+
     async fn prune_below(
         &self,
         request: Request<proto::HeightRequest>,
@@ -234,6 +284,45 @@ impl proto::store_server::Store for StoreService {
             Some((Ok(proto::Change { counter }), (changes, false)))
         });
         Ok(Response::new(Box::pin(stream)))
+    }
+}
+
+fn app_write_from(write: proto::AppTableWrite) -> Result<AppWrite, Status> {
+    use proto::app_table_write::Op;
+    let table = write.table;
+    match write.op {
+        Some(Op::Put(entry)) => Ok(AppWrite::Put {
+            table,
+            key: entry.key.into(),
+            value: entry.value.into(),
+        }),
+        Some(Op::DeleteBefore(key)) => Ok(AppWrite::DeleteBefore {
+            table,
+            key: key.into(),
+        }),
+        Some(Op::Clear(_)) => Ok(AppWrite::Clear { table }),
+        None => Err(Status::invalid_argument("a write without an operation")),
+    }
+}
+
+pub(crate) fn app_write_to(write: AppWrite) -> proto::AppTableWrite {
+    use proto::app_table_write::Op;
+    match write {
+        AppWrite::Put { table, key, value } => proto::AppTableWrite {
+            table,
+            op: Some(Op::Put(proto::AppEntry {
+                key: key.to_vec(),
+                value: value.to_vec(),
+            })),
+        },
+        AppWrite::DeleteBefore { table, key } => proto::AppTableWrite {
+            table,
+            op: Some(Op::DeleteBefore(key.to_vec())),
+        },
+        AppWrite::Clear { table } => proto::AppTableWrite {
+            table,
+            op: Some(Op::Clear(proto::Empty {})),
+        },
     }
 }
 

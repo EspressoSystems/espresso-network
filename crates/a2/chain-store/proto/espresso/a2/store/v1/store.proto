@@ -44,6 +44,15 @@ service Store {
 
   rpc MarkCertsChecked(EpochRequest) returns (Done);
 
+  // The value of a key in an application table.
+  rpc AppGet(AppGetRequest) returns (MaybeBytes);
+
+  // The entries of an application table from a key on, in bytewise key order.
+  rpc AppEntries(AppEntriesRequest) returns (AppEntriesResponse);
+
+  // Applies writes to the application tables, in order, in one commit.
+  rpc AppWrite(AppWriteRequest) returns (Done);
+
   // Deletes everything below `height`, and raises the floor to it.
   rpc PruneBelow(HeightRequest) returns (Done);
 
@@ -157,6 +166,42 @@ message HeightsResponse {
 
 message Checked {
   bool checked = 1;
+}
+
+message AppGetRequest {
+  string table = 1;
+  bytes key = 2;
+}
+
+message AppEntriesRequest {
+  string table = 1;
+  bytes from = 2;
+}
+
+message AppEntry {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+message AppEntriesResponse {
+  repeated AppEntry entries = 1;
+}
+
+// One write to an application table.
+message AppTableWrite {
+  string table = 1;
+  oneof op {
+    // Sets a key to a value.
+    AppEntry put = 2;
+    // Deletes the keys before this one.
+    bytes delete_before = 3;
+    // Deletes every key.
+    Empty clear = 4;
+  }
+}
+
+message AppWriteRequest {
+  repeated AppTableWrite writes = 1;
 }
 
 message Change {

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
 
-use crate::{Backend, Column, Part, Row};
+use crate::{AppWrite, Backend, Column, Part, Row};
 
 #[derive(Debug)]
 pub struct MemBackend {
@@ -23,6 +23,7 @@ struct State {
     rows: BTreeMap<u64, Row>,
     parts: BTreeMap<(u64, Part), Bytes>,
     checked_epochs: BTreeSet<u64>,
+    app: BTreeMap<(String, Bytes), Bytes>,
     floor: u64,
 }
 
@@ -166,6 +167,40 @@ impl Backend for MemBackend {
     async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()> {
         self.write(|state| {
             state.checked_epochs.insert(epoch);
+        });
+        Ok(())
+    }
+
+    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        let key = (table.to_string(), Bytes::copy_from_slice(key));
+        Ok(self.read(|state| state.app.get(&key).cloned()))
+    }
+
+    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        let from = (table.to_string(), Bytes::copy_from_slice(from));
+        Ok(self.read(|state| {
+            state
+                .app
+                .range(from..)
+                .take_while(|((t, _), _)| t == table)
+                .map(|((_, key), value)| (key.clone(), value.clone()))
+                .collect()
+        }))
+    }
+
+    async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+        self.write(|state| {
+            for write in writes {
+                match write {
+                    AppWrite::Put { table, key, value } => {
+                        state.app.insert((table, key), value);
+                    },
+                    AppWrite::DeleteBefore { table, key } => {
+                        state.app.retain(|(t, k), _| *t != table || *k >= key);
+                    },
+                    AppWrite::Clear { table } => state.app.retain(|(t, _), _| *t != table),
+                }
+            }
         });
         Ok(())
     }

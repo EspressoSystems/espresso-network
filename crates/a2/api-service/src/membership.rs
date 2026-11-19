@@ -3,62 +3,54 @@
 //! contract's events on L1 up to the root block of the epoch two before. The root blocks come from
 //! the store, so the stake tables follow what the store holds.
 //!
-//! The API service needs them only to check what the chain does not commit to: the `Certificate2`
-//! that decided a block directly, and the state certificate of an epoch root.
+//! The API service needs them to check what the chain does not commit to, the `Certificate2` that
+//! decided a block directly and the state certificate of an epoch root, and to apply the rewards an
+//! epoch pays. It keeps them, and the L1 events they come from, in the store.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Range,
-    sync::Arc,
-};
+use std::{ops::Range, sync::Arc};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
-use async_trait::async_trait;
+use chain_store::ChainStore;
 use committable::Committable;
-use consensus_node::null_catchup::NullStateCatchup;
+use consensus_node::{membership_store::MembershipStore, null_catchup::NullStateCatchup};
 use espresso_genesis::Genesis;
-use espresso_types::{
-    AuthenticatedValidatorMap, Header, Leaf2, NodeState, PubKey, SeqTypes, StakeTableHash,
-    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
-};
+use espresso_types::{Header, Leaf2, NodeState, SeqTypes};
 use hotshot_types::{
     ValidatorConfig,
-    data::{
-        DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
-        ViewNumber,
-    },
-    drb::{DrbInput, DrbResult},
+    data::EpochNumber,
     epoch_membership::EpochMembershipCoordinator,
-    event::HotShotAction,
-    message::{Proposal, UpgradeLock},
+    message::UpgradeLock,
     network::NetworkConfig,
-    simple_certificate::{Certificate2, LightClientStateUpdateCertificateV2, UpgradeCertificate},
+    simple_certificate::{Certificate2, LightClientStateUpdateCertificateV2},
     stake_table::HSStakeTable,
     traits::{
         election::{Membership as _, MembershipSnapshot as _},
         metrics::NoMetrics,
-        storage::Storage,
     },
     utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
 };
-use indexmap::IndexMap;
 use light_client::consensus::quorum::{Quorum, StakeTable, StakeTableQuorum};
 use url::Url;
 use versions::Upgrade;
 
 use crate::state_cert::validate_state_cert;
 
-/// The node state of the chain `genesis` starts, as an API service keeps it: stake tables in memory,
-/// read from the L1 at `l1`, and no catchup, since the API service follows the chain itself.
-pub async fn node_state(genesis: &Genesis, l1: Vec<Url>) -> anyhow::Result<NodeState> {
+/// The node state of the chain `genesis` starts, as an API service keeps it: stake tables in
+/// `store`, read from the L1 at `l1`, and no catchup, since the API service follows the chain
+/// itself. A restart finds the stake tables and L1 events in the store, and reads from L1 only what
+/// is newer.
+pub async fn node_state(
+    genesis: &Genesis,
+    l1: Vec<Url>,
+    store: ChainStore,
+) -> anyhow::Result<NodeState> {
     let network_config = network_config(genesis)?;
     consensus_node::node_state::node_state(
         genesis,
         &network_config,
         l1,
-        MemMembership::default(),
+        MembershipStore::new(store),
         Arc::new(NullStateCatchup::default()),
         &NoMetrics,
     )
@@ -200,235 +192,6 @@ fn epoch_heights(epoch: EpochNumber, epoch_height: u64) -> Range<u64> {
     end.saturating_sub(epoch_height)..end
 }
 
-/// What membership persists, in memory: a restarted API service derives it again from L1 and the
-/// store.
-#[derive(Clone, Debug, Default)]
-struct MemMembership {
-    inner: Arc<std::sync::Mutex<Kept>>,
-}
-
-#[derive(Debug, Default)]
-struct Kept {
-    stakes: BTreeMap<EpochNumber, StakeTuple>,
-    epoch_roots: BTreeMap<EpochNumber, Header>,
-    drb_results: BTreeMap<EpochNumber, DrbResult>,
-    drb_inputs: BTreeMap<u64, DrbInput>,
-    events: BTreeMap<EventKey, StakeTableEvent>,
-    events_until: Option<u64>,
-    validators: BTreeMap<EpochNumber, IndexMap<Address, RegisteredValidator<PubKey>>>,
-}
-
-impl MemMembership {
-    fn with<R>(&self, f: impl FnOnce(&mut Kept) -> R) -> R {
-        f(&mut self.inner.lock().unwrap())
-    }
-}
-
-#[async_trait]
-impl MembershipPersistence for MemMembership {
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
-        Ok(self.with(|kept| kept.stakes.get(&epoch).cloned()))
-    }
-
-    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
-        Ok(Some(self.with(|kept| {
-            kept.stakes
-                .iter()
-                .rev()
-                .take(limit as usize)
-                .map(|(epoch, (validators, reward, hash))| {
-                    (*epoch, (validators.clone(), *reward), *hash)
-                })
-                .collect()
-        })))
-    }
-
-    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
-        Ok(self.with(|kept| kept.stakes.keys().copied().collect()))
-    }
-
-    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
-        Ok(self.with(|kept| kept.drb_results.get(&epoch).copied()))
-    }
-
-    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
-        Ok(self.with(|kept| kept.epoch_roots.get(&epoch).cloned()))
-    }
-
-    async fn store_epoch_root(&self, epoch: EpochNumber, header: Header) -> anyhow::Result<()> {
-        self.with(|kept| kept.epoch_roots.insert(epoch, header));
-        Ok(())
-    }
-
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: AuthenticatedValidatorMap,
-        block_reward: Option<RewardAmount>,
-        stake_table_hash: Option<StakeTableHash>,
-    ) -> anyhow::Result<()> {
-        self.with(|kept| {
-            let held = kept.stakes.get(&epoch);
-            let reward = block_reward.or(held.and_then(|(_, reward, _)| *reward));
-            let hash = stake_table_hash.or(held.and_then(|(_, _, hash)| *hash));
-            kept.stakes.insert(epoch, (stake, reward, hash));
-        });
-        Ok(())
-    }
-
-    /// Keeps the later of the stored and the given `l1_finalized`, as the consensus store does.
-    async fn store_events(
-        &self,
-        l1_finalized: u64,
-        events: Vec<(EventKey, StakeTableEvent)>,
-    ) -> anyhow::Result<()> {
-        self.with(|kept| {
-            if kept.events_until > Some(l1_finalized) {
-                return;
-            }
-            kept.events.extend(events);
-            kept.events_until = Some(l1_finalized);
-        });
-        Ok(())
-    }
-
-    async fn load_events(
-        &self,
-        from_l1_block: u64,
-        to_l1_block: u64,
-    ) -> anyhow::Result<(
-        Option<EventsPersistenceRead>,
-        Vec<(EventKey, StakeTableEvent)>,
-    )> {
-        Ok(self.with(|kept| {
-            let Some(until) = kept.events_until else {
-                return (None, Vec::new());
-            };
-            let last = until.min(to_l1_block);
-            let events = kept
-                .events
-                .range((from_l1_block, 0)..)
-                .take_while(|((block, _), _)| *block <= last)
-                .map(|(key, event)| (*key, event.clone()))
-                .collect();
-            let read = if last == to_l1_block {
-                EventsPersistenceRead::Complete
-            } else {
-                EventsPersistenceRead::UntilL1Block(last)
-            };
-            (Some(read), events)
-        }))
-    }
-
-    async fn delete_stake_tables(&self) -> anyhow::Result<()> {
-        self.with(|kept| {
-            kept.events.clear();
-            kept.events_until = None;
-            kept.validators.clear();
-            kept.drb_results.clear();
-            kept.epoch_roots.clear();
-        });
-        Ok(())
-    }
-
-    async fn store_all_validators(
-        &self,
-        epoch: EpochNumber,
-        all_validators: IndexMap<Address, RegisteredValidator<PubKey>>,
-    ) -> anyhow::Result<()> {
-        self.with(|kept| kept.validators.insert(epoch, all_validators));
-        Ok(())
-    }
-
-    async fn load_all_validators(
-        &self,
-        epoch: EpochNumber,
-        offset: u64,
-        limit: u64,
-    ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        self.with(|kept| {
-            let Some(map) = kept.validators.get(&epoch) else {
-                bail!("no validators stored for epoch {epoch}");
-            };
-            let mut validators: Vec<_> = map.values().cloned().collect();
-            validators.sort_by_key(|v| v.account);
-            Ok(validators
-                .into_iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .collect())
-        })
-    }
-}
-
-/// Membership keeps only DRB results and epoch roots here; the rest of the trait is what a
-/// consensus node persists, which the API service has none of.
-#[async_trait]
-impl Storage<SeqTypes> for MemMembership {
-    async fn append_vid(
-        &self,
-        _: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        bail!("the API service stores no VID shares")
-    }
-
-    async fn append_da2(
-        &self,
-        _: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        _: VidCommitment,
-    ) -> anyhow::Result<()> {
-        bail!("the API service stores no DA proposals")
-    }
-
-    async fn append_proposal_wrapper(
-        &self,
-        _: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        bail!("the API service stores no proposals")
-    }
-
-    async fn record_action(&self, _: ViewNumber, _: HotShotAction) -> anyhow::Result<()> {
-        bail!("the API service takes no consensus actions")
-    }
-
-    async fn update_state_cert(
-        &self,
-        _: LightClientStateUpdateCertificateV2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        bail!("the API service keeps state certificates in its store")
-    }
-
-    async fn update_decided_upgrade_certificate(
-        &self,
-        _: Option<UpgradeCertificate<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        bail!("the API service stores no upgrade certificate")
-    }
-
-    async fn store_drb_result(
-        &self,
-        epoch: EpochNumber,
-        drb_result: DrbResult,
-    ) -> anyhow::Result<()> {
-        self.with(|kept| kept.drb_results.insert(epoch, drb_result));
-        Ok(())
-    }
-
-    async fn store_epoch_root(&self, epoch: EpochNumber, header: Header) -> anyhow::Result<()> {
-        MembershipPersistence::store_epoch_root(self, epoch, header).await
-    }
-
-    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
-        self.with(|kept| kept.drb_inputs.insert(drb_input.epoch, drb_input));
-        Ok(())
-    }
-
-    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
-        self.with(|kept| kept.drb_inputs.get(&epoch).cloned())
-            .with_context(|| format!("no DRB progress stored for epoch {epoch}"))
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod testing {
     //! A membership on a fixed committee, which needs no L1, and certificates it checks.
@@ -438,9 +201,10 @@ pub(crate) mod testing {
     use alloy::primitives::FixedBytes;
     use async_lock::Mutex as AsyncMutex;
     use bitvec::vec::BitVec;
+    use chain_store::mem::MemBackend;
     use consensus_node::null_catchup::NullStateCatchup;
     use espresso_types::{
-        EpochCommittees, L1ClientOptions, NodeState, ValidatedState,
+        EpochCommittees, L1ClientOptions, NodeState, PubKey, ValidatedState,
         v0_3::{ChainConfig, Fetcher},
     };
     use hotshot_contract_adapter::light_client::derive_signed_state_digest;
@@ -488,7 +252,7 @@ pub(crate) mod testing {
         let l1 = L1ClientOptions::default()
             .connect(vec!["http://127.0.0.1:1".parse().unwrap()])
             .unwrap();
-        let store = MemMembership::default();
+        let store = MembershipStore::new(ChainStore::new(MemBackend::default()));
         let fetcher = Fetcher::new(
             Arc::new(NullStateCatchup::default()),
             Arc::new(AsyncMutex::new(store.clone())),

@@ -9,7 +9,7 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::{Backend, Column, Part, Row};
+use crate::{AppWrite, Backend, Column, Part, Row};
 
 /// A row at `height` whose payload commitment is `payload`.
 pub fn row(height: u64, payload: &str) -> Row {
@@ -133,6 +133,56 @@ pub async fn conformance(backend: &dyn Backend) {
     backend.mark_certs_checked(3).await.unwrap();
     assert!(backend.certs_checked(3).await.unwrap());
     assert!(!backend.certs_checked(4).await.unwrap());
+
+    // Application tables keep their keys apart, in bytewise order.
+    let put = |table: &str, key: &[u8], value: &str| AppWrite::Put {
+        table: table.into(),
+        key: Bytes::copy_from_slice(key),
+        value: bytes(value),
+    };
+    backend
+        .app_write(vec![
+            put("a", &[2], "a2"),
+            put("a", &[1], "a1"),
+            put("a", &[3, 0], "a30"),
+            put("b", &[1], "b1"),
+            put("a", &[1], "a1'"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.app_get("a", &[1]).await.unwrap(),
+        Some(bytes("a1'"))
+    );
+    assert_eq!(backend.app_get("a", &[9]).await.unwrap(), None);
+    let keys = |entries: Vec<(Bytes, Bytes)>| -> Vec<Vec<u8>> {
+        entries.into_iter().map(|(key, _)| key.to_vec()).collect()
+    };
+    assert_eq!(
+        keys(backend.app_entries("a", &[]).await.unwrap()),
+        vec![vec![1], vec![2], vec![3, 0]]
+    );
+    assert_eq!(
+        keys(backend.app_entries("a", &[2]).await.unwrap()),
+        vec![vec![2], vec![3, 0]]
+    );
+    backend
+        .app_write(vec![AppWrite::DeleteBefore {
+            table: "a".into(),
+            key: Bytes::from_static(&[2]),
+        }])
+        .await
+        .unwrap();
+    assert_eq!(
+        keys(backend.app_entries("a", &[]).await.unwrap()),
+        vec![vec![2], vec![3, 0]]
+    );
+    backend
+        .app_write(vec![AppWrite::Clear { table: "a".into() }])
+        .await
+        .unwrap();
+    assert!(backend.app_entries("a", &[]).await.unwrap().is_empty());
+    assert_eq!(backend.app_get("b", &[1]).await.unwrap(), Some(bytes("b1")));
 
     // A gap at the start counts, and `limit` bounds the answer.
     backend.put(row(8, "p"), Vec::new()).await.unwrap();

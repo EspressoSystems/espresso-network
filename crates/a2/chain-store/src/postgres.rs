@@ -13,7 +13,7 @@ use sqlx::{
 };
 use tokio::{sync::watch, task::JoinHandle};
 
-use crate::{Backend, Column, Part, Row};
+use crate::{AppWrite, Backend, Column, Part, Row};
 
 /// The channel writes are announced on.
 const CHANNEL: &str = "chain_store";
@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS chain_floor (
     height BIGINT NOT NULL
 );
 INSERT INTO chain_floor (height) VALUES (0) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS chain_app (
+    tbl   TEXT NOT NULL,
+    key   BYTEA NOT NULL,
+    value BYTEA NOT NULL,
+    PRIMARY KEY (tbl, key)
+);
 CREATE TABLE IF NOT EXISTS chain_checked_epochs (
     epoch BIGINT PRIMARY KEY
 );
@@ -310,6 +316,67 @@ impl Backend for PostgresBackend {
             .bind(epoch as i64)
             .execute(&mut *tx)
             .await?;
+        self.commit(tx).await
+    }
+
+    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        let value: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT value FROM chain_app WHERE tbl = $1 AND key = $2")
+                .bind(table)
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(value.map(Bytes::from))
+    }
+
+    /// Postgres orders `bytea` bytewise, as the other backends order keys.
+    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        let rows = sqlx::query(
+            "SELECT key, value FROM chain_app WHERE tbl = $1 AND key >= $2 ORDER BY key",
+        )
+        .bind(table)
+        .bind(from)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let key: Vec<u8> = row.try_get("key")?;
+                let value: Vec<u8> = row.try_get("value")?;
+                Ok((key.into(), value.into()))
+            })
+            .collect()
+    }
+
+    async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for write in writes {
+            match write {
+                AppWrite::Put { table, key, value } => {
+                    sqlx::query(
+                        "INSERT INTO chain_app (tbl, key, value) VALUES ($1, $2, $3) ON CONFLICT \
+                         (tbl, key) DO UPDATE SET value = EXCLUDED.value",
+                    )
+                    .bind(table)
+                    .bind(&key[..])
+                    .bind(&value[..])
+                    .execute(&mut *tx)
+                    .await?;
+                },
+                AppWrite::DeleteBefore { table, key } => {
+                    sqlx::query("DELETE FROM chain_app WHERE tbl = $1 AND key < $2")
+                        .bind(table)
+                        .bind(&key[..])
+                        .execute(&mut *tx)
+                        .await?;
+                },
+                AppWrite::Clear { table } => {
+                    sqlx::query("DELETE FROM chain_app WHERE tbl = $1")
+                        .bind(table)
+                        .execute(&mut *tx)
+                        .await?;
+                },
+            }
+        }
         self.commit(tx).await
     }
 

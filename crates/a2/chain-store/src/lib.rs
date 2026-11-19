@@ -36,7 +36,7 @@ pub mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use backend::{Backend, Column, Part, Row};
+pub use backend::{AppWrite, Backend, Column, Part, Row};
 
 /// The store service's protocol, generated from `proto/espresso/a2/store/v1`.
 pub mod proto {
@@ -257,6 +257,25 @@ impl ChainStore {
     /// Records that the certificates of every height of `epoch` have been checked and stored.
     pub async fn mark_certs_checked(&self, epoch: EpochNumber) -> anyhow::Result<()> {
         self.backend.mark_certs_checked(*epoch).await
+    }
+
+    /// The value of `key` in the application table `table`.
+    pub async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        self.backend.app_get(table, key).await
+    }
+
+    /// The entries of the application table `table` from `from` on, in bytewise key order.
+    pub async fn app_entries(
+        &self,
+        table: &str,
+        from: &[u8],
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        self.backend.app_entries(table, from).await
+    }
+
+    /// Applies `writes` to the application tables, in order, in one commit.
+    pub async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+        self.backend.app_write(writes).await
     }
 
     /// Deletes everything before `height` and stops accepting writes there.

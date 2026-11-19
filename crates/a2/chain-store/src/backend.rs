@@ -45,6 +45,15 @@ pub trait Backend: Send + Sync + 'static {
 
     async fn mark_certs_checked(&self, epoch: u64) -> anyhow::Result<()>;
 
+    /// The value of `key` in the application table `table`.
+    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>>;
+
+    /// The entries of the application table `table` from `from` on, in bytewise key order.
+    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>>;
+
+    /// Applies `writes` to the application tables, in order, in one commit.
+    async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()>;
+
     /// Deletes rows and parts before `height`, and raises the floor to it.
     async fn prune_below(&self, height: u64) -> anyhow::Result<()>;
 
@@ -99,4 +108,22 @@ impl Part {
     pub fn from_id(id: i16) -> Option<Self> {
         Self::ALL.into_iter().find(|part| part.id() == id)
     }
+}
+
+/// A write to the application tables, which a service keeps next to the chain, such as the stake
+/// tables of an API service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppWrite {
+    /// Sets `key` to `value`.
+    Put {
+        table: String,
+        key: Bytes,
+        value: Bytes,
+    },
+
+    /// Deletes the keys before `key`.
+    DeleteBefore { table: String, key: Bytes },
+
+    /// Deletes every key.
+    Clear { table: String },
 }
