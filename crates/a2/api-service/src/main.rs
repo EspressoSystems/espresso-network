@@ -7,7 +7,8 @@ use api_service::{
     ApiService, GapFiller, Membership,
     catchup::Catchup,
     chain_state::{self, ChainState},
-    membership::node_state,
+    compat::Compat,
+    membership::{network_config, node_state},
 };
 use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
@@ -65,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
         store.clone(),
         options.consensus_api,
         options.bootstrap,
-        Some(membership),
+        Some(membership.clone()),
     );
     tokio::spawn(filler.run());
     let chain = Arc::new(ChainState::default());
@@ -74,7 +75,9 @@ async fn main() -> anyhow::Result<()> {
         store.clone(),
         state.clone(),
     ));
+    let config = network_config(&genesis)?;
     ApiService::new(store.clone(), options.consensus_api)
+        .with_compat(Compat::new(store.clone(), membership.clone(), config))
         .with_catchup(Catchup::new(store, chain, state))
         .serve(listener)
         .await

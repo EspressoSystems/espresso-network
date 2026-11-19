@@ -987,6 +987,7 @@ dependencies = [
  "consensus-node",
  "either",
  "espresso-api",
+ "espresso-contract-deployer",
  "espresso-genesis",
  "espresso-types",
  "futures",
@@ -994,6 +995,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
+ "http-client",
  "http-wire",
  "indexmap 2.14.0",
  "jf-merkle-tree-compat",
@@ -1013,6 +1015,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
+ "vbs",
  "versions",
 ]
 

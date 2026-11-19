@@ -36,6 +36,7 @@ pub mod catchup;
 mod certs;
 mod chain;
 pub mod chain_state;
+pub mod compat;
 mod discovery;
 mod gaps;
 pub mod membership;
@@ -62,6 +63,9 @@ pub struct ApiService {
     /// What consensus nodes that are behind catch up from, if this API service follows the
     /// chain's state.
     catchup: Option<Arc<catchup::Catchup>>,
+
+    /// The v1 paths the state relay server and the prover read, if served.
+    compat: Option<Arc<compat::Compat>>,
 }
 
 impl ApiService {
@@ -70,6 +74,15 @@ impl ApiService {
             reader: Reader::new(store),
             consensus_api,
             catchup: None,
+            compat: None,
+        }
+    }
+
+    /// Serves the v1 paths of `compat` too.
+    pub fn with_compat(self, compat: compat::Compat) -> Self {
+        Self {
+            compat: Some(Arc::new(compat)),
+            ..self
         }
     }
 
@@ -84,11 +97,15 @@ impl ApiService {
     /// Serves the API on `listener` until it fails.
     pub async fn serve(self, listener: TcpListener) -> anyhow::Result<()> {
         let catchup = self.catchup.clone();
+        let compat = self.compat.clone();
         let service = Arc::new(self);
-        let rest = rest::availability_service_rest_router(service.clone())
+        let mut rest = rest::availability_service_rest_router(service.clone())
             .merge(rest::status_service_rest_router(service.clone()))
             .merge(rest::node_service_rest_router(service.clone()))
             .merge(rest::submit_service_rest_router(service.clone()));
+        if let Some(compat) = compat {
+            rest = rest.merge(compat.router());
+        }
         let mut grpc = tonic::service::Routes::builder();
         grpc.add_service(AvailabilityServiceServer::from_arc(service.clone()))
             .add_service(StatusServiceServer::from_arc(service.clone()))

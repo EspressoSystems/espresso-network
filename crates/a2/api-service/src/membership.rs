@@ -33,6 +33,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::HotShotAction,
     message::{Proposal, UpgradeLock},
+    network::NetworkConfig,
     simple_certificate::{Certificate2, LightClientStateUpdateCertificateV2, UpgradeCertificate},
     stake_table::HSStakeTable,
     traits::{
@@ -52,13 +53,7 @@ use crate::state_cert::validate_state_cert;
 /// The node state of the chain `genesis` starts, as an API service keeps it: stake tables in memory,
 /// read from the L1 at `l1`, and no catchup, since the API service follows the chain itself.
 pub async fn node_state(genesis: &Genesis, l1: Vec<Url>) -> anyhow::Result<NodeState> {
-    // The API service has no stake, so any key serves to read the genesis stake table.
-    let key =
-        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed([0; 32], 0, U256::ONE, false)
-            .public_key;
-    let network_config = genesis
-        .network_config(&key)
-        .context("the genesis file has no stake table")?;
+    let network_config = network_config(genesis)?;
     consensus_node::node_state::node_state(
         genesis,
         &network_config,
@@ -68,6 +63,20 @@ pub async fn node_state(genesis: &Genesis, l1: Vec<Url>) -> anyhow::Result<NodeS
         &NoMetrics,
     )
     .await
+}
+
+/// The network config of the chain `genesis` starts: its genesis stake table and its epochs.
+pub fn network_config(genesis: &Genesis) -> anyhow::Result<NetworkConfig<SeqTypes>> {
+    // The API service has no stake, so any key serves to read the genesis stake table.
+    let key =
+        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed([0; 32], 0, U256::ONE, false)
+            .public_key;
+    let mut config = genesis
+        .network_config(&key)
+        .context("the genesis file has no stake table")?;
+    config.config.epoch_height = genesis.epoch_height.unwrap_or_default();
+    config.config.epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+    Ok(config)
 }
 
 /// The stake tables of the chain, as far as the store's epoch roots reach.

@@ -34,6 +34,7 @@ light-client                = { workspace = true }
 parking_lot                 = { workspace = true }
 prost                       = { workspace = true }
 serde                       = { workspace = true }
+serde_json                  = { workspace = true }
 tagged-base64               = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tonic                       = { workspace = true, features = ["tls-ring", "tls-webpki-roots"] }
@@ -49,6 +50,9 @@ versions                    = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
+espresso-contract-deployer = { workspace = true }
+http-client    = { workspace = true }
+vbs            = { workspace = true }
 bitvec         = { workspace = true }
 chain-store    = { workspace = true, features = ["testing"] }
 espresso-types = { workspace = true, features = ["testing"] }
