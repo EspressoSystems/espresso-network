@@ -34,8 +34,11 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 - Trusted inputs:
   - chain config
   - L1 RPC
-  - local event storage
+  - local storage: stake table events, and stored committees, whose validators, reward and hash are reused without
+    recomputing
   - the LC contract owner, who can upgrade the contract (`LightClient._authorizeUpgrade`)
+  - the stake table contract admin (`DEFAULT_ADMIN_ROLE`), who can upgrade it and so change the `lightClient()` address
+    it returns
   - the LC contract circuit, whose proof `newFinalizedState` verifies
 - Not trusted: the permissioned prover, when one is set (`LightClient.permissionedProver`). It only limits who may
   submit a proof, so it affects how recent `F` is, not its correctness.
@@ -69,7 +72,7 @@ flowchart TD
 
 0. LC contract address
    - `StakeTableV3(chain_config.stake_table_contract).lightClient()`.
-   - Trusts chain config and L1 RPC.
+   - Trusts chain config, L1 RPC and the stake table contract admin.
 1. `F`, `blockCommRoot`
    - `LightClientV3.finalizedState()` at the L1 finalized block.
    - Trusts L1 RPC, the LC contract owner and the circuit.
@@ -78,14 +81,15 @@ flowchart TD
    - `verify_header`: height is `F` and `light_client_state.block_comm_root` equals the contract's.
    - Leaf chain QCs are not checked. Only the header's Merkle root is used.
 3. Root headers below `F`
-   - `HeaderProof` from `/v1/light-client/header/{F}/{h}`.
+   - `HeaderProof` from `/v1/light-client/header/{F}/{h}`, or `Request::HeaderProof` over request-response.
    - `verify_at_height(anchor_root, h)`: Merkle proof against the block Merkle root of header `F`.
 4. Table of epoch `e`
    - Derived from stake table events up to `root(e-2).l1_finalized`: stored events, plus L1 for what storage lacks
      (`StoredThenL1`).
    - `install_root` compares `root(e-2).next_stake_table_hash` with the held table of `e-1`. A mismatch ends the
      process.
-   - Skipped, with a `warn!`, when either hash is missing (roots of older versions).
+   - Skipped silently when the root has no `next_stake_table_hash` (older versions) or `e-1` is not held. Skipped with a
+     `warn!` when the held `e-1` has no hash.
 5. Block reward
    - Inputs: proven root fields (timestamp, `total_reward_distributed`) of the roots and the preceding root, stake of
      the derived table, initial token supply (constant or L1).
@@ -98,7 +102,9 @@ flowchart TD
 
 In `EpochMembershipCoordinator::catchup`.
 
-1. `held_pair_top` finds the highest held consecutive pair `(start-1, start)` in memory or storage.
+1. `held_pair_top` finds the highest held consecutive pair `(start-1, start)`. It searches down from
+   `min(target - 1, highest epoch in memory)`, loading from storage as it goes. A stored pair above the highest epoch in
+   memory is not found.
 2. If `start + 1 < target`, the seed takes `seed_lock` and re-checks `start`.
 3. L1 reads: the finalized block number, the LC contract address (cached in a `OnceCell`), then `finalizedState`, both
    at that finalized block.
@@ -114,7 +120,8 @@ In `EpochMembershipCoordinator::catchup`.
    - The anchor and each proven header get up to 5 attempts, or 1 with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE`.
    - One HTTP attempt asks the state peers in turn.
 7. `EpochCommittees::install_epoch_roots`, ascending, each root under `catchup_timeout`. Per root `e`, `install_root`:
-   1. `store_epoch_root`
+   1. `store_epoch_root`. A failure is logged and the install continues, so a seed can succeed with the root header
+      missing from storage.
    2. `update_chain_config`
    3. fixed block reward (protocol version 0.3 only)
    4. Returns if the held committee of `e` already has a block reward, header and hash.
@@ -153,8 +160,9 @@ In `StakeTableBackfill`.
 - Provider: `--state-peers`, or the upstreams when unset. No request-response.
 - Requests one table from the coordinator: the next ingest epoch, or the one after once past the epoch root. Runs at
   init and at each poll.
-- Startup and each poll are bounded by `--bootstrap-epoch-catchup-timeout`. A failed request is logged and the next poll
-  retries. A failure is not an error when the table is already held.
+- `--bootstrap-epoch-catchup-timeout` bounds the stake table wait at startup and in each poll, not the block fetches. A
+  poll already at the tip requests no table. A failed request is logged and the next poll retries. A failure is not an
+  error when the table is already held.
 
 ## Hash-check coverage gaps
 
@@ -192,18 +200,19 @@ stake table events. Not needed today: the event-derived install is fast enough.
 3. Accept it iff `state.commit()` equals the proven `root(e-1).next_stake_table_hash`. The hash commits to the full
    state: all registered validators, exits and used keys (`ValidatorSet::from_state`). A mismatch rejects that peer's
    answer and asks the next peer; no process exit, since the peer is untrusted.
-4. Derive the active set locally with `select_active_validator_set` at the root's protocol version. Block reward as
-   today.
-5. Install as today: storage, then memory.
+4. Derive the active set locally with `select_active_validator_set` at the protocol version of `root(e-2)`, as today.
+   `root(e-1)` only supplies the hash. Across an upgrade the two roots can carry different selection rules. Block reward
+   as today.
+5. Install as today.
 
 ### Effects
 
-- No L1 event replay on the startup path. Trust drops to the LC contract plus Merkle proofs; L1 RPC is no longer trusted
-  for the window's tables.
-- Every installed table is hash-checked at install. The top and bottom gaps above disappear.
-- `table(e)` needs proven `root(e-1)`. `root(epoch(F))` lies 5 blocks before the end of `epoch(F)` and is usually above
-  `F`, so `table(epoch(F) + 1)` is usually not provable. The window top drops to `epoch(F)`, or that one table falls
-  back to event derivation.
+- No L1 event replay on the startup path. L1 RPC stays trusted for the LC contract reads, which anchor every proof; only
+  the event reads drop out.
+- Every peer-supplied table is hash-checked at install.
+- `table(e)` needs proven `root(e-1)`. The LC contract rejects an `F` past the epoch root of its epoch, so
+  `root(epoch(F)) >= F` and `table(epoch(F) + 1)` is never provable. The window top drops to `epoch(F)`, or that one
+  table is derived from events and stays unchecked at install, as today.
 
 ### Required changes
 
