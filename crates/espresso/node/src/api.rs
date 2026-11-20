@@ -63,7 +63,6 @@ use hotshot_types::{
         election::{GenesisStakeTables, Membership, MembershipSnapshot},
         metrics::Metrics,
     },
-    utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
@@ -1224,8 +1223,8 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             //   (`reward-claim-input`) target the LightClient L1 finalization
             //   exactly.
 
-            let epoch_height = node_state
-                .epoch_height
+            let epoch_length = node_state
+                .epoch_length
                 .context("reward tree gc requires an epoch height")?;
             // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
             // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
@@ -1237,9 +1236,10 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             } else {
                 1
             };
-            let current_epoch = epoch_from_block_number(height, epoch_height);
+            let current_epoch = epoch_length.epoch_of(height);
             // First block of the oldest epoch we still want to retain.
-            let epoch_start_block = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
+            let epoch_start_block =
+                current_epoch.saturating_sub(epochs_to_retain) * epoch_length.get();
 
             let gc_height = epoch_start_block.min(finalized_hotshot_height);
 
@@ -1495,8 +1495,9 @@ where
             .as_ref()
             .node_state()
             .await
-            .epoch_height
-            .context("epoch height not found")?;
+            .epoch_length
+            .context("epoch height not found")?
+            .get();
         let serialized_account = bincode::serialize(&account)
             .context("Failed to serialize RewardAccountV2 for lookup; this should never happen.")?;
         let proof_bytes = self

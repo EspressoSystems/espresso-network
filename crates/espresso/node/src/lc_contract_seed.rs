@@ -247,7 +247,7 @@ mod tests {
             vec![],
             None,
             Fetcher::mock(),
-            EPOCH_HEIGHT,
+            std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
             EpochNumber::new(1),
         )
         .unwrap();

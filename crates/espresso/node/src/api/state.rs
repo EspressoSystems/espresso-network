@@ -57,7 +57,6 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, VidShare},
-    utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof as JfMerkleProof};
@@ -3252,10 +3251,10 @@ where
         let fetch_timeout = FETCH_TIMEOUT;
 
         let node_state = NodeStateDataSource::node_state(ds).await;
-        let epoch_height = node_state
-            .epoch_height
+        let epoch_length = node_state
+            .epoch_length
             .ok_or_else(|| anyhow::anyhow!("epoch state not set"))?;
-        let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
+        let first_epoch = *epoch_length.epoch_of(node_state.epoch_start_block);
         if epoch < first_epoch + 2 {
             return Err(bad_request(format!(
                 "epoch must be at least {}",
@@ -3263,7 +3262,7 @@ where
             )));
         }
 
-        let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
+        let epoch_root_height = *epoch_length.root_inside(EpochNumber::new(epoch - 2))? as usize;
         let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
             ds,
             HsBlockId::Number(epoch_root_height),
@@ -3278,7 +3277,8 @@ where
             .number();
 
         let from_l1_block = if epoch >= first_epoch + 3 {
-            let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
+            let prev_epoch_root_height =
+                *epoch_length.root_inside(EpochNumber::new(epoch - 3))? as usize;
             let prev_epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
                 ds,
                 HsBlockId::Number(prev_epoch_root_height),

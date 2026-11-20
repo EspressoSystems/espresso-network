@@ -6,12 +6,12 @@ use committable::{Commitment, Committable};
 use either::Either;
 use hotshot_query_service_types::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, EpochNumber, ViewNumber},
+    data::{BlockError, ViewNumber},
+    epoch::EpochLength,
     traits::{
         ValidatedState as HotShotState, block_contents::BlockHeader,
         signature_key::BuilderSignatureKey, states::StateDelta,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
@@ -574,7 +574,7 @@ pub(crate) struct ValidatedTransition<'a> {
     total_rewards_distributed: Option<RewardAmount>,
     version: Version,
     validation_start_time: OffsetDateTime,
-    epoch_height: Option<u64>,
+    epoch_length: Option<EpochLength>,
     leader_index: Option<usize>,
 }
 
@@ -588,7 +588,7 @@ impl<'a> ValidatedTransition<'a> {
         total_rewards_distributed: Option<RewardAmount>,
         version: Version,
         validation_start_time: OffsetDateTime,
-        epoch_height: Option<u64>,
+        epoch_length: Option<EpochLength>,
         leader_index: Option<usize>,
     ) -> Self {
         let expected_chain_config = state
@@ -603,7 +603,7 @@ impl<'a> ValidatedTransition<'a> {
             total_rewards_distributed,
             version,
             validation_start_time,
-            epoch_height,
+            epoch_length,
             leader_index,
         }
     }
@@ -891,7 +891,7 @@ impl<'a> ValidatedTransition<'a> {
             return Ok(());
         }
 
-        let Some(epoch_height) = self.epoch_height else {
+        let Some(epoch_length) = self.epoch_length else {
             return Err(ProposalValidationError::NoEpochHeight);
         };
 
@@ -911,7 +911,7 @@ impl<'a> ValidatedTransition<'a> {
             self.parent,
             proposed_height,
             leader_index,
-            epoch_height,
+            epoch_length,
         );
 
         if proposed_counts != &expected_counts {
@@ -1127,8 +1127,8 @@ impl ValidatedState {
             None
         } else if version >= EPOCH_REWARD_VERSION {
             let parent_header = parent_leaf.block_header();
-            let epoch_height = instance
-                .epoch_height
+            let epoch_length = instance
+                .epoch_length
                 .context("epoch height not in instance state for V6")?;
             let leader_index = Header::get_leader_index(
                 version,
@@ -1142,7 +1142,7 @@ impl ValidatedState {
                 parent_header,
                 proposed_header.height(),
                 leader_index,
-                epoch_height,
+                epoch_length,
             );
             let (epoch_rewards_applied, changed_accounts) = Header::handle_epoch_rewards(
                 proposed_header.height(),
@@ -1281,16 +1281,14 @@ async fn validate_next_stake_table_hash(
     instance: &NodeState,
     proposed_header: &Header,
 ) -> Result<(), ProposalValidationError> {
-    let Some(epoch_height) = instance.epoch_height else {
+    let Some(epoch_length) = instance.epoch_length else {
         return Err(ProposalValidationError::NoEpochHeight);
     };
-    if !is_ge_epoch_root(proposed_header.height(), epoch_height) {
+    let position = epoch_length.position(proposed_header.height());
+    if !position.is_at_or_after_root() {
         return Ok(());
     }
-    let epoch = EpochNumber::new(epoch_from_block_number(
-        proposed_header.height(),
-        epoch_height,
-    ));
+    let epoch = position.epoch();
     let coordinator = instance.coordinator.clone();
     let first_epoch = coordinator.membership().first_epoch();
 
@@ -1392,7 +1390,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
                 total_rewards_distributed,
                 version,
                 validation_start_time,
-                instance.epoch_height,
+                instance.epoch_length,
                 leader_index,
             )
             .validate()?
@@ -1814,7 +1812,7 @@ mod test {
                 parent,
                 proposal,
                 total_rewards_distributed: None,
-                epoch_height: instance.epoch_height,
+                epoch_length: instance.epoch_length,
                 version: instance.current_version,
                 validation_start_time,
                 leader_index: None,
@@ -2511,7 +2509,7 @@ mod test {
             Some(actual_total),
             version(0, 4),
             validation_start_time,
-            None, // epoch_height - not needed for V4 tests
+            None, // epoch_length - not needed for V4 tests
             None,
         );
 
@@ -2535,7 +2533,7 @@ mod test {
             Some(actual_total),
             version(0, 4),
             validation_start_time,
-            None, // epoch_height - not needed for V4 tests
+            None, // epoch_length - not needed for V4 tests
             None,
         )
         .validate_total_rewards_distributed()
@@ -2565,7 +2563,7 @@ mod test {
             None,
             MAX_SUPPORTED_VERSION,
             OffsetDateTime::now_utc(),
-            None, // epoch_height
+            None, // epoch_length
             None,
         )
         .validate_timestamp()
@@ -2585,7 +2583,7 @@ mod test {
             None,
             MAX_SUPPORTED_VERSION,
             validation_start_time,
-            None, // epoch_height
+            None, // epoch_length
             None,
         )
         .validate_timestamp()

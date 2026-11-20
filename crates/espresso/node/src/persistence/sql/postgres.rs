@@ -234,7 +234,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_postgres_read_ns_table_v0_3() {
-        test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(0)).await;
+        test_postgres_read_ns_table(NodeState::mock_v3()).await;
     }
 
     /// Verify that concurrent calls to `record_action` all succeed under
