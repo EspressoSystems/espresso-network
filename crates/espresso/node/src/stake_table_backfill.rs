@@ -14,9 +14,9 @@ use espresso_types::{
 };
 use hotshot_types::{
     data::EpochNumber,
+    epoch::{EpochArithmeticError, EpochLength},
     epoch_membership::EpochMembershipCoordinator,
     traits::metrics::{Counter, Gauge, Metrics},
-    utils::root_block_in_epoch,
 };
 use tokio::{
     sync::Notify,
@@ -98,7 +98,7 @@ impl StakeTableBackfill {
             peers: membership.fetcher().peers(),
             layout: EpochLayout {
                 first_epoch: membership.first_epoch(),
-                epoch_height: *coordinator.epoch_height(),
+                epoch_length: coordinator.epoch_length(),
             },
         };
         self.serve(&sources).await
@@ -271,10 +271,9 @@ impl FillSources<'_> {
     ) -> HashMap<u64, anyhow::Result<Header>> {
         let heights: BTreeSet<u64> = chunk
             .iter()
-            .flat_map(|epoch| {
-                let heights = self.layout.root_heights(*epoch);
-                [Some(heights.root), Some(heights.next), heights.preceding]
-            })
+            // An epoch without roots fetches nothing; `store_epoch` reports it.
+            .filter_map(|epoch| self.layout.root_heights(*epoch).ok())
+            .flat_map(|heights| [Some(heights.root), Some(heights.next), heights.preceding])
             .flatten()
             .collect();
         let mut headers = HashMap::new();
@@ -297,7 +296,7 @@ impl FillSources<'_> {
             Ok(header) => Ok(header),
             Err(err) => bail!("no root header at height {height}: {err:#}"),
         };
-        let heights = self.layout.root_heights(epoch);
+        let heights = self.layout.root_heights(epoch)?;
         let root = header(heights.root)?;
         let next_root = header(heights.next)?;
         let preceding = heights.preceding.map(header).transpose()?;
@@ -366,18 +365,17 @@ impl StakeTableStore for EpochCommittees {
 struct EpochLayout {
     /// The first epoch of the membership.
     first_epoch: EpochNumber,
-    /// Blocks per epoch.
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl EpochLayout {
     /// The heights of the epoch roots that the table of `epoch` reads.
-    fn root_heights(&self, epoch: EpochNumber) -> EpochRootHeights {
-        EpochRootHeights {
-            root: root_block_in_epoch(*epoch - 2, self.epoch_height),
-            next: root_block_in_epoch(*epoch - 1, self.epoch_height),
-            preceding: preceding_root_height(epoch, self.first_epoch, self.epoch_height),
-        }
+    fn root_heights(&self, epoch: EpochNumber) -> Result<EpochRootHeights, EpochArithmeticError> {
+        Ok(EpochRootHeights {
+            root: *self.epoch_length.root_inside(epoch.checked_rewind(2)?)?,
+            next: *self.epoch_length.root_inside(epoch.checked_rewind(1)?)?,
+            preceding: preceding_root_height(epoch, self.first_epoch, self.epoch_length)?,
+        })
     }
 }
 
@@ -411,7 +409,7 @@ mod tests {
     use committable::Commitment;
     use futures::FutureExt;
     use hotshot_query_service::metrics::PrometheusMetrics;
-    use hotshot_types::utils::epoch_from_block_number;
+    use light_client::testing::epoch_length;
     use parking_lot::Mutex;
     use rstest::rstest;
     use tokio::time::Instant;
@@ -431,7 +429,7 @@ mod tests {
     fn layout() -> EpochLayout {
         EpochLayout {
             first_epoch: EpochNumber::new(1),
-            epoch_height: EPOCH_HEIGHT,
+            epoch_length: epoch_length(EPOCH_HEIGHT),
         }
     }
 
@@ -446,7 +444,7 @@ mod tests {
     #[case::complete(layout(), &[3, 4, 5, 6], &[])]
     #[case::gap(layout(), &[7], &[6, 5, 4, 3])]
     #[case::later_first_epoch(
-        EpochLayout { first_epoch: EpochNumber::new(5), epoch_height: EPOCH_HEIGHT },
+        EpochLayout { first_epoch: EpochNumber::new(5), epoch_length: epoch_length(EPOCH_HEIGHT) },
         &[10],
         &[9, 8, 7]
     )]
@@ -467,7 +465,7 @@ mod tests {
     #[case(6, Some(25))]
     #[case(7, Some(35))]
     fn root_heights_cases(#[case] epoch: u64, #[case] preceding: Option<u64>) {
-        let heights = layout().root_heights(EpochNumber::new(epoch));
+        let heights = layout().root_heights(EpochNumber::new(epoch)).unwrap();
 
         assert_eq!(heights.root, 10 * (epoch - 2) - 5);
         assert_eq!(heights.next, 10 * (epoch - 1) - 5);
@@ -550,7 +548,7 @@ mod tests {
             preceding_root: Option<&Header>,
             next_root: &Header,
         ) -> anyhow::Result<StakeTableStoreOutcome> {
-            let epoch = epoch_from_block_number(root.height(), EPOCH_HEIGHT) + 2;
+            let epoch = *epoch_length(EPOCH_HEIGHT).epoch_of(root.height()) + 2;
             self.calls.lock().push((
                 epoch,
                 preceding_root.map(Header::height),

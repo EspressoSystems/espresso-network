@@ -11,6 +11,7 @@ use espresso_types::{Header, traits::SequencerPersistence};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch::EpochPosition,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{
         LCV3StateSignatureRequestBody, LightClientState, StakeTableState, StateSignKey, StateVerKey,
@@ -23,7 +24,6 @@ use hotshot_types::{
         election::Membership,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
     },
-    utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
 use http_client::{Client, Url, error::ClientErr};
 use jf_signature::SignatureError;
@@ -105,10 +105,11 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 );
 
                 let cur_block_height = state.block_height;
-                let blocks_per_epoch = *consensus_handle.epoch_height();
+                let epoch_position = consensus_handle
+                    .epoch_length()
+                    .map(|epoch_length| epoch_length.position(cur_block_height));
 
-                let option_state_epoch =
-                    option_epoch_from_block_number(true, cur_block_height, blocks_per_epoch);
+                let option_state_epoch = epoch_position.map(EpochPosition::epoch);
 
                 if self.voting_stake_table_epoch != option_state_epoch {
                     let Some(stake_table) = voting_stake_table(
@@ -140,7 +141,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 }
 
                 // The last few state updates are handled in the consensus, we do not sign them.
-                if is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                if epoch_position.is_some_and(EpochPosition::is_at_or_after_root) {
                     tracing::debug!("Skipping epoch transition block {cur_block_height}");
                     return;
                 }

@@ -79,8 +79,8 @@ impl LcContractSeed {
         let started = tokio::time::Instant::now();
         let fetcher = coordinator.membership().fetcher();
         let lc_contract_state = fetcher.lc_contract_finalized_state().await?;
-        let epoch_height = *coordinator.epoch_height();
-        let seed_epoch = lc_contract_state.seed_epoch(epoch_height);
+        let epoch_length = coordinator.epoch_length();
+        let seed_epoch = lc_contract_state.seed_epoch(epoch_length);
         let log = |outcome: &str| {
             tracing::info!(
                 target: "announce::catchup",
@@ -94,16 +94,17 @@ impl LcContractSeed {
             );
         };
         let Some(window) = lc_contract_state.seed_window(
-            epoch_height,
+            epoch_length,
             coordinator.membership().first_epoch(),
             start,
             target,
-        ) else {
+        )?
+        else {
             log("not needed");
             return Ok(start);
         };
 
-        let heights = window.root_heights(epoch_height).collect();
+        let heights = window.root_heights(epoch_length)?;
         let (preceding, roots) = fetch_headers(
             fetcher.peers(),
             &lc_contract_state,

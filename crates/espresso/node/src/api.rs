@@ -599,13 +599,13 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
     ) -> Result<LightClientStateUpdateCertificateV2<SeqTypes>, StateCertFetchError> {
         let handle = self.consensus().await;
         let coordinator = handle.membership_coordinator().await;
-        let epoch_height = *coordinator.epoch_height();
+        let epoch_length = coordinator.epoch_length();
         let decided = handle.decided_leaf().await;
         ensure_cert_can_exist(
             EpochNumber::new(epoch),
             coordinator.membership().first_epoch(),
-            epoch_height,
-            decided.epoch(epoch_height).map(|_| decided.height()),
+            epoch_length,
+            decided.epoch(epoch_length.get()).map(|_| decided.height()),
             handle.current_epoch().await,
         )?;
 
@@ -651,7 +651,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
                     &cert,
                     &stake_table,
                     EpochNumber::new(epoch),
-                    epoch_height,
+                    epoch_length,
                     &handle.upgrade_lock().await,
                 )
                 .map_err(|e| {
@@ -1368,7 +1368,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         &self,
         height: u64,
         account: Vec<u8>,
-        epoch_height: u64,
+        epoch_length: EpochLength,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
     fn load_latest_proof(
@@ -1449,7 +1449,7 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
         &self,
         _height: u64,
         _account: Vec<u8>,
-        _epoch_height: u64,
+        _epoch_length: EpochLength,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move {
             bail!("reward merklized state is not supported for this data source");
@@ -1491,18 +1491,17 @@ where
         height: u64,
         account: RewardAccountV2,
     ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        let epoch_height = self
+        let epoch_length = self
             .as_ref()
             .node_state()
             .await
             .epoch_length
-            .context("epoch height not found")?
-            .get();
+            .context("epoch height not found")?;
         let serialized_account = bincode::serialize(&account)
             .context("Failed to serialize RewardAccountV2 for lookup; this should never happen.")?;
         let proof_bytes = self
             .inner()
-            .load_proof(height, serialized_account, epoch_height)
+            .load_proof(height, serialized_account, epoch_length)
             .await?;
 
         bincode::deserialize::<RewardAccountQueryDataV2>(&proof_bytes)
@@ -1544,9 +1543,9 @@ where
         &self,
         height: u64,
         account: Vec<u8>,
-        epoch_height: u64,
+        epoch_length: EpochLength,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
-        async move { self.inner().load_proof(height, account, epoch_height).await }
+        async move { self.inner().load_proof(height, account, epoch_length).await }
     }
 
     fn load_latest_proof(
@@ -1646,9 +1645,9 @@ where
         &self,
         height: u64,
         account: Vec<u8>,
-        epoch_height: u64,
+        epoch_length: EpochLength,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
-        async move { (**self).load_proof(height, account, epoch_height).await }
+        async move { (**self).load_proof(height, account, epoch_length).await }
     }
 
     fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
@@ -3551,7 +3550,7 @@ mod test {
             namespace::NamespaceProof,
             payload::PayloadProof,
         },
-        testing::EpochChangeQuorum,
+        testing::{EpochChangeQuorum, epoch_length},
     };
     use alloy::{
         eips::BlockId,
@@ -3610,7 +3609,6 @@ mod test {
         simple_certificate::UpgradeCertificate,
         simple_vote::UpgradeProposalData,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
-        utils::epoch_from_block_number,
         x25519,
     };
     use http_client::{
@@ -5149,7 +5147,7 @@ mod test {
             for address in &addresses {
                 total += reward_balance(&client, height, *address).await;
             }
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+            let epoch = *epoch_length(EPOCH_HEIGHT).epoch_of(height);
             let expected = if epoch <= 3 {
                 U256::ZERO
             } else {
@@ -5408,7 +5406,6 @@ mod test {
         let chain = LegacyChain::load("v4")?;
         let replay = chain.replay::<D>().await?;
         let client = &replay.client;
-        let epoch_height = chain.epoch_height();
         let coordinator = replay.node.node_state().coordinator;
         let membership = coordinator.membership();
 
@@ -5420,7 +5417,7 @@ mod test {
             let leaf = recorded.leaf.leaf();
             let header = leaf.block_header();
             let height = header.height();
-            let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+            let epoch = coordinator.epoch_length().epoch_of(height);
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 validators_by_epoch.entry(*epoch)
             {
@@ -6171,7 +6168,7 @@ mod test {
         );
         assert!(
             metric_value(&export, "light_client_latest_stake_table_epoch")
-                >= Some(epoch_from_block_number(tip, EPOCH_HEIGHT) as f64),
+                >= Some(*epoch_length(EPOCH_HEIGHT).epoch_of(tip) as f64),
             "{export}"
         );
         assert_eq!(
@@ -6217,7 +6214,7 @@ mod test {
         assert_same_epoch_state(
             &api_client,
             &follower_client,
-            epoch_from_block_number(tip, EPOCH_HEIGHT),
+            *epoch_length(EPOCH_HEIGHT).epoch_of(tip),
         )
         .await?;
         assert_same_merklized_state(
@@ -7116,7 +7113,7 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = epoch_from_block_number(height, epoch_height);
+            let epoch = *coordinator.epoch_length().epoch_of(height);
             let header_total_distributed = header
                 .total_reward_distributed()
                 .expect("total_reward_distributed should exist");
@@ -7159,7 +7156,7 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = epoch_from_block_number(height, epoch_height);
+            let epoch = *coordinator.epoch_length().epoch_of(height);
             if epoch <= 2 {
                 continue;
             }
@@ -7388,7 +7385,7 @@ mod test {
         // The post-start catchup seeds the window from the LC contract.
         let mut events = node.event_stream();
         node.start_consensus().await;
-        let seed_epoch = epoch_from_block_number(lc_contract_height, EPOCH_HEIGHT);
+        let seed_epoch = *epoch_length(EPOCH_HEIGHT).epoch_of(lc_contract_height);
         // Past the end of the seed epoch and of the next one, where block rewards are read.
         let height = network
             .server
