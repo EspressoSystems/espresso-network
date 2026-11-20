@@ -367,12 +367,6 @@ const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 /// start from a recent epoch boundary.
 const BOUNDARY_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
-/// The most epoch boundaries below its start whose reward trees a loop that starts from a recent
-/// boundary fetches. A peer whose newest boundary is the start keeps the trees of the 5
-/// boundaries below it: `save_and_gc_reward_tree_v2` deletes only the trees strictly below
-/// `start - 5 * epoch_height`.
-const REWARD_TREES_BELOW_START: u64 = 5;
-
 /// How long a loop that starts from a recent boundary tries to fetch the reward tree at one
 /// boundary below its start, before it goes on without it.
 const REWARD_TREE_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -724,15 +718,17 @@ where
 
 /// The epoch boundaries below `start`, oldest first, whose reward trees a node whose state starts
 /// at the boundary `start` must fetch from peers, so that it can store reward proofs for the
-/// boundary the L1 light client has finalized at `finalized`, as `persist_reward_proofs` does.
-/// None while the light client has not finalized past the first epoch, as no proofs are stored
-/// then, and at most [`REWARD_TREES_BELOW_START`].
+/// boundary the L1 light client has finalized at `finalized`, as `persist_reward_proofs` does,
+/// and for each boundary the light client finalizes on its way up to `start`. Peers keep all of
+/// them, however far the light client lags, as GC keeps every tree from that boundary up. None
+/// while the light client has not finalized past the first epoch, as no proofs are stored then.
 fn reward_boundaries_below(start: u64, finalized: u64, epoch_height: u64) -> Vec<u64> {
     let Some(proof_boundary) = reward_proof_boundary(finalized, epoch_height) else {
         return Vec::new();
     };
-    let lowest = proof_boundary.max(start.saturating_sub(REWARD_TREES_BELOW_START * epoch_height));
-    (lowest..start).step_by(epoch_height as usize).collect()
+    (proof_boundary..start)
+        .step_by(epoch_height as usize)
+        .collect()
 }
 
 /// The epoch boundary whose reward tree `persist_reward_proofs` stores reward proofs from when the
@@ -1111,10 +1107,9 @@ mod test {
 
     /// A node whose state starts at the boundary `start` needs the reward trees from the boundary
     /// the L1 light client has finalized, where it stores reward proofs, up to `start`: the newest
-    /// boundary at or below `finalized`, or `finalized` itself when it ends an epoch. It needs at
-    /// most the 5 boundaries below `start`, as peers keep the trees of the 5 epochs below their
-    /// newest boundary only, never the first epoch's, for which no proofs are stored, and none
-    /// once the light client has reached `start`.
+    /// boundary at or below `finalized`, or `finalized` itself when it ends an epoch. It needs
+    /// every boundary from there up to `start`, however many, never the first epoch's, for which
+    /// no proofs are stored, and none once the light client has reached `start`.
     #[rstest]
     #[case::finalized_two_epochs_below(100, 75, 10, vec![70, 80, 90])]
     #[case::finalized_in_epoch_below_start(100, 95, 10, vec![90])]
@@ -1123,8 +1118,13 @@ mod test {
     #[case::finalized_last_block_below_start(100, 90, 10, vec![90])]
     #[case::finalized_just_below_last_block(100, 89, 10, vec![80, 90])]
     #[case::finalized_just_below_start(100, 99, 10, vec![90])]
-    #[case::capped_at_five_boundaries(100, 15, 10, vec![50, 60, 70, 80, 90])]
-    #[case::capped_finalized_first_boundary(100, 10, 10, vec![50, 60, 70, 80, 90])]
+    #[case::light_client_far_behind(100, 15, 10, vec![10, 20, 30, 40, 50, 60, 70, 80, 90])]
+    #[case::finalized_first_boundary_far_below(
+        100,
+        10,
+        10,
+        vec![10, 20, 30, 40, 50, 60, 70, 80, 90]
+    )]
     #[case::finalized_at_start(100, 100, 10, vec![])]
     #[case::finalized_above_start(100, 105, 10, vec![])]
     #[case::finalized_genesis(100, 0, 10, vec![])]
@@ -1147,17 +1147,17 @@ mod test {
         );
     }
 
-    /// The window of boundaries below `start` holds 5 boundaries, down to `start - 5 * eh`: a peer
-    /// whose newest boundary is `start` deletes only the reward trees strictly below
-    /// `start - 5 * eh`, so it still serves the tree at `start - 5 * eh`, and the node needs that
-    /// tree whenever the L1 light client has finalized a height in
-    /// `[start - 5 * eh, start - 4 * eh)`. The window never reaches below `start - 5 * eh`.
+    /// The node fetches the boundary 5 epochs below `start` whenever the L1 light client has
+    /// finalized a height in `[start - 5 * eh, start - 4 * eh)`, and every boundary below it down
+    /// to the claim boundary when the light client lags further: a peer whose newest boundary is
+    /// `start` keeps the reward trees from `start - 5 * eh` up, and from the claim boundary up when
+    /// that lies lower.
     #[rstest]
     #[case::finalized_at_fifth_boundary(100, 50, 10, vec![50, 60, 70, 80, 90])]
     #[case::finalized_inside_epoch_above_fifth_boundary(100, 55, 10, vec![50, 60, 70, 80, 90])]
     #[case::finalized_just_below_fourth_boundary(100, 59, 10, vec![50, 60, 70, 80, 90])]
-    #[case::finalized_just_below_fifth_boundary(100, 49, 10, vec![50, 60, 70, 80, 90])]
-    #[case::capped_at_five_boundaries(70, 15, 10, vec![20, 30, 40, 50, 60])]
+    #[case::finalized_just_below_fifth_boundary(100, 49, 10, vec![40, 50, 60, 70, 80, 90])]
+    #[case::light_client_far_behind(70, 15, 10, vec![10, 20, 30, 40, 50, 60])]
     #[case::start_five_epochs_above_proof_boundary(60, 15, 10, vec![10, 20, 30, 40, 50])]
     #[case::water_devnet_fifth_boundary(
         1_542_000,
@@ -1182,6 +1182,89 @@ mod test {
             expected,
             "start {start}, L1-finalized height {finalized}, epoch height {epoch_height}"
         );
+    }
+
+    /// A light client that lags more than 5 epochs below `start` puts the claim boundary below the
+    /// window, yet `persist_reward_proofs` reads its tree, and peers keep it however far the light
+    /// client lags. So are the boundaries between it and the window, which the light client
+    /// finalizes on its way up to `start`.
+    #[rstest]
+    #[case::decaf(
+        23_715_000,
+        23_699_812,
+        3000,
+        vec![23_697_000, 23_700_000, 23_703_000, 23_706_000, 23_709_000, 23_712_000]
+    )]
+    #[case::mainnet(
+        31_920_000,
+        31_700_000,
+        40_000,
+        vec![31_680_000, 31_720_000, 31_760_000, 31_800_000, 31_840_000, 31_880_000]
+    )]
+    #[case::finalized_at_boundary_far_below(100, 20, 10, vec![20, 30, 40, 50, 60, 70, 80, 90])]
+    #[case::finalized_just_below_window(100, 49, 10, vec![40, 50, 60, 70, 80, 90])]
+    fn test_reward_boundaries_below_fetches_claim_boundary(
+        #[case] start: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: Vec<u64>,
+    ) {
+        assert_eq!(
+            reward_boundaries_below(start, finalized, epoch_height),
+            expected,
+            "start {start}, L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
+
+    /// Every lag of the light client below every boundary start over 30 epochs, as the claim
+    /// boundary can lie any number of epochs below the start.
+    #[test]
+    fn test_reward_boundaries_below_fetches_claim_boundary_sweep() {
+        let epoch_height = 10;
+        for start in (epoch_height..=300).step_by(epoch_height as usize) {
+            // Heights at or above `start` too, where no tree below it is needed.
+            for finalized in 0..=start + 2 * epoch_height {
+                check_fetches_claim_boundary(start, finalized, epoch_height);
+            }
+        }
+    }
+
+    fn check_fetches_claim_boundary(start: u64, finalized: u64, epoch_height: u64) {
+        let fetched = reward_boundaries_below(start, finalized, epoch_height);
+        let context =
+            format!("start {start}, L1-finalized height {finalized}, epoch height {epoch_height}");
+        let claim_boundary = match reward_proof_boundary(finalized, epoch_height) {
+            Some(boundary) if boundary < start => boundary,
+            _ => {
+                assert!(
+                    fetched.is_empty(),
+                    "{context}: fetched {fetched:?}, but no claim boundary lies below the start"
+                );
+                return;
+            },
+        };
+        assert!(
+            fetched.contains(&claim_boundary),
+            "{context}: the claim boundary {claim_boundary} is missing from {fetched:?}"
+        );
+        assert!(
+            fetched.windows(2).all(|pair| pair[0] < pair[1]),
+            "{context}: {fetched:?} is not ascending and distinct"
+        );
+        for &height in &fetched {
+            assert!(
+                height.is_multiple_of(epoch_height) && (claim_boundary..start).contains(&height),
+                "{context}: {height} in {fetched:?} is not a boundary in [{claim_boundary}, \
+                 {start})"
+            );
+        }
+        for height in (claim_boundary..start).step_by(epoch_height as usize) {
+            assert!(
+                fetched.contains(&height),
+                "{context}: the boundary {height} above the claim boundary {claim_boundary} is \
+                 missing from {fetched:?}"
+            );
+        }
     }
 
     /// Reward proofs for the L1-finalized height `finalized` come from the tree at `finalized`
