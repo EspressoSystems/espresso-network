@@ -300,12 +300,15 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             return;
         };
         let encoded = block_payload.encode();
+        self.written_payloads.insert((view, commitment));
+        let mut written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
         if let Some(height) = self.awaited_payloads.remove(&(view, commitment)) {
-            store::put_decided_payload(&mut self.pending.batch, height, encoded.clone());
+            // After the payload's own write, so that the copy finds it.
+            written = written.and_then(|()| {
+                store::put_decided_payload(&mut self.pending.batch, height, view, &commitment)
+            });
             self.pending.writes_decide_log = true;
         }
-        self.written_payloads.insert((view, commitment));
-        let written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
         self.queued(written, StorageOutput::Payload(view, commitment), |m| {
             &m.append_da
         });

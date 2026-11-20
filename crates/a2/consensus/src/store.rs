@@ -570,14 +570,22 @@ pub fn put_proposal<T: NodeType>(
     Ok(())
 }
 
-/// Stores `payload` as the payload of the decide log entry at `height`, which was written without
-/// it.
-pub fn put_decided_payload(batch: &mut Batch, height: u64, payload: Arc<[u8]>) {
-    batch.put(
+/// Gives the decide log entry at `height`, written without its payload, the payload stored for
+/// the block with commitment `commitment` proposed in `view`. Like the copy at the decide, it
+/// shares the stored value rather than writing it again.
+pub fn put_decided_payload(
+    batch: &mut Batch,
+    height: u64,
+    view: ViewNumber,
+    commitment: &VidCommitment2,
+) -> anyhow::Result<()> {
+    batch.copy(
+        &PAYLOADS,
+        payload_key(view, commitment)?,
         &DECIDED_PAYLOADS,
         key::u64(height).to_vec(),
-        Bytes::from_owner(payload),
     );
+    Ok(())
 }
 
 /// Stores the encoded payload of the block with commitment `commitment` proposed in `view`.
