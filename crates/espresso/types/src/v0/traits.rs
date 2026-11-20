@@ -18,6 +18,7 @@ use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 use hotshot_types::{
     data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::DrbInput,
+    epoch::EpochLength,
     event::{HotShotAction, LeafInfo},
     initializer::{HotShotInitializer, InitializerEpochInfo},
     message::Proposal,
@@ -769,9 +770,12 @@ pub trait SequencerPersistence:
                 );
                 if leaf.block_header().version() < NEW_PROTOCOL_VERSION {
                     ensure!(
-                        epoch_height == 0
-                            || cert_pair.block_number().is_none()
-                            || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                        EpochLength::try_from(epoch_height)
+                            .ok()
+                            .is_none_or(|epoch_length| {
+                                cert_pair.block_number().is_none()
+                                    || cert_pair.verify_next_epoch_qc(epoch_length).is_ok()
+                            }),
                         format!(
                             "Next epoch QC is required but it's not present or doesn't match \
                              primary QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",

@@ -41,7 +41,6 @@ use crate::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
     },
-    utils::is_epoch_transition,
     vote::{Certificate, HasViewNumber},
 };
 
@@ -1044,16 +1043,16 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     /// [`None`] if a next epoch QC is not required for this certificate.
     pub fn verify_next_epoch_qc(
         &self,
-        epoch_height: u64,
+        epoch_length: EpochLength,
     ) -> Result<Option<&NextEpochQuorumCertificate2<TYPES>>> {
         let block_number = self.qc.data.block_number.context(warn!(
             "QC for epoch {:?} has no block number",
             self.qc.data.epoch
         ))?;
-        if !is_epoch_transition(block_number, epoch_height) {
+        if !epoch_length.position(block_number).is_epoch_transition() {
             tracing::debug!(
                 block_number,
-                epoch_height,
+                epoch_length = epoch_length.get(),
                 "QC is not in an epoch transition"
             );
             return Ok(None);

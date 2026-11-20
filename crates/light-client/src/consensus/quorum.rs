@@ -6,6 +6,7 @@ use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     data::ViewNumber,
+    epoch::EpochLength,
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
@@ -144,7 +145,7 @@ pub trait Quorum: Sync {
     }
 
     /// The number of blocks in an epoch.
-    fn epoch_height(&self) -> u64;
+    fn epoch_length(&self) -> EpochLength;
 
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
     /// version.
@@ -390,15 +391,15 @@ impl StakeTablePair for (Arc<StakeTable>, Arc<StakeTable>) {
 #[derive(Clone, Debug)]
 pub struct StakeTableQuorum<T> {
     membership: T,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl<T> StakeTableQuorum<T> {
-    /// Construct a quorum given a [`StakeTablePair`] and the epoch height.
-    pub fn new(membership: T, epoch_height: u64) -> Self {
+    /// Construct a quorum given a [`StakeTablePair`] and the epoch length.
+    pub fn new(membership: T, epoch_length: EpochLength) -> Self {
         Self {
             membership,
-            epoch_height,
+            epoch_length,
         }
     }
 }
@@ -423,7 +424,7 @@ where
             // otherwise go unverified, yet the epoch dispatch in `verify_qc_chain_and_get_version`
             // treats a next-epoch QC on the committing certificate as proof that the next epoch
             // co-signed the leaf.
-            match cert.verify_next_epoch_qc(self.epoch_height)? {
+            match cert.verify_next_epoch_qc(self.epoch_length)? {
                 Some(next_epoch_qc) => {
                     let stake_table = self.membership.next_epoch_stake_table().await?;
                     stake_table
@@ -473,8 +474,8 @@ where
         Ok(())
     }
 
-    fn epoch_height(&self) -> u64 {
-        self.epoch_height
+    fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
     }
 }
 
@@ -501,7 +502,7 @@ mod test {
         AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum,
         LEAF_CHAIN_EPOCH_HEIGHT, LEGACY_VERSION, VersionCheckQuorum,
         custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
-        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
+        epoch_length, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -811,7 +812,7 @@ mod test {
                 Arc::new(StakeTable::from(current.1)),
                 Arc::new(StakeTable::from(next.1)),
             ),
-            BOUNDARY_EPOCH_HEIGHT,
+            epoch_length(BOUNDARY_EPOCH_HEIGHT),
         );
         (leaves, committing_qc, deciding_qc, quorum)
     }
@@ -885,7 +886,7 @@ mod test {
                 Arc::new(StakeTable::from(current.1)),
                 Arc::new(StakeTable::from(next.1)),
             ),
-            BOUNDARY_EPOCH_HEIGHT,
+            epoch_length(BOUNDARY_EPOCH_HEIGHT),
         );
         (leaves, committing_qc, deciding_qc, quorum)
     }
@@ -921,8 +922,10 @@ mod test {
                 stake_amount: U256::from(1),
             })
             .collect();
-        let quorum =
-            StakeTableQuorum::new((Arc::new(stake_table.clone()), Arc::new(stake_table)), 10);
+        let quorum = StakeTableQuorum::new(
+            (Arc::new(stake_table.clone()), Arc::new(stake_table)),
+            epoch_length(10),
+        );
 
         let data = Vote2Data {
             leaf_commit: Commitment::from_raw([7; 32]),
@@ -953,7 +956,7 @@ mod test {
     async fn test_unsigned_genesis_view_qc_cannot_start_a_qc_chain() {
         let keys = boundary_quorum(0..5);
         let stake_table = Arc::new(StakeTable::from(keys.1.clone()));
-        let quorum = StakeTableQuorum::new((stake_table.clone(), stake_table), 10);
+        let quorum = StakeTableQuorum::new((stake_table.clone(), stake_table), epoch_length(10));
 
         let leaf = &leaf_chain(1..=1, LEGACY_VERSION).await[0];
         let unsigned = QuorumData2 {

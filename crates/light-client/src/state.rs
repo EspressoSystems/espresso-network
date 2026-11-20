@@ -21,7 +21,7 @@ use hotshot_query_service_types::{
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
 };
-use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
+use hotshot_types::{data::EpochNumber, epoch::EpochLength, stake_table::StakeTableEntry};
 use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersionType, Version};
 
@@ -49,7 +49,7 @@ use crate::{
 )]
 pub struct Genesis {
     /// The number of blocks in an epoch.
-    pub epoch_height: u64,
+    pub epoch_height: EpochLength,
 
     /// The first epoch where the stake table came from the contract, rather than the genesis stake
     /// table.
@@ -113,7 +113,7 @@ pub struct LightClient<P, S> {
     opt: LightClientOptions,
 
     chain_id: ChainId,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     first_epoch_with_dynamic_stake_table: EpochNumber,
     genesis_stake_table: Arc<StakeTable>,
 
@@ -173,7 +173,7 @@ where
             server,
             opt,
             chain_id: genesis.chain_id,
-            epoch_height: genesis.epoch_height,
+            epoch_length: genesis.epoch_height,
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
             stake_tables: Default::default(),
@@ -188,7 +188,7 @@ where
 
     pub fn genesis(&self) -> Genesis {
         Genesis {
-            epoch_height: self.epoch_height,
+            epoch_height: self.epoch_length,
             first_epoch_with_dynamic_stake_table: self.first_epoch_with_dynamic_stake_table,
             stake_table: (*self.genesis_stake_table).clone().into(),
             chain_id: self.chain_id,
@@ -235,7 +235,7 @@ where
     /// Fetch and verify the requested leaf.
     pub async fn fetch_leaf(&self, id: LeafId<SeqTypes>) -> Result<LeafQueryData<SeqTypes>> {
         self.fetch_leaf_with_quorum(id, |epoch| {
-            StakeTableQuorum::new((epoch, self), self.epoch_height)
+            StakeTableQuorum::new((epoch, self), self.epoch_length)
         })
         .await
     }
@@ -396,7 +396,7 @@ where
                 header.height(),
             )));
         }
-        let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
+        let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_length);
         quorum
             .verify_cert2(&cert2, header.version())
             .await
@@ -598,7 +598,7 @@ where
     /// Fetch and verify the requested header.
     pub async fn fetch_header(&self, id: BlockId<SeqTypes>) -> Result<Header> {
         self.fetch_header_with_quorum(id, |epoch| {
-            StakeTableQuorum::new((epoch, self), self.epoch_height)
+            StakeTableQuorum::new((epoch, self), self.epoch_length)
         })
         .await
     }
@@ -997,15 +997,18 @@ where
                     .context(
                         "first_epoch_with_dynamic_stake_table must be >= 2 for genesis catchup",
                     )?;
-                let bootstrap_height = root_block_in_epoch(bootstrap_epoch, self.epoch_height);
+                let bootstrap_height = self
+                    .epoch_length
+                    .root_inside(EpochNumber::new(bootstrap_epoch))
+                    .context("locating the epoch root for genesis catchup")?;
                 let bootstrap_quorum = (
                     self.genesis_stake_table.clone(),
                     self.genesis_stake_table.clone(),
                 );
                 let bootstrap_root = self
                     .fetch_header_with_quorum(
-                        BlockId::Number(bootstrap_height as usize),
-                        move |_epoch| StakeTableQuorum::new(bootstrap_quorum, self.epoch_height),
+                        BlockId::Number(*bootstrap_height as usize),
+                        move |_epoch| StakeTableQuorum::new(bootstrap_quorum, self.epoch_length),
                     )
                     .await
                     .context("fetching snapshot root header for genesis catchup")?;
@@ -1039,14 +1042,17 @@ where
                 epoch_root_protocol_version,
             )?);
 
-            let root_height = root_block_in_epoch(epoch - 1, self.epoch_height);
+            let root_height = *self
+                .epoch_length
+                .root_inside(EpochNumber::new(epoch - 1))
+                .context(format!("locating the epoch root for {epoch}"))?;
             let root = {
                 let prev_quorum = prev_quorum.clone();
                 let next_quorum = next_quorum.clone();
                 self.fetch_header_with_quorum(
                     BlockId::Number(root_height as usize),
                     move |_epoch| {
-                        StakeTableQuorum::new((prev_quorum, next_quorum), self.epoch_height)
+                        StakeTableQuorum::new((prev_quorum, next_quorum), self.epoch_length)
                     },
                 )
                 .await
@@ -1168,7 +1174,7 @@ where
                 .leaf_proof(id, known_finalized.map(Leaf2::height))
                 .await?;
             let quorum;
-            let hint = match proof.epoch(self.epoch_height)? {
+            let hint = match proof.epoch(self.epoch_length)? {
                 Some(epoch) => {
                     quorum = make_quorum(epoch);
                     LeafProofHint::Quorum(&quorum)
@@ -1338,7 +1344,6 @@ mod test {
         simple_vote::{QuorumData2, VersionedVoteData},
         stake_table::supermajority_threshold,
         traits::signature_key::{SignatureKey, StateSignatureKey},
-        utils::epoch_from_block_number,
         vote::Certificate as _,
         x25519,
     };
@@ -1352,8 +1357,15 @@ mod test {
     use super::*;
     use crate::{
         storage::SqlStorage,
-        testing::{TestClient, leaf_chain, random_validator, register_validator_events},
+        testing::{
+            TestClient, epoch_length, leaf_chain, random_validator, register_validator_events,
+        },
     };
+
+    /// The height of the root inside `epoch` on a chain with an epoch height of 10.
+    fn root_inside(epoch: EpochNumber) -> u64 {
+        *epoch_length(10).root_inside(epoch).unwrap()
+    }
 
     #[tokio::test]
     #[test_log::test]
@@ -1975,7 +1987,7 @@ mod test {
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 5;
 
         let db = SqlStorage::default().await.unwrap();
-        let above_every_root = root_block_in_epoch(*epoch + 1, 10) as usize;
+        let above_every_root = root_inside(epoch + 1) as usize;
         db.insert_leaf(client.leaf(above_every_root).await)
             .await
             .unwrap();
@@ -2182,7 +2194,7 @@ mod test {
 
         // Height 45 is in epoch 5, so verifying its leaf replays up to the invalid stake table.
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 2;
-        assert_eq!(epoch_from_block_number(45, 10), *epoch);
+        assert_eq!(epoch_length(10).epoch_of(45u64), epoch);
         client.leaf(45).await;
         client.return_invalid_quorum(epoch).await;
         lc.fetch_leaf(LeafId::Number(45)).await.unwrap_err();
@@ -2249,7 +2261,7 @@ mod test {
         );
 
         let target_epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
-        let root_height = root_block_in_epoch(*target_epoch - 1, 10) as usize;
+        let root_height = root_inside(target_epoch - 1) as usize;
         for i in [0, 2, 4] {
             client.add_view_gap_after(root_height + i).await;
         }
@@ -2272,7 +2284,7 @@ mod test {
         );
 
         let target_epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
-        let root_height = root_block_in_epoch(*target_epoch - 1, 10) as usize;
+        let root_height = root_inside(target_epoch - 1) as usize;
         client.add_view_gap_after(root_height).await;
         client.corrupt_next_epoch_qc().await;
 
@@ -2299,7 +2311,7 @@ mod test {
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table;
-        let root_height = root_block_in_epoch(*epoch - 1, 10);
+        let root_height = root_inside(epoch - 1);
         client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
 
         lc.quorum_for_epoch(epoch).await.unwrap();
@@ -2334,7 +2346,7 @@ mod test {
 
         let lower_bound_epoch = genesis.first_epoch_with_dynamic_stake_table;
         let target_epoch = lower_bound_epoch + 1;
-        let target_epoch_root = root_block_in_epoch(*target_epoch - 2, 10);
+        let target_epoch_root = root_inside(target_epoch - 2);
 
         let mut prev_state = StakeTableState::default();
         for event in client.stake_table_events(lower_bound_epoch).await.unwrap() {
@@ -2379,7 +2391,7 @@ mod test {
 
         let prev_epoch = genesis.first_epoch_with_dynamic_stake_table;
         let target_epoch = prev_epoch + 1;
-        let root_height = root_block_in_epoch(*target_epoch - 1, 10);
+        let root_height = root_inside(target_epoch - 1);
 
         let mut prev_state = StakeTableState::default();
         for event in client.stake_table_events(prev_epoch).await.unwrap() {
@@ -2972,7 +2984,7 @@ mod rlp_test {
     #[test_log::test]
     fn rlp_genesis_round_trip() {
         let genesis = Genesis {
-            epoch_height: 1000,
+            epoch_height: EpochLength::try_from(1000).unwrap(),
             first_epoch_with_dynamic_stake_table: EpochNumber::new(3),
             stake_table: vec![StakeTableEntry {
                 stake_key: PubKey::generated_from_seed_indexed(
@@ -2991,5 +3003,15 @@ mod rlp_test {
         let mut buf = buf.as_slice();
         assert_eq!(genesis, Genesis::decode(&mut buf).unwrap());
         assert!(buf.is_empty());
+    }
+
+    /// `Genesis::epoch_height` was a `u64`, and still encodes as one.
+    #[test_log::test]
+    fn rlp_epoch_height_encodes_as_u64() {
+        let epoch_height = EpochLength::try_from(1000).unwrap();
+        assert_eq!(alloy_rlp::encode(epoch_height), alloy_rlp::encode(1000u64));
+
+        let zero = alloy_rlp::encode(0u64);
+        EpochLength::decode(&mut zero.as_slice()).unwrap_err();
     }
 }
