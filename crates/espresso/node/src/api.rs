@@ -3694,7 +3694,6 @@ mod test {
         testing::{DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource},
     };
     use super::*;
-    use crate::state::reward_proof_boundary;
 
     type Postgres = sql::postgres::DataSource;
     type Sqlite = sql::sqlite::DataSource;
