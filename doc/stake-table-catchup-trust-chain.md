@@ -36,7 +36,9 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
   - L1 RPC
   - local event storage
   - the LC contract owner, who can upgrade the contract (`LightClient._authorizeUpgrade`)
-  - the permissioned prover, when one is set (`LightClient.permissionedProver`)
+  - the LC contract circuit, whose proof `newFinalizedState` verifies
+- Not trusted: the permissioned prover, when one is set (`LightClient.permissionedProver`). It only limits who may
+  submit a proof, so it affects how recent `F` is, not its correctness.
 
 ```mermaid
 flowchart TD
@@ -70,7 +72,7 @@ flowchart TD
    - Trusts chain config and L1 RPC.
 1. `F`, `blockCommRoot`
    - `LightClientV3.finalizedState()` at the L1 finalized block.
-   - Trusts L1 RPC, the contract owner and the permissioned prover.
+   - Trusts L1 RPC, the LC contract owner and the circuit.
 2. Header at `F`
    - First leaf of `/v1/catchup/{F}/leafchain`, or request-response.
    - `verify_header`: height is `F` and `light_client_state.block_comm_root` equals the contract's.
