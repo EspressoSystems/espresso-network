@@ -36,6 +36,7 @@ use crate::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
+    storage::StorageOutput,
     tests::common::mock::MockCoordinator,
     trace,
     upgrade::UpgradeProtocol,
@@ -242,6 +243,16 @@ impl TestHarness {
     }
 
     pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
+        // The coordinator writes a reconstructed block's payload as it hands the block to
+        // consensus; a test that hands it over directly confirms the write after it.
+        let stored_payload = match &input {
+            ConsensusInput::BlockReconstructed {
+                view,
+                payload_commitment,
+                ..
+            } => Some(StorageOutput::Payload(*view, *payload_commitment)),
+            _ => None,
+        };
         let consensus = self.coordinator.consensus();
         self.trace.preamble(
             consensus.public_key(),
@@ -272,6 +283,9 @@ impl TestHarness {
             if let Err(err) = self.coordinator.process_consensus_output(out) {
                 panic!("unexpected error: {err}")
             }
+        }
+        if let Some(stored) = stored_payload {
+            self.apply_and_process(ConsensusInput::Stored(stored));
         }
     }
 

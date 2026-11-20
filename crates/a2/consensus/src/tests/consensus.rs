@@ -613,6 +613,43 @@ async fn test_fetched_lock_block_has_its_payload_fetched() {
     assert_eq!(payload_requests(&harness, block.view_number), 1);
 }
 
+/// A node restarted with its lock but without the locked block's payload holds
+/// its vote1 on a child of the block, and asks for the payload once the view
+/// times out, which a lock alone no longer stands in for.
+#[tokio::test]
+async fn test_restored_lock_without_payload_fetches_it() {
+    let test_data = TestData::new(3).await;
+    let (parent, child) = (&test_data.views[0], &test_data.views[1]);
+    let epoch = parent.epoch_number;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    harness.seed_proposals([parent.proposal.data.clone()]);
+    harness.consensus.seed_locked_cert(parent.cert1.clone());
+
+    harness
+        .apply_pair(child.proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(
+            o,
+            *child.view_number
+        )),
+        "the vote1 waits for the parent's payload"
+    );
+    assert_eq!(payload_requests(&harness, parent.view_number), 0);
+
+    let tc = timeout_cert_of(
+        &harness,
+        epoch,
+        ViewNumber::new(3),
+        Some(parent.cert1.clone()),
+    );
+    harness.apply(timeout_cert_input(tc)).await;
+
+    assert!(payload_requests(&harness, parent.view_number) > 0);
+}
+
 /// The block a timeout certificate's lock asked for has its payload asked for
 /// however it arrives: here parked without this node's share and adopted on
 /// its `Certificate2`, with the fetch still unanswered.
@@ -3645,6 +3682,55 @@ async fn test_vote1_gated_on_storage() {
         1,
         "re-delivered confirmations must not double-send"
     );
+}
+
+/// A vote1 on a child counts this node among the holders of the parent's payload, so it is held
+/// until that payload is on disk, not only reconstructed.
+#[tokio::test]
+async fn test_vote1_gated_on_parent_payload_storage() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let (parent, child) = (&test_data.views[0], &test_data.views[1]);
+    let view = child.view_number;
+    let commit = proposal_commitment(&child.proposal.data);
+    // Applied by hand: the harness would confirm the parent's payload as soon as it is
+    // reconstructed.
+    let consensus = &mut harness.consensus;
+    let mut outbox = Outbox::new();
+
+    let (proposal, share) = parent.proposal_input_consensus(&node_key);
+    consensus.apply(proposal, &mut outbox);
+    consensus.apply(share, &mut outbox);
+    consensus.apply(parent.block_reconstructed_input(), &mut outbox);
+    let (proposal, share) = child.proposal_input_consensus(&node_key);
+    consensus.apply(proposal, &mut outbox);
+    consensus.apply(share, &mut outbox);
+    consensus.apply(
+        state_verified_input(&child.proposal.data, view),
+        &mut outbox,
+    );
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Action(view, ActionKind::Vote)),
+        &mut outbox,
+    );
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Proposal(view, commit)),
+        &mut outbox,
+    );
+    assert!(
+        !any(&outbox, |o| is_vote1_for_view(o, *view)),
+        "vote1 must wait for the parent's payload to be stored"
+    );
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Payload(
+            parent.view_number,
+            parent.vid_commitment(),
+        )),
+        &mut outbox,
+    );
+    assert_eq!(count_matching(&outbox, |o| is_vote1_for_view(o, *view)), 1);
 }
 
 /// The lock update and view change fire as soon as cert1 is valid, but

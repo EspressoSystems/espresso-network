@@ -1483,6 +1483,14 @@ impl ConsensusHarness {
         cert1: Certificate1<TestTypes>,
     ) {
         self.seed_proposals([block.clone()]);
+        // A restarted node finds the payload of its lock's block on disk, since its vote2
+        // waited for it.
+        if let VidCommitment::V2(commitment) =
+            BlockHeader::<TestTypes>::payload_commitment(&block.block_header)
+        {
+            self.consensus
+                .seed_stored_payloads(BTreeSet::from([(block.view_number, commitment)]));
+        }
         self.trace.payload_held(&block);
         self.trace.cert1_held(&cert1);
         self.trace.lock_restored(cert1.view_number);

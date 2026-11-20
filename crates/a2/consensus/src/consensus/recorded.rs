@@ -87,15 +87,22 @@ impl<T: NodeType> Consensus<T> {
             (!self.stored_actions.contains(&(view, kind)))
                 .then_some(StorageOutput::Action(view, kind))
         };
-        let vote1 = self.pending_vote1.iter().map(|(key, vote)| {
+        let vote1 = self.pending_vote1.iter().map(|(key, pending)| {
             let ViewEpoch(view, epoch) = *key;
-            let commit = vote.vote.data.leaf_commit;
+            let commit = pending.vote.vote.data.leaf_commit;
             let is_revote = self.revotes.get(&view).is_some_and(|revote| {
                 revote.epoch == epoch && revote.cert1.data.leaf_commit == commit
             });
             let proposal = (!is_revote && !self.is_proposal_stored(view, &commit))
                 .then_some(StorageOutput::Proposal(view, commit));
-            let waits = action(view, ActionKind::Vote).into_iter().chain(proposal);
+            let parent = pending
+                .parent_payload
+                .filter(|key| !self.stored_payloads.contains(key))
+                .map(|(view, commitment)| StorageOutput::Payload(view, commitment));
+            let waits = action(view, ActionKind::Vote)
+                .into_iter()
+                .chain(proposal)
+                .chain(parent);
             HeldBack::new(HeldKind::Vote1, *key, waits)
         });
         let vote2 = self.pending_vote2.iter().map(|(key, pending)| {

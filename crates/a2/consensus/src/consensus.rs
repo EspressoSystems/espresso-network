@@ -282,7 +282,7 @@ pub struct Consensus<T: NodeType> {
     /// Messages constructed and accounted for in `voted_*_views` /
     /// `proposed_views`, awaiting their storage confirmations. A pending vote2
     /// also records the locked-QC view it must see persisted before release.
-    pending_vote1: BTreeMap<ViewEpoch, Vote1<T>>,
+    pending_vote1: BTreeMap<ViewEpoch, PendingVote1<T>>,
     pending_vote2: BTreeMap<ViewEpoch, PendingVote2<T>>,
     pending_proposal: BTreeMap<ViewEpoch, SignedProposal<T, Proposal<T>>>,
     pending_revote: BTreeMap<ViewEpoch, ReVoteMessage<T, Validated>>,
@@ -366,6 +366,15 @@ pub struct Consensus<T: NodeType> {
 enum RevoteFetch {
     Proposal,
     Payload,
+}
+
+/// A vote1 awaiting its storage confirmations.
+pub(crate) struct PendingVote1<T: NodeType> {
+    pub(crate) vote: Vote1<T>,
+
+    /// The view and payload commitment of the parent block, whose payload must be on disk
+    /// first, unless the vote does not depend on it.
+    pub(crate) parent_payload: Option<(ViewNumber, VidCommitment2)>,
 }
 
 /// A vote2 awaiting its storage confirmations.
@@ -760,13 +769,12 @@ impl<T: NodeType> Consensus<T> {
     /// block's view, is compared rather than the view, since a re-vote's
     /// certificate is at a later view than its block.
     ///
-    /// The specification does not cover restarts yet. One detail to settle
-    /// when it does: the lock (`append_high_qc2`) and the payload
-    /// (`append_da`) are persisted by separate storage tasks, so a node that
-    /// restarts between the two writes comes back with the lock but without
-    /// the payload, and the lock alone counts here. Ordering the two writes,
-    /// or checking the payload on restart, keeps a restarted node within the
-    /// rule that a vote1 needs the parent's payload (`ParentReady`).
+    /// The lock alone counts here, as for a node restarted with its lock but
+    /// without the block. A vote1 on a child still waits until the parent's
+    /// payload is on disk (`PendingVote1::parent_payload`), which keeps the
+    /// node within the rule that a vote1 needs the parent's payload
+    /// (`ParentReady`); a restarted node that lost the payload holds its
+    /// vote1 until it has the payload again.
     fn parent_reconstructed(
         &self,
         parent_view: ViewNumber,
@@ -1962,17 +1970,17 @@ impl<T: NodeType> Consensus<T> {
     /// missed the view's votes and the certificate broadcast that followed
     /// them.
     ///
-    /// Views at or earlier than the lock cannot be what blocks us: safety
-    /// pins the justify_qc of any proposal we may still vote for at or later
-    /// than the lock, and a parent equal to the lock counts as reconstructed.
-    /// Later than `current_view - GC_MARGIN_VIEWS` a missing share broadcast
-    /// may still arrive on its own, and fetching would race it for a whole
-    /// payload.
+    /// Views earlier than the lock cannot be what blocks us: safety pins the
+    /// justify_qc of any proposal we may still vote for at or later than the
+    /// lock. The lock's own view can: a vote1 on a child of the locked block
+    /// waits for the block's payload on disk, which a node restarted without
+    /// it has to fetch. Later than `current_view - GC_MARGIN_VIEWS` a missing
+    /// share broadcast may still arrive on its own, and fetching would race it
+    /// for a whole payload.
     fn request_missing_payloads(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let earliest = self
             .lock_view()
-            .map_or_else(ViewNumber::genesis, |lock| lock.view)
-            + 1;
+            .map_or_else(ViewNumber::genesis, |lock| lock.view);
         let latest = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS.get()));
 
         let Some(child) = self.proposals.last() else {
@@ -3425,7 +3433,12 @@ impl<T: NodeType> Consensus<T> {
             },
             StorageOutput::Payload(view, commitment) => {
                 self.stored_payloads.insert((view, commitment));
-                // A re-vote at a later view can wait on this payload; re-check all.
+                // A vote1 on a child, or a re-vote at a later view, can wait on this payload;
+                // re-check all.
+                let pending: Vec<ViewEpoch> = self.pending_vote1.keys().copied().collect();
+                for key in pending {
+                    self.release_vote1_at(key, outbox);
+                }
                 let pending: Vec<ViewEpoch> = self.pending_vote2.keys().copied().collect();
                 for key in pending {
                     self.release_vote2_at(key, outbox);
@@ -3469,19 +3482,22 @@ impl<T: NodeType> Consensus<T> {
 
     fn release_vote1_at(&mut self, key: ViewEpoch, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let ViewEpoch(view, epoch) = key;
-        let Some(vote1) = self.pending_vote1.get(&key) else {
+        let Some(pending) = self.pending_vote1.get(&key) else {
             return;
         };
+        let commit = pending.vote.vote.data.leaf_commit;
         // A re-vote's block was proposed, and stored, at an earlier view.
-        let is_revote = self.revotes.get(&view).is_some_and(|revote| {
-            revote.epoch == epoch && revote.cert1.data.leaf_commit == vote1.vote.data.leaf_commit
-        });
+        let is_revote = self
+            .revotes
+            .get(&view)
+            .is_some_and(|revote| revote.epoch == epoch && revote.cert1.data.leaf_commit == commit);
         if !self.stored_actions.contains(&(view, ActionKind::Vote))
-            || (!is_revote && !self.is_proposal_stored(view, &vote1.vote.data.leaf_commit))
+            || (!is_revote && !self.is_proposal_stored(view, &commit))
+            || !self.payload_stored(pending.parent_payload)
         {
             return;
         }
-        let vote1 = self.pending_vote1.remove(&key).expect("checked above");
+        let vote1 = self.pending_vote1.remove(&key).expect("checked above").vote;
         if self.upgrade_lock.certificate_rule(view) && epoch < self.current_epoch {
             debug!(%view, %epoch, "dropping pending vote1 of an epoch this node has left");
             return;
@@ -3561,6 +3577,11 @@ impl<T: NodeType> Consensus<T> {
                 && self
                     .stored_payloads
                     .contains(&(block_view, block_commitment)))
+    }
+
+    /// Whether the payload `payload` names, if any, is on disk.
+    fn payload_stored(&self, payload: Option<(ViewNumber, VidCommitment2)>) -> bool {
+        payload.is_none_or(|key| self.stored_payloads.contains(&key))
     }
 
     /// See [`Self::timeout_vote_bar`].
@@ -3765,6 +3786,7 @@ impl<T: NodeType> Consensus<T> {
 
         // Verify parent chain unless justify_qc is the genesis QC
         let parent_view = proposal.justify_qc.view_number();
+        let mut parent_payload = None;
 
         if parent_view != ViewNumber::genesis()
             && !self
@@ -3805,6 +3827,10 @@ impl<T: NodeType> Consensus<T> {
                 );
                 return;
             }
+            // The vote counts this node among the holders of the parent's payload, so the
+            // payload must be on disk before the vote is sent, as a vote2 waits for its own
+            // block's.
+            parent_payload = Some((parent_view, prev_block_commitment));
         }
 
         let proposal_commit = proposal_commitment(proposal);
@@ -3848,7 +3874,8 @@ impl<T: NodeType> Consensus<T> {
             state_vote,
         };
         let can_send = self.stored_actions.contains(&(view, ActionKind::Vote))
-            && self.is_proposal_stored(view, &proposal_commit);
+            && self.is_proposal_stored(view, &proposal_commit)
+            && self.payload_stored(parent_payload);
         let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(ViewEpoch(view, epoch));
         self.vote1_parent.insert(view, qc_view);
@@ -3857,7 +3884,13 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {
             self.request_action(view, ActionKind::Vote, outbox);
-            self.pending_vote1.insert(ViewEpoch(view, epoch), vote);
+            self.pending_vote1.insert(
+                ViewEpoch(view, epoch),
+                PendingVote1 {
+                    vote,
+                    parent_payload,
+                },
+            );
         }
     }
 
@@ -4198,7 +4231,15 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
         } else {
             self.request_action(view, ActionKind::Vote, outbox);
-            self.pending_vote1.insert(ViewEpoch(view, epoch), vote);
+            // The block is the last of its epoch, decided by a `Certificate2` of its own, whose
+            // vote2s wait for its payload.
+            self.pending_vote1.insert(
+                ViewEpoch(view, epoch),
+                PendingVote1 {
+                    vote,
+                    parent_payload: None,
+                },
+            );
         }
     }
 
