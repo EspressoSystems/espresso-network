@@ -1420,8 +1420,8 @@ fn reward_tree_gc_height(height: u64, finalized: u64, epoch_height: u64, version
         1
     };
     let current_epoch = epoch_from_block_number(height, epoch_height);
-    // Last block of the epoch before the oldest epoch we retain: the oldest boundary tree we keep.
-    let epoch_start_block = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
+    // The last block of epoch `current_epoch - epochs_to_retain`.
+    let oldest_retained_boundary = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
 
     let claim_tree = if version >= versions::EPOCH_REWARD_VERSION {
         // Before the first boundary no proofs exist yet; keeping every tree from `finalized` up
@@ -1430,7 +1430,7 @@ fn reward_tree_gc_height(height: u64, finalized: u64, epoch_height: u64, version
     } else {
         finalized
     };
-    epoch_start_block.min(claim_tree)
+    oldest_retained_boundary.min(claim_tree)
 }
 
 impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsDataSource {
