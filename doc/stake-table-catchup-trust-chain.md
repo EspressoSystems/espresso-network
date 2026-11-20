@@ -15,11 +15,10 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
   - local event storage
   - the LC contract owner, who can upgrade the contract (`LightClient._authorizeUpgrade`)
   - the permissioned prover, when one is set (`LightClient.permissionedProver`)
-  - the stake table contract, whose `lightClient()` is read at the latest L1 block, not the finalized one
 
 ```mermaid
 flowchart TD
-    CC[chain config: stake_table_contract] -->|L1 RPC, latest block| ST[StakeTableV3.lightClient]
+    CC[chain config: stake_table_contract] -->|L1 RPC, finalized block| ST[StakeTableV3.lightClient]
     ST -->|L1 RPC, finalized block| LC["LcContract.finalizedState: F, blockCommRoot (SNARK-verified)"]
     LC --> A["Anchor header at F (peer)"]
     A -->|"verify_header: height == F, block_comm_root matches"| AR[block Merkle root of header F]
@@ -34,7 +33,7 @@ flowchart TD
 
 | #   | Value                   | From                    | Checked by                                  |
 | --- | ----------------------- | ----------------------- | ------------------------------------------- |
-| 0   | LC contract address     | L1, latest block        | trusted                                     |
+| 0   | LC contract address     | L1, finalized block     | trusted                                     |
 | 1   | `F`, `blockCommRoot`    | L1, finalized block     | SNARK, in the contract                      |
 | 2   | Header at `F`           | peer                    | its `block_comm_root` equals the contract's |
 | 3   | Root headers below `F`  | peer                    | Merkle proof against header `F`             |
@@ -77,8 +76,8 @@ In `EpochMembershipCoordinator::catchup`.
 
 1. `held_pair_top` finds the highest held consecutive pair `(start-1, start)` in memory or storage.
 2. If `start + 1 < target`, the seed takes `seed_lock` and re-checks `start`.
-3. L1 reads: the finalized block number, the LC address (latest block, cached in a `OnceCell`), then `finalizedState` at
-   that finalized block.
+3. L1 reads: the finalized block number, the LC address (cached in a `OnceCell`), then `finalizedState`, both at that
+   finalized block.
 4. `seed_window` picks the epochs to install:
    - `last = min(target, epoch(F) + 1)`
    - `first = max(last - 4, start + 1, 3)`
