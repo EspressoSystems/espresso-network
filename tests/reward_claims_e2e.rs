@@ -189,7 +189,9 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
     println!("Fetching reward claim input from: {}", reward_claim_url);
 
-    // Retry fetching the reward claim input up to 5 times with 2 second delays
+    // Retry fetching the reward claim input for up to 3 minutes: a node stores reward proofs only
+    // at every 30th block, after it reads the light client's new finalized height.
+    const ATTEMPTS: u32 = 90;
     let http_client = reqwest::Client::new();
     let mut attempt = 0;
     let claim_input = loop {
@@ -205,12 +207,12 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
                 Ok(data) => {
                     break data;
                 },
-                Err(e) if attempt == 5 => {
+                Err(e) if attempt == ATTEMPTS => {
                     panic!("Failed to parse reward claim input: {}", e);
                 },
                 Err(_) => {},
             },
-            Err(e) if attempt == 5 => {
+            Err(e) if attempt == ATTEMPTS => {
                 panic!("Request for reward claim input failed: {}", e);
             },
             Err(_) => {},

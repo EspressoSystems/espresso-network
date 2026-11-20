@@ -673,13 +673,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
             // Only attempt to persist proofs every 30th block.
-            //
-            // In tests, we persist proofs at every block height so
-            // reward claim tests can query proofs at arbitrary heights. This can be
-            // removed once all reward claim tests are updated
-            if !cfg!(any(test, feature = "testing"))
-                && !(height + node_state.node_id).is_multiple_of(30)
-            {
+            if !(height + node_state.node_id).is_multiple_of(30) {
                 return Ok(());
             }
 
@@ -2946,6 +2940,49 @@ mod tests {
             U256::from(20),
             "the proofs at 20 come from the tree at 20"
         );
+    }
+
+    /// `persist_reward_proofs` stores proofs only at the blocks where the block height plus the
+    /// node id is a multiple of 30, so nodes spread the work: a call at another block stores
+    /// nothing, though the L1 light client has finalized a height whose proofs are missing.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_reward_lc_proofs_only_on_throttle_blocks() {
+        use tokio::time::{Duration, sleep};
+
+        // (node id, a block it skips, a block it stores proofs at)
+        for (node_id, skipped, stored) in [(0, 23, 30), (7, 30, 23)] {
+            let db = TmpDb::init().await;
+            let account = super::RewardAccountV2(Address::repeat_byte(1));
+            let storage = reward_lc_storage(&db, account).await;
+            let mut node_state = NodeState::mock().with_epoch_height(LC_EPOCH_HEIGHT);
+            node_state.node_id = node_id;
+
+            cache_l1_finalized(&mut node_state, LC_FINALIZED).await;
+            storage
+                .persist_reward_proofs(&node_state, skipped, EPOCH_REWARD_VERSION)
+                .await
+                .unwrap();
+            // A spawned task writes the proofs, so give one the time to land.
+            sleep(Duration::from_secs(2)).await;
+            for height in [20, 30] {
+                assert!(
+                    !storage.proof_exists(height).await,
+                    "node {node_id}: the call at block {skipped} stored proofs at {height}, but \
+                     {skipped} + {node_id} is not a multiple of 30"
+                );
+            }
+
+            storage
+                .persist_reward_proofs(&node_state, stored, EPOCH_REWARD_VERSION)
+                .await
+                .unwrap();
+            let at = wait_for_proofs_at_any(&storage, &[20, 30]).await;
+            assert_eq!(
+                at, 20,
+                "node {node_id}: the call at block {stored} stored proofs at {at}"
+            );
+        }
     }
 
     /// The epoch height of the `test_reward_lc_*` storage tests.
