@@ -25,6 +25,18 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 - `seed_window_first`, `seed_window_last` (`first`, `last` in code): the lowest and highest epoch of the seed window.
 - preceding root: `root(seed_window_first-3)`, fetched only for the block reward of `table(seed_window_first)`.
 
+## Where `requested_epoch` comes from
+
+- Validator: from a peer. A node that starts behind knows only its stored anchor epoch. Its timeout vote reaches
+  up-to-date peers, which reply with their locked QC. That QC's `epoch` is `requested_epoch`.
+- The claim is checked after catchup: the QC commits to its epoch and block number, and its signatures must reach the
+  threshold of the table catchup installed for that epoch. Only then does the node's own epoch advance.
+- Catchup does not take the peer's tables on trust: the seed stops at `epoch(F) + 1` from the LC contract, and the walk
+  above it accepts only QC-checked epoch roots.
+- Follower: the next ingest epoch, from a block height the upstream reports and the light client checks with a finality
+  proof.
+- Query API: the epoch named in a state certificate request, accepted only up to the node's own decided epoch.
+
 ## Summary
 
 - One trust root: the LC contract's SNARK-verified `finalizedState`, read over L1 RPC.
