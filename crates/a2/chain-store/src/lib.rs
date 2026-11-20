@@ -35,7 +35,7 @@ pub mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use backend::{AppWrite, Backend, Column, Part, Row};
+pub use backend::{AppWrite, Backend, Column, KeyBounds, Part, Row};
 
 /// The store service's protocol, generated from `proto/espresso/a2/store/v1`.
 pub mod proto {
@@ -147,6 +147,9 @@ pub enum Lookup {
 /// values of other versions.
 const FORMAT: u8 = 1;
 
+/// How many application table entries [`ChainStore::app_entries`] asks the backend for at a time.
+const APP_PAGE: usize = 1024;
+
 /// A store over a [`Backend`]. Clones share the backend.
 #[derive(Clone)]
 pub struct ChainStore {
@@ -206,13 +209,11 @@ impl ChainStore {
     /// The item and parts of `height` as the store encodes them, for passing on to another store
     /// unchanged.
     pub async fn record(&self, height: u64) -> anyhow::Result<Option<Record>> {
-        let Some(item) = self.backend.item(height).await? else {
-            return Ok(None);
-        };
-        Ok(Some(Record {
+        let record = self.backend.record(height).await?;
+        Ok(record.map(|(item, parts)| Record {
             height,
             item,
-            parts: self.backend.parts(height).await?,
+            parts,
         }))
     }
 
@@ -262,13 +263,32 @@ impl ChainStore {
         self.backend.app_get(table, key).await
     }
 
-    /// The entries of the application table `table` from `from` on, in bytewise key order.
+    /// The entries of the application table `table` with keys from `from` on, and before
+    /// `until` if set, in bytewise key order. They are read a page at a time, so no single answer
+    /// grows with the table.
     pub async fn app_entries(
         &self,
         table: &str,
         from: &[u8],
+        until: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
-        self.backend.app_entries(table, from).await
+        let mut entries: Vec<(Bytes, Bytes)> = Vec::new();
+        let mut next = from.to_vec();
+        loop {
+            let keys = KeyBounds {
+                from: &next,
+                until,
+                limit: APP_PAGE,
+            };
+            // A backend may answer fewer than asked for; only an empty page is the end.
+            let page = self.backend.app_entries(table, keys).await?;
+            let Some((last, _)) = page.last() else {
+                return Ok(entries);
+            };
+            // The least key after the last one read.
+            next = [&last[..], &[0]].concat();
+            entries.extend(page);
+        }
     }
 
     /// Applies `writes` to the application tables, in order, in one commit.
@@ -374,6 +394,28 @@ mod tests {
                 "{lookup:?}"
             );
         }
+    }
+
+    /// A table longer than a page is read whole, and only up to `until` if set.
+    #[tokio::test]
+    async fn app_entries_read_every_page() {
+        let store = ChainStore::new(mem::MemBackend::default());
+        let count = 2 * APP_PAGE as u32 + 5;
+        let writes = (0..count)
+            .map(|i| AppWrite::Put {
+                table: "t".into(),
+                key: Bytes::copy_from_slice(&i.to_be_bytes()),
+                value: Bytes::new(),
+            })
+            .collect();
+        store.app_write(writes).await.unwrap();
+
+        let all = store.app_entries("t", &[], None).await.unwrap();
+        assert_eq!(all.len(), count as usize);
+        let until = 1500u32.to_be_bytes();
+        let before = store.app_entries("t", &[], Some(&until)).await.unwrap();
+        assert_eq!(before.len(), 1500);
+        assert_eq!(before.last().unwrap().0[..], 1499u32.to_be_bytes());
     }
 
     /// A record carries the item and parts as stored, and decodes to them.

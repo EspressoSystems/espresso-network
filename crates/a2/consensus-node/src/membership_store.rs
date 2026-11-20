@@ -66,11 +66,12 @@ const PER_EPOCH: [&str; 5] = [STAKE, VALIDATORS, DRB_RESULTS, DRB_INPUTS, EPOCH_
 pub trait AppTables: Clone + Send + Sync + 'static {
     async fn get(&self, table: &'static str, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>>;
 
-    /// The entries of `table` from `from` on, in key order.
+    /// The entries of `table` with keys from `from` on, and before `until` if set, in key order.
     async fn entries(
         &self,
         table: &'static str,
         from: Vec<u8>,
+        until: Option<Vec<u8>>,
     ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>>;
 
     /// Applies `writes` in order, in one commit.
@@ -89,9 +90,11 @@ impl AppTables for ConsensusStore<SeqTypes> {
         &self,
         table: &'static str,
         from: Vec<u8>,
+        until: Option<Vec<u8>>,
     ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let store = self.clone();
-        tokio::task::spawn_blocking(move || store.app_entries(table, &from)).await?
+        tokio::task::spawn_blocking(move || store.app_entries(table, &from, until.as_deref()))
+            .await?
     }
 
     async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
@@ -110,8 +113,9 @@ impl AppTables for ChainStore {
         &self,
         table: &'static str,
         from: Vec<u8>,
+        until: Option<Vec<u8>>,
     ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let entries = self.app_entries(table, &from).await?;
+        let entries = self.app_entries(table, &from, until.as_deref()).await?;
         Ok(entries
             .into_iter()
             .map(|(key, value)| (key.to_vec(), value.to_vec()))
@@ -183,7 +187,7 @@ impl<A: AppTables> MembershipStore<A> {
     /// The DRB results the store holds, each with the root of its epoch if the store has it, for
     /// a restarted node to begin with.
     pub async fn start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
-        let results = self.store.entries(DRB_RESULTS, Vec::new()).await?;
+        let results = self.store.entries(DRB_RESULTS, Vec::new(), None).await?;
         let mut info = Vec::with_capacity(results.len());
         for (key, value) in results {
             let epoch = epoch_of(&key)?;
@@ -207,7 +211,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
-        let entries = self.store.entries(STAKE, Vec::new()).await?;
+        let entries = self.store.entries(STAKE, Vec::new(), None).await?;
         let mut stakes = entries
             .into_iter()
             .rev()
@@ -224,7 +228,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     }
 
     async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
-        let entries = self.store.entries(STAKE, Vec::new()).await?;
+        let entries = self.store.entries(STAKE, Vec::new(), None).await?;
         entries.iter().map(|(k, _)| epoch_of(k)).collect()
     }
 
@@ -306,21 +310,21 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         Option<EventsPersistenceRead>,
         Vec<(EventKey, StakeTableEvent)>,
     )> {
-        let until = self.events_until().await?;
-        let entries = self
-            .store
-            .entries(EVENTS, event_key(from_l1_block, 0).to_vec())
-            .await?;
-        let Some(until) = until else {
+        let Some(until) = self.events_until().await? else {
             return Ok((None, Vec::new()));
         };
         let last = until.min(to_l1_block);
+        let entries = self
+            .store
+            .entries(
+                EVENTS,
+                event_key(from_l1_block, 0).to_vec(),
+                last.checked_add(1).map(|next| event_key(next, 0).to_vec()),
+            )
+            .await?;
         let mut events = Vec::new();
         for (k, v) in entries {
             let (block, index) = decode_event_key(&k)?;
-            if block > last {
-                break;
-            }
             let event: StakeTableEvent = serde_json::from_slice(&v)
                 .with_context(|| format!("stake-table event at {block}/{index}"))?;
             events.push(((block, index), event));

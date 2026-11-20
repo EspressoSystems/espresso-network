@@ -416,6 +416,27 @@ async fn a_broken_chain_stops_the_ingester() {
     assert_eq!(sink.appended(), vec![0, 1]);
 }
 
+/// An entry the ingester cannot decode would come again after every reconnect, so it stops the
+/// ingester instead.
+#[tokio::test]
+async fn an_undecodable_entry_stops_the_ingester() {
+    let chain = chain(1).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=0);
+    let mut bad = entry(&chain, &chain.blocks()[1], true);
+    bad.body.as_mut().unwrap().leaf = vec![1, 2, 3];
+    log.insert(bad);
+    let sink = MemSink::new();
+    let ingester = spawn_ingester(serve(log).await, sink.clone());
+
+    let err = timeout(Duration::from_secs(10), ingester)
+        .await
+        .expect("the ingester stops")
+        .unwrap();
+    assert!(err.is::<BadEntry>(), "{err:#}");
+    assert_eq!(sink.appended(), vec![0]);
+}
+
 /// A chain that differs from those of [`chain`] at height 1, so its leaf at height 2 names a
 /// different parent.
 async fn other_chain() -> MockChain {

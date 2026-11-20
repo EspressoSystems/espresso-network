@@ -17,8 +17,8 @@ service Store {
 
   rpc GetPart(PartRequest) returns (MaybeBytes);
 
-  // The parts a height has, in part order.
-  rpc GetParts(HeightRequest) returns (PartsResponse);
+  // The item of a height with the parts it has, in part order, read together.
+  rpc GetRecord(HeightRequest) returns (RecordResponse);
 
   // The height of the item whose commitment in `column` is `value`; the earliest if several share
   // it.
@@ -43,7 +43,7 @@ service Store {
   // The value of a key in an application table.
   rpc AppGet(AppGetRequest) returns (MaybeBytes);
 
-  // The entries of an application table from a key on, in bytewise key order.
+  // Entries of an application table between two keys, in bytewise key order, up to a limit.
   rpc AppEntries(AppEntriesRequest) returns (AppEntriesResponse);
 
   // Applies writes to the application tables, in order, in one commit.
@@ -135,8 +135,10 @@ message Height {
   uint64 height = 1;
 }
 
-message PartsResponse {
-  repeated PartData parts = 1;
+message RecordResponse {
+  // Absent if the height has no item.
+  optional bytes item = 1;
+  repeated PartData parts = 2;
 }
 
 message HeightRange {
@@ -163,7 +165,13 @@ message AppGetRequest {
 
 message AppEntriesRequest {
   string table = 1;
+
+  // The first key, and the key the entries end before, if any.
   bytes from = 2;
+  optional bytes until = 3;
+
+  // At most this many entries; the server may answer fewer.
+  uint32 limit = 4;
 }
 
 message AppEntry {

@@ -8,54 +8,83 @@
 //! sent it. Until the cache holds records, the bootstrap URLs are the peers. The API service's own
 //! URL is never a peer.
 
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 use consensus::discovery::SignedServiceRecord;
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
 use rand::seq::SliceRandom;
+use tonic::transport::Channel;
 use url::Url;
 
 use crate::{
     Membership,
-    discovery::{from_listed, service_records},
+    discovery::{consensus_channel, from_listed, service_records},
     gaps::endpoint,
     proto::{GetPeersRequest, discovery_service_client::DiscoveryServiceClient},
 };
 
 pub struct Peers {
-    consensus_api: SocketAddr,
-    bootstrap: Vec<Url>,
+    /// The channel to the API service's consensus node.
+    consensus: Channel,
+
+    bootstrap: Vec<Peer>,
 
     /// The URL other services reach this API service at, left out of the peers.
     own: Option<Url>,
 
-    /// The URLs the records of `epoch` name.
-    urls: Vec<Url>,
+    /// The peers the records of `epoch` name.
+    peers: Vec<Peer>,
     epoch: Option<EpochNumber>,
+}
+
+/// An API service to ask, with a channel to it that connects on first use and reconnects when
+/// the connection fails, so requests share one connection.
+#[derive(Clone, Debug)]
+pub struct Peer {
+    pub url: Url,
+    pub(crate) channel: Channel,
+}
+
+impl Peer {
+    fn new(url: Url) -> anyhow::Result<Self> {
+        let channel = endpoint(&url)?.connect_lazy();
+        Ok(Self { url, channel })
+    }
+}
+
+impl fmt::Display for Peer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.url.fmt(f)
+    }
 }
 
 impl Peers {
     pub fn new(consensus_api: SocketAddr, bootstrap: Vec<Url>, own: Option<Url>) -> Self {
+        let bootstrap = bootstrap
+            .into_iter()
+            .filter(|url| Some(url) != own.as_ref())
+            .filter_map(|url| {
+                Peer::new(url.clone())
+                    .inspect_err(|err| tracing::warn!(%url, "a bad bootstrap URL: {err:#}"))
+                    .ok()
+            })
+            .collect();
         Self {
-            consensus_api,
+            consensus: consensus_channel(consensus_api),
             bootstrap,
             own,
-            urls: Vec::new(),
+            peers: Vec::new(),
             epoch: None,
         }
     }
 
     /// The peers, in random order, so that the load spreads and no peer is always asked first.
-    pub fn shuffled(&self) -> Vec<Url> {
-        let mut peers: Vec<_> = match self.urls.is_empty() {
-            true => &self.bootstrap,
-            false => &self.urls,
-        }
-        .iter()
-        .filter(|url| Some(*url) != self.own.as_ref())
-        .cloned()
-        .collect();
+    pub fn shuffled(&self) -> Vec<Peer> {
+        let mut peers = match self.peers.is_empty() {
+            true => self.bootstrap.clone(),
+            false => self.peers.clone(),
+        };
         peers.shuffle(&mut rand::thread_rng());
         peers
     }
@@ -66,7 +95,7 @@ impl Peers {
         if self.epoch == Some(epoch) {
             return;
         }
-        let mut urls = match service_records(self.consensus_api, Some(*epoch)).await {
+        let mut urls = match service_records(self.consensus.clone(), Some(*epoch)).await {
             Ok((_, records)) => valid_urls(records, epoch, membership),
             Err(status) => {
                 tracing::debug!(%epoch, %status, "no records from consensus");
@@ -80,7 +109,25 @@ impl Peers {
             return;
         }
         tracing::info!(%epoch, peers = urls.len(), "peers of the epoch");
-        (self.urls, self.epoch) = (urls, Some(epoch));
+        let peers = urls
+            .into_iter()
+            .filter(|url| Some(url) != self.own.as_ref())
+            .filter_map(|url| {
+                match self
+                    .peers
+                    .iter()
+                    .chain(&self.bootstrap)
+                    .find(|peer| peer.url == url)
+                {
+                    // A peer known already keeps its connection.
+                    Some(peer) => Some(peer.clone()),
+                    None => Peer::new(url.clone())
+                        .inspect_err(|err| tracing::debug!(%url, "a bad peer URL: {err:#}"))
+                        .ok(),
+                }
+            })
+            .collect();
+        (self.peers, self.epoch) = (peers, Some(epoch));
     }
 
     /// The URLs of the valid records of `epoch` the first bootstrap API service with any lists.
@@ -102,10 +149,10 @@ impl Peers {
 
 /// The records `peer` lists for `epoch`; those that do not decode are left out.
 async fn listed_records(
-    peer: &Url,
+    peer: &Peer,
     epoch: EpochNumber,
 ) -> anyhow::Result<Vec<SignedServiceRecord<SeqTypes>>> {
-    let mut client = DiscoveryServiceClient::new(endpoint(peer)?.connect().await?);
+    let mut client = DiscoveryServiceClient::new(peer.channel.clone());
     let response = client
         .get_peers(GetPeersRequest {
             epoch: Some(*epoch),
@@ -179,14 +226,14 @@ mod tests {
     }
 
     /// Without records the bootstrap URLs are the peers, and the service's own URL is never one.
-    #[test]
-    fn uses_the_bootstrap_urls_but_not_its_own() {
+    #[tokio::test]
+    async fn uses_the_bootstrap_urls_but_not_its_own() {
         let peers = Peers::new(
             "127.0.0.1:1".parse().unwrap(),
             vec![url(1), url(2), url(3)],
             Some(url(3)),
         );
-        let shuffled: BTreeSet<_> = peers.shuffled().into_iter().collect();
+        let shuffled: BTreeSet<_> = peers.shuffled().into_iter().map(|peer| peer.url).collect();
         assert_eq!(shuffled, BTreeSet::from([url(1), url(2)]));
     }
 

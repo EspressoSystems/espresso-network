@@ -1,8 +1,8 @@
 //! Catching up from API services: the node's own first, then those the operator names, then those
 //! of the other validators, as their signed records name them. A node with an empty store has no
-//! records yet, so it needs its own API service or one the operator names. Nothing is taken on trust: a leaf chain must end in a
-//! `Certificate2` with a quorum of its epoch's stake table, and state must prove against the roots
-//! of verified headers.
+//! records yet, so it needs its own API service or one the operator names. Nothing is taken on
+//! trust: a leaf chain must end in a `Certificate2` with a quorum of its epoch's stake table, and
+//! state must prove against the roots of verified headers.
 
 use std::{sync::Arc, time::Duration};
 
@@ -49,9 +49,9 @@ type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 /// Catchup from API services.
 #[derive(Clone)]
 pub struct ApiCatchup {
-    /// The node's own API service, asked first, and those the operator names.
-    own: Url,
-    bootstrap: Vec<Url>,
+    /// The node's own API service, asked first, and those the operator names, each with a
+    /// channel that connects on first use, so that their requests share a connection.
+    known: Vec<(Url, Channel)>,
 
     /// The consensus store, whose records name the other validators' API services.
     store: ConsensusStore<SeqTypes>,
@@ -61,31 +61,36 @@ pub struct ApiCatchup {
 
 impl std::fmt::Debug for ApiCatchup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let urls: Vec<&str> = self.known.iter().map(|(url, _)| url.as_str()).collect();
         f.debug_struct("ApiCatchup")
-            .field("own", &self.own.as_str())
+            .field("known", &urls)
             .finish_non_exhaustive()
     }
 }
 
 impl ApiCatchup {
     pub fn new(own: Url, bootstrap: Vec<Url>, store: ConsensusStore<SeqTypes>) -> Self {
+        let mut known: Vec<(Url, Channel)> = Vec::new();
+        for url in std::iter::once(own).chain(bootstrap) {
+            if known.iter().any(|(known, _)| *known == url) {
+                continue;
+            }
+            match channel(&url) {
+                Ok(channel) => known.push((url, channel)),
+                Err(err) => tracing::warn!(%url, "cannot catch up from it: {err:#}"),
+            }
+        }
         Self {
-            own,
-            bootstrap,
+            known,
             store,
             backoff: BackoffParams::default(),
         }
     }
 
     /// The node's own API service, those the operator names, then those the latest stored records
-    /// name.
-    fn sources(&self) -> Vec<Url> {
-        let mut sources = vec![self.own.clone()];
-        for url in &self.bootstrap {
-            if !sources.contains(url) {
-                sources.push(url.clone());
-            }
-        }
+    /// name, with channels to them.
+    fn sources(&self) -> Vec<(Url, Channel)> {
+        let mut sources = self.known.clone();
         let records = match self.store.service_records(None) {
             Ok(records) => records.map(|(_, records)| records).unwrap_or_default(),
             Err(err) => {
@@ -97,9 +102,15 @@ impl ApiCatchup {
             let Ok(record) = bincode::deserialize::<SignedServiceRecord<SeqTypes>>(&bytes) else {
                 continue;
             };
-            match record.record.api_url.parse::<Url>() {
-                Ok(url) if !sources.contains(&url) => sources.push(url),
-                _ => {},
+            let Ok(url) = record.record.api_url.parse::<Url>() else {
+                continue;
+            };
+            if sources.iter().any(|(known, _)| *known == url) {
+                continue;
+            }
+            match channel(&url) {
+                Ok(channel) => sources.push((url, channel)),
+                Err(err) => tracing::debug!(%url, "cannot catch up from it: {err:#}"),
             }
         }
         sources
@@ -112,11 +123,10 @@ impl ApiCatchup {
         F: Fn(CatchupServiceClient<Channel>) -> Fut,
         Fut: Future<Output = anyhow::Result<T>>,
     {
-        for source in self.sources() {
-            let answer = timeout(REQUEST_TIMEOUT, async {
-                ask(connect(&source).await.context("connecting")?).await
-            })
-            .await;
+        for (source, channel) in self.sources() {
+            let client =
+                CatchupServiceClient::new(channel).max_decoding_message_size(MAX_ANSWER_SIZE);
+            let answer = timeout(REQUEST_TIMEOUT, ask(client)).await;
             match answer {
                 Ok(Ok(answer)) => return Ok(answer),
                 Ok(Err(err)) => tracing::debug!(%source, "{what}: {err:#}"),
@@ -127,15 +137,20 @@ impl ApiCatchup {
     }
 }
 
-async fn connect(url: &Url) -> anyhow::Result<CatchupServiceClient<Channel>> {
+/// A channel to the API service at `url`, which connects on first use and again whenever the
+/// connection fails.
+fn channel(url: &Url) -> anyhow::Result<Channel> {
     let mut endpoint = Endpoint::from_shared(url.to_string())?
         .connect_timeout(REQUEST_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT);
+        .timeout(REQUEST_TIMEOUT)
+        // A connection is shared by many requests; pings drop one that died without closing.
+        .http2_keep_alive_interval(Duration::from_secs(10))
+        .keep_alive_timeout(Duration::from_secs(20))
+        .keep_alive_while_idle(true);
     if url.scheme() == "https" {
         endpoint = endpoint.tls_config(ClientTlsConfig::new().with_webpki_roots())?;
     }
-    Ok(CatchupServiceClient::new(endpoint.connect().await?)
-        .max_decoding_message_size(MAX_ANSWER_SIZE))
+    Ok(endpoint.connect_lazy())
 }
 
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {

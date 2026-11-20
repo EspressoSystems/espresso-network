@@ -9,7 +9,7 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::{AppWrite, Backend, Column, Part, Row};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row};
 
 /// A row at `height` whose payload commitment is `payload`.
 pub fn row(height: u64, payload: &str) -> Row {
@@ -58,10 +58,17 @@ pub async fn conformance(backend: &dyn Backend) {
     assert_eq!(backend.part(4, Payload).await.unwrap(), None);
     assert_eq!(backend.newest().await.unwrap(), Some(5));
     assert_eq!(
-        backend.parts(1).await.unwrap(),
-        vec![(Payload, bytes("p1")), (VidCommon, bytes("v1"))]
+        backend.record(1).await.unwrap(),
+        Some((
+            bytes("item-1"),
+            vec![(Payload, bytes("p1")), (VidCommon, bytes("v1"))]
+        ))
     );
-    assert_eq!(backend.parts(4).await.unwrap(), vec![]);
+    assert_eq!(
+        backend.record(4).await.unwrap(),
+        Some((bytes("item-4"), vec![]))
+    );
+    assert_eq!(backend.record(2).await.unwrap(), None);
 
     // An empty part is kept as present.
     backend
@@ -168,13 +175,36 @@ pub async fn conformance(backend: &dyn Backend) {
     let keys = |entries: Vec<(Bytes, Bytes)>| -> Vec<Vec<u8>> {
         entries.into_iter().map(|(key, _)| key.to_vec()).collect()
     };
+    let from = |from: &'static [u8]| KeyBounds {
+        from,
+        until: None,
+        limit: usize::MAX,
+    };
     assert_eq!(
-        keys(backend.app_entries("a", &[]).await.unwrap()),
+        keys(backend.app_entries("a", from(&[])).await.unwrap()),
         vec![vec![1], vec![2], vec![3, 0]]
     );
     assert_eq!(
-        keys(backend.app_entries("a", &[2]).await.unwrap()),
+        keys(backend.app_entries("a", from(&[2])).await.unwrap()),
         vec![vec![2], vec![3, 0]]
+    );
+    // Entries end before `until`, and `limit` bounds them.
+    let bounded = KeyBounds {
+        from: &[],
+        until: Some(&[3]),
+        limit: usize::MAX,
+    };
+    assert_eq!(
+        keys(backend.app_entries("a", bounded).await.unwrap()),
+        vec![vec![1], vec![2]]
+    );
+    let limited = KeyBounds {
+        limit: 2,
+        ..from(&[])
+    };
+    assert_eq!(
+        keys(backend.app_entries("a", limited).await.unwrap()),
+        vec![vec![1], vec![2]]
     );
     backend
         .app_write(vec![AppWrite::DeleteBefore {
@@ -184,14 +214,20 @@ pub async fn conformance(backend: &dyn Backend) {
         .await
         .unwrap();
     assert_eq!(
-        keys(backend.app_entries("a", &[]).await.unwrap()),
+        keys(backend.app_entries("a", from(&[])).await.unwrap()),
         vec![vec![2], vec![3, 0]]
     );
     backend
         .app_write(vec![AppWrite::Clear { table: "a".into() }])
         .await
         .unwrap();
-    assert!(backend.app_entries("a", &[]).await.unwrap().is_empty());
+    assert!(
+        backend
+            .app_entries("a", from(&[]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(backend.app_get("b", &[1]).await.unwrap(), Some(bytes("b1")));
 
     // A gap at the start counts, and `limit` bounds the answer.

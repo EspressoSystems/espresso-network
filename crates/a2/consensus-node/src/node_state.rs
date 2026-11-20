@@ -27,7 +27,7 @@ use crate::SeqTypes;
 /// the L1 at `l1`. Waits for L1 to finalize the chain's L1 genesis block.
 ///
 /// A consensus node keeps its stake tables in its consensus store and catches up from API
-/// services; an API service keeps them in memory and follows the chain itself.
+/// services; an API service keeps them in its chain store and follows the chain itself.
 pub async fn node_state<S>(
     genesis: &Genesis,
     network_config: &NetworkConfig<SeqTypes>,

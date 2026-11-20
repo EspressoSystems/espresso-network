@@ -18,9 +18,8 @@ use std::{collections::BTreeSet, ops::Range};
 
 use chain_store::{Item, Part, Parts};
 use hotshot_types::data::EpochNumber;
-use url::Url;
 
-use crate::{GapFiller, Membership, gaps::runs};
+use crate::{GapFiller, Membership, gaps::runs, peers::Peer};
 
 /// How many epoch roots one pass derives stake tables from.
 const ROOTS_PER_PASS: usize = 8;
@@ -120,7 +119,7 @@ impl GapFiller {
         &mut self,
         membership: &Membership,
         epoch: EpochNumber,
-        peers: &[Url],
+        peers: &[Peer],
     ) -> anyhow::Result<()> {
         let heights = membership.heights_of(epoch);
         let wanted: BTreeSet<u64> = self
@@ -158,7 +157,7 @@ impl GapFiller {
     async fn take_certs(
         &self,
         membership: &Membership,
-        peer: &Url,
+        peer: &Peer,
         heights: Range<u64>,
     ) -> anyhow::Result<()> {
         let records = crate::gaps::fetch(peer, heights.clone(), true).await?;
@@ -217,6 +216,7 @@ mod tests {
     use chain_store::{ChainStore, mem::MemBackend};
     use hotshot_types::simple_certificate::QuorumCertificate2;
     use tokio::net::TcpListener;
+    use url::Url;
 
     use super::*;
     use crate::{ApiService, membership::testing::*};

@@ -13,7 +13,7 @@ use sqlx::{
 };
 use tokio::{sync::watch, task::JoinSet};
 
-use crate::{AppWrite, Backend, Column, Part, Row};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row};
 
 /// The channel writes are announced on.
 const CHANNEL: &str = "chain_store";
@@ -94,11 +94,22 @@ impl PostgresBackend {
 /// announced while it was down are missed.
 async fn listen(mut listener: PgListener, changes: watch::Sender<u64>) {
     loop {
-        match listener.recv().await {
-            Ok(_) => changes.send_modify(|n| *n += 1),
+        // `try_recv`, unlike `recv`, reports a lost connection instead of reconnecting silently.
+        match listener.try_recv().await {
+            Ok(Some(_)) => changes.send_modify(|n| *n += 1),
+            Ok(None) => {
+                tracing::warn!(
+                    "lost the connection listening for chain store writes; reconnecting"
+                );
+                changes.send_modify(|n| *n += 1);
+            },
             Err(err) => {
                 tracing::warn!("listening for chain store writes failed; listening again: {err:#}");
-                tokio::time::sleep(RELISTEN_DELAY).await;
+                // The change comes once listening again, so no write between falls through.
+                while let Err(err) = listener.listen(CHANNEL).await {
+                    tracing::debug!("listening again failed: {err:#}");
+                    tokio::time::sleep(RELISTEN_DELAY).await;
+                }
                 changes.send_modify(|n| *n += 1);
             },
         }
@@ -184,20 +195,29 @@ impl Backend for PostgresBackend {
         Ok(data.map(Bytes::from))
     }
 
-    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>> {
-        let rows =
-            sqlx::query("SELECT part, data FROM chain_parts WHERE height = $1 ORDER BY part")
-                .bind(height as i64)
-                .fetch_all(&self.pool)
-                .await?;
-        rows.iter()
-            .map(|row| {
-                let id: i16 = row.try_get("part")?;
-                let part = Part::from_id(id).ok_or_else(|| anyhow::anyhow!("unknown part {id}"))?;
-                let data: Vec<u8> = row.try_get("data")?;
-                Ok((part, data.into()))
-            })
-            .collect()
+    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
+        let rows = sqlx::query(
+            "SELECT i.item, p.part, p.data FROM chain_items i
+             LEFT JOIN chain_parts p ON p.height = i.height
+             WHERE i.height = $1 ORDER BY p.part",
+        )
+        .bind(height as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        let Some(first) = rows.first() else {
+            return Ok(None);
+        };
+        let item: Vec<u8> = first.try_get("item")?;
+        let mut parts = Vec::new();
+        for row in &rows {
+            let Some(id) = row.try_get::<Option<i16>, _>("part")? else {
+                continue;
+            };
+            let part = Part::from_id(id).ok_or_else(|| anyhow::anyhow!("unknown part {id}"))?;
+            let data: Vec<u8> = row.try_get("data")?;
+            parts.push((part, data.into()));
+        }
+        Ok(Some((item.into(), parts)))
     }
 
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -306,12 +326,20 @@ impl Backend for PostgresBackend {
     }
 
     /// Postgres orders `bytea` bytewise, as the other backends order keys.
-    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+    async fn app_entries(
+        &self,
+        table: &str,
+        keys: KeyBounds<'_>,
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
         let rows = sqlx::query(
-            "SELECT key, value FROM chain_app WHERE tbl = $1 AND key >= $2 ORDER BY key",
+            "SELECT key, value FROM chain_app
+             WHERE tbl = $1 AND key >= $2 AND ($3::BYTEA IS NULL OR key < $3)
+             ORDER BY key LIMIT $4",
         )
         .bind(table)
-        .bind(from)
+        .bind(keys.from)
+        .bind(keys.until)
+        .bind(i64::try_from(keys.limit).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
         .await?;
         rows.iter()
@@ -407,5 +435,27 @@ mod tests {
             .expect("the reader hears of the write")
             .unwrap();
         assert!(reader.item(0).await.unwrap().is_some());
+    }
+
+    /// Writes announced while the listening connection is down are missed, so a lost connection
+    /// counts as a change.
+    #[tokio::test]
+    async fn a_lost_listener_connection_is_a_change() {
+        let db = TmpPostgres::init().await;
+        let backend = PostgresBackend::connect(&db.url()).await.unwrap();
+        let mut changes = backend.changes();
+        changes.borrow_and_update();
+
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+             WHERE query LIKE 'LISTEN%' AND pid <> pg_backend_pid()",
+        )
+        .execute(&backend.pool)
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), changes.changed())
+            .await
+            .expect("the lost connection is a change")
+            .unwrap();
     }
 }

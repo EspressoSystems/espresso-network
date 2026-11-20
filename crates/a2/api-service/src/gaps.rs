@@ -35,14 +35,17 @@ use hotshot_types::{
     },
 };
 use light_client::consensus::payload::PayloadProof;
-use tokio::time::{Instant, sleep, sleep_until, timeout};
+use tokio::{
+    task::spawn_blocking,
+    time::{Instant, sleep, sleep_until, timeout},
+};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use url::Url;
 
 use crate::{
     Membership,
     chain::{RECORD_RANGE_LIMIT, from_proto},
-    peers::Peers,
+    peers::{Peer, Peers},
     proto::{GetRecordsRequest, chain_service_client::ChainServiceClient},
 };
 
@@ -54,6 +57,11 @@ const GAPS_PER_PASS: usize = 16;
 
 /// How long a peer may take to connect, to answer a request, and between two records it sends.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often a connection to another service is pinged, and how long a ping may go unanswered
+/// before the connection is dropped.
+pub(crate) const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The largest record a peer may send, which a payload bounds.
 const MAX_RECORD_SIZE: usize = 64 << 20;
@@ -310,7 +318,7 @@ impl GapFiller {
     }
 
     /// Fills `gap` from the top down, from the first peer that continues the chain.
-    async fn fill_items(&self, gap: Range<u64>, peers: &[Url]) -> anyhow::Result<()> {
+    async fn fill_items(&self, gap: Range<u64>, peers: &[Peer]) -> anyhow::Result<()> {
         let mut child = self
             .store
             .item(gap.end)
@@ -341,7 +349,7 @@ impl GapFiller {
     /// `child`, the leaf at `heights.end`. Returns the lowest height filled, and its item.
     async fn fill_items_from(
         &self,
-        peer: &Url,
+        peer: &Peer,
         heights: Range<u64>,
         mut child: Item,
     ) -> anyhow::Result<(u64, Item)> {
@@ -353,6 +361,7 @@ impl GapFiller {
             }
             let item = checked_item(&record, &child)?;
             let parts = checked_parts(item.leaf.block_header(), &record)
+                .await
                 .inspect_err(|err| tracing::debug!(%peer, "payload not taken: {err:#}"))
                 .unwrap_or_default();
             self.store.put(&item, &parts).await?;
@@ -363,7 +372,7 @@ impl GapFiller {
 
     /// Fills the payloads and VID common data of the stored `heights` from the peers, until
     /// none lacks them or every peer was asked.
-    async fn fill_parts(&self, heights: Range<u64>, peers: &[Url]) {
+    async fn fill_parts(&self, heights: Range<u64>, peers: &[Peer]) {
         for peer in peers {
             if let Err(err) = self.fill_parts_from(peer, heights.clone()).await {
                 tracing::debug!(%peer, ?heights, "{err:#}");
@@ -379,12 +388,12 @@ impl GapFiller {
         }
     }
 
-    async fn fill_parts_from(&self, peer: &Url, heights: Range<u64>) -> anyhow::Result<()> {
+    async fn fill_parts_from(&self, peer: &Peer, heights: Range<u64>) -> anyhow::Result<()> {
         for record in fetch(peer, heights, false).await? {
             let Some(item) = self.store.item(record.height).await? else {
                 continue;
             };
-            if let Ok(parts) = checked_parts(item.leaf.block_header(), &record) {
+            if let Ok(parts) = checked_parts(item.leaf.block_header(), &record).await {
                 self.store.put_parts(record.height, &parts).await?;
             }
         }
@@ -470,12 +479,12 @@ impl Retries {
 /// data if `skip_payloads`. A peer that sends nothing for [`REQUEST_TIMEOUT`] fails; one that
 /// keeps sending may take as long as its records need.
 pub(crate) async fn fetch(
-    peer: &Url,
+    peer: &Peer,
     heights: Range<u64>,
     skip_payloads: bool,
 ) -> anyhow::Result<Vec<Record>> {
-    let mut client = ChainServiceClient::new(endpoint(peer)?.connect().await?)
-        .max_decoding_message_size(MAX_RECORD_SIZE);
+    let mut client =
+        ChainServiceClient::new(peer.channel.clone()).max_decoding_message_size(MAX_RECORD_SIZE);
     let mut stream = client
         .get_records(GetRecordsRequest {
             from: Some(heights.start),
@@ -508,7 +517,11 @@ pub(crate) async fn fetch(
 pub(crate) fn endpoint(peer: &Url) -> anyhow::Result<Endpoint> {
     let mut endpoint = Endpoint::from_shared(peer.to_string())?
         .connect_timeout(REQUEST_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT);
+        .timeout(REQUEST_TIMEOUT)
+        // A connection is shared by many requests; pings drop one that died without closing.
+        .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
+        .keep_alive_while_idle(true);
     if peer.scheme() == "https" {
         endpoint = endpoint.tls_config(ClientTlsConfig::new().with_webpki_roots())?;
     }
@@ -544,19 +557,25 @@ fn checked_item(record: &Record, child: &Item) -> anyhow::Result<Item> {
 }
 
 /// The payload and VID common data of `record`, if both are there and recompute the payload
-/// commitment of `header`. The payload is returned as encoded again after the check.
-fn checked_parts(header: &Header, record: &Record) -> anyhow::Result<Parts> {
+/// commitment of `header`. The payload is returned as encoded again after the check, which runs
+/// on a blocking thread: it encodes the whole payload.
+async fn checked_parts(header: &Header, record: &Record) -> anyhow::Result<Parts> {
     let parts = record.parts()?;
     let (Some(payload), Some(common)) = (parts.payload, parts.vid_common) else {
         bail!("the record of height {} lacks parts", record.height);
     };
-    let payload = Payload::from_bytes(&payload, header.metadata());
-    let (payload, common) = PayloadProof::new(payload, common).verify_with_vid_common(header)?;
-    Ok(Parts {
-        payload: Some(payload.encode().to_vec().into()),
-        vid_common: Some(common),
-        ..Default::default()
+    let header = header.clone();
+    spawn_blocking(move || {
+        let payload = Payload::from_bytes(&payload, header.metadata());
+        let (payload, common) =
+            PayloadProof::new(payload, common).verify_with_vid_common(&header)?;
+        Ok(Parts {
+            payload: Some(payload.encode().to_vec().into()),
+            vid_common: Some(common),
+            ..Default::default()
+        })
     })
+    .await?
 }
 
 /// `heights` as runs of consecutive heights, each at most a record request long.

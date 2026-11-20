@@ -9,7 +9,7 @@
 
 use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, anyhow, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use consensus_api::{
@@ -75,12 +75,13 @@ pub struct Block<Types: NodeType> {
 }
 
 /// Ingests from the ingester API at `addr` into `sink`, reconnecting whenever the connection
-/// fails, until an entry breaks the chain the sink holds.
+/// fails, until an entry breaks the chain the sink holds or cannot be taken at all. Such an
+/// entry would come again after every reconnect.
 pub async fn run<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Error {
     loop {
         match ingest(addr, sink).await {
             Ok(()) => tracing::warn!(%addr, "decide log stream ended; reconnecting"),
-            Err(err) if err.is::<ChainBroken>() => {
+            Err(err) if err.is::<ChainBroken>() || err.is::<BadEntry>() => {
                 tracing::error!(%addr, "stopped ingesting: {err:#}");
                 return err;
             },
@@ -94,6 +95,12 @@ pub async fn run<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> a
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ChainBroken(String);
+
+/// An entry that cannot be taken, such as one that does not decode, or a stream that breaks the
+/// decide log's protocol.
+#[derive(Debug, thiserror::Error)]
+#[error("{0:#}")]
+pub struct BadEntry(anyhow::Error);
 
 /// Ingests until the stream ends or fails. The stream starts at the earliest entry consensus
 /// still holds, all of which are unacknowledged, so nothing stored but unacknowledged is missed.
@@ -115,7 +122,10 @@ async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> an
                 let Some(response) = response else {
                     return Ok(());
                 };
-                let event = response?.event.context("subscribe response without an event")?;
+                // An event this ingester does not know decodes to none, and would come again.
+                let event = response?
+                    .event
+                    .ok_or_else(|| BadEntry(anyhow!("a subscribe response without an event")))?;
                 receive(sink, &mut chain, &mut receiving, event).await?;
             },
             _ = acks.tick() => {
@@ -148,7 +158,7 @@ async fn receive<Types: NodeType>(
 ) -> anyhow::Result<()> {
     if receiving.is_some() {
         let Event::PayloadChunk(chunk) = event else {
-            bail!("a payload ended early");
+            return Err(BadEntry(anyhow!("a payload ended early")).into());
         };
         return receive_chunk(sink, chain, receiving, chunk.data).await;
     }
@@ -156,7 +166,7 @@ async fn receive<Types: NodeType>(
         Event::Start(start) => chain.start(start.earliest_height),
         Event::Decided(decided) => {
             let size = decided.payload_size;
-            let entry = decode(decided)?;
+            let entry = decode(decided).map_err(BadEntry)?;
             chain.check(&entry)?;
             match size {
                 Some(size) => {
@@ -177,7 +187,9 @@ async fn receive<Types: NodeType>(
             });
             return receive_chunk(sink, chain, receiving, Vec::new()).await;
         },
-        Event::PayloadChunk(_) => bail!("a payload chunk without an entry"),
+        Event::PayloadChunk(_) => {
+            return Err(BadEntry(anyhow!("a payload chunk without an entry")).into());
+        },
     }
     Ok(())
 }
@@ -203,10 +215,9 @@ async fn receive_chunk<Types: NodeType>(
             (payload.len(), *size)
         },
     };
-    ensure!(
-        received as u64 <= expected,
-        "a payload is longer than announced"
-    );
+    if received as u64 > expected {
+        return Err(BadEntry(anyhow!("a payload is longer than announced")).into());
+    }
     if (received as u64) < expected {
         return Ok(());
     }
@@ -229,7 +240,8 @@ async fn store<Types: NodeType>(
 ) -> anyhow::Result<()> {
     let (height, view) = (entry.leaf.height(), entry.view);
     let complete = payload.is_some();
-    sink.append(finish(entry.into_block(payload))?).await?;
+    let block = finish(entry.into_block(payload)).map_err(BadEntry)?;
+    sink.append(block).await?;
     chain.stored(height, view, complete);
     Ok(())
 }

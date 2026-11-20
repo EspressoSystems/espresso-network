@@ -1,6 +1,6 @@
 //! The discovery service: the API services of the validators, as their signed records name them.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use consensus::discovery::{ServiceRecord, SignedServiceRecord};
@@ -8,10 +8,14 @@ use consensus_api::{DecideLogClient, proto::ServiceRecordsRequest};
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
 use tagged_base64::TaggedBase64;
-use tonic::{Code, Request, Response, Status};
+use tonic::{
+    Code, Request, Response, Status,
+    transport::{Channel, Endpoint},
+};
 
 use crate::{
     ApiService,
+    gaps::{KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT},
     proto::{self, discovery_service_server::DiscoveryService},
 };
 
@@ -23,7 +27,7 @@ impl DiscoveryService for ApiService {
         request: Request<proto::GetPeersRequest>,
     ) -> Result<Response<proto::PeersResponse>, Status> {
         let (epoch, records) =
-            service_records(self.consensus_api, request.into_inner().epoch).await?;
+            service_records(self.consensus.clone(), request.into_inner().epoch).await?;
         Ok(Response::new(proto::PeersResponse {
             peers: records.into_iter().map(listed).collect(),
             epoch,
@@ -31,15 +35,29 @@ impl DiscoveryService for ApiService {
     }
 }
 
-/// The valid records consensus at `consensus_api` holds for `epoch`, or for the latest epoch with
-/// records, with that epoch.
+/// A channel to the consensus node's API at `addr`. It connects on first use and again whenever
+/// the connection fails, so all requests to consensus share one connection.
+pub(crate) fn consensus_channel(addr: SocketAddr) -> Channel {
+    Endpoint::from_shared(format!("http://{addr}"))
+        .expect("a socket address makes a valid URI")
+        .connect_timeout(CONSENSUS_TIMEOUT)
+        .timeout(CONSENSUS_TIMEOUT)
+        .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
+        .keep_alive_while_idle(true)
+        .connect_lazy()
+}
+
+/// How long a request to the consensus node may take.
+const CONSENSUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The valid records the consensus node behind `consensus` holds for `epoch`, or for the latest
+/// epoch with records, with that epoch.
 pub(crate) async fn service_records(
-    consensus_api: SocketAddr,
+    consensus: Channel,
     epoch: Option<u64>,
 ) -> Result<(u64, Vec<SignedServiceRecord<SeqTypes>>), Status> {
-    let mut client = DecideLogClient::connect(format!("http://{consensus_api}"))
-        .await
-        .map_err(|err| Status::unavailable(format!("cannot reach consensus: {err}")))?;
+    let mut client = DecideLogClient::new(consensus);
     let response = client
         .get_service_records(ServiceRecordsRequest { epoch })
         .await

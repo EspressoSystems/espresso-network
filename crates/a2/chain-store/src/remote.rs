@@ -8,7 +8,7 @@ use tokio::{sync::watch, task::JoinSet, time::sleep};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
-    AppWrite, Backend, Column, Part, Row,
+    AppWrite, Backend, Column, KeyBounds, Part, Row,
     proto::{self, store_client::StoreClient},
     service::{MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to},
 };
@@ -141,13 +141,20 @@ impl Backend for RemoteBackend {
         Ok(response.into_inner().data.map(Bytes::from))
     }
 
-    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>> {
+    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
         let response = self
             .client()
-            .get_parts(proto::HeightRequest { height })
+            .get_record(proto::HeightRequest { height })
             .await
-            .map_err(status)?;
-        parts_from(response.into_inner().parts).map_err(status)
+            .map_err(status)?
+            .into_inner();
+        let Some(item) = response.item else {
+            return Ok(None);
+        };
+        Ok(Some((
+            item.into(),
+            parts_from(response.parts).map_err(status)?,
+        )))
     }
 
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -232,12 +239,18 @@ impl Backend for RemoteBackend {
         Ok(response.into_inner().data.map(Bytes::from))
     }
 
-    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+    async fn app_entries(
+        &self,
+        table: &str,
+        keys: KeyBounds<'_>,
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
         let response = self
             .client()
             .app_entries(proto::AppEntriesRequest {
                 table: table.to_string(),
-                from: from.to_vec(),
+                from: keys.from.to_vec(),
+                until: keys.until.map(<[u8]>::to_vec),
+                limit: u32::try_from(keys.limit).unwrap_or(u32::MAX),
             })
             .await
             .map_err(status)?;

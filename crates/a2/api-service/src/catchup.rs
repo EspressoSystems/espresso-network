@@ -57,7 +57,8 @@ impl CatchupService for Catchup {
     ) -> Result<Response<LeafChainResponse>, Status> {
         let height = request.into_inner().height;
         let mut leaves = Vec::new();
-        for at in height..height + MAX_CHAIN {
+        // The height comes from a peer, and can be any number.
+        for at in height..height.saturating_add(MAX_CHAIN) {
             let item = self
                 .store
                 .item(at)
@@ -175,5 +176,28 @@ impl CatchupService for Catchup {
                 EpochNumber::new(epoch)
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chain_store::mem::MemBackend;
+
+    use super::*;
+    use crate::chain_state;
+
+    /// A leaf chain asked for at any height is answered, by not found if nothing is there.
+    #[tokio::test]
+    async fn a_leaf_chain_at_the_last_height_is_not_found() {
+        let store = ChainStore::new(MemBackend::default());
+        let node = NodeState::mock();
+        let (_, states) = chain_state::follower(store.clone(), node.clone());
+        let catchup = Catchup::new(store, states, node);
+
+        let status = catchup
+            .get_leaf_chain(Request::new(HeightRequest { height: u64::MAX }))
+            .await
+            .expect_err("nothing is stored");
+        assert_eq!(status.code(), tonic::Code::NotFound);
     }
 }

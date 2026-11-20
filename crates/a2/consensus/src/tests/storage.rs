@@ -435,7 +435,7 @@ async fn test_decided_state_written_with_the_decide() {
     let batches = store.store().commits.load(Ordering::SeqCst);
     assert_eq!(batches, 1, "the decided state joins the decide's batch");
     let order: Vec<_> = store
-        .app_entries("order", &[])
+        .app_entries("order", &[], None)
         .unwrap()
         .into_iter()
         .map(|(_, value)| value)
@@ -492,16 +492,16 @@ async fn test_app_tables() {
         ])
         .unwrap();
     assert_eq!(
-        store.app_entries("a", &[]).unwrap(),
+        store.app_entries("a", &[], None).unwrap(),
         vec![(vec![2], b"two".to_vec()), (vec![3], b"three".to_vec())]
     );
     assert_eq!(
-        store.app_entries("a", &[3]).unwrap(),
+        store.app_entries("a", &[3], None).unwrap(),
         vec![(vec![3], b"three".to_vec())]
     );
 
     store.app_write(&[AppWrite::Clear { table: "a" }]).unwrap();
-    assert!(store.app_entries("a", &[]).unwrap().is_empty());
+    assert!(store.app_entries("a", &[], None).unwrap().is_empty());
     assert_eq!(store.app_get("b", &[1]).unwrap(), Some(b"other".to_vec()));
 
     assert!(

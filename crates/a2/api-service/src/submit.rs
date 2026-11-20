@@ -21,9 +21,7 @@ impl SubmitService for ApiService {
         let transaction =
             Transaction::new(namespace(r.namespace)?, required(r.payload, "payload")?);
         let hash = transaction.commit();
-        let mut client = ConsensusNodeClient::connect(format!("http://{}", self.consensus_api))
-            .await
-            .map_err(|err| Status::unavailable(format!("cannot reach consensus: {err}")))?;
+        let mut client = ConsensusNodeClient::new(self.consensus.clone());
         let encoded = bincode::serialize(&transaction)
             .map_err(|err| Status::internal(format!("encoding the transaction: {err}")))?;
         client

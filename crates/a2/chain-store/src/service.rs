@@ -9,12 +9,15 @@ use futures::{Stream, stream};
 use tonic::{Request, Response, Status};
 
 use crate::{
-    AppWrite, Backend, Column, Part, Row,
+    AppWrite, Backend, Column, KeyBounds, Part, Row,
     proto::{self, store_server::StoreServer},
 };
 
 /// The largest message the store service and its clients send, which a payload bounds.
 pub const MAX_MESSAGE_SIZE: usize = 64 << 20;
+
+/// The most application table entries one answer holds.
+const MAX_APP_ENTRIES: usize = 4096;
 
 /// The gRPC service over `backend`.
 pub fn server(backend: Arc<dyn Backend>) -> StoreServer<StoreService> {
@@ -93,17 +96,21 @@ impl proto::store_server::Store for StoreService {
         }))
     }
 
-    async fn get_parts(
+    async fn get_record(
         &self,
         request: Request<proto::HeightRequest>,
-    ) -> Result<Response<proto::PartsResponse>, Status> {
-        let parts = self
+    ) -> Result<Response<proto::RecordResponse>, Status> {
+        let record = self
             .backend
-            .parts(request.into_inner().height)
+            .record(request.into_inner().height)
             .await
             .map_err(internal)?;
-        Ok(Response::new(proto::PartsResponse {
-            parts: parts_to(parts),
+        Ok(Response::new(match record {
+            Some((item, parts)) => proto::RecordResponse {
+                item: Some(item.to_vec()),
+                parts: parts_to(parts),
+            },
+            None => proto::RecordResponse::default(),
         }))
     }
 
@@ -206,9 +213,14 @@ impl proto::store_server::Store for StoreService {
         request: Request<proto::AppEntriesRequest>,
     ) -> Result<Response<proto::AppEntriesResponse>, Status> {
         let r = request.into_inner();
+        let keys = KeyBounds {
+            from: &r.from,
+            until: r.until.as_deref(),
+            limit: (r.limit as usize).min(MAX_APP_ENTRIES),
+        };
         let entries = self
             .backend
-            .app_entries(&r.table, &r.from)
+            .app_entries(&r.table, keys)
             .await
             .map_err(internal)?;
         Ok(Response::new(proto::AppEntriesResponse {

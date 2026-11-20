@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
 
-use crate::{AppWrite, Backend, Column, Part, Row};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row};
 
 #[derive(Debug)]
 pub struct MemBackend {
@@ -78,12 +78,14 @@ impl Backend for MemBackend {
         Ok(self.read(|state| state.parts.get(&(height, part)).cloned()))
     }
 
-    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>> {
+    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
         Ok(self.read(|state| {
-            Part::ALL
+            let item = state.rows.get(&height)?.item.clone();
+            let parts = Part::ALL
                 .into_iter()
                 .filter_map(|part| Some((part, state.parts.get(&(height, part))?.clone())))
-                .collect()
+                .collect();
+            Some((item, parts))
         }))
     }
 
@@ -160,13 +162,20 @@ impl Backend for MemBackend {
         Ok(self.read(|state| state.app.get(&key).cloned()))
     }
 
-    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
-        let from = (table.to_string(), Bytes::copy_from_slice(from));
+    async fn app_entries(
+        &self,
+        table: &str,
+        keys: KeyBounds<'_>,
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        let from = (table.to_string(), Bytes::copy_from_slice(keys.from));
         Ok(self.read(|state| {
             state
                 .app
                 .range(from..)
-                .take_while(|((t, _), _)| t == table)
+                .take_while(|((t, key), _)| {
+                    t == table && keys.until.is_none_or(|until| &key[..] < until)
+                })
+                .take(keys.limit)
                 .map(|((_, key), value)| (key.clone(), value.clone()))
                 .collect()
         }))

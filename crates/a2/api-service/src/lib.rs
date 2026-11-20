@@ -25,6 +25,7 @@ use proto::{
     chain_service_server::ChainServiceServer, discovery_service_server::DiscoveryServiceServer,
 };
 use tokio::net::TcpListener;
+use tonic::transport::Channel;
 
 /// The services of the API service's own, generated from `proto/espresso/a2/v1`.
 pub mod proto {
@@ -59,8 +60,8 @@ use reader::Reader;
 pub struct ApiService {
     reader: Reader,
 
-    /// The consensus node's API, for submissions and discovery records.
-    consensus_api: SocketAddr,
+    /// The channel to the consensus node's API, for submissions and discovery records.
+    consensus: Channel,
 
     /// What consensus nodes that are behind catch up from, if this API service follows the
     /// chain's state.
@@ -74,7 +75,7 @@ impl ApiService {
     pub fn new(store: ChainStore, consensus_api: SocketAddr) -> Self {
         Self {
             reader: Reader::new(store),
-            consensus_api,
+            consensus: discovery::consensus_channel(consensus_api),
             catchup: None,
             compat: None,
         }

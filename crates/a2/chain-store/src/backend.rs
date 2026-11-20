@@ -22,8 +22,8 @@ pub trait Backend: Send + Sync + 'static {
 
     async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>>;
 
-    /// The parts `height` has, in [`Part`] order.
-    async fn parts(&self, height: u64) -> anyhow::Result<Vec<(Part, Bytes)>>;
+    /// The item of `height` with the parts it has, in [`Part`] order, read together.
+    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>>;
 
     /// The height of the row whose `column` is `value`.
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>>;
@@ -44,8 +44,13 @@ pub trait Backend: Send + Sync + 'static {
     /// The value of `key` in the application table `table`.
     async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>>;
 
-    /// The entries of the application table `table` from `from` on, in bytewise key order.
-    async fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Bytes, Bytes)>>;
+    /// Up to `keys.limit` entries of the application table `table` with keys from `keys.from`
+    /// and before `keys.until`, in bytewise key order.
+    async fn app_entries(
+        &self,
+        table: &str,
+        keys: KeyBounds<'_>,
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>>;
 
     /// Applies `writes` to the application tables, in order, in one commit.
     async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()>;
@@ -115,6 +120,15 @@ impl Part {
     pub fn from_id(id: i16) -> Option<Self> {
         Self::ALL.into_iter().find(|part| part.id() == id)
     }
+}
+
+/// Which keys of an application table to read: from `from` on, before `until` if set, at most
+/// `limit` of them.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyBounds<'a> {
+    pub from: &'a [u8],
+    pub until: Option<&'a [u8]>,
+    pub limit: usize,
 }
 
 /// A write to the application tables, which a service keeps next to the chain, such as the stake

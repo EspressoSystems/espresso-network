@@ -66,7 +66,7 @@ pub fn load(store: &ConsensusStore<SeqTypes>, anchor: &Leaf2) -> anyhow::Result<
     let root = header.reward_merkle_tree_root().right();
     if root.is_some() && get::<RewardMerkleCommitmentV2>(store, REWARD_ROOT)? == root {
         let accounts = store
-            .app_entries(REWARD_ACCOUNTS, &[])?
+            .app_entries(REWARD_ACCOUNTS, &[], None)?
             .into_iter()
             .map(|(key, value)| {
                 let account = RewardAccountV2(Address::try_from(key.as_slice())?);

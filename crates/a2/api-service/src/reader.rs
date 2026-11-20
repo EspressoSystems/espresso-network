@@ -2,8 +2,7 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use bytes::Bytes;
-use chain_store::{ChainStore, Item, Lookup};
+use chain_store::{ChainStore, Item, Lookup, Parts};
 use espresso_api::error::to_status;
 use espresso_types::{NamespaceId, NamespaceProofQueryData, NsProof, Payload, SeqTypes};
 use futures::stream::{self, BoxStream, StreamExt};
@@ -11,7 +10,10 @@ use hotshot_query_service_types::availability::{
     BlockQueryData, LeafQueryData, VidCommonQueryData,
 };
 use hotshot_types::traits::block_contents::{BlockHeader, BlockPayload};
-use tokio::time::{Instant, timeout_at};
+use tokio::{
+    task::spawn_blocking,
+    time::{Instant, timeout_at},
+};
 use tonic::Status;
 
 use crate::request::BlockKey;
@@ -71,8 +73,13 @@ impl Reader {
         height: u64,
         wait: Wait,
     ) -> Result<BlockQueryData<SeqTypes>, Status> {
-        let (item, payload) = self.item_and_payload(height, wait).await?;
-        Ok(block(&item, &payload))
+        let (item, parts) = self
+            .with_parts(height, wait, |p| p.payload.is_some())
+            .await?;
+        Ok(block(
+            &item,
+            parts.payload.as_deref().expect("waited for the payload"),
+        ))
     }
 
     pub(crate) async fn vid_common(
@@ -80,17 +87,14 @@ impl Reader {
         height: u64,
         wait: Wait,
     ) -> Result<VidCommonQueryData<SeqTypes>, Status> {
-        self.wait(height, wait, || async move {
-            let Some(common) = self.store.vid_common(height).await? else {
-                return Ok(None);
-            };
-            Ok(self
-                .store
-                .item(height)
-                .await?
-                .map(|item| VidCommonQueryData::new(item.leaf.block_header().clone(), common)))
-        })
-        .await
+        let (item, parts) = self
+            .with_parts(height, wait, |p| p.vid_common.is_some())
+            .await?;
+        let common = parts.vid_common.expect("waited for the VID common data");
+        Ok(VidCommonQueryData::new(
+            item.leaf.block_header().clone(),
+            common,
+        ))
     }
 
     /// The proof of `namespace` in the block at `height`, empty if the block has no such
@@ -101,8 +105,16 @@ impl Reader {
         namespace: NamespaceId,
         wait: Wait,
     ) -> Result<NamespaceProofQueryData, Status> {
-        let block = self.block(height, wait).await?;
-        let common = self.vid_common(height, wait).await?;
+        let (item, parts) = self
+            .with_parts(height, wait, |p| {
+                p.payload.is_some() && p.vid_common.is_some()
+            })
+            .await?;
+        let block = block(
+            &item,
+            parts.payload.as_deref().expect("waited for the payload"),
+        );
+        let common = parts.vid_common.expect("waited for the VID common data");
         let none = NamespaceProofQueryData {
             proof: None,
             transactions: Vec::new(),
@@ -110,7 +122,11 @@ impl Reader {
         let Some(index) = block.payload().ns_table().find_ns_id(&namespace) else {
             return Ok(none);
         };
-        let Some(proof) = NsProof::new(block.payload(), &index, common.common()) else {
+        // Proving encodes the whole payload.
+        let proof = spawn_blocking(move || NsProof::new(block.payload(), &index, &common))
+            .await
+            .map_err(|err| Status::internal(format!("proving the namespace failed: {err}")))?;
+        let Some(proof) = proof else {
             return Ok(none);
         };
         Ok(NamespaceProofQueryData {
@@ -145,12 +161,21 @@ impl Reader {
         .boxed()
     }
 
-    async fn item_and_payload(&self, height: u64, wait: Wait) -> Result<(Item, Bytes), Status> {
+    /// The item of `height` with its parts, read together, once the parts are as `complete`
+    /// requires.
+    async fn with_parts(
+        &self,
+        height: u64,
+        wait: Wait,
+        complete: impl Fn(&Parts) -> bool,
+    ) -> Result<(Item, Parts), Status> {
+        let complete = &complete;
         self.wait(height, wait, || async move {
-            let Some(payload) = self.store.payload(height).await? else {
+            let Some(record) = self.store.record(height).await? else {
                 return Ok(None);
             };
-            Ok(self.store.item(height).await?.map(|item| (item, payload)))
+            let parts = record.parts()?;
+            Ok(complete(&parts).then_some((record.item()?, parts)))
         })
         .await
     }

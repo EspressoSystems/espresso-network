@@ -452,10 +452,20 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         Ok(snap.get(&app_table(table)?, key)?.map(|v| v.to_vec()))
     }
 
-    /// The entries of the application's `table` from `from` on, in key order.
-    pub fn app_entries(&self, table: &str, from: &[u8]) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    /// The entries of the application's `table` with keys from `from` on, and before `until` if
+    /// set, in key order.
+    pub fn app_entries(
+        &self,
+        table: &str,
+        from: &[u8],
+        until: Option<&[u8]>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let snap = self.store.snapshot()?;
-        let range = KeyRange::starting_at(Bytes::copy_from_slice(from));
+        let from = Bytes::copy_from_slice(from);
+        let range = match until {
+            Some(until) => KeyRange::between(from, Bytes::copy_from_slice(until)),
+            None => KeyRange::starting_at(from),
+        };
         snap.range(&app_table(table)?, &range)?
             .map(|entry| {
                 let (k, v) = entry?;
