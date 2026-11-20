@@ -32,25 +32,54 @@ flowchart TD
 
 ## Trust chain
 
-| Link                            | Source                                                                                                                                                                                                        | Check                                                                                                                                                                                                                   | Code                                                                                                                                                                                   |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0. LC contract address          | L1: `StakeTableV3(chain_config.stake_table_contract).lightClient()` at the latest block                                                                                                                       | Trusted: chain config plus L1 RPC                                                                                                                                                                                       | `crates/espresso/types/src/v0/impls/stake_table.rs` `lc_contract_finalized_state`                                                                                                      |
-| 1. `F`, `blockCommRoot`         | L1: `LightClientV3.finalizedState()` at the L1 finalized block                                                                                                                                                | SNARK-verified by the contract; L1 RPC and the contract owner and prover trusted                                                                                                                                        | same                                                                                                                                                                                   |
-| 2. Anchor header at `F`         | Peer: `/v1/catchup/{F}/leafchain` (first leaf), or request-response                                                                                                                                           | `verify_header`: height is `F`, `light_client_state.block_comm_root` equals the contract's. Leaf chain QCs are not checked; only the header's Merkle root is used.                                                      | `crates/espresso/types/src/v0/impls/lc_contract.rs` `verify_header`; callers in `crates/espresso/node/src/catchup.rs` and `crates/espresso/node/src/request_response/catchup/state.rs` |
-| 3. Epoch root headers below `F` | Peer: `HeaderProof` (`/v1/light-client/header/{F}/{h}`)                                                                                                                                                       | `verify_at_height(anchor_root, h)`: Merkle proof against the block Merkle root of header `F`                                                                                                                            | `crates/light-client/src/consensus/header.rs` `verify_at_height`                                                                                                                       |
-| 4. Stake table of epoch `e`     | Derived from stake table events up to `root(e-2).l1_finalized`: stored events, plus L1 for what storage lacks (`StoredThenL1`)                                                                                | Deterministic from the events. `root(e-2).next_stake_table_hash` is compared with the held table of `e-1`; a mismatch ends the process. Skipped, with a `warn!`, when either hash is missing (roots of older versions). | `crates/espresso/types/src/v0/impls/committee.rs` `install_root`                                                                                                                       |
-| 5. Block reward                 | Proven root fields (timestamp, `total_reward_distributed`) of the roots and the preceding root, stake of the derived table, initial token supply (constant or L1). V3: fixed reward. A held reward is reused. | Covered by links 3 and 4 plus L1 RPC                                                                                                                                                                                    | `crates/espresso/types/src/v0/impls/committee.rs` `derive_stake_table`                                                                                                                 |
-| 6. Epochs above the window      | Normal walk: `epoch_root_leaf`, QC-verified against held table `e-2`                                                                                                                                          | Unchanged by the seed                                                                                                                                                                                                   | `crates/hotshot/types/src/epoch_membership.rs` `epoch_root_leaf`                                                                                                                       |
+| #   | Value                   | From                    | Checked by                                  |
+| --- | ----------------------- | ----------------------- | ------------------------------------------- |
+| 0   | LC contract address     | L1, latest block        | trusted                                     |
+| 1   | `F`, `blockCommRoot`    | L1, finalized block     | SNARK, in the contract                      |
+| 2   | Header at `F`           | peer                    | its `block_comm_root` equals the contract's |
+| 3   | Root headers below `F`  | peer                    | Merkle proof against header `F`             |
+| 4   | Table of epoch `e`      | stored and L1 events    | `root(e-2)` hash against table `e-1`        |
+| 5   | Block reward            | proven roots, table `e` | links 3 and 4                               |
+| 6   | Epochs above the window | peer leaves             | QC against table `e-2`                      |
+
+### Link details
+
+0. LC contract address
+   - `StakeTableV3(chain_config.stake_table_contract).lightClient()`.
+   - Trusts chain config and L1 RPC.
+1. `F`, `blockCommRoot`
+   - `LightClientV3.finalizedState()` at the L1 finalized block.
+   - Trusts L1 RPC, the contract owner and the permissioned prover.
+2. Header at `F`
+   - First leaf of `/v1/catchup/{F}/leafchain`, or request-response.
+   - `verify_header`: height is `F` and `light_client_state.block_comm_root` equals the contract's.
+   - Leaf chain QCs are not checked. Only the header's Merkle root is used.
+3. Root headers below `F`
+   - `HeaderProof` from `/v1/light-client/header/{F}/{h}`.
+   - `verify_at_height(anchor_root, h)`: Merkle proof against the block Merkle root of header `F`.
+4. Table of epoch `e`
+   - Derived from stake table events up to `root(e-2).l1_finalized`: stored events, plus L1 for what storage lacks
+     (`StoredThenL1`).
+   - `install_root` compares `root(e-2).next_stake_table_hash` with the held table of `e-1`. A mismatch ends the
+     process.
+   - Skipped, with a `warn!`, when either hash is missing (roots of older versions).
+5. Block reward
+   - Inputs: proven root fields (timestamp, `total_reward_distributed`) of the roots and the preceding root, stake of
+     the derived table, initial token supply (constant or L1).
+   - V3 uses the fixed reward. A held reward is reused.
+6. Epochs above the window
+   - Normal walk: `epoch_root_leaf`, QC-checked against held table `e-2`.
+   - Unchanged by the seed.
 
 ## Fetch order in one `catchup(target)`
 
-`EpochMembershipCoordinator::catchup` in `crates/hotshot/types/src/epoch_membership.rs`.
+In `EpochMembershipCoordinator::catchup`.
 
 1. `held_pair_top` finds the highest held consecutive pair `(start-1, start)` in memory or storage.
 2. If `start + 1 < target`, the seed takes `seed_lock` and re-checks `start`.
 3. L1 reads: the finalized block number, the LC address (latest block, cached in a `OnceCell`), then `finalizedState` at
    that finalized block.
-4. `seed_window` (`crates/espresso/types/src/v0/impls/lc_contract.rs`) picks the epochs to install:
+4. `seed_window` picks the epochs to install:
    - `last = min(target, epoch(F) + 1)`
    - `first = max(last - 4, start + 1, 3)`
    - At most 5 tables, covering the target's DRB and rewards.
@@ -58,7 +87,7 @@ flowchart TD
    - Returns `None` (no seed) when the walk from `start` reaches the target or `epoch(F)` without one.
 5. Anchor: the header at `F`, then `verify_header`.
 6. Proven headers: the preceding root first, then `root(e-2)` for each `e` in the window, ascending. Up to 3 requests in
-   flight (`crates/espresso/node/src/lc_contract_seed.rs`).
+   flight.
    - The anchor and each proven header get up to 5 attempts, or 1 with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE`.
    - One HTTP attempt asks the state peers in turn.
 7. `EpochCommittees::install_epoch_roots`, ascending, each root under `catchup_timeout`. Per root `e`, `install_root`:
@@ -80,7 +109,7 @@ On a seed failure at any step: `warn!` "catchup seed failed, walking". The walk 
 
 ## Backfill below the window (async)
 
-`StakeTableBackfill` in `crates/espresso/node/src/stake_table_backfill.rs`.
+In `StakeTableBackfill`.
 
 - Read order:
   1. Stored epochs (no L1 read when nothing is missing).
