@@ -33,6 +33,7 @@ use hotshot_types::{
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
+    time::{Instant, sleep_until},
 };
 use tracing::{error, info, warn};
 
@@ -45,7 +46,11 @@ use crate::{
     store::{self, Anchor, ConsensusStore, ForeignWrite, Restored},
 };
 
-const RETRY_DELAY: Duration = Duration::from_millis(300);
+/// The delay before the first retry of a failed batch. It doubles with each further failure, up
+/// to [`MAX_RETRY_DELAY`].
+const MIN_RETRY_DELAY: Duration = Duration::from_millis(300);
+
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// How many bytes the decide log may take up, with the payloads of its entries, before this
 /// node stops sending vote2, unless configured otherwise.
@@ -108,9 +113,13 @@ pub trait DecidedState<T: NodeType>: Send + Sync {
 /// Storage cannot go on.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    /// The store failed in a way retrying cannot fix.
+    /// The store failed in a way retrying cannot fix: it is poisoned or corrupt.
     #[error("consensus store failed: {0}")]
     Store(#[from] consensus_store::Error),
+
+    /// A write could not be encoded. Consensus would wait for it forever.
+    #[error("failed to encode a storage write: {0:#}")]
+    Encoding(anyhow::Error),
 
     /// The blocking task applying a batch was cancelled, as at runtime shutdown.
     #[error("storage task cancelled")]
@@ -172,6 +181,18 @@ pub struct Storage<T: NodeType, S> {
 
     /// The batch being applied, if any.
     applying: Option<JoinHandle<Applied<T>>>,
+
+    /// The writer's batch that failed, which is applied again at `retry_at`. Until then only
+    /// foreign writes are applied, each batch of them on its own, so that an acknowledgement,
+    /// which frees space, does not wait for a batch that fails for lack of it.
+    failed: Option<Pending<T>>,
+    retry_at: Instant,
+
+    /// The delay before the next retry. Reset when a batch of the writer succeeds.
+    retry_delay: Duration,
+
+    /// A write that could not be encoded, which [`Self::next`] reports.
+    fatal: Option<StorageError>,
 
     /// Outputs of applied batches, not yet returned by [`Self::next`].
     durable: std::collections::VecDeque<StorageOutput<T>>,
@@ -247,9 +268,10 @@ struct Pending<T: NodeType> {
     foreign: Vec<oneshot::Sender<anyhow::Result<()>>>,
 
     /// Whether the batch adds to the decide log, which its readers then hear of, and whether
-    /// it changes the decide log's size, which is then measured.
+    /// it or the foreign writes change the decide log's size, which is then measured.
     adds_to_decide_log: bool,
     resizes_decide_log: bool,
+    foreign_resizes_decide_log: bool,
 }
 
 impl<T: NodeType> Default for Pending<T> {
@@ -262,6 +284,7 @@ impl<T: NodeType> Default for Pending<T> {
             foreign: Vec::new(),
             adds_to_decide_log: false,
             resizes_decide_log: false,
+            foreign_resizes_decide_log: false,
         }
     }
 }
@@ -282,6 +305,24 @@ impl<T: NodeType> Pending<T> {
         let mut batch = self.batch.clone();
         batch.append(self.foreign_batch.clone());
         batch
+    }
+
+    /// The foreign writes alone, as a batch of their own. The writer's stay.
+    fn split_foreign(&mut self) -> Self {
+        Self {
+            batch: mem::take(&mut self.foreign_batch),
+            foreign: mem::take(&mut self.foreign),
+            resizes_decide_log: mem::take(&mut self.foreign_resizes_decide_log),
+            ..Self::default()
+        }
+    }
+
+    /// Reports the foreign writes failed with `error` and drops them. A foreign write may be
+    /// what fails, so it must not hold up the writes consensus waits on.
+    fn drop_foreign(&mut self, error: &str) {
+        self.report(Some(error));
+        self.foreign_batch = Batch::new();
+        self.foreign_resizes_decide_log = false;
     }
 
     /// Reports the foreign writes as durable, or as failed with `error`.
@@ -319,6 +360,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             signature,
             pending: Pending::default(),
             applying: None,
+            failed: None,
+            retry_at: Instant::now(),
+            retry_delay: MIN_RETRY_DELAY,
+            fatal: None,
             durable: Default::default(),
             decide_log_bytes,
             decide_log_limit: DEFAULT_DECIDE_LOG_LIMIT,
@@ -401,7 +446,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         }
         match store::put_boundary_qc(&mut self.pending.batch, &qc) {
             Ok(()) => self.marks.boundary = Some(lock),
-            Err(err) => error!(%err, view = %qc.view_number(), "failed to encode boundary qc"),
+            Err(err) => self.fail(err.context(format!("boundary qc of view {}", qc.view_number()))),
         }
     }
 
@@ -434,14 +479,14 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 self.pending.timers.extend(timer);
                 self.state_certs.insert(view, state_cert);
             },
-            Err(err) => error!(%err, %view, "failed to encode state certificate"),
+            Err(err) => self.fail(err.context(format!("state certificate of view {view}"))),
         }
     }
 
     /// Persists the newest record of a validator's API service. Nothing waits on it.
     pub fn append_service_record(&mut self, record: &SignedServiceRecord<T>) {
         if let Err(err) = store::put_service_record(&mut self.pending.batch, record) {
-            error!(%err, signer = %record.signer, "failed to encode service record");
+            self.fail(err.context(format!("service record of {}", record.signer)));
         }
     }
 
@@ -452,7 +497,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
 
     pub fn update_decided_upgrade_certificate(&mut self, cert: UpgradeCertificate<T>) {
         if let Err(err) = store::put_upgrade_cert(&mut self.pending.batch, &cert) {
-            error!(%err, "failed to encode upgrade certificate");
+            self.fail(err.context("upgrade certificate"));
         }
     }
 
@@ -524,7 +569,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 self.advance_anchor(leaves, cert1, cert2);
             },
             Err(err) => {
-                error!(%err, view = %cert1.view_number(), "failed to encode decided leaves");
+                let view = cert1.view_number();
+                self.fail(err.context(format!("leaves decided in view {view}")));
                 return;
             },
         }
@@ -579,7 +625,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         };
         match store::put_anchor(&mut self.pending.batch, &anchor) {
             Ok(()) => self.marks.anchor = Some(newest.height()),
-            Err(err) => error!(%err, height = newest.height(), "failed to encode the anchor"),
+            Err(err) => self.fail(err.context(format!("anchor at height {}", newest.height()))),
         }
     }
 
@@ -622,6 +668,9 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// batch in progress stays in progress.
     pub async fn next(&mut self) -> Result<StorageOutput<T>, StorageError> {
         loop {
+            if let Some(err) = self.fatal.take() {
+                return Err(err);
+            }
             if let Some(output) = self.durable.pop_front() {
                 return Ok(output);
             }
@@ -632,19 +681,24 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             while let Ok(write) = self.foreign.try_recv() {
                 self.take_foreign(write);
             }
-            let idle = self.applying.is_none() && self.pending.is_empty();
-            // A clone, since `apply_next` borrows `self`. It has seen what the original has.
+            self.start();
+            if !self.durable.is_empty() {
+                continue;
+            }
+            // A clone, since `finish` borrows `self`. It has seen what the original has.
             let mut decide_log_bytes = self.decide_log_bytes.clone();
-            if idle {
+            if self.applying.is_some() {
+                tokio::select! {
+                    applied = self.finish() => applied?,
+                    _ = decide_log_bytes.changed() => {},
+                }
+            } else {
+                let retry_at = self.failed.as_ref().map(|_| self.retry_at);
                 tokio::select! {
                     // The sender lives as long as the store, which this writer holds.
                     _ = decide_log_bytes.changed() => {},
                     Some(write) = self.foreign.recv() => self.take_foreign(write),
-                }
-            } else {
-                tokio::select! {
-                    applied = self.apply_next() => applied?,
-                    _ = decide_log_bytes.changed() => {},
+                    _ = sleep_until(retry_at.unwrap_or_else(Instant::now)), if retry_at.is_some() => {},
                 }
             }
         }
@@ -653,7 +707,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// Adds a write from outside the writer to the next batch, so that it shares its commit.
     fn take_foreign(&mut self, write: ForeignWrite) {
         self.pending.foreign_batch.append(write.batch);
-        self.pending.resizes_decide_log |= write.resizes_decide_log;
+        self.pending.foreign_resizes_decide_log |= write.resizes_decide_log;
         self.pending.foreign.push(write.done);
     }
 
@@ -663,33 +717,58 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         while let Ok(write) = self.foreign.try_recv() {
             self.take_foreign(write);
         }
-        while self.applying.is_some() || !self.pending.is_empty() {
-            if let Err(err) = self.apply_next().await {
-                error!(%err, "storage failed during shutdown");
-                return;
+        loop {
+            self.start();
+            if self.applying.is_some() {
+                if let Err(err) = self.finish().await {
+                    error!(%err, "storage failed during shutdown");
+                    return;
+                }
+            } else if self.failed.is_some() {
+                sleep_until(self.retry_at).await;
+            } else if self.pending.is_empty() {
+                break;
             }
         }
         info!("storage flush complete");
     }
 
-    /// Waits for the batch being applied, starting one from the queued writes if none is, and
-    /// moves its outputs to `durable`. A failed batch is started again after a delay.
+    /// Starts applying a batch unless one is being applied: while the writer's batch is failing,
+    /// the foreign writes on their own, and the failed batch once its retry is due; otherwise
+    /// the queued writes.
+    fn start(&mut self) {
+        if self.applying.is_some() {
+            return;
+        }
+        if self.failed.is_some() {
+            if !self.pending.foreign.is_empty() {
+                let foreign = self.pending.split_foreign();
+                self.applying = Some(self.spawn(foreign));
+            } else if Instant::now() >= self.retry_at {
+                let failed = self.failed.take().expect("checked above");
+                self.applying = Some(self.spawn(failed));
+            }
+            return;
+        }
+        if self.pending.is_empty() {
+            return;
+        }
+        let mut pending = mem::take(&mut self.pending);
+        if pending.writes_nothing() {
+            // Nothing to write, and everything queued before is durable.
+            pending.report(None);
+            self.durable.extend(pending.outputs);
+            return;
+        }
+        self.applying = Some(self.spawn(pending));
+    }
+
+    /// Waits for the batch being applied and moves its outputs to `durable`. A failed batch of
+    /// the writer is kept for a retry, with a delay that doubles with each failure.
     ///
     /// Cancel-safe: a batch in progress stays in progress.
-    async fn apply_next(&mut self) -> Result<(), StorageError> {
-        if self.applying.is_none() {
-            let pending = mem::take(&mut self.pending);
-            if pending.writes_nothing() {
-                // Nothing to write, and everything queued before is durable: no batch is being
-                // applied.
-                let mut pending = pending;
-                pending.report(None);
-                self.durable.extend(pending.outputs);
-                return Ok(());
-            }
-            self.applying = Some(self.spawn(pending, Duration::ZERO));
-        }
-        let applying = self.applying.as_mut().expect("set above");
+    async fn finish(&mut self) -> Result<(), StorageError> {
+        let applying = self.applying.as_mut().expect("a batch is being applied");
         let applied = match applying.await {
             Ok(applied) => applied,
             Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
@@ -699,31 +778,49 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             },
         };
         self.applying = None;
-        match applied.result {
+        let Applied {
+            mut pending,
+            result,
+        } = applied;
+        // While the writer's batch is failing, only foreign writes are applied.
+        let writers = self.failed.is_none();
+        match result {
             Ok(()) => {
-                let mut pending = applied.pending;
                 pending.report(None);
                 if pending.adds_to_decide_log {
                     self.store.announce();
                 }
                 self.durable.extend(pending.outputs);
+                if writers {
+                    self.retry_delay = MIN_RETRY_DELAY;
+                }
             },
-            Err(err @ consensus_store::Error::Poisoned(_)) => {
-                let mut pending = applied.pending;
+            Err(
+                err
+                @ (consensus_store::Error::Poisoned(_) | consensus_store::Error::Corrupt { .. }),
+            ) => {
                 pending.report(Some(&err.to_string()));
                 return Err(err.into());
             },
             Err(err) => {
-                warn!(%err, "failed to apply storage batch, retrying");
-                // A foreign write may be what fails; it is reported failed and dropped, so that
-                // it cannot hold up the writes consensus waits on.
-                let mut pending = applied.pending;
-                pending.report(Some(&err.to_string()));
-                pending.foreign_batch = Batch::new();
-                self.applying = Some(self.spawn(pending, RETRY_DELAY));
+                pending.drop_foreign(&err.to_string());
+                if writers {
+                    warn!(%err, delay = ?self.retry_delay, "failed to apply storage batch, retrying");
+                    self.retry_at = Instant::now() + self.retry_delay;
+                    self.retry_delay = (self.retry_delay * 2).min(MAX_RETRY_DELAY);
+                    self.failed = Some(pending);
+                } else {
+                    warn!(%err, "failed to apply foreign writes while the writer's batch is failing");
+                }
             },
         }
         Ok(())
+    }
+
+    /// Stops the writer, since consensus would wait forever for a write that cannot be encoded.
+    fn fail(&mut self, err: anyhow::Error) {
+        error!(err = format!("{err:#}"), "failed to encode a storage write");
+        self.fatal.get_or_insert(StorageError::Encoding(err));
     }
 
     /// Whether the decide log is full, if that differs from what was last reported.
@@ -757,9 +854,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         histogram: impl FnOnce(&StorageMetrics) -> &Arc<dyn Histogram>,
     ) {
         if let Err(err) = written {
-            // Encoding failed: the write and its output are dropped, and whatever waits on
-            // the output waits forever, as for a write that never finishes.
-            error!(%err, ?output, "failed to encode storage write");
+            self.fail(err.context(format!("{output:?}")));
             return;
         }
         if let Some(m) = &self.metrics {
@@ -770,16 +865,15 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self.pending.outputs.push(output);
     }
 
-    fn spawn(&self, pending: Pending<T>, delay: Duration) -> JoinHandle<Applied<T>> {
+    fn spawn(&self, pending: Pending<T>) -> JoinHandle<Applied<T>> {
         let store = self.store.clone();
         let apply_histogram = self.metrics.as_ref().map(|m| m.apply.clone());
         tokio::task::spawn_blocking(move || {
-            std::thread::sleep(delay);
             let timer = apply_histogram.map(Measurement::start);
             let result = store.store().apply(&pending.combined());
             drop(timer);
             if result.is_ok()
-                && pending.resizes_decide_log
+                && (pending.resizes_decide_log || pending.foreign_resizes_decide_log)
                 && let Err(err) = store.measure_decide_log()
             {
                 warn!(%err, "failed to measure the decide log");

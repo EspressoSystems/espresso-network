@@ -10,7 +10,7 @@ use std::{
 use app_tables::{AppWrite, TableName};
 use committable::RawCommitmentBuilder;
 use consensus_store::{
-    Batch, Bytes, Error, Store,
+    Batch, Bytes, Error, Op, Store, Table,
     mem::{MemSnapshot, MemStore},
 };
 use hotshot_example_types::{block_types::TestBlockPayload, node_types::TestTypes};
@@ -256,6 +256,75 @@ async fn test_restarted_writer_keeps_the_stored_marks() {
     assert_eq!(restored.restart_view, Some(ViewNumber::new(13)));
 }
 
+/// A store whose data is corrupt stops the writer.
+#[tokio::test]
+async fn test_corrupt_store_is_an_error() {
+    let (mut storage, store) = test_storage();
+    store.store().corrupt.store(true, Ordering::Relaxed);
+    storage.record_action(ViewNumber::new(1), ActionKind::Vote);
+    assert!(storage.next().await.is_err());
+}
+
+/// While the writer's batch keeps failing, foreign writes, such as the acknowledgements that
+/// free space, are applied on their own. The writer's batch completes once it succeeds.
+#[tokio::test]
+async fn test_foreign_writes_apply_while_the_writers_batch_fails() {
+    let (mut storage, store) = test_storage();
+    store.store().fail_safety.store(true, Ordering::Relaxed);
+    let view = ViewNumber::new(3);
+    storage.record_action(view, ActionKind::Vote);
+    // The writer's batch fails once before the foreign write arrives, which would otherwise
+    // join it and fail with it.
+    assert!(
+        timeout(Duration::from_millis(100), storage.next())
+            .await
+            .is_err()
+    );
+    let table = TableName::new("a").unwrap();
+    let writes = [AppWrite::Put {
+        table: table.clone(),
+        key: Bytes::from_static(&[1]),
+        value: Bytes::from_static(b"one"),
+    }];
+
+    let (written, outputs) = timeout(
+        Duration::from_secs(5),
+        driving(&mut storage, store.app_write(&writes)),
+    )
+    .await
+    .expect("the foreign write does not wait for the writer's batch");
+    written.unwrap();
+    assert!(outputs.is_empty(), "the writer's batch is still failing");
+    assert_eq!(
+        store.app_get(&table, &[1]).unwrap(),
+        Some(Bytes::from_static(b"one"))
+    );
+    assert_eq!(store.load().unwrap().acted_view, None);
+
+    store.store().fail_safety.store(false, Ordering::Relaxed);
+    let stored = timeout(Duration::from_secs(5), storage.next())
+        .await
+        .expect("completes once the batch succeeds")
+        .expect("completion");
+    assert_eq!(stored, StorageOutput::Action(view, ActionKind::Vote));
+    assert_eq!(store.load().unwrap().acted_view, Some(view));
+}
+
+/// The delay between retries doubles: attempts at 0, 0.3, 0.9 and 2.1 seconds, where a fixed
+/// delay would make a fourth at 0.9 seconds.
+#[tokio::test]
+async fn test_retry_delay_doubles() {
+    let (mut storage, store) = test_storage();
+    store.store().fail.store(true, Ordering::Relaxed);
+    storage.record_action(ViewNumber::new(1), ActionKind::Vote);
+    assert!(
+        timeout(Duration::from_millis(1500), storage.next())
+            .await
+            .is_err()
+    );
+    assert_eq!(store.store().attempts.load(Ordering::Relaxed), 3);
+}
+
 /// A store that can no longer tell whether a commit happened stops the writer.
 #[tokio::test]
 async fn test_poisoned_store_is_an_error() {
@@ -294,7 +363,12 @@ async fn assert_nothing_more(storage: &mut Storage<TestTypes, FlakyStore>) {
 struct FlakyStore {
     inner: MemStore,
     fail: AtomicBool,
+
+    /// Fails the batches that write to the table of locks and views, which only the writer does.
+    fail_safety: AtomicBool,
     poisoned: AtomicBool,
+    corrupt: AtomicBool,
+    attempts: AtomicUsize,
     commits: AtomicUsize,
 }
 
@@ -302,10 +376,24 @@ impl Store for FlakyStore {
     type Snapshot = MemSnapshot;
 
     fn apply(&self, batch: &Batch) -> Result<(), Error> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
         if self.poisoned.load(Ordering::Relaxed) {
             return Err(Error::Poisoned("test".into()));
         }
-        if self.fail.load(Ordering::Relaxed) {
+        if self.corrupt.load(Ordering::Relaxed) {
+            return Err(Error::Corrupt {
+                table: Table::new("test").unwrap(),
+                key: Bytes::new(),
+                reason: "test",
+            });
+        }
+        let writes_safety = batch.ops().iter().any(|op| match op {
+            Op::Put { table, .. } => table.name() == "safety",
+            _ => false,
+        });
+        if self.fail.load(Ordering::Relaxed)
+            || (writes_safety && self.fail_safety.load(Ordering::Relaxed))
+        {
             return Err(Error::Io(std::io::Error::other("test")));
         }
         self.inner.apply(batch)?;
