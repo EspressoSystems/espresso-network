@@ -103,3 +103,38 @@ On a seed failure at any step: `warn!` "catchup seed failed, walking", then the 
   capped at `epoch(F) + 1`; that table comes from `root(epoch(F) - 1)`, which is below `F`.
 - `next_stake_table_hash` lags one root: a root decides the hash of the epoch before the one it defines. Installing
   `root(e-2)` therefore checks table `e-1`, and the top of the window waits one more root for its check.
+
+## Not implemented: stake tables from peers
+
+A faster variant takes the stake table from a peer and checks it against a proven root instead of deriving it from L1
+stake table events. Not needed today: the event-derived install is fast enough.
+
+### Outline
+
+1. Same anchor as today: LC contract `finalizedState`, header at `F`, proven epoch roots below `F`.
+2. For each table `e` in the window, request the full `StakeTableState` of epoch `e` from a peer (new request-response
+   request and HTTP endpoint).
+3. Accept it iff `state.commit()` equals the proven `root(e-1).next_stake_table_hash`. The hash commits to the full
+   state: all registered validators, exits and used keys (`ValidatorSet::from_state`). A mismatch rejects that peer's
+   answer and asks the next peer; no process exit, since the peer is untrusted.
+4. Derive the active set locally with `select_active_validator_set` at the root's protocol version. Block reward as
+   today.
+5. Install as today: storage, then memory.
+
+### Effects
+
+- No L1 event replay on the startup path. Trust drops to the LC contract plus Merkle proofs; L1 RPC is no longer trusted
+  for the window's tables.
+- Every installed table is hash-checked at install. The top and bottom gaps above disappear.
+- `table(e)` needs proven `root(e-1)`. `root(epoch(F))` lies 5 blocks before the end of `epoch(F)` and is usually above
+  `F`, so `table(epoch(F) + 1)` is usually not provable. The window top drops to `epoch(F)`, or that one table falls
+  back to event derivation.
+
+### Required changes
+
+- Peers serve `StakeTableState` per epoch. Per-epoch storage holds the active map, the hash and all validators
+  (`MembershipPersistence::store_stake`, `store_all_validators`), not the exit and used-key sets. Peers either rebuild
+  the state from stored events or storage gains the full state.
+- Later epochs still derive tables by replaying all events from L1 block 0 (`validator_set_from_stored_events`). Without
+  incremental derivation (verified state of `e` plus events after `root(e-2).l1_finalized`), the full event history is
+  still fetched before the next epoch root; the variant only moves that cost off the startup path.
