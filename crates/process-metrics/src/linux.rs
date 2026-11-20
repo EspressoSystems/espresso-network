@@ -1,6 +1,6 @@
 use std::{fs, io::BufReader, path::Path};
 
-use hotshot_types::traits::metrics::{Counter, Gauge, Metrics};
+use hotshot_metrics::{Counter, Gauge, Metrics};
 use procfs::{
     Current, CurrentSI, KernelStats, LoadAverage, PressureRecord, get_pressure,
     process::{Io, Process},
