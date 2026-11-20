@@ -13,7 +13,7 @@ use tokio_tungstenite::{
         Error as WsError, Message,
         client::IntoClientRequest,
         http::{self, HeaderName, HeaderValue},
-        protocol::WebSocketConfig,
+        protocol::{WebSocketConfig, frame::coding::CloseCode},
     },
 };
 use url::Url;
@@ -208,6 +208,22 @@ impl<FromServer: DeserializeOwned, ToServer: ?Sized, E: ClientError, VER: Static
                         format!("invalid JSON: {err}\n{s}"),
                     )
                 })),
+                // No code or a normal one is the end of the stream. Any other code is the server
+                // giving up on it, which must not look the same.
+                Message::Close(Some(frame)) if frame.code != CloseCode::Normal => {
+                    let msg = if frame.reason.is_empty() {
+                        format!("server closed stream with code {}", frame.code)
+                    } else {
+                        format!(
+                            "server closed stream with code {}: {}",
+                            frame.code, frame.reason
+                        )
+                    };
+                    Some(Err(E::catch_all(
+                        reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                        msg,
+                    )))
+                },
                 Message::Close(_) => None,
                 _ => Some(Err(E::catch_all(
                     reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -284,4 +300,76 @@ fn socket_scheme(scheme: &str) -> String {
         _ => scheme,
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    use vbs::version::StaticVersion;
+
+    use super::*;
+    use crate::error::ClientErr;
+
+    /// Serves one connection that sends a single item and then `close`.
+    async fn subscribe_to_closing_server(
+        close: Option<CloseFrame>,
+    ) -> Connection<u64, Unsupported, ClientErr, StaticVersion<0, 1>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.send(Message::Text("1".into())).await.unwrap();
+            ws.send(Message::Close(close)).await.unwrap();
+        });
+        SocketRequest::new(
+            format!("http://{addr}/").parse().unwrap(),
+            ContentType::Json,
+            None,
+        )
+        .subscribe()
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn abnormal_close_is_an_error_before_end_of_stream() {
+        let mut conn = subscribe_to_closing_server(Some(CloseFrame {
+            code: CloseCode::Error,
+            reason: "failed to encode stream item".into(),
+        }))
+        .await;
+        assert_eq!(conn.next().await.unwrap().unwrap(), 1);
+        let err = conn.next().await.unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error 500: server closed stream with code 1011: failed to encode stream item"
+        );
+        assert!(conn.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn abnormal_close_without_a_reason_reports_only_the_code() {
+        let mut conn = subscribe_to_closing_server(Some(CloseFrame {
+            code: CloseCode::Away,
+            reason: "".into(),
+        }))
+        .await;
+        assert_eq!(conn.next().await.unwrap().unwrap(), 1);
+        let err = conn.next().await.unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error 500: server closed stream with code 1001"
+        );
+        assert!(conn.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn close_without_a_code_ends_the_stream() {
+        let mut conn = subscribe_to_closing_server(None).await;
+        assert_eq!(conn.next().await.unwrap().unwrap(), 1);
+        assert!(conn.next().await.is_none());
+    }
 }
