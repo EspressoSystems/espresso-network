@@ -147,9 +147,27 @@ impl LegacyChain {
     /// Starts a query node on this chain and returns once it has stored every block and derived
     /// the merklized state up to the tip.
     pub async fn replay<D: TestableSqlDataSource>(&self) -> anyhow::Result<ReplayNode<D>> {
+        self.replay_with_l1_finalized(None).await
+    }
+
+    /// Like [`Self::replay`], with the HotShot height the L1 light client has finalized set to
+    /// `finalized` before the node starts, if given. The recorded L1 never moves it from genesis,
+    /// and the node stores reward proofs only for that height.
+    pub async fn replay_with_l1_finalized<D: TestableSqlDataSource>(
+        &self,
+        finalized: Option<u64>,
+    ) -> anyhow::Result<ReplayNode<D>> {
         let l1 = replay_l1(&self.l1_blocks)
             .await
             .with_context(|| format!("replaying the {} chain's L1", self.name))?;
+        if let Some(height) = finalized {
+            let stake_table = self
+                .genesis
+                .chain_config
+                .stake_table_contract
+                .context("a recorded chain has a stake table")?;
+            set_l1_finalized_hotshot_height(&l1, stake_table, height).await?;
+        }
 
         let storage = D::create_storage().await;
         let mut db = D::persistence_options(&storage);
@@ -231,6 +249,49 @@ fn chain_dir(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../data/legacy-chains")
         .join(name)
+}
+
+/// Sets the HotShot height the mock L1 light client of `stake_table` has finalized to `height`,
+/// in a new L1 block mined after the recorded ones.
+async fn set_l1_finalized_hotshot_height(
+    l1: &AnvilInstance,
+    stake_table: Address,
+    height: u64,
+) -> anyhow::Result<()> {
+    use alloy::{network::EthereumWallet, signers::local::PrivateKeySigner};
+    use hotshot_contract_adapter::sol_types::{
+        LightClientStateSol, LightClientV3Mock, StakeTableV3,
+    };
+
+    let signer: PrivateKeySigner = l1.keys()[0].clone().into();
+    let provider = ProviderBuilder::new()
+        .wallet(EthereumWallet::from(signer))
+        .connect_http(l1.endpoint_url());
+    let address = StakeTableV3::new(stake_table, &provider)
+        .lightClient()
+        .call()
+        .await?;
+    let light_client = LightClientV3Mock::new(address, &provider);
+    let state: LightClientStateSol = light_client.finalizedState().call().await?.into();
+    let pending = light_client
+        .setFinalizedState(
+            LightClientStateSol {
+                blockHeight: height,
+                ..state
+            }
+            .into(),
+        )
+        .send()
+        .await?;
+    // The replayed L1 mines only on request.
+    provider.anvil_mine(Some(1), None).await?;
+    pending.get_receipt().await?;
+    let set = light_client.finalizedState().call().await?.blockHeight;
+    ensure!(
+        set == height,
+        "the light client finalized height is {set}, not {height}"
+    );
+    Ok(())
 }
 
 /// Starts an anvil at the recorded genesis timestamp and mines the recorded blocks one by one.
