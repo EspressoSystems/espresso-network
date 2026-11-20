@@ -7958,7 +7958,7 @@ mod test {
     /// Check that a query node whose state started from the boundary `start` serves, through
     /// `actual`, the reward trees it needs to store reward proofs for the L1-finalized height
     /// [`PRUNED_START_L1_FINALIZED_HEIGHT`]: the same as node 0 (`expected`) serves at each
-    /// boundary from the finalized one up to `start`, at most 5 of them, and none below.
+    /// boundary from the finalized one up to `start`, and none below.
     async fn check_reward_trees_below_start(
         expected: &Client<ClientErr, StaticVersion<0, 1>>,
         actual: &Client<ClientErr, StaticVersion<0, 1>>,
@@ -7966,7 +7966,6 @@ mod test {
     ) -> anyhow::Result<()> {
         let epoch = PRUNED_START_EPOCH_HEIGHT;
         let proof_boundary = l1_finalized_proof_boundary(PRUNED_START_L1_FINALIZED_HEIGHT, epoch);
-        let lowest = proof_boundary.max(start.saturating_sub(5 * epoch));
         let context = || {
             format!(
                 "L1-finalized height {PRUNED_START_L1_FINALIZED_HEIGHT}, its boundary \
@@ -7978,13 +7977,15 @@ mod test {
         check_same_reward_tree(expected, actual, start)
             .await
             .with_context(|| format!("setup: the snapshot's reward tree, {}", context()))?;
-        let needed = (lowest..start).step_by(epoch as usize).collect::<Vec<_>>();
+        let needed = (proof_boundary..start)
+            .step_by(epoch as usize)
+            .collect::<Vec<_>>();
         for &height in &needed {
             check_same_reward_tree(expected, actual, height)
                 .await
                 .with_context(context)?;
         }
-        for height in (epoch..lowest).step_by(epoch as usize) {
+        for height in (epoch..proof_boundary).step_by(epoch as usize) {
             check_no_reward_tree(actual, height)
                 .await
                 .with_context(context)?;
