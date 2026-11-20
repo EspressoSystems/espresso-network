@@ -1237,11 +1237,16 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 1
             };
             let current_epoch = epoch_length.epoch_of(height);
-            // First block of the oldest epoch we still want to retain.
-            let epoch_start_block =
-                current_epoch.saturating_sub(epochs_to_retain) * epoch_length.get();
+            // The last block of the newest epoch that is not retained. Only trees below it are
+            // collected.
+            let Ok(retained_from) = current_epoch
+                .checked_rewind(epochs_to_retain)
+                .and_then(|epoch| epoch_length.last_block(epoch))
+            else {
+                return Ok(());
+            };
 
-            let gc_height = epoch_start_block.min(finalized_hotshot_height);
+            let gc_height = (*retained_from).min(finalized_hotshot_height);
 
             if let Err(err) = self.garbage_collect(gc_height).await {
                 tracing::info!(gc_height, "failed to garbage collect: {err:#}");

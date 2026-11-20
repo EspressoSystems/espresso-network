@@ -503,13 +503,14 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
             // For V5+, resolve to the last epoch boundary where proofs were stored.
             // For V4, proofs exist at every height.
-            let position = epoch_length.position(height);
             let proof_height = if leaf.header().version() < EPOCH_REWARD_VERSION
-                || position.is_last()
+                || epoch_length.position(height).is_last()
             {
                 height
             } else {
-                let prev_epoch_last_block = position.epoch().saturating_sub(1) * epoch_length.get();
+                let prev_epoch_last_block = *epoch_length
+                    .boundary_at_or_before(height)
+                    .context("no epoch has ended by this height")?;
                 let boundary_leaf = tx
                     .get_leaf(LeafId::<SeqTypes>::from(prev_epoch_last_block as usize))
                     .await
@@ -732,10 +733,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .context("epoch_height not set in node state")?;
                 let position = epoch_length.position(finalized_hotshot_height);
                 if !position.is_last() {
-                    tree_height = position.epoch().saturating_sub(1) * epoch_length.get();
-                    if tree_height == 0 {
+                    let Some(boundary) =
+                        epoch_length.boundary_at_or_before(finalized_hotshot_height)
+                    else {
                         return Ok(());
-                    }
+                    };
+                    tree_height = *boundary;
                     // A loop replaying history below the boundary may not have its leaf yet, and a
                     // failed read would fail the whole state update.
                     if height < tree_height {
@@ -2821,6 +2824,12 @@ mod tests {
                 .unwrap(),
             boundary_proof,
         );
+
+        // No epoch has ended by height 5, so no boundary holds a proof for it.
+        storage
+            .load_proof(5, account, epoch_length)
+            .await
+            .unwrap_err();
     }
 
     #[tokio::test]

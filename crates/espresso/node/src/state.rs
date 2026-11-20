@@ -571,7 +571,7 @@ where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
-    let epoch_height = instance.epoch_length?.get();
+    let epoch_length = instance.epoch_length?;
     let pruned = retry_until_ok("loading the data pruned height", || {
         storage.load_pruned_height()
     })
@@ -583,10 +583,7 @@ where
     let mut retry = 0;
     let (leaf, state) = loop {
         let tip = local_tip_above(&**storage, pruned).await;
-        let boundary = tip - tip % epoch_height;
-        if boundary == 0 {
-            return None;
-        }
+        let boundary = *epoch_length.boundary_at_or_before(tip)?;
         let leaf = leaf_at(storage, provider, boundary).await;
         if leaf.block_header().version() < EPOCH_REWARD_VERSION {
             return None;
