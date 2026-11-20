@@ -11,6 +11,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 - `doc/agents/solidity.md` - before touching `contracts/`
 - `API.md` - the v1 and v2 APIs, and how to add a v2 endpoint
 - `doc/agents/architecture.md` - transaction and block flow, L1 reads, stake table, consensus upgrades
+- `doc/stake-table-catchup-trust-chain.md` - what the LC contract catchup seed trusts, and the order it fetches in
 - `doc/agents/protocol-versions.md` - what each version changed, and what a network runs
 - `doc/agents/live-chains.md` - querying mainnet or decaf over the query-service API
 - `doc/agents/rewards.md` - reward accumulation and the L1 claim path
