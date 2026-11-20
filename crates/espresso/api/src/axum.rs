@@ -5084,6 +5084,7 @@ mod tests {
             "/v2/availability/block-range",
             "/v2/availability/block-ranges",
             "/v2/availability/payload",
+            "/v2/availability/payload-data",
             "/v2/availability/payload-range",
             "/v2/availability/vid-common",
             "/v2/availability/vid-common-range",
@@ -5974,6 +5975,8 @@ mod tests {
                 let id = operation["operationId"].as_str().expect("operation id");
                 let content = &operation["responses"]["200"]["content"];
                 let is_stream = streaming.contains(id);
+                // The raw bytes of a payload are the one response that is neither.
+                let is_binary = content.get("application/octet-stream").is_some();
                 if is_stream {
                     documented.insert(id);
                 }
@@ -5984,7 +5987,7 @@ mod tests {
                 );
                 assert_eq!(
                     content.get("application/json").is_some(),
-                    !is_stream,
+                    !is_stream && !is_binary,
                     "{path}"
                 );
             }

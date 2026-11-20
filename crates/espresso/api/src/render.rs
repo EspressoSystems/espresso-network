@@ -56,6 +56,7 @@ use light_client::consensus::{
 use tagged_base64::TaggedBase64;
 
 use crate::{
+    payload_data,
     proto::{
         self, advz_merkle_node::Node, header_response::Header as Shape,
         resolvable_chain_config::ChainConfig,
@@ -1045,24 +1046,47 @@ impl From<&LeafQueryData<SeqTypes>> for proto::LeafResponse {
 impl From<&BlockQueryData<SeqTypes>> for proto::BlockResponse {
     fn from(block: &BlockQueryData<SeqTypes>) -> Self {
         proto::BlockResponse {
-            header: Some(block.header().into()),
             payload: Some(block.payload().into()),
-            hash: block.hash().to_string(),
-            size: block.size(),
-            num_transactions: block.num_transactions(),
+            ..block_by_reference(block)
         }
+    }
+}
+
+/// `block` as a stream sends it: its payload by reference only.
+pub fn block_by_reference(block: &BlockQueryData<SeqTypes>) -> proto::BlockResponse {
+    let hash = block.payload_hash().to_string();
+    proto::BlockResponse {
+        header: Some(block.header().into()),
+        payload: None,
+        hash: block.hash().to_string(),
+        size: block.size(),
+        num_transactions: block.num_transactions(),
+        payload_ref: Some(payload_data::reference(
+            &hash,
+            block.payload().raw_payload(),
+        )),
     }
 }
 
 impl From<&PayloadQueryData<SeqTypes>> for proto::PayloadResponse {
     fn from(payload: &PayloadQueryData<SeqTypes>) -> Self {
         proto::PayloadResponse {
-            height: payload.height,
-            block_hash: payload.block_hash().to_string(),
-            hash: payload.hash().to_string(),
-            size: payload.size(),
             data: Some(payload.data().into()),
+            ..payload_by_reference(payload)
         }
+    }
+}
+
+/// `payload` as a stream sends it: by reference only.
+pub fn payload_by_reference(payload: &PayloadQueryData<SeqTypes>) -> proto::PayloadResponse {
+    let hash = payload.hash().to_string();
+    proto::PayloadResponse {
+        height: payload.height,
+        block_hash: payload.block_hash().to_string(),
+        size: payload.size(),
+        data: None,
+        payload_ref: Some(payload_data::reference(&hash, payload.data().raw_payload())),
+        hash,
     }
 }
 

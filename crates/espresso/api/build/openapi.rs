@@ -158,6 +158,17 @@ pub fn generate_from(
         }
     }
 
+    // The raw bytes of a payload are not a proto message, so their route is served beside the
+    // generated ones (`payload_data` in the crate) and documented here.
+    if paths
+        .entry("/v2/availability/payload-data".to_string())
+        .or_default()
+        .insert("get".to_string(), payload_data_operation())
+        .is_some()
+    {
+        return Err("duplicate route: get /v2/availability/payload-data".into());
+    }
+
     // A GET's request message is inlined as query parameters, so nothing can `$ref` it. Publishing
     // it anyway leaves a client generator with a type per endpoint that it never uses. Its own
     // `deprecated` goes with it, so deprecate its fields, or the rpc, to reach a REST client.
@@ -179,6 +190,41 @@ pub fn generate_from(
         "paths": paths,
         "components": { "schemas": schemas },
     }))
+}
+
+/// The operation serving a payload's raw bytes by its VID commitment, which a `PayloadRef` names.
+fn payload_data_operation() -> Value {
+    json!({
+        "tags": ["Availability"],
+        "operationId": "GetPayloadData",
+        "summary": "Get the raw bytes of a payload by its VID commitment",
+        "description": "The URL a `PayloadRef` names. The content of a URL never changes, so it \
+                        may be cached for good. Check the bytes against the reference's `blake3` \
+                        hash, or recompute the VID commitment from them for a full check.",
+        "parameters": [{
+            "name": "hash",
+            "in": "query",
+            "required": true,
+            "description": "VID commitment to the payload, TaggedBase64",
+            "schema": { "type": "string" },
+        }],
+        "responses": {
+            "200": {
+                "description": "The payload's raw bytes",
+                "content": {
+                    "application/octet-stream": {
+                        "schema": { "type": "string", "format": "binary" },
+                    },
+                },
+            },
+            "default": {
+                "description": "Error, following the Google API error model",
+                "content": {
+                    "application/json": { "schema": { "$ref": "#/components/schemas/Error" } },
+                },
+            },
+        },
+    })
 }
 
 /// Records `type_name` and every message and enum reachable from its fields, which is the set a

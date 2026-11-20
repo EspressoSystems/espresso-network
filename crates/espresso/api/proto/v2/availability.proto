@@ -309,9 +309,27 @@ message Cert2Response {
   Certificate2 certificate = 1;
 }
 
+// Where to fetch a payload, and how to check what is fetched.
+message PayloadRef {
+  // The URL serving the payload's raw bytes (`Payload.raw_payload`). A path such as
+  // `/v2/availability/payload-data?hash=...` is relative to the API that sent it; it can also be
+  // absolute, as for an object store. The URL addresses the payload by its VID commitment, so its
+  // content never changes.
+  string url = 1;
+
+  // BLAKE3 hash of the raw bytes, lowercase hex, to check that the fetched bytes are the ones
+  // this reference describes. For a full check, recompute the VID commitment from them and
+  // compare it with the header's payload commitment.
+  string blake3 = 2;
+
+  // Size of the raw bytes
+  uint64 size = 3;
+}
+
 message BlockResponse {
   HeaderResponse header = 1;
 
+  // The payload inline. Unset in streams, which send `payload_ref` only.
   Payload payload = 2;
 
   // Hash of the header, which is how a block is identified. TaggedBase64 `BLOCK~`
@@ -321,6 +339,9 @@ message BlockResponse {
   uint64 size = 4;
 
   uint64 num_transactions = 5;
+
+  // Where to fetch the payload
+  PayloadRef payload_ref = 6;
 }
 
 message GetBlockRequest {
@@ -358,7 +379,11 @@ message PayloadResponse {
   // Payload size in bytes
   uint64 size = 4;
 
+  // The payload inline. Unset in streams, which send `payload_ref` only.
   Payload data = 5;
+
+  // Where to fetch the payload
+  PayloadRef payload_ref = 6;
 }
 
 message GetPayloadRequest {
@@ -1025,12 +1050,14 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/stream/headers"};
   }
 
-  // Subscribe to blocks from a height onward, as server-sent events
+  // Subscribe to blocks from a height onward, as server-sent events. Each block carries its payload
+  // by reference only, so the stream stays small whatever the blocks hold.
   rpc StreamBlocks(StreamBlocksRequest) returns (stream BlockResponse) {
     option (google.api.http) = {get: "/v2/availability/stream/blocks"};
   }
 
-  // Subscribe to payloads from a height onward, as server-sent events
+  // Subscribe to payloads from a height onward, as server-sent events. Each payload is sent by
+  // reference only, so the stream stays small whatever the blocks hold.
   rpc StreamPayloads(StreamPayloadsRequest) returns (stream PayloadResponse) {
     option (google.api.http) = {get: "/v2/availability/stream/payloads"};
   }
