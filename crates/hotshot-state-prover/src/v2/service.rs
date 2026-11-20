@@ -22,9 +22,6 @@ use hotshot_types::{
     },
     simple_certificate::LightClientStateUpdateCertificateV1,
     traits::signature_key::LCV2StateSignatureKey,
-    utils::{
-        epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
-    },
 };
 use http_client::{Client, error::ClientErr};
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -282,13 +279,14 @@ async fn advance_epoch(
             .with_context(|| format!("Failed to sync with epoch {contract_epoch:?}"))
             .map_err(ProverError::Internal)?;
     }
+    let first_epoch = state
+        .config
+        .blocks_per_epoch
+        .epoch_of(state.config.epoch_start_block);
     let base_epoch = contract_epoch
         .map(|en| en.u64())
         .unwrap_or(0)
-        .max(epoch_from_block_number(
-            state.config.epoch_start_block,
-            state.config.blocks_per_epoch,
-        ));
+        .max(first_epoch.u64());
     let target_epoch = target_epoch.u64();
     for epoch in base_epoch..target_epoch {
         tracing::info!("Performing epoch root state update for epoch {epoch}...");
@@ -394,25 +392,21 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         tracing::info!("Successfully synced light client state.");
     } else {
         // After the epoch is enabled
-        let contract_epoch = option_epoch_from_block_number(
-            contract_state_epoch_enabled,
-            contract_state.block_height,
-            blocks_per_epoch,
-        );
+        let contract_epoch = contract_state_epoch_enabled
+            .then(|| blocks_per_epoch.epoch_of(contract_state.block_height));
         // If the last contract update was on an epoch root, it's already on the next epoch.
         let contract_epoch = if contract_state_epoch_enabled
-            && is_epoch_root(contract_state.block_height, blocks_per_epoch)
+            && blocks_per_epoch
+                .position(contract_state.block_height)
+                .is_root()
         {
             contract_epoch.map(|en| en + 1)
         } else {
             contract_epoch
         };
 
-        let bundle_epoch = option_epoch_from_block_number(
-            epoch_enabled,
-            bundle.state.block_height,
-            blocks_per_epoch,
-        );
+        let bundle_epoch =
+            epoch_enabled.then(|| blocks_per_epoch.epoch_of(bundle.state.block_height));
         let bundle_next_epoch = bundle_epoch.map(|en| en + 1);
 
         // Update the local stake table if necessary
@@ -442,7 +436,10 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
 
         // Now that the contract epoch should be equal to the bundle epoch.
 
-        if is_ge_epoch_root(bundle.state.block_height as u64, blocks_per_epoch) {
+        if blocks_per_epoch
+            .position(bundle.state.block_height)
+            .is_at_or_after_root()
+        {
             // If we reached the epoch root, proceed to the next epoch directly
             // In theory this should never happen because the node won't sign them.
             tracing::info!("Epoch reaching an end, proceed to the next epoch...");

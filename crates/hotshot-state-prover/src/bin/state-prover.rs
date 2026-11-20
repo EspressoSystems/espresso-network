@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{num::NonZeroU64, time::Duration};
 
 use alloy::{
     primitives::{Address, utils::parse_units},
@@ -15,7 +15,7 @@ use espresso_types::{L1ClientOptions, parse_duration, v0_1::SwitchingTransport};
 use espresso_utils::logging;
 use hotshot_contract_adapter::sol_types;
 use hotshot_state_prover::{StateProverConfig, utils::ChainIdRetry};
-use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
+use hotshot_types::{epoch::EpochLength, light_client::DEFAULT_STAKE_TABLE_CAPACITY};
 use url::Url;
 use vbs::version::StaticVersion;
 
@@ -145,12 +145,9 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
             .await
             .unwrap_or((u64::MAX, u64::MAX));
 
-    // If the sequencer returns 0 for pre-epoch configuration.
-    let blocks_per_epoch = if blocks_per_epoch == 0 {
-        u64::MAX
-    } else {
-        blocks_per_epoch
-    };
+    // The sequencer returns 0 for a pre-epoch configuration, which is one epoch that never ends.
+    let blocks_per_epoch =
+        EpochLength::try_from(blocks_per_epoch).unwrap_or(EpochLength::new(NonZeroU64::MAX));
     let epoch_start_block = if epoch_start_block == 0 {
         u64::MAX
     } else {
@@ -159,7 +156,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     tracing::info!(
         "Epoch config fetched from sequencer: blocks_per_epoch = {}, epoch_start_block = {}",
-        blocks_per_epoch,
+        blocks_per_epoch.get(),
         epoch_start_block
     );
     let max_gas_price = args.max_gas_price.map(|v| {

@@ -14,7 +14,9 @@ use espresso_contract_deployer::{
     is_proxy_contract, network_config::fetch_stake_table_from_sequencer,
 };
 use espresso_types::SeqTypes;
-use hotshot_types::{data::EpochNumber, light_client::StakeTableState, stake_table::HSStakeTable};
+use hotshot_types::{
+    data::EpochNumber, epoch::EpochLength, light_client::StakeTableState, stake_table::HSStakeTable,
+};
 use http_client::error::ClientErr;
 use jf_plonk::PlonkError;
 use url::Url;
@@ -57,7 +59,7 @@ pub struct StateProverConfig {
     /// Stake table capacity for the prover circuit.
     pub stake_table_capacity: usize,
     /// Epoch length in number of Hotshot blocks.
-    pub blocks_per_epoch: u64,
+    pub blocks_per_epoch: EpochLength,
     /// The epoch start block.
     pub epoch_start_block: u64,
     /// Maximum number of retires for one-shot prover
