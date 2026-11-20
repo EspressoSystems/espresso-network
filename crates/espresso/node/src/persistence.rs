@@ -1303,9 +1303,10 @@ mod tests {
             Some((eqc_high_qc.clone(), next_epoch_qc))
         );
         let epoch_height = 10;
+        let epoch_length = hotshot_types::epoch::EpochLength::try_from(epoch_height).unwrap();
         let (initializer, _) = storage
             .load_consensus_state(
-                NodeState::mock().with_epoch_height(epoch_height),
+                NodeState::mock().with_epoch_length(epoch_length),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
             )
             .await
@@ -1323,7 +1324,7 @@ mod tests {
 
         let (initializer, _anchor_view) = storage
             .load_consensus_state(
-                NodeState::mock().with_epoch_height(epoch_height),
+                NodeState::mock().with_epoch_length(epoch_length),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
             )
             .await

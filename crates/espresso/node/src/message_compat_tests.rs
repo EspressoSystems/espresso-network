@@ -442,7 +442,7 @@ async fn reference_new_protocol_messages(
             committee,
             None,
             Fetcher::mock(),
-            epoch_height,
+            std::num::NonZeroU64::new(epoch_height).unwrap(),
             1.into(),
         )
         .expect("genesis without duplicate keys"),

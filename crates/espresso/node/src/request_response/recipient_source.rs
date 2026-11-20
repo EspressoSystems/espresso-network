@@ -155,7 +155,7 @@ mod tests {
             peers,
             None,
             Fetcher::mock(),
-            EPOCH_HEIGHT,
+            std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
             EpochNumber::new(FIRST_EPOCH),
         )
         .expect("genesis without duplicate keys");

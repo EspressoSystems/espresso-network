@@ -9,6 +9,8 @@ use alloy::primitives::{Address, U256};
 use anyhow::{Context, bail, ensure};
 use async_lock::Mutex as AsyncMutex;
 use committable::Commitment;
+#[cfg(feature = "node")]
+use hotshot_types::traits::block_contents::BlockHeader;
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
     data::{BlockNumber, EpochNumber, ViewNumber},
@@ -16,6 +18,7 @@ use hotshot_types::{
         DrbResult, INITIAL_DRB_RESULT,
         election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
+    epoch::{EpochArithmeticError, EpochLength},
     epoch_membership::EpochMembershipCoordinator,
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
@@ -23,10 +26,7 @@ use hotshot_types::{
         election::{GenesisStakeTables, Membership, MembershipSnapshot},
         signature_key::{SignatureKey as _, StakeTableEntryType},
     },
-    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
 };
-#[cfg(feature = "node")]
-use hotshot_types::{traits::block_contents::BlockHeader, utils::is_epoch_root};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
@@ -74,7 +74,7 @@ pub struct EpochCommittees {
     update_fixed_block_reward_lock: Arc<AsyncMutex<()>>,
     load_from_storage_lock: Arc<AsyncMutex<()>>,
     storage_read_timeout: Duration,
-    epoch_height: BlockNumber,
+    epoch_length: EpochLength,
 }
 
 #[derive(Debug)]
@@ -194,8 +194,8 @@ struct DerivedStakeTable {
 }
 
 impl EpochCommittees {
-    pub fn epoch_height(&self) -> BlockNumber {
-        self.epoch_height
+    pub fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
     }
 
     pub fn first_epoch(&self) -> EpochNumber {
@@ -287,8 +287,8 @@ impl EpochCommittees {
         validators: &AuthenticatedValidatorMap,
         preceding_root: PrecedingRoot<'_>,
     ) -> anyhow::Result<Option<RewardAmount>> {
-        let epoch_height = self.epoch_height;
-        let current_epoch = epoch_from_block_number(header.height(), *epoch_height);
+        let epoch_length = self.epoch_length;
+        let current_epoch = *epoch_length.epoch_of(header.height());
         let previous_epoch = current_epoch
             .checked_sub(1)
             .context("underflow: cannot get previous epoch when current_epoch is 0")?;
@@ -333,7 +333,7 @@ impl EpochCommittees {
             let next_epoch = epoch
                 .checked_sub(1)
                 .context("underflow: cannot get next epoch when epoch is 0")?;
-            let root_height = header.height().checked_sub(*epoch_height).context(
+            let root_height = header.height().checked_sub(epoch_length.get()).context(
                 "Epoch height is greater than block height. cannot compute preceding epoch root \
                  height",
             )?;
@@ -375,9 +375,7 @@ impl EpochCommittees {
                 "Current timestamp is earlier than previous. underflow in block time calculation",
             )?;
 
-            time_diff
-                .checked_div(*epoch_height)
-                .context("Epoch height is zero. cannot compute average block time")?
+            time_diff / epoch_length.get()
         };
         debug!(?epoch, %total_supply, %total_stake, %average_block_time_ms,
                        "dynamic block reward parameters");
@@ -438,12 +436,12 @@ impl EpochCommittees {
     ///
     /// Returns an error if the staked genesis members or the genesis DA
     /// members hold a key twice.
-    pub fn new<B: Into<BlockNumber>>(
+    pub fn new(
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
         fixed_block_reward: Option<RewardAmount>,
         fetcher: Fetcher,
-        epoch_height: B,
+        epoch_length: impl Into<EpochLength>,
         first_epoch: EpochNumber,
     ) -> anyhow::Result<Self> {
         // For each member, get the stake table entry
@@ -529,7 +527,7 @@ impl EpochCommittees {
             update_fixed_block_reward_lock: Arc::new(AsyncMutex::new(())),
             load_from_storage_lock: Arc::new(AsyncMutex::new(())),
             storage_read_timeout: DEFAULT_STORAGE_READ_TIMEOUT,
-            epoch_height: epoch_height.into(),
+            epoch_length: epoch_length.into(),
         };
         committees.seed_first_epoch(first_epoch);
         Ok(committees)
@@ -555,13 +553,13 @@ impl EpochCommittees {
     ) -> Result<(), EpochCommitteesError> {
         let block_number = block_header.block_number();
 
-        let epoch_height = *self.epoch_height;
+        let position = self.epoch_length.position(block_number);
 
-        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
+        let epoch = position.epoch() + 2;
 
         info!(?epoch, "adding epoch root. height={:?}", block_number);
 
-        if !is_epoch_root(block_number, epoch_height) {
+        if !position.is_root() {
             error!(
                 "`add_epoch_root` was called with a block header that was not the root block for \
                  an epoch. This should never happen. Header:\n\n{block_header:?}"
@@ -860,16 +858,16 @@ impl EpochCommittees {
         preceding_root: Option<&Header>,
         next_root: &Header,
     ) -> Result<StakeTableStoreOutcome, EpochCommitteesError> {
-        let epoch_height = *self.epoch_height;
-        if !is_epoch_root(root.height(), epoch_height) {
+        let position = self.epoch_length.position(root.height());
+        if !position.is_root() {
             return Err(EpochCommitteesError::NoRootBlock(root.height().into()));
         }
-        let epoch = EpochNumber::new(epoch_from_block_number(root.height(), epoch_height) + 2);
-        if next_root.height() != root.height() + epoch_height {
+        let epoch = position.epoch() + 2;
+        let next_root_height = root.height() + self.epoch_length.get();
+        if next_root.height() != next_root_height {
             return Err(EpochCommitteesError::Message(format!(
-                "the next epoch root is at height {}, expected {}",
+                "the next epoch root is at height {}, expected {next_root_height}",
                 next_root.height(),
-                root.height() + epoch_height
             )));
         }
 
@@ -1273,7 +1271,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: EpochNumber,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> Result<Leaf2, Self::Error> {
-        let block_height = root_block_in_epoch(*epoch, *self.epoch_height());
+        let block_height = *self.epoch_length.root_inside(epoch)?;
         let peers = self.fetcher.peers.clone();
 
         // the root block may not exist anywhere yet
@@ -1324,7 +1322,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let block_height = transition_block_for_epoch(*previous_epoch, *self.epoch_height());
+        let block_height = *self.epoch_length.transition_leaving(previous_epoch)?;
 
         debug!(
             "Getting DRB for epoch {}, block height {}",
@@ -1444,6 +1442,9 @@ pub enum EpochCommitteesError {
 
     #[error("block {0} is not the root block for an epoch")]
     NoRootBlock(BlockNumber),
+
+    #[error(transparent)]
+    EpochArithmetic(#[from] EpochArithmeticError),
 
     #[error("fetcher error: {0}")]
     Fetcher(#[source] anyhow::Error),
@@ -1847,8 +1848,15 @@ mod tests {
                 .public_config()
             })
             .collect();
-        EpochCommittees::new(peers.clone(), peers, None, fetcher, 100u64, first_epoch)
-            .expect("genesis without duplicate keys")
+        EpochCommittees::new(
+            peers.clone(),
+            peers,
+            None,
+            fetcher,
+            std::num::NonZeroU64::new(100).unwrap(),
+            first_epoch,
+        )
+        .expect("genesis without duplicate keys")
     }
 
     /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
@@ -2410,7 +2418,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(2)).await;
             let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
                 committees.clone(),
-                std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
+                committees.epoch_length(),
                 &hotshot_example_types::storage_types::TestStorage::default(),
             );
             coordinator
@@ -2460,8 +2468,8 @@ mod tests {
             crate::ChainConfig::default(),
         );
         let committees = build_committees_with_fetcher(4, fetcher, EpochNumber::genesis());
-        let epoch_height = *committees.epoch_height();
-        let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
+        let epoch_length = committees.epoch_length();
+        let epoch = epoch_length.epoch_of(header.height()) + 2;
 
         {
             let mut inner = committees.inner.write();
@@ -2482,7 +2490,7 @@ mod tests {
 
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            std::num::NonZeroU64::new(epoch_height).unwrap(),
+            epoch_length,
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator, epoch, fail_next_store)
@@ -2727,8 +2735,15 @@ mod tests {
 
     fn committees_from_first_epoch(first_epoch: EpochNumber, fetcher: Fetcher) -> EpochCommittees {
         let (members, _) = genesis_members();
-        EpochCommittees::new(members.clone(), members, None, fetcher, 100u64, first_epoch)
-            .expect("genesis without duplicate keys")
+        EpochCommittees::new(
+            members.clone(),
+            members,
+            None,
+            fetcher,
+            std::num::NonZeroU64::new(100).unwrap(),
+            first_epoch,
+        )
+        .expect("genesis without duplicate keys")
     }
 
     /// Asserts that `epoch` runs on exactly the `staked` committee, has a DRB
@@ -2879,7 +2894,7 @@ mod tests {
             members,
             None,
             Fetcher::mock(),
-            100u64,
+            std::num::NonZeroU64::new(100).unwrap(),
             first_epoch,
         )
         .expect("genesis without duplicate keys");
@@ -3246,9 +3261,15 @@ mod tests {
             .filter(|p| p.stake_table_entry.stake() == U256::ZERO)
             .map(|p| PubKey::public_key(&p.stake_table_entry))
             .collect();
-        let committees =
-            EpochCommittees::new(all.clone(), all, None, Fetcher::mock(), 100u64, first_epoch)
-                .expect("genesis without duplicate keys");
+        let committees = EpochCommittees::new(
+            all.clone(),
+            all,
+            None,
+            Fetcher::mock(),
+            std::num::NonZeroU64::new(100).unwrap(),
+            first_epoch,
+        )
+        .expect("genesis without duplicate keys");
         let genesis = committees.genesis_stake_tables();
 
         let stake_table: Vec<_> = genesis.stake_table().cloned().collect();
@@ -3371,7 +3392,7 @@ mod tests {
             da,
             None,
             Fetcher::mock(),
-            100u64,
+            std::num::NonZeroU64::new(100).unwrap(),
             EpochNumber::new(5),
         );
         assert!(result.is_err(), "accepted a genesis with key {key} twice");
@@ -3516,9 +3537,15 @@ mod tests {
         da_success: U256,
     ) {
         let first_epoch = EpochNumber::new(5);
-        let committees =
-            EpochCommittees::new(quorum, da, None, Fetcher::mock(), 100u64, first_epoch)
-                .expect("genesis without duplicate keys");
+        let committees = EpochCommittees::new(
+            quorum,
+            da,
+            None,
+            Fetcher::mock(),
+            std::num::NonZeroU64::new(100).unwrap(),
+            first_epoch,
+        )
+        .expect("genesis without duplicate keys");
         let coordinator = coordinator_for(committees);
 
         for epoch in [first_epoch, first_epoch + 1] {
@@ -3710,7 +3737,7 @@ mod tests {
         );
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
+            committees.epoch_length(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         assert_eq!(committees.fixed_block_reward(), None);
@@ -3729,7 +3756,7 @@ mod tests {
         put_prefilled(&committees, 3, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
+            committees.epoch_length(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator)
@@ -3869,7 +3896,7 @@ mod tests {
         }
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
+            committees.epoch_length(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         (committees, coordinator)
@@ -4237,7 +4264,7 @@ mod tests {
         put_prefilled(&committees, 20, Some(StakeTableState::default().commit()));
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            std::num::NonZeroU64::new(*committees.epoch_height()).unwrap(),
+            committees.epoch_length(),
             &hotshot_example_types::storage_types::TestStorage::default(),
         )
         .with_catchup_timeout(catchup_timeout);

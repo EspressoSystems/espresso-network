@@ -33,7 +33,7 @@ use hotshot_query_service::{
     status::HasMetrics as _,
 };
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
+    data::{QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     traits::{ValidatedState as _, election::MembershipSnapshot, metrics::Metrics},
     utils::{epoch_from_block_number, is_last_block},
@@ -728,13 +728,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             let mut tree_height = finalized_hotshot_height;
             let mut proof_height = finalized_hotshot_height;
             if version >= EPOCH_REWARD_VERSION {
-                let epoch_height = node_state
-                    .epoch_height
+                let epoch_length = node_state
+                    .epoch_length
                     .context("epoch_height not set in node state")?;
-                if !is_last_block(finalized_hotshot_height, epoch_height) {
-                    tree_height = epoch_from_block_number(finalized_hotshot_height, epoch_height)
-                        .saturating_sub(1)
-                        * epoch_height;
+                let position = epoch_length.position(finalized_hotshot_height);
+                if !position.is_last() {
+                    tree_height = position.epoch().saturating_sub(1) * epoch_length.get();
                     if tree_height == 0 {
                         return Ok(());
                     }
@@ -1997,8 +1996,8 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         },
         either::Either::Right(expected_root) => {
             let version = parent.block_header().version();
-            let epoch_height = instance
-                .epoch_height
+            let epoch_length = instance
+                .epoch_length
                 .context("epoch_height not set but parent has V2 reward tree")?;
 
             // V5+ only stores the reward merkle tree at epoch's last block, so if we're
@@ -2007,7 +2006,7 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             // the commitment check below will catch it if
             // we ended up with a tree from an older epoch.
             // But this should never happen as we don't garbage collect the latest tree
-            if version >= EPOCH_REWARD_VERSION && !is_last_block(from_height, epoch_height) {
+            if version >= EPOCH_REWARD_VERSION && !epoch_length.position(from_height).is_last() {
                 let tree = db
                     .load_latest_reward_merkle_tree_v2(from_height)
                     .await
@@ -2131,9 +2130,7 @@ async fn reward_header_dependencies(
     leaves: impl IntoIterator<Item = &Leaf2>,
 ) -> anyhow::Result<HashSet<RewardAccountV2>> {
     let mut reward_accounts = HashSet::default();
-    let epoch_height = instance.epoch_height;
-
-    let Some(epoch_height) = epoch_height else {
+    let Some(epoch_length) = instance.epoch_length else {
         tracing::info!("epoch height is not set. returning empty reward_header_dependencies");
         return Ok(HashSet::new());
     };
@@ -2154,7 +2151,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let proposal_epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let proposal_epoch = epoch_length.epoch_of(height);
 
         // reward distribution starts third epoch onwards
         if proposal_epoch <= first_epoch + 1 {

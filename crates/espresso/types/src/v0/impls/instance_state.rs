@@ -14,8 +14,8 @@ use async_trait::async_trait;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
-    HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
-    traits::states::InstanceState,
+    HotShotConfig, data::EpochNumber, drb::DrbResult, epoch::EpochLength,
+    epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
 };
 use moka::future::Cache;
 use vbs::version::Version;
@@ -57,7 +57,7 @@ pub struct NodeState {
     pub l1_genesis: Option<L1BlockInfo>,
     #[debug(skip)]
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
-    pub epoch_height: Option<u64>,
+    pub epoch_length: Option<EpochLength>,
     pub genesis_version: Version,
     pub epoch_start_block: u64,
 
@@ -325,7 +325,7 @@ impl NodeState {
             l1_genesis: None,
             upgrades: Default::default(),
             current_version,
-            epoch_height: None,
+            epoch_length: None,
             coordinator,
             genesis_version,
             epoch_start_block: 0,
@@ -362,7 +362,7 @@ impl NodeState {
             Default::default(),
             None,
             Fetcher::mock(),
-            0,
+            std::num::NonZeroU64::new(100).unwrap(),
             EpochNumber::genesis(),
         )
         .expect("genesis without duplicate keys");
@@ -400,7 +400,7 @@ impl NodeState {
             Default::default(),
             None,
             Fetcher::mock(),
-            0,
+            std::num::NonZeroU64::new(100).unwrap(),
             EpochNumber::genesis(),
         )
         .expect("genesis without duplicate keys");
@@ -436,7 +436,7 @@ impl NodeState {
             Default::default(),
             None,
             Fetcher::mock(),
-            0,
+            std::num::NonZeroU64::new(100).unwrap(),
             EpochNumber::genesis(),
         )
         .expect("genesis without duplicate keys");
@@ -489,8 +489,8 @@ impl NodeState {
         self
     }
 
-    pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
-        self.epoch_height = Some(epoch_height);
+    pub fn with_epoch_length(mut self, epoch_length: EpochLength) -> Self {
+        self.epoch_length = Some(epoch_length);
         self
     }
 
@@ -538,7 +538,7 @@ impl Default for NodeState {
             Default::default(),
             None,
             Fetcher::mock(),
-            0,
+            std::num::NonZeroU64::new(100).unwrap(),
             EpochNumber::genesis(),
         )
         .expect("genesis without duplicate keys");
