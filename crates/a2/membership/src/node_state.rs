@@ -9,7 +9,7 @@ use async_lock::Mutex;
 use espresso_genesis::{Genesis, L1Finalized};
 use espresso_types::{
     EpochCommittees, EpochRewardsCalculator, L1BlockInfo, L1Client, L1ClientOptions, NodeState,
-    RECENT_STAKE_TABLES_LIMIT, ValidatedState,
+    RECENT_STAKE_TABLES_LIMIT, SeqTypes, ValidatedState,
     traits::{MembershipPersistence, StateCatchup},
     v0_3::Fetcher,
 };
@@ -20,8 +20,6 @@ use hotshot_types::{
 };
 use moka::future::Cache;
 use url::Url;
-
-use crate::SeqTypes;
 
 /// The node state of the chain `genesis` starts, with stake tables kept in `store` and read from
 /// the L1 at `l1`. Waits for L1 to finalize the chain's L1 genesis block.

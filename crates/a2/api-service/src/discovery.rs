@@ -3,8 +3,11 @@
 use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
-use consensus::discovery::{ServiceRecord, SignedServiceRecord};
-use consensus_api::{DecideLogClient, proto::ServiceRecordsRequest};
+use consensus_api::{
+    DecideLogClient,
+    discovery::{ServiceRecord, SignedServiceRecord},
+    proto::ServiceRecordsRequest,
+};
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
 use tagged_base64::TaggedBase64;

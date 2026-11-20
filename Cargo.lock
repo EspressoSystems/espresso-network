@@ -994,12 +994,11 @@ dependencies = [
  "bincode",
  "bitvec 1.1.0",
  "bytes",
+ "catchup-api",
  "chain-store",
  "clap",
  "committable",
- "consensus",
  "consensus-api",
- "consensus-node",
  "either",
  "espresso-api",
  "espresso-contract-deployer",
@@ -1015,6 +1014,7 @@ dependencies = [
  "indexmap 2.14.0",
  "jf-merkle-tree-compat",
  "light-client",
+ "membership",
  "parking_lot",
  "prost",
  "rand 0.8.6",
@@ -1033,6 +1033,15 @@ dependencies = [
  "url",
  "vbs",
  "versions",
+]
+
+[[package]]
+name = "app-tables"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
 ]
 
 [[package]]
@@ -2274,6 +2283,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
+name = "catchup-api"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2346,6 +2365,7 @@ name = "chain-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "app-tables",
  "async-trait",
  "bincode",
  "bytes",
@@ -2713,6 +2733,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "app-tables",
  "async-broadcast",
  "async-trait",
  "bincode",
@@ -2723,7 +2744,6 @@ dependencies = [
  "consensus",
  "consensus-api",
  "consensus-store",
- "consensus-store-redb",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-example-types",
@@ -2755,9 +2775,12 @@ name = "consensus-api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bincode",
  "bytes",
  "futures",
+ "hotshot-types",
  "prost",
+ "serde",
  "test-utils",
  "thiserror 2.0.18",
  "tokio",
@@ -2772,14 +2795,18 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "app-tables",
  "async-lock",
  "async-trait",
  "axum",
  "bincode",
- "chain-store",
+ "bytes",
+ "catchup-api",
  "clap",
  "committable",
  "consensus",
+ "consensus-api",
+ "consensus-store-redb",
  "dyn-clone",
  "espresso-genesis",
  "espresso-keyset",
@@ -2788,17 +2815,13 @@ dependencies = [
  "hotshot-types",
  "http-client",
  "humantime",
- "indexmap 2.14.0",
  "jf-merkle-tree-compat",
- "moka",
- "prost",
+ "membership",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tonic",
- "tonic-prost",
- "tonic-prost-build",
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
@@ -6776,6 +6799,32 @@ checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
 dependencies = [
  "cfg-if",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "membership"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "app-tables",
+ "async-lock",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "chain-store",
+ "committable",
+ "consensus",
+ "espresso-genesis",
+ "espresso-types",
+ "hotshot-types",
+ "indexmap 2.14.0",
+ "moka",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

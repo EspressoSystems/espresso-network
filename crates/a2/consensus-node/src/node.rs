@@ -13,10 +13,10 @@ use anyhow::{Context, anyhow, bail, ensure};
 use consensus::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
-    discovery::ServiceRecord,
     network::{Cliquenet, Role, message_limit},
-    store::{ConsensusStore, Import},
 };
+use consensus_api::discovery::ServiceRecord;
+use consensus_store_redb::RedbStore;
 use espresso_genesis::Genesis;
 use espresso_types::{PubKey, SeqTypes, v0_3::StakeTableError};
 use hotshot_types::{
@@ -34,6 +34,7 @@ use hotshot_types::{
     upgrade_config::UpgradeConfig,
     x25519,
 };
+use membership::{MembershipStore, node_state::node_state};
 use tokio::{
     sync::{broadcast, mpsc::unbounded_channel},
     task::JoinSet,
@@ -46,8 +47,6 @@ use crate::{
     catchup::ApiCatchup,
     decided_state::DecidedStateWriter,
     initializer::initializer,
-    membership_store::MembershipStore,
-    node_state::node_state,
     state_signer::{Decided, StateSigner},
 };
 
@@ -118,7 +117,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     let network_config = network_config(&genesis, &public_key)?;
     let upgrade = Upgrade::new(genesis.base_version, genesis.upgrade_version);
 
-    let (store, restored) = ConsensusStore::open(store, async || Ok(nothing_to_import())).await?;
+    let (store, restored) = crate::store::open(store).await?;
     let membership_store = MembershipStore::new(store.clone());
     let catchup = Arc::new(ApiCatchup::new(api_url.clone(), bootstrap, store.clone()));
     let state = node_state(
@@ -226,7 +225,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         .service_record(record)
         .make();
 
-    let (addr, server) = consensus::ingest::bind(
+    let (addr, server) = crate::api::bind(
         store,
         initializer.epoch_height(),
         coordinator.client_api().clone(),
@@ -247,7 +246,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
 /// Drives `coordinator` until it fails critically or one of `tasks` stops, sending the newest leaf
 /// of each decide to `decided`.
 async fn run_coordinator(
-    mut coordinator: Coordinator<SeqTypes>,
+    mut coordinator: Coordinator<SeqTypes, RedbStore>,
     decided: Option<broadcast::Sender<Decided>>,
     mut tasks: JoinSet<anyhow::Error>,
 ) -> anyhow::Result<()> {
@@ -410,21 +409,4 @@ async fn connect_startup_peers(
         .add_peers(Role::Active, targets)
         .context("dialing the validators active on L1")?;
     Ok(())
-}
-
-/// What a node takes over into a new store: nothing, since an a2 node keeps all its state there
-/// from the start.
-fn nothing_to_import() -> Import<SeqTypes> {
-    Import {
-        proposals: Vec::new(),
-        locked_qc: None,
-        boundary_qc: None,
-        acted_view: None,
-        restart_view: None,
-        upgrade_cert: None,
-        state_cert: None,
-        payloads: Vec::new(),
-        anchor: None,
-        app: Vec::new(),
-    }
 }

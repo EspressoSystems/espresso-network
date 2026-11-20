@@ -194,18 +194,17 @@ mod tests {
     use alloy::primitives::U256;
     use async_lock::Mutex;
     use axum::{Router, body::Bytes, extract::State, routing::post};
-    use consensus::store::{ConsensusStore, Import};
     use espresso_types::{
         EpochCommittees, L1ClientOptions, Leaf2, NodeState, PubKey, ValidatedState,
         v0_3::{ChainConfig, Fetcher},
     };
     use hotshot_types::{PeerConfig, traits::signature_key::SignatureKey};
+    use membership::{MembershipStore, null_catchup::NullStateCatchup};
     use tokio::{net::TcpListener, sync::mpsc};
     use vbs::{BinarySerializer, Serializer};
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::*;
-    use crate::{membership_store::MembershipStore, null_catchup::NullStateCatchup};
 
     const EPOCH_HEIGHT: u64 = 10;
     const SIGNERS: u64 = 4;
@@ -226,22 +225,7 @@ mod tests {
             })
             .collect();
         let dir = tempfile::tempdir().unwrap();
-        let (store, _) = ConsensusStore::open(dir.path().join("store"), async || {
-            Ok(Import {
-                proposals: Vec::new(),
-                locked_qc: None,
-                boundary_qc: None,
-                acted_view: None,
-                restart_view: None,
-                upgrade_cert: None,
-                state_cert: None,
-                payloads: Vec::new(),
-                anchor: None,
-                app: Vec::new(),
-            })
-        })
-        .await
-        .unwrap();
+        let (store, _) = crate::store::open(dir.path().join("store")).await.unwrap();
         let store = MembershipStore::new(store);
         let l1 = L1ClientOptions::default()
             .connect(vec!["http://127.0.0.1:1".parse().unwrap()])

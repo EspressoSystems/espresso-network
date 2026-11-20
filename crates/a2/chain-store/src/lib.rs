@@ -17,6 +17,7 @@
 
 use std::{fmt, ops::Range, sync::Arc};
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use committable::{Commitment, Committable};
 use espresso_types::{Header, Leaf2, SeqTypes};
@@ -35,7 +36,8 @@ pub mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use backend::{AppWrite, Backend, Column, KeyBounds, Part, Row};
+pub use app_tables::{AppTables, AppWrite};
+pub use backend::{Backend, Column, KeyBounds, Part, Row};
 
 /// The store service's protocol, generated from `proto/espresso/a2/store/v1`.
 pub mod proto {
@@ -141,6 +143,27 @@ pub enum Lookup {
     Leaf(Commitment<Leaf2>),
     Block(Commitment<Header>),
     Payload(VidCommitment),
+}
+
+/// The application tables of the store, which the ingester keeps the data it derives in.
+#[async_trait]
+impl AppTables for ChainStore {
+    async fn get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        self.app_get(table, key).await
+    }
+
+    async fn entries(
+        &self,
+        table: &str,
+        from: &[u8],
+        until: Option<&[u8]>,
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        self.app_entries(table, from, until).await
+    }
+
+    async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+        self.app_write(writes).await
+    }
 }
 
 /// The version of the encoding of an [`Item`] and of each part but the payload. A store refuses

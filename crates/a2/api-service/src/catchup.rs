@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
-use chain_store::ChainStore;
-use committable::Committable;
-use consensus_node::proto::{
+use catchup_api::proto::{
     AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HeightRequest, LeafChainResponse,
     catchup_service_server::CatchupService,
 };
+use chain_store::ChainStore;
+use committable::Committable;
 use espresso_api::error::to_status;
 use espresso_types::{FeeAccount, FeeAccountProof, NodeState, ValidatedState};
 use hotshot_types::{data::EpochNumber, utils::root_block_in_epoch};

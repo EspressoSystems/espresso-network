@@ -8,10 +8,13 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
-use committable::{Commitment, Committable};
-use consensus::{
-    discovery::SignedServiceRecord, store::ConsensusStore, utils::verify_new_protocol_leaf_chain,
+use catchup_api::proto::{
+    AccountsRequest, ChainConfigRequest, EpochRequest, HeightRequest,
+    catchup_service_client::CatchupServiceClient,
 };
+use committable::{Commitment, Committable};
+use consensus::utils::verify_new_protocol_leaf_chain;
+use consensus_api::discovery::SignedServiceRecord;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, ChainConfig, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, SeqTypes,
@@ -33,10 +36,7 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use url::Url;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-use crate::proto::{
-    AccountsRequest, ChainConfigRequest, EpochRequest, HeightRequest,
-    catchup_service_client::CatchupServiceClient,
-};
+use crate::store::NodeStore;
 
 /// How long one source may take to connect and answer, the answer's body included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -54,7 +54,7 @@ pub struct ApiCatchup {
     known: Vec<(Url, Channel)>,
 
     /// The consensus store, whose records name the other validators' API services.
-    store: ConsensusStore<SeqTypes>,
+    store: NodeStore,
 
     backoff: BackoffParams,
 }
@@ -69,7 +69,7 @@ impl std::fmt::Debug for ApiCatchup {
 }
 
 impl ApiCatchup {
-    pub fn new(own: Url, bootstrap: Vec<Url>, store: ConsensusStore<SeqTypes>) -> Self {
+    pub fn new(own: Url, bootstrap: Vec<Url>, store: NodeStore) -> Self {
         let mut known: Vec<(Url, Channel)> = Vec::new();
         for url in std::iter::once(own).chain(bootstrap) {
             if known.iter().any(|(known, _)| *known == url) {

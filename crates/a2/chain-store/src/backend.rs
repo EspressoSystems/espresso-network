@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use app_tables::AppWrite;
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
@@ -129,22 +130,4 @@ pub struct KeyBounds<'a> {
     pub from: &'a [u8],
     pub until: Option<&'a [u8]>,
     pub limit: usize,
-}
-
-/// A write to the application tables, which a service keeps next to the chain, such as the stake
-/// tables of an API service.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AppWrite {
-    /// Sets `key` to `value`.
-    Put {
-        table: String,
-        key: Bytes,
-        value: Bytes,
-    },
-
-    /// Deletes the keys before `key`.
-    DeleteBefore { table: String, key: Bytes },
-
-    /// Deletes every key.
-    Clear { table: String },
 }

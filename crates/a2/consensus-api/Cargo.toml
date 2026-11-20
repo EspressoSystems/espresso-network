@@ -7,9 +7,12 @@ edition     = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }
+bincode     = { workspace = true }
 bytes       = { workspace = true }
 futures     = { workspace = true }
+hotshot-types = { workspace = true }
 prost       = { workspace = true }
+serde       = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true }
 tonic       = { workspace = true }

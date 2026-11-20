@@ -31,11 +31,10 @@ mod disperse;
 mod fragments;
 mod reconstruct;
 
-pub use disperse::{
-    BuiltDispersal, Dispersal, VidDisperseError, VidDisperseOutput, VidDisperseRequest,
-    VidDisperser, disperse_payload,
-};
-pub use fragments::{VidFragmentAccumulator, VidFragmentError};
+pub use disperse::{BuiltDispersal, VidDisperseError, VidDisperseRequest, VidDisperser};
+pub use fragments::VidFragmentAccumulator;
+#[cfg(test)]
+pub(crate) use fragments::VidFragmentError;
 use hotshot_types::{
     data::{
         EpochNumber,
@@ -46,10 +45,10 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, init_avidm_gf2_param},
 };
+#[cfg(test)]
+pub(crate) use reconstruct::VidReconstructErrorKind;
 pub(crate) use reconstruct::matches_commitment;
-pub use reconstruct::{
-    ObtainedPayload, PinnedBy, VidReconstructError, VidReconstructErrorKind, VidReconstructor,
-};
+pub use reconstruct::{ObtainedPayload, PinnedBy, VidReconstructError, VidReconstructor};
 
 /// The VID erasure parameters the committee for `epoch` fixes, matching what
 /// an honest disperser derives. Used to reject shares whose `common.param` is

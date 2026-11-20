@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use app_tables::AppWrite;
 use committable::Commitment;
 use consensus_store::{Batch, Store};
 use hotshot_types::{
@@ -38,7 +39,7 @@ use crate::{
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
     state::StateEntry,
-    store::{self, AppWrite, ConsensusStore},
+    store::{self, ConsensusStore},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);

@@ -1,0 +1,14 @@
+[package]
+name        = "app-tables"
+description = "Application tables: keyed values a store keeps for the service over it"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+anyhow      = { workspace = true }
+async-trait = { workspace = true }
+bytes       = { workspace = true }
+
+[lints]
+workspace = true

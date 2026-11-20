@@ -1,0 +1,17 @@
+[package]
+name        = "catchup-api"
+description = "The catchup protocol between consensus nodes and API services"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+prost       = { workspace = true }
+tonic       = { workspace = true }
+tonic-prost = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
+[lints]
+workspace = true

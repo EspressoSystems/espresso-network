@@ -7,9 +7,10 @@ use std::{
     time::Duration,
 };
 
+use app_tables::AppWrite;
 use committable::RawCommitmentBuilder;
 use consensus_store::{
-    Batch, Error, Store,
+    Batch, Bytes, Error, Store,
     mem::{MemSnapshot, MemStore},
 };
 use hotshot_example_types::{block_types::TestBlockPayload, node_types::TestTypes};
@@ -25,7 +26,7 @@ use super::common::utils::{build_cert1, mock_membership};
 use crate::{
     state::StateEntry,
     storage::{ActionKind, DecidedState, Storage, StorageOutput},
-    store::{AppWrite, ConsensusStore, Import},
+    store::{ConsensusStore, Import},
 };
 
 /// A writer over a store that can be made to fail, counting the batches it commits.
@@ -402,13 +403,14 @@ async fn test_decided_state_written_with_the_decide() {
         ) -> Vec<AppWrite> {
             self.0 += 1;
             vec![AppWrite::Put {
-                table: "order",
-                key: self.0.to_be_bytes().to_vec(),
+                table: "order".into(),
+                key: self.0.to_be_bytes().to_vec().into(),
                 value: [
                     leaf.height().to_be_bytes().as_slice(),
                     &[state.is_some() as u8],
                 ]
-                .concat(),
+                .concat()
+                .into(),
             }]
         }
     }
@@ -455,11 +457,12 @@ async fn test_decided_state_written_with_the_decide() {
 #[tokio::test]
 async fn test_app_tables() {
     let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
-    let put = |table, key: u8, value: &[u8]| AppWrite::Put {
-        table,
-        key: vec![key],
-        value: value.to_vec(),
+    let put = |table: &str, key: u8, value: &[u8]| AppWrite::Put {
+        table: table.into(),
+        key: vec![key].into(),
+        value: Bytes::copy_from_slice(value),
     };
+    let bytes = |value: &[u8]| Bytes::copy_from_slice(value);
     store
         .import(Import {
             proposals: Vec::new(),
@@ -478,31 +481,33 @@ async fn test_app_tables() {
             ],
         })
         .unwrap();
-    assert_eq!(store.app_get("a", &[1]).unwrap(), Some(b"one".to_vec()));
-    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(b"other".to_vec()));
+    assert_eq!(store.app_get("a", &[1]).unwrap(), Some(bytes(b"one")));
+    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(bytes(b"other")));
     assert_eq!(store.app_get("a", &[3]).unwrap(), None);
 
     store
         .app_write(&[
             put("a", 3, b"three"),
             AppWrite::DeleteBefore {
-                table: "a",
-                key: vec![2],
+                table: "a".into(),
+                key: vec![2].into(),
             },
         ])
         .unwrap();
     assert_eq!(
         store.app_entries("a", &[], None).unwrap(),
-        vec![(vec![2], b"two".to_vec()), (vec![3], b"three".to_vec())]
+        vec![(bytes(&[2]), bytes(b"two")), (bytes(&[3]), bytes(b"three"))]
     );
     assert_eq!(
         store.app_entries("a", &[3], None).unwrap(),
-        vec![(vec![3], b"three".to_vec())]
+        vec![(bytes(&[3]), bytes(b"three"))]
     );
 
-    store.app_write(&[AppWrite::Clear { table: "a" }]).unwrap();
+    store
+        .app_write(&[AppWrite::Clear { table: "a".into() }])
+        .unwrap();
     assert!(store.app_entries("a", &[], None).unwrap().is_empty());
-    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(b"other".to_vec()));
+    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(bytes(b"other")));
 
     assert!(
         store.app_get("Not a name", &[1]).is_err(),

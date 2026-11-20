@@ -11,8 +11,8 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
+use catchup_api::proto::catchup_service_server::CatchupServiceServer;
 use chain_store::ChainStore;
-use consensus_node::proto::catchup_service_server::CatchupServiceServer;
 use espresso_api::{
     proto::{
         availability_service_server::AvailabilityServiceServer,

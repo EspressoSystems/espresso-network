@@ -13,7 +13,6 @@ use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
 use chain_store::ChainStore;
 use committable::Committable;
-use consensus_node::{membership_store::MembershipStore, null_catchup::NullStateCatchup};
 use espresso_genesis::Genesis;
 use espresso_types::{Header, Leaf2, NodeState, SeqTypes};
 use hotshot_types::{
@@ -31,6 +30,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
 };
 use light_client::consensus::quorum::{Quorum, StakeTable, StakeTableQuorum};
+use membership::{MembershipStore, null_catchup::NullStateCatchup};
 use url::Url;
 use versions::Upgrade;
 
@@ -46,7 +46,7 @@ pub async fn node_state(
     store: ChainStore,
 ) -> anyhow::Result<NodeState> {
     let network_config = network_config(genesis)?;
-    consensus_node::node_state::node_state(
+    membership::node_state::node_state(
         genesis,
         &network_config,
         l1,
@@ -202,7 +202,6 @@ pub(crate) mod testing {
     use async_lock::Mutex as AsyncMutex;
     use bitvec::vec::BitVec;
     use chain_store::mem::MemBackend;
-    use consensus_node::null_catchup::NullStateCatchup;
     use espresso_types::{
         EpochCommittees, L1ClientOptions, NodeState, PubKey, ValidatedState,
         v0_3::{ChainConfig, Fetcher},
@@ -218,6 +217,7 @@ pub(crate) mod testing {
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
         vote::Certificate,
     };
+    use membership::null_catchup::NullStateCatchup;
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::*;

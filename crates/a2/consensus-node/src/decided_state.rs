@@ -11,12 +11,9 @@
 
 use alloy::primitives::Address;
 use anyhow::Context;
+use app_tables::AppWrite;
 use committable::{Commitment, Committable};
-use consensus::{
-    state::StateEntry,
-    storage::DecidedState,
-    store::{AppWrite, ConsensusStore},
-};
+use consensus::{state::StateEntry, storage::DecidedState};
 use espresso_types::{
     BlockMerkleTree, ChainConfig, Leaf2, SeqTypes, ValidatedState,
     v0_3::RewardAmount,
@@ -26,6 +23,8 @@ use espresso_types::{
 };
 use hotshot_types::traits::states::ValidatedState as _;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+
+use crate::store::NodeStore;
 
 type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
@@ -45,7 +44,7 @@ const CHAIN_CONFIG: &[u8] = b"chain-config";
 const REWARD_ROOT: &[u8] = b"reward-root";
 
 /// The state at `anchor`, with the parts the store holds for it.
-pub fn load(store: &ConsensusStore<SeqTypes>, anchor: &Leaf2) -> anyhow::Result<ValidatedState> {
+pub fn load(store: &NodeStore, anchor: &Leaf2) -> anyhow::Result<ValidatedState> {
     let header = anchor.block_header();
     let mut state = ValidatedState::from_header(header);
 
@@ -69,7 +68,7 @@ pub fn load(store: &ConsensusStore<SeqTypes>, anchor: &Leaf2) -> anyhow::Result<
             .app_entries(REWARD_ACCOUNTS, &[], None)?
             .into_iter()
             .map(|(key, value)| {
-                let account = RewardAccountV2(Address::try_from(key.as_slice())?);
+                let account = RewardAccountV2(Address::try_from(&key[..])?);
                 let balance: RewardAmount = bincode::deserialize(&value)?;
                 anyhow::Ok((account, balance))
             })
@@ -101,7 +100,7 @@ pub struct DecidedStateWriter {
 
 impl DecidedStateWriter {
     /// Continues from what `store` holds, with `anchor` the latest decided leaf.
-    pub fn new(store: &ConsensusStore<SeqTypes>, anchor: &Leaf2) -> anyhow::Result<Self> {
+    pub fn new(store: &NodeStore, anchor: &Leaf2) -> anyhow::Result<Self> {
         Ok(Self {
             height: anchor.height(),
             leaf_root: anchor.block_header().reward_merkle_tree_root().right(),
@@ -168,7 +167,7 @@ impl DecidedState<SeqTypes> for DecidedStateWriter {
                 }
             } else if let Some(tree) = complete {
                 writes.push(AppWrite::Clear {
-                    table: REWARD_ACCOUNTS,
+                    table: REWARD_ACCOUNTS.into(),
                 });
                 for (account, balance) in tree.iter() {
                     writes.push(put_account(account, balance)?);
@@ -201,10 +200,7 @@ impl DecidedState<SeqTypes> for DecidedStateWriter {
 
 /// The value under `key`, or `None` if it is missing or no longer decodes, as after a release that
 /// changed its type: it is then rebuilt from later decides, and must not stop the node.
-fn get<V: serde::de::DeserializeOwned>(
-    store: &ConsensusStore<SeqTypes>,
-    key: &[u8],
-) -> anyhow::Result<Option<V>> {
+fn get<V: serde::de::DeserializeOwned>(store: &NodeStore, key: &[u8]) -> anyhow::Result<Option<V>> {
     let Some(bytes) = store.app_get(STATE, key)? else {
         return Ok(None);
     };
@@ -218,17 +214,17 @@ fn get<V: serde::de::DeserializeOwned>(
 
 fn put(key: &[u8], value: &impl serde::Serialize) -> anyhow::Result<AppWrite> {
     Ok(AppWrite::Put {
-        table: STATE,
-        key: key.to_vec(),
-        value: bincode::serialize(value)?,
+        table: STATE.into(),
+        key: key.to_vec().into(),
+        value: bincode::serialize(value)?.into(),
     })
 }
 
 fn put_account(account: &RewardAccountV2, balance: &RewardAmount) -> anyhow::Result<AppWrite> {
     Ok(AppWrite::Put {
-        table: REWARD_ACCOUNTS,
-        key: account.0.to_vec(),
-        value: bincode::serialize(balance)?,
+        table: REWARD_ACCOUNTS.into(),
+        key: account.0.to_vec().into(),
+        value: bincode::serialize(balance)?.into(),
     })
 }
 
@@ -237,7 +233,6 @@ mod tests {
     use std::{collections::HashSet, sync::Arc};
 
     use alloy::primitives::U256;
-    use consensus::store::Import;
     use espresso_types::{NodeState, v0_4::Delta};
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, UniversalMerkleTreeScheme};
     use versions::NEW_PROTOCOL_VERSION;
@@ -354,24 +349,9 @@ mod tests {
         );
     }
 
-    async fn store() -> (tempfile::TempDir, ConsensusStore<SeqTypes>) {
+    async fn store() -> (tempfile::TempDir, NodeStore) {
         let dir = tempfile::tempdir().unwrap();
-        let (store, _) = ConsensusStore::open(dir.path().join("store"), async || {
-            Ok(Import {
-                proposals: Vec::new(),
-                locked_qc: None,
-                boundary_qc: None,
-                acted_view: None,
-                restart_view: None,
-                upgrade_cert: None,
-                state_cert: None,
-                payloads: Vec::new(),
-                anchor: None,
-                app: Vec::new(),
-            })
-        })
-        .await
-        .unwrap();
+        let (store, _) = crate::store::open(dir.path().join("store")).await.unwrap();
         (dir, store)
     }
 
@@ -468,11 +448,7 @@ mod tests {
             .count()
     }
 
-    fn assert_restored(
-        store: &ConsensusStore<SeqTypes>,
-        anchor: &Leaf2,
-        expected: &ValidatedState,
-    ) {
+    fn assert_restored(store: &NodeStore, anchor: &Leaf2, expected: &ValidatedState) {
         let restored = load(store, anchor).unwrap();
         let tree = &restored.block_merkle_tree;
         assert!(tree.lookup(tree.num_leaves() - 1).expect_ok().is_ok());

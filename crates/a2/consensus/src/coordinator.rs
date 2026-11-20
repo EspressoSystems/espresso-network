@@ -62,7 +62,7 @@ use crate::{
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{DEFAULT_DECIDE_LOG_LIMIT, DecidedState, Storage},
-    store::{ConsensusStore, DiskStore, Restored},
+    store::{ConsensusStore, Restored},
     upgrade::UpgradeProtocol,
     vid::{
         BuiltDispersal, ObtainedPayload, PinnedBy, VidDisperseRequest, VidDisperser,
@@ -112,7 +112,7 @@ const EPOCH_CHANGE_LOOKBEHIND: u64 = 1;
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, S = DiskStore> {
+pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Cliquenet<T>,

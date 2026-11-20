@@ -16,6 +16,8 @@ use futures::{Stream, StreamExt, stream};
 use tokio::sync::{mpsc, watch};
 use tonic::{Request, Response, Status};
 
+pub mod discovery;
+
 /// Code generated from the proto definition.
 #[allow(clippy::large_enum_variant)]
 pub mod proto {

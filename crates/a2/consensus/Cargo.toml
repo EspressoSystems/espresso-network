@@ -11,6 +11,7 @@ testing = ["consensus-store/testing", "hotshot-example-types"]
 trace = []
 
 [dependencies]
+app-tables = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -20,7 +21,6 @@ cliquenet = { workspace = true }
 committable = { workspace = true }
 consensus-api = { workspace = true }
 consensus-store = { workspace = true }
-consensus-store-redb = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true, optional = true }
@@ -34,7 +34,6 @@ serde_bytes = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
-tonic = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
@@ -49,6 +48,7 @@ quickcheck = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { workspace = true }
+tonic = { workspace = true }
 vbs = { workspace = true }
 # Enables `vid/testing` for tests only: constructs non-codeword dispersals to
 # exercise the unrecoverable VID reconstruction path.

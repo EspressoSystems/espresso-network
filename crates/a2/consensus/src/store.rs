@@ -10,11 +10,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     ops::Range,
-    path::PathBuf,
     sync::{Arc, LazyLock},
 };
 
 use anyhow::{Context, bail};
+use app_tables::{AppTables, AppWrite};
+use async_trait::async_trait;
 use consensus_store::{Batch, Bytes, KeyRange, Snapshot, Store, Table, key};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
@@ -77,15 +78,12 @@ const ANCHOR: &[u8] = b"anchor";
 /// Present once the state of the storage this store replaces has been imported.
 const IMPORTED: &[u8] = b"imported";
 
-/// The store a node keeps on disk.
-pub type DiskStore = consensus_store_redb::RedbStore;
-
 /// An in-memory store, for tests.
 #[cfg(any(test, feature = "testing"))]
 pub use consensus_store::mem::MemStore;
 
 /// Typed access to the consensus tables of a store.
-pub struct ConsensusStore<T, S = DiskStore> {
+pub struct ConsensusStore<T, S> {
     store: Arc<S>,
     changes: Arc<Changes>,
     _types: PhantomData<fn() -> T>,
@@ -204,43 +202,17 @@ pub struct Import<T: NodeType> {
     pub app: Vec<AppWrite>,
 }
 
-/// A write to a table the application keeps in the store, next to the consensus state.
-///
-/// Consensus does not read these tables. A table name is lowercase ASCII letters, digits, `_`
-/// and `-`.
-#[derive(Clone, Debug)]
-pub enum AppWrite {
-    /// Sets `key` to `value`.
-    Put {
-        table: &'static str,
-        key: Vec<u8>,
-        value: Vec<u8>,
-    },
-
-    /// Deletes the keys before `key`.
-    DeleteBefore { table: &'static str, key: Vec<u8> },
-
-    /// Deletes every key.
-    Clear { table: &'static str },
-}
-
-impl<T: NodeType> ConsensusStore<T, DiskStore> {
-    /// Opens the store in `dir`, creating it if needed, and returns it with what a restarted
+impl<T: NodeType, S: Store> ConsensusStore<T, S> {
+    /// Takes over `store`, an opened store of any backend, and returns it with what a restarted
     /// node resumes from.
     ///
     /// On the first open, `import` provides the state of the storage this store replaces, and
     /// the store takes it over. A failed import fails the open: a node that lost its votes
     /// and locks could vote twice in a view.
     pub async fn open(
-        dir: PathBuf,
+        store: S,
         import: impl AsyncFnOnce() -> anyhow::Result<Import<T>>,
     ) -> anyhow::Result<(Self, Restored<T>)> {
-        let path = dir.display().to_string();
-        let store = tokio::task::spawn_blocking(move || {
-            consensus_store_redb::RedbStore::open(&dir, consensus_store_redb::Config::default())
-        })
-        .await?
-        .with_context(|| format!("opening the consensus store in {path}"))?;
         let store = Self::new(Arc::new(store));
         if !store.imported()? {
             let state = import().await.context("reading the state to import")?;
@@ -446,10 +418,11 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         )
     }
 
-    /// The value of `key` in the application's `table`.
-    pub fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    /// The value of `key` in the application's `table`. Consensus does not read these tables. A
+    /// table name is lowercase ASCII letters, digits, `_` and `-`.
+    pub fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         let snap = self.store.snapshot()?;
-        Ok(snap.get(&app_table(table)?, key)?.map(|v| v.to_vec()))
+        Ok(snap.get(&app_table(table)?, key)?)
     }
 
     /// The entries of the application's `table` with keys from `from` on, and before `until` if
@@ -459,19 +432,16 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         table: &str,
         from: &[u8],
         until: Option<&[u8]>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
         let snap = self.store.snapshot()?;
         let from = Bytes::copy_from_slice(from);
         let range = match until {
             Some(until) => KeyRange::between(from, Bytes::copy_from_slice(until)),
             None => KeyRange::starting_at(from),
         };
-        snap.range(&app_table(table)?, &range)?
-            .map(|entry| {
-                let (k, v) = entry?;
-                Ok((k.to_vec(), v.to_vec()))
-            })
-            .collect()
+        Ok(snap
+            .range(&app_table(table)?, &range)?
+            .collect::<Result<_, _>>()?)
     }
 
     /// Applies `writes` to the application's tables, all or none.
@@ -707,6 +677,32 @@ fn decide_log_bytes(snap: &impl Snapshot) -> Result<u64, consensus_store::Error>
     Ok(usage.inline_bytes.saturating_add(usage.extern_bytes))
 }
 
+/// The application tables of the store, whose calls block, so they run on a blocking thread.
+#[async_trait]
+impl<T: NodeType, S: Store> AppTables for ConsensusStore<T, S> {
+    async fn get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        let (store, table, key) = (self.clone(), table.to_owned(), key.to_vec());
+        tokio::task::spawn_blocking(move || store.app_get(&table, &key)).await?
+    }
+
+    async fn entries(
+        &self,
+        table: &str,
+        from: &[u8],
+        until: Option<&[u8]>,
+    ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
+        let (store, table, from) = (self.clone(), table.to_owned(), from.to_vec());
+        let until = until.map(<[u8]>::to_vec);
+        tokio::task::spawn_blocking(move || store.app_entries(&table, &from, until.as_deref()))
+            .await?
+    }
+
+    async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.app_write(&writes)).await?
+    }
+}
+
 /// Stores `anchor`, unless the stored anchor is of a later height.
 fn put_anchor<T: NodeType>(batch: &mut Batch, anchor: &Anchor<T>) -> anyhow::Result<()> {
     let height = anchor.leaf.height();
@@ -752,17 +748,10 @@ pub fn put_app(batch: &mut Batch, writes: &[AppWrite]) -> anyhow::Result<()> {
     for write in writes {
         match write {
             AppWrite::Put { table, key, value } => {
-                batch.put(
-                    &app_table(table)?,
-                    key.clone(),
-                    Bytes::copy_from_slice(value),
-                );
+                batch.put(&app_table(table)?, key.clone(), value.clone());
             },
             AppWrite::DeleteBefore { table, key } => {
-                batch.delete_range(
-                    &app_table(table)?,
-                    KeyRange::before(Bytes::copy_from_slice(key)),
-                );
+                batch.delete_range(&app_table(table)?, KeyRange::before(key.clone()));
             },
             AppWrite::Clear { table } => {
                 batch.delete_range(&app_table(table)?, KeyRange::all());

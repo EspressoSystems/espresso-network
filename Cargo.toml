@@ -8,6 +8,8 @@ members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/a2/api-service",
+    "crates/a2/app-tables",
+    "crates/a2/catchup-api",
     "crates/a2/load",
     "crates/a2/chain-store",
     "crates/a2/consensus",
@@ -17,6 +19,7 @@ members = [
     "crates/a2/consensus-store-redb",
     "crates/a2/genesis",
     "crates/a2/ingester",
+    "crates/a2/membership",
     "crates/a2/store-service",
     "crates/alloy-compat",
     "crates/client",
@@ -71,6 +74,8 @@ default-members = [
     "contracts/rust/gen-vk-contract",
     "contracts/rust/safe-tx-builder",
     "crates/a2/api-service",
+    "crates/a2/app-tables",
+    "crates/a2/catchup-api",
     "crates/a2/chain-store",
     "crates/a2/consensus",
     "crates/a2/consensus-api",
@@ -79,6 +84,7 @@ default-members = [
     "crates/a2/consensus-store-redb",
     "crates/a2/genesis",
     "crates/a2/ingester",
+    "crates/a2/membership",
     "crates/a2/store-service",
     "crates/alloy-compat",
     "crates/client",
@@ -183,12 +189,14 @@ cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
 ] }
+app-tables = { path = "crates/a2/app-tables" }
+catchup-api = { path = "crates/a2/catchup-api" }
 chain-store = { path = "crates/a2/chain-store" }
 consensus = { path = "crates/a2/consensus" }
 consensus-api = { path = "crates/a2/consensus-api" }
-consensus-node = { path = "crates/a2/consensus-node" }
 consensus-store = { path = "crates/a2/consensus-store" }
 consensus-store-redb = { path = "crates/a2/consensus-store-redb" }
+membership = { path = "crates/a2/membership" }
 crc32fast = "1.5"
 criterion = "0.8.1"
 csv = "1"

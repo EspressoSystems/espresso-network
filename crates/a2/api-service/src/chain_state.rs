@@ -18,7 +18,6 @@ use anyhow::{Context, bail, ensure};
 use bytes::Bytes;
 use chain_store::{AppWrite, ChainStore};
 use committable::Committable;
-use consensus_node::null_catchup::NullStateCatchup;
 use either::Either;
 use espresso_types::{
     BlockMerkleTree, ChainConfig, Leaf2, NodeState, ValidatedState,
@@ -30,6 +29,7 @@ use hotshot_types::{
     utils::{is_epoch_root, is_transition_block},
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use membership::null_catchup::NullStateCatchup;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, time::sleep};
 

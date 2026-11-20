@@ -1,48 +1,18 @@
 //! The decide log as the ingester API serves it.
 
-use std::{net::SocketAddr, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
 use consensus_api::{
-    BODY_FORMAT, Error, Node, Source, SubmitError,
+    BODY_FORMAT, Error, Source,
     proto::{Body, Decided as DecidedEntry},
 };
 use consensus_store::{Bytes, Store};
 use hotshot_types::{data::EpochNumber, traits::node_implementation::NodeType};
 use tokio::sync::watch;
 
-use crate::{
-    block::SubmitError as BlockSubmitError,
-    client::{ClientApi, QueryError},
-    store::{ConsensusStore, Decided},
-};
-
-/// Binds the consensus node's API to `addr`: the decide log over `store` for the ingester, and
-/// the node service over the coordinator behind `client` for the API service. Returns the address
-/// it is bound to, which differs from `addr` for port 0, with the server, which runs until it is
-/// dropped or fails.
-pub fn bind<T: NodeType, S: Store>(
-    store: ConsensusStore<T, S>,
-    epoch_height: u64,
-    client: ClientApi<T>,
-    addr: SocketAddr,
-) -> std::io::Result<(
-    SocketAddr,
-    impl Future<Output = Result<(), tonic::transport::Error>> + Send,
-)> {
-    // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
-    let incoming = tonic::transport::server::TcpIncoming::bind(addr)?.with_nodelay(Some(true));
-    let bound = incoming.local_addr()?;
-    let server = tonic::transport::Server::builder()
-        .add_service(consensus_api::server(IngestSource::new(
-            store,
-            epoch_height,
-        )))
-        .add_service(consensus_api::node_server(Arc::new(NodeService { client })))
-        .serve_with_incoming(incoming);
-    Ok((bound, server))
-}
+use crate::store::{ConsensusStore, Decided};
 
 /// A [`Source`] over a node's consensus store.
 pub struct IngestSource<T, S> {
@@ -147,27 +117,4 @@ fn entry<T: NodeType>(
         payload_size,
         body: Some(body),
     })
-}
-
-/// The node service: what only consensus can do for the API service.
-struct NodeService<T: NodeType> {
-    client: ClientApi<T>,
-}
-
-#[async_trait]
-impl<T: NodeType> Node for NodeService<T> {
-    async fn submit_transaction(&self, transaction: Bytes) -> Result<(), SubmitError> {
-        let transaction = bincode::deserialize(&transaction)
-            .map_err(|err| SubmitError::Invalid(format!("undecodable transaction: {err}")))?;
-        match self.client.submit_transaction(transaction).await {
-            Ok(()) => Ok(()),
-            Err(QueryError::Rejected(rejection @ BlockSubmitError::TooLarge { .. })) => {
-                Err(SubmitError::Invalid(rejection.to_string()))
-            },
-            Err(QueryError::Rejected(rejection @ BlockSubmitError::RetryBufferFull)) => {
-                Err(SubmitError::Overloaded(rejection.to_string()))
-            },
-            Err(err) => Err(SubmitError::Internal(err.into())),
-        }
-    }
 }

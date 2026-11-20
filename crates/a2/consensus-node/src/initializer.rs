@@ -3,7 +3,7 @@
 use std::{cmp::max, sync::Arc};
 
 use anyhow::{Context, ensure};
-use consensus::store::{ConsensusStore, Restored};
+use consensus::store::Restored;
 use espresso_types::{Leaf2, NodeState, ValidatedState};
 use hotshot_types::{
     data::{QuorumProposalWrapper, ViewNumber},
@@ -12,18 +12,19 @@ use hotshot_types::{
     simple_certificate::QuorumCertificate2,
     traits::states::ValidatedState as _,
 };
+use membership::MembershipStore;
 use versions::Upgrade;
 
-use crate::{SeqTypes, decided_state, membership_store::MembershipStore};
+use crate::{SeqTypes, decided_state, store::NodeStore};
 
 /// The initializer of a node with node state `state`, resuming from `restored`, what `store`
 /// held when it was opened, or starting from genesis if it held no decided leaf.
 pub async fn initializer(
     state: NodeState,
     upgrade: Upgrade,
-    store: &ConsensusStore<SeqTypes>,
+    store: &NodeStore,
     restored: &Restored<SeqTypes>,
-    membership: &MembershipStore,
+    membership: &MembershipStore<NodeStore>,
 ) -> anyhow::Result<HotShotInitializer<SeqTypes>> {
     let epoch_height = state.epoch_height.unwrap_or_default();
     let genesis_state = ValidatedState::genesis(&state).0;

@@ -1,31 +1,31 @@
 pub mod block;
-pub mod cert_verifier;
+pub(crate) mod cert_verifier;
 pub mod client;
 pub mod consensus;
 pub mod coordinator;
-pub mod discovery;
-pub mod epoch;
-pub mod fetch;
-pub mod helpers;
+pub(crate) mod discovery;
+pub(crate) mod epoch;
+pub(crate) mod fetch;
+pub(crate) mod helpers;
 pub mod ingest;
 pub mod leader_trace;
 pub mod logging;
-pub mod message;
+pub(crate) mod message;
 pub mod network;
-pub mod outbox;
-pub mod serve;
+pub(crate) mod outbox;
+pub(crate) mod serve;
 pub mod state;
 pub mod storage;
 pub mod store;
-pub mod upgrade;
+pub(crate) mod upgrade;
 pub mod utils;
-pub mod vid;
-pub mod vote;
+pub(crate) mod vid;
+pub(crate) mod vote;
 
-pub mod proposal;
+pub(crate) mod proposal;
 
 #[cfg(any(test, feature = "trace"))]
-pub mod trace;
+pub(crate) mod trace;
 
 #[cfg(test)]
 mod tests;

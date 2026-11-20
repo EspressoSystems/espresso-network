@@ -1,0 +1,35 @@
+[package]
+name        = "membership"
+description = "Membership data and node state shared by the a2 consensus node and ingester"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+alloy            = { workspace = true }
+anyhow           = { workspace = true }
+app-tables       = { workspace = true }
+async-lock       = { workspace = true }
+async-trait      = { workspace = true }
+bincode          = { workspace = true }
+bytes            = { workspace = true }
+committable      = { workspace = true }
+espresso-genesis = { workspace = true }
+espresso-types   = { workspace = true, features = ["node"] }
+hotshot-types    = { workspace = true }
+indexmap         = { workspace = true }
+moka             = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+tokio            = { workspace = true }
+tracing          = { workspace = true }
+url              = { workspace = true }
+
+[dev-dependencies]
+chain-store    = { workspace = true }
+consensus      = { workspace = true, features = ["testing"] }
+espresso-types = { workspace = true, features = ["testing"] }
+tokio          = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

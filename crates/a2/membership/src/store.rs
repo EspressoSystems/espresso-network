@@ -2,8 +2,8 @@
 //!
 //! Consensus keeps the stake tables it builds, the DRB results and epoch roots they follow from,
 //! and the L1 stake-table events it reads in its own store, next to its safety state, so that it
-//! needs no SQL. An API service keeps the same in the chain store, so that a restart does not read
-//! L1 again. Per-epoch data is kept for the most recent [`RETAINED_EPOCHS`] epochs; older epochs
+//! needs no SQL. The ingester of an API service keeps the same in the chain store, where the API
+//! instances read the stake tables, and a restart does not read L1 again. Per-epoch data is kept for the most recent [`RETAINED_EPOCHS`] epochs; older epochs
 //! come from the API services, which keep history. The events are kept in full, since a stake
 //! table is computed from all events before its epoch.
 
@@ -11,9 +11,9 @@ use std::collections::BTreeSet;
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
+use app_tables::{AppTables, AppWrite};
 use async_trait::async_trait;
-use chain_store::ChainStore;
-use consensus::store::{AppWrite, ConsensusStore};
+use bytes::Bytes;
 use espresso_types::{
     AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
@@ -61,93 +61,10 @@ const EVENTS_UNTIL: &[u8] = b"until";
 /// The per-epoch tables, which keep only the latest epochs.
 const PER_EPOCH: [&str; 5] = [STAKE, VALIDATORS, DRB_RESULTS, DRB_INPUTS, EPOCH_ROOTS];
 
-/// A store with application tables: keyed values per table, ordered bytewise by key.
-#[async_trait]
-pub trait AppTables: Clone + Send + Sync + 'static {
-    async fn get(&self, table: &'static str, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>>;
-
-    /// The entries of `table` with keys from `from` on, and before `until` if set, in key order.
-    async fn entries(
-        &self,
-        table: &'static str,
-        from: Vec<u8>,
-        until: Option<Vec<u8>>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>>;
-
-    /// Applies `writes` in order, in one commit.
-    async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()>;
-}
-
-/// The consensus store, whose calls block, so they run on a blocking thread.
-#[async_trait]
-impl AppTables for ConsensusStore<SeqTypes> {
-    async fn get(&self, table: &'static str, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.app_get(table, &key)).await?
-    }
-
-    async fn entries(
-        &self,
-        table: &'static str,
-        from: Vec<u8>,
-        until: Option<Vec<u8>>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.app_entries(table, &from, until.as_deref()))
-            .await?
-    }
-
-    async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.app_write(&writes)).await?
-    }
-}
-
-#[async_trait]
-impl AppTables for ChainStore {
-    async fn get(&self, table: &'static str, key: Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
-        Ok(self.app_get(table, &key).await?.map(|value| value.to_vec()))
-    }
-
-    async fn entries(
-        &self,
-        table: &'static str,
-        from: Vec<u8>,
-        until: Option<Vec<u8>>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let entries = self.app_entries(table, &from, until.as_deref()).await?;
-        Ok(entries
-            .into_iter()
-            .map(|(key, value)| (key.to_vec(), value.to_vec()))
-            .collect())
-    }
-
-    async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
-        let writes = writes
-            .into_iter()
-            .map(|write| match write {
-                AppWrite::Put { table, key, value } => chain_store::AppWrite::Put {
-                    table: table.into(),
-                    key: key.into(),
-                    value: value.into(),
-                },
-                AppWrite::DeleteBefore { table, key } => chain_store::AppWrite::DeleteBefore {
-                    table: table.into(),
-                    key: key.into(),
-                },
-                AppWrite::Clear { table } => chain_store::AppWrite::Clear {
-                    table: table.into(),
-                },
-            })
-            .collect();
-        self.app_write(writes).await
-    }
-}
-
 /// The membership tables of a store: the consensus store of a consensus node, or the chain store
 /// of an API service.
 #[derive(Clone)]
-pub struct MembershipStore<A = ConsensusStore<SeqTypes>> {
+pub struct MembershipStore<A> {
     store: A,
 }
 
@@ -161,7 +78,7 @@ impl<A: AppTables> MembershipStore<A> {
         table: &'static str,
         epoch: EpochNumber,
     ) -> anyhow::Result<Option<V>> {
-        let bytes = self.store.get(table, epoch_key(epoch).to_vec()).await?;
+        let bytes = self.store.get(table, &epoch_key(epoch)).await?;
         bytes
             .map(|b| bincode::deserialize(&b))
             .transpose()
@@ -174,9 +91,9 @@ impl<A: AppTables> MembershipStore<A> {
 
     /// The L1 block up to which the store holds every stake-table event.
     async fn events_until(&self) -> anyhow::Result<Option<u64>> {
-        match self.store.get(EVENTS_META, EVENTS_UNTIL.to_vec()).await? {
+        match self.store.get(EVENTS_META, EVENTS_UNTIL).await? {
             Some(bytes) => {
-                Ok(Some(u64::from_be_bytes(bytes.try_into().map_err(
+                Ok(Some(u64::from_be_bytes(bytes[..].try_into().map_err(
                     |_| anyhow::anyhow!("malformed stake-event watermark"),
                 )?)))
             },
@@ -187,7 +104,7 @@ impl<A: AppTables> MembershipStore<A> {
     /// The DRB results the store holds, each with the root of its epoch if the store has it, for
     /// a restarted node to begin with.
     pub async fn start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
-        let results = self.store.entries(DRB_RESULTS, Vec::new(), None).await?;
+        let results = self.store.entries(DRB_RESULTS, &[], None).await?;
         let mut info = Vec::with_capacity(results.len());
         for (key, value) in results {
             let epoch = epoch_of(&key)?;
@@ -211,7 +128,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
-        let entries = self.store.entries(STAKE, Vec::new(), None).await?;
+        let entries = self.store.entries(STAKE, &[], None).await?;
         let mut stakes = entries
             .into_iter()
             .rev()
@@ -228,7 +145,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     }
 
     async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
-        let entries = self.store.entries(STAKE, Vec::new(), None).await?;
+        let entries = self.store.entries(STAKE, &[], None).await?;
         entries.iter().map(|(k, _)| epoch_of(k)).collect()
     }
 
@@ -265,9 +182,9 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         let stake: StakeTuple = (stake, block_reward, stake_table_hash);
         let mut writes = vec![put(STAKE, epoch, bincode::serialize(&stake)?)];
         if let Some(oldest) = (*epoch + 1).checked_sub(RETAINED_EPOCHS) {
-            let before = epoch_key(EpochNumber::new(oldest)).to_vec();
+            let before = Bytes::copy_from_slice(&epoch_key(EpochNumber::new(oldest)));
             writes.extend(PER_EPOCH.map(|table| AppWrite::DeleteBefore {
-                table,
+                table: table.into(),
                 key: before.clone(),
             }));
         }
@@ -285,16 +202,16 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
             .into_iter()
             .map(|((block, index), event)| {
                 Ok(AppWrite::Put {
-                    table: EVENTS,
-                    key: event_key(block, index).to_vec(),
-                    value: serde_json::to_vec(&event)?,
+                    table: EVENTS.into(),
+                    key: Bytes::copy_from_slice(&event_key(block, index)),
+                    value: serde_json::to_vec(&event)?.into(),
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         writes.push(AppWrite::Put {
-            table: EVENTS_META,
-            key: EVENTS_UNTIL.to_vec(),
-            value: l1_finalized.to_be_bytes().to_vec(),
+            table: EVENTS_META.into(),
+            key: Bytes::from_static(EVENTS_UNTIL),
+            value: Bytes::copy_from_slice(&l1_finalized.to_be_bytes()),
         });
         if self.events_until().await? > Some(l1_finalized) {
             return Ok(());
@@ -318,8 +235,11 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
             .store
             .entries(
                 EVENTS,
-                event_key(from_l1_block, 0).to_vec(),
-                last.checked_add(1).map(|next| event_key(next, 0).to_vec()),
+                &event_key(from_l1_block, 0),
+                last.checked_add(1)
+                    .map(|next| event_key(next, 0))
+                    .as_ref()
+                    .map(|key| &key[..]),
             )
             .await?;
         let mut events = Vec::new();
@@ -339,11 +259,21 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
 
     async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         self.write(vec![
-            AppWrite::Clear { table: EVENTS },
-            AppWrite::Clear { table: EVENTS_META },
-            AppWrite::Clear { table: VALIDATORS },
-            AppWrite::Clear { table: DRB_RESULTS },
-            AppWrite::Clear { table: EPOCH_ROOTS },
+            AppWrite::Clear {
+                table: EVENTS.into(),
+            },
+            AppWrite::Clear {
+                table: EVENTS_META.into(),
+            },
+            AppWrite::Clear {
+                table: VALIDATORS.into(),
+            },
+            AppWrite::Clear {
+                table: DRB_RESULTS.into(),
+            },
+            AppWrite::Clear {
+                table: EPOCH_ROOTS.into(),
+            },
         ])
         .await
     }
@@ -367,11 +297,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let Some(bytes) = self
-            .store
-            .get(VALIDATORS, epoch_key(epoch).to_vec())
-            .await?
-        else {
+        let Some(bytes) = self.store.get(VALIDATORS, &epoch_key(epoch)).await? else {
             bail!("no validators stored for epoch {epoch}");
         };
         let map: RegisteredValidatorMap = serde_json::from_slice(&bytes)
@@ -476,11 +402,11 @@ impl<A: AppTables> Storage<SeqTypes> for MembershipStore<A> {
     }
 }
 
-fn put(table: &'static str, epoch: EpochNumber, value: Vec<u8>) -> AppWrite {
+fn put(table: &str, epoch: EpochNumber, value: Vec<u8>) -> AppWrite {
     AppWrite::Put {
-        table,
-        key: epoch_key(epoch).to_vec(),
-        value,
+        table: table.into(),
+        key: Bytes::copy_from_slice(&epoch_key(epoch)),
+        value: value.into(),
     }
 }
 
@@ -511,29 +437,14 @@ fn decode_event_key(key: &[u8]) -> anyhow::Result<EventKey> {
 
 #[cfg(test)]
 mod tests {
-    use consensus::store::Import;
+    use std::sync::Arc;
+
+    use consensus::store::{ConsensusStore, MemStore};
 
     use super::*;
 
-    async fn store() -> (tempfile::TempDir, MembershipStore) {
-        let dir = tempfile::tempdir().unwrap();
-        let (store, _) = ConsensusStore::open(dir.path().join("store"), async || {
-            Ok(Import {
-                proposals: Vec::new(),
-                locked_qc: None,
-                boundary_qc: None,
-                acted_view: None,
-                restart_view: None,
-                upgrade_cert: None,
-                state_cert: None,
-                payloads: Vec::new(),
-                anchor: None,
-                app: Vec::new(),
-            })
-        })
-        .await
-        .unwrap();
-        (dir, MembershipStore::new(store))
+    fn store() -> MembershipStore<ConsensusStore<SeqTypes, MemStore>> {
+        MembershipStore::new(ConsensusStore::new(Arc::new(MemStore::new())))
     }
 
     /// Runs each check on the consensus store and on the chain store, which must behave alike.
@@ -543,7 +454,7 @@ mod tests {
                 $(
                     #[tokio::test]
                     async fn $check() {
-                        let (_dir, store) = super::store().await;
+                        let store = super::store();
                         super::$check(store).await;
                     }
                 )*

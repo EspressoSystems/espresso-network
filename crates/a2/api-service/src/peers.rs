@@ -10,7 +10,7 @@
 
 use std::{fmt, net::SocketAddr};
 
-use consensus::discovery::SignedServiceRecord;
+use consensus_api::discovery::SignedServiceRecord;
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
 use rand::seq::SliceRandom;
@@ -203,7 +203,7 @@ fn valid_urls(
 mod tests {
     use std::collections::BTreeSet;
 
-    use consensus::discovery::ServiceRecord;
+    use consensus_api::discovery::ServiceRecord;
 
     use super::*;
     use crate::{discovery::listed, membership::testing::*};

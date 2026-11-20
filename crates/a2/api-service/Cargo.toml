@@ -6,6 +6,7 @@ authors     = { workspace = true }
 edition     = { workspace = true }
 
 [dependencies]
+membership = { workspace = true }
 alloy                       = { workspace = true }
 anyhow                      = { workspace = true }
 async-lock                  = { workspace = true }
@@ -13,17 +14,16 @@ async-trait                 = { workspace = true }
 axum                        = { workspace = true }
 bincode                     = { workspace = true }
 bytes                       = { workspace = true }
+catchup-api                 = { workspace = true }
 chain-store                 = { workspace = true }
 clap                        = { workspace = true }
 committable                 = { workspace = true }
 consensus-api               = { workspace = true }
-consensus-node              = { workspace = true }
 either                      = { workspace = true }
 espresso-api                = { workspace = true }
 espresso-genesis            = { workspace = true }
 espresso-types              = { workspace = true, features = ["node"] }
 futures                     = { workspace = true }
-consensus                   = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-contract-adapter    = { workspace = true }
 hotshot-types               = { workspace = true }
