@@ -15,22 +15,22 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 - held: in the node's memory or storage.
 - walk: the default catchup, one epoch at a time. Each epoch root leaf is fetched from a peer and its QC is checked
   against the held table two epochs below.
-- seed: the step before the walk that installs a window of tables from proven epoch roots, anchored at the LC contract
-  (`LcContractSeed`).
-- window: the epochs `first..=last` whose tables one seed installs, at most 5.
+- seed: the step before the walk that installs a seed window of tables from proven epoch roots, anchored at the LC
+  contract (`LcContractSeed`).
+- seed window: the epochs `seed_window_first..=seed_window_last` whose tables one seed installs, at most 5.
 - anchor: the header at `F`, accepted when its block Merkle root matches `blockCommRoot`. Every epoch root the seed uses
   is proven against it.
-- `start`: the top of the highest pair of consecutive held epochs.
-- `target`: the epoch catchup was asked for.
-- `first`, `last`: the lowest and highest epoch of the window.
-- preceding root: `root(first-3)`, fetched only for the block reward of `table(first)`.
+- `top_held_epoch` (`start` in code): the top of the highest pair of consecutive held epochs.
+- `requested_epoch` (`epoch` or `target` in code): the epoch catchup was asked for.
+- `seed_window_first`, `seed_window_last` (`first`, `last` in code): the lowest and highest epoch of the seed window.
+- preceding root: `root(seed_window_first-3)`, fetched only for the block reward of `table(seed_window_first)`.
 
 ## Summary
 
 - One trust root: the LC contract's SNARK-verified `finalizedState`, read over L1 RPC.
 - Peers supply data only. The seed's peer answers (anchor header, header proofs) are checked against that root before
   use. Chain configs fetched from peers are checked against the commitment in a proven header. Leaves of the walk above
-  the window and of `drb_ready` are QC-checked against the installed tables.
+  the seed window and of `drb_ready` are QC-checked against the installed tables.
 - Trusted inputs:
   - chain config
   - L1 RPC
@@ -53,20 +53,20 @@ flowchart TD
     P -->|verify_at_height| R[proven epoch roots]
     R --> T["Stake table of epoch e, derived from stake table events up to root(e-2).l1_finalized"]
     T -->|"hash check: root(e-2).next_stake_table_hash vs table(e-1)"| I["install: store table(e-1), put table(e) in memory"]
-    I --> W["Normal walk above the window (QC-verified epoch_root_leaf)"]
+    I --> W["Normal walk above the seed window (QC-verified epoch_root_leaf)"]
 ```
 
 ## Trust chain
 
-| #   | Value                   | From                    | Checked by                                  |
-| --- | ----------------------- | ----------------------- | ------------------------------------------- |
-| 0   | LC contract address     | L1, finalized block     | trusted                                     |
-| 1   | `F`, `blockCommRoot`    | L1, finalized block     | SNARK, in the contract                      |
-| 2   | Header at `F`           | peer                    | its `block_comm_root` equals the contract's |
-| 3   | Root headers below `F`  | peer                    | Merkle proof against header `F`             |
-| 4   | Table of epoch `e`      | stored and L1 events    | `root(e-2)` hash against table `e-1`        |
-| 5   | Block reward            | proven roots, table `e` | links 3 and 4                               |
-| 6   | Epochs above the window | peer leaves             | QC against table `e-2`                      |
+| #   | Value                        | From                    | Checked by                                  |
+| --- | ---------------------------- | ----------------------- | ------------------------------------------- |
+| 0   | LC contract address          | L1, finalized block     | trusted                                     |
+| 1   | `F`, `blockCommRoot`         | L1, finalized block     | SNARK, in the contract                      |
+| 2   | Header at `F`                | peer                    | its `block_comm_root` equals the contract's |
+| 3   | Root headers below `F`       | peer                    | Merkle proof against header `F`             |
+| 4   | Table of epoch `e`           | stored and L1 events    | `root(e-2)` hash against table `e-1`        |
+| 5   | Block reward                 | proven roots, table `e` | links 3 and 4                               |
+| 6   | Epochs above the seed window | peer leaves             | QC against table `e-2`                      |
 
 ### Link details
 
@@ -94,29 +94,29 @@ flowchart TD
    - Inputs: proven root fields (timestamp, `total_reward_distributed`) of the roots and the preceding root, stake of
      the derived table, initial token supply (constant or L1).
    - At protocol version 0.3 the fixed reward is used. A held reward is reused.
-6. Epochs above the window
+6. Epochs above the seed window
    - Normal walk: `epoch_root_leaf`, QC-checked against held table `e-2`.
    - Unchanged by the seed.
 
-## Fetch order in one `catchup(target)`
+## Fetch order in one `catchup(requested_epoch)`
 
 In `EpochMembershipCoordinator::catchup`.
 
-1. `held_pair_top` finds the highest held consecutive pair `(start-1, start)`. It searches down from
-   `min(target - 1, highest epoch in memory)`, loading from storage as it goes. A stored pair above the highest epoch in
-   memory is not found.
-2. If `start + 1 < target`, the seed takes `seed_lock` and re-checks `start`.
+1. `held_pair_top` finds the highest held consecutive pair `(top_held_epoch-1, top_held_epoch)`. It searches down from
+   `min(requested_epoch - 1, highest epoch in memory)`, loading from storage as it goes. A stored pair above the highest
+   epoch in memory is not found.
+2. If `top_held_epoch + 1 < requested_epoch`, the seed takes `seed_lock` and re-checks `top_held_epoch`.
 3. L1 reads: the finalized block number, the LC contract address (cached in a `OnceCell`), then `finalizedState`, both
    at that finalized block.
 4. `seed_window` picks the epochs to install:
-   - `last = min(target, epoch(F) + 1)`
-   - `first = max(last - 4, start + 1, 3)`
-   - At most 5 tables, covering the target's DRB and rewards.
-   - `preceding_root = root(first - 3)` when `first > first_epoch + 4`.
-   - Returns `None` (no seed) when the walk from `start` reaches the target or `epoch(F)` without one.
+   - `seed_window_last = min(requested_epoch, epoch(F) + 1)`
+   - `seed_window_first = max(seed_window_last - 4, top_held_epoch + 1, 3)`
+   - At most 5 tables, covering the requested epoch's DRB and rewards.
+   - `preceding_root = root(seed_window_first - 3)` when `seed_window_first > first_epoch + 4`.
+   - Returns `None` (no seed) when the walk from `top_held_epoch` reaches `requested_epoch` or `epoch(F)` without one.
 5. Anchor: the header at `F`, then `verify_header`.
-6. Proven headers: the preceding root first, then `root(e-2)` for each `e` in the window, ascending. Up to 3 requests in
-   flight.
+6. Proven headers: the preceding root first, then `root(e-2)` for each `e` in the seed window, ascending. Up to 3
+   requests in flight.
    - The anchor and each proven header get up to 5 attempts, or 1 with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE`.
    - One HTTP attempt asks the state peers in turn.
 7. `EpochCommittees::install_epoch_roots`, ascending, each root under `catchup_timeout`. Per root `e`, `install_root`:
@@ -128,16 +128,17 @@ In `EpochMembershipCoordinator::catchup`.
    5. Derives table `e` from events. A held table with a hash is reused, not re-derived.
    6. Runs the hash check of `e-1`.
    7. Stores the held table of `e-1`, then puts table `e` in memory. Table `e` is not stored here, so the seed does not
-      persist `table(last)`. The memory put is skipped when the new table has no reward and the held one has.
+      persist `table(seed_window_last)`. The memory put is skipped when the new table has no reward and the held one
+      has.
 8. `backfill.request_fill()` runs after the install step, whether or not it succeeded. A failure before the install step
    does not call it.
-9. The walk runs from `last + 1` to `target`.
-10. `drb_ready(target)`.
+9. The walk runs from `seed_window_last + 1` to `requested_epoch`.
+10. `drb_ready(requested_epoch)`.
 
-On a seed failure at any step: `warn!` "catchup seed failed, walking". The walk then runs from `start` as re-read under
-`seed_lock`. Tables installed before the failure are kept and skipped.
+On a seed failure at any step: `warn!` "catchup seed failed, walking". The walk then runs from `top_held_epoch` as
+re-read under `seed_lock`. Tables installed before the failure are kept and skipped.
 
-## Backfill below the window (async)
+## Backfill below the seed window (async)
 
 In `StakeTableBackfill`.
 
@@ -166,15 +167,15 @@ In `StakeTableBackfill`.
 
 ## Hash-check coverage gaps
 
-- **Top of the window:** installing `root(e-2)` checks the table of `e-1`. `table(last)` stays unchecked until the walk
-  or live consensus adds `root(last-1)`.
-- **Bottom of the window:** the seed does not install `table(first-1)`. Its check reads memory and is skipped when the
-  table is absent.
-  - With no gap below the window, `first = start + 1`. `held_pair_top` has already loaded `start` into memory
-    (`load_stake_table` inserts what it reads), so the check runs.
-  - With a gap, `table(first-1)` is not held. The backfill later derives its own copy from stored events and checks
-    that.
-  - With `first == last`, no seeded table is hash-checked at install.
+- **Top of the seed window:** installing `root(e-2)` checks the table of `e-1`. `table(seed_window_last)` stays
+  unchecked until the walk or live consensus adds `root(seed_window_last-1)`.
+- **Bottom of the seed window:** the seed does not install `table(seed_window_first-1)`. Its check reads memory and is
+  skipped when the table is absent.
+  - With no gap below the seed window, `seed_window_first = top_held_epoch + 1`. `held_pair_top` has already loaded
+    `top_held_epoch` into memory (`load_stake_table` inserts what it reads), so the check runs.
+  - With a gap, `table(seed_window_first-1)` is not held. The backfill later derives its own copy from stored events and
+    checks that.
+  - With `seed_window_first == seed_window_last`, no seeded table is hash-checked at install.
 - **Scope of the check:** guards against a faulty L1 provider. Table correctness rests on L1 RPC plus the proven root's
   `l1_finalized`.
 
@@ -182,10 +183,10 @@ In `StakeTableBackfill`.
 
 - The leaf chain at `F` supplies only the header at `F`. Its QCs are not verified; the `block_comm_root` match against
   the SNARK-verified contract state is the stronger check.
-- Only headers below `F` are provable: the block Merkle tree in header `F` commits to blocks `0..F-1`. Hence `last` is
-  capped at `epoch(F) + 1`; that table comes from `root(epoch(F) - 1)`, which is below `F`.
+- Only headers below `F` are provable: the block Merkle tree in header `F` commits to blocks `0..F-1`. Hence
+  `seed_window_last` is capped at `epoch(F) + 1`; that table comes from `root(epoch(F) - 1)`, which is below `F`.
 - `next_stake_table_hash` lags one root: a root decides the hash of the epoch before the one it defines. Installing
-  `root(e-2)` therefore checks table `e-1`, and the top of the window waits one more root for its check.
+  `root(e-2)` therefore checks table `e-1`, and the top of the seed window waits one more root for its check.
 
 ## Not implemented: stake tables from peers
 
@@ -195,8 +196,8 @@ stake table events. Not needed today: the event-derived install is fast enough.
 ### Outline
 
 1. Same anchor as today: LC contract `finalizedState`, header at `F`, proven epoch roots below `F`.
-2. For each table `e` in the window, request the full `StakeTableState` of epoch `e` from a peer (new request-response
-   request and HTTP endpoint).
+2. For each table `e` in the seed window, request the full `StakeTableState` of epoch `e` from a peer (new
+   request-response request and HTTP endpoint).
 3. Accept it iff `state.commit()` equals the proven `root(e-1).next_stake_table_hash`. The hash commits to the full
    state: all registered validators, exits and used keys (`ValidatorSet::from_state`). A mismatch rejects that peer's
    answer and asks the next peer; no process exit, since the peer is untrusted.
@@ -211,8 +212,8 @@ stake table events. Not needed today: the event-derived install is fast enough.
   the event reads drop out.
 - Every peer-supplied table is hash-checked at install.
 - `table(e)` needs proven `root(e-1)`. The LC contract rejects an `F` past the epoch root of its epoch, so
-  `root(epoch(F)) >= F` and `table(epoch(F) + 1)` is never provable. The window top drops to `epoch(F)`, or that one
-  table is derived from events and stays unchecked at install, as today.
+  `root(epoch(F)) >= F` and `table(epoch(F) + 1)` is never provable. The seed window top drops to `epoch(F)`, or that
+  one table is derived from events and stays unchecked at install, as today.
 
 ### Required changes
 
