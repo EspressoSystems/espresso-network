@@ -63,8 +63,8 @@ async fn main() -> anyhow::Result<()> {
     let membership = Membership::new(&state)?;
     let peers = Peers::new(
         Tables::new(store.clone()),
-        options.bootstrap,
-        options.public_url,
+        options.bootstrap.clone(),
+        options.public_url.clone(),
     );
     let filler = GapFiller::new(store.clone(), peers, Some(membership.clone()));
     let follower_store = store.clone();
@@ -88,7 +88,12 @@ async fn main() -> anyhow::Result<()> {
         // A failing follower holds up only the state catchup serves, never the decide log, so
         // it is started again rather than stopping the ingester.
         loop {
-            match ChainFollower::new(follower_store.clone(), state.clone())
+            let peers = Peers::new(
+                Tables::new(follower_store.clone()),
+                options.bootstrap.clone(),
+                options.public_url.clone(),
+            );
+            match ChainFollower::new(follower_store.clone(), state.clone(), peers)
                 .run()
                 .await
             {

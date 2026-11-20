@@ -10,6 +10,7 @@ alloy                 = { workspace = true }
 anyhow                = { workspace = true }
 async-trait           = { workspace = true }
 bincode               = { workspace = true }
+catchup-api           = { workspace = true }
 chain-api             = { workspace = true }
 chain-store           = { workspace = true, features = ["remote"] }
 clap                  = { workspace = true }

@@ -11,9 +11,13 @@
 //! and the reward balances, these only at the heights where they changed. The fee tree does not
 //! change under the new protocol; it is written once, from genesis, as are the chain configs the
 //! genesis file knows. API instances answer catchup requests from these rows, and a restarted
-//! ingester resumes from the newest one instead of applying the chain from genesis again. A store
-//! pruned past the heights the follower needs, without a row to start after them, cannot be
-//! followed.
+//! ingester resumes from the newest one instead of applying the chain from genesis again.
+//!
+//! A follower without a row of its own, in a new deployment or one whose store was pruned past it,
+//! takes the state at the newest stored height from the catchup service of another API service,
+//! and checks it against the stored header as it checks its own rows. Membership then gets what
+//! the skipped blocks would have given it. Only if no peer has the state and the store starts at
+//! genesis does the follower apply the chain from there.
 
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -21,7 +25,10 @@ use std::{
 };
 
 use anyhow::{Context, bail, ensure};
-use chain_api::{StateRow, Tables};
+use catchup_api::proto::{
+    ChainConfigRequest, HeightRequest, catchup_service_client::CatchupServiceClient,
+};
+use chain_api::{BlocksFrontier, RewardSet, StateRow, Tables};
 use chain_store::ChainStore;
 use committable::{Commitment, Committable};
 use either::Either;
@@ -30,12 +37,22 @@ use espresso_types::{
     v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
 };
 use hotshot_types::{
-    traits::states::ValidatedState as _,
-    utils::{is_epoch_root, is_transition_block},
+    data::EpochNumber,
+    traits::{
+        election::{Membership as _, MembershipSnapshot as _},
+        states::ValidatedState as _,
+    },
+    utils::{is_epoch_root, is_transition_block, root_block_in_epoch, transition_block_for_epoch},
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use membership::null_catchup::NullStateCatchup;
+use serde::de::DeserializeOwned;
 use tokio::time::sleep;
+
+use crate::{
+    membership::Membership,
+    peers::{Peer, Peers},
+};
 
 /// How many of the newest heights the state is kept for.
 pub const KEPT_HEIGHTS: usize = 256;
@@ -44,14 +61,19 @@ pub const KEPT_HEIGHTS: usize = 256;
 /// membership does not have the stake table of its epoch yet.
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
+/// How large an answer of a peer's catchup service may be; reward balances are the largest.
+const MAX_ANSWER_SIZE: usize = 256 << 20;
+
 type RewardRoot = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
 
 /// Applies the blocks of the store in height order, and stores what the newest states hold.
-#[derive(Debug)]
 pub struct ChainFollower {
     store: ChainStore,
     tables: Tables,
     node: NodeState,
+
+    /// The API services to take the state from when the follower has no row of its own.
+    peers: Peers,
 
     /// The heights of the kept rows, oldest first, each with the height its reward balances are
     /// stored under.
@@ -66,26 +88,35 @@ pub struct ChainFollower {
 }
 
 impl ChainFollower {
-    pub fn new(store: ChainStore, node: NodeState) -> Self {
+    pub fn new(store: ChainStore, node: NodeState, peers: Peers) -> Self {
         Self {
             tables: Tables::new(store.clone()),
             store,
             node,
+            peers,
             kept: VecDeque::new(),
             rewards: None,
             configs: BTreeSet::new(),
         }
     }
 
-    /// Follows the store from the newest stored row, or from genesis without one. Returns when
-    /// the store's changes end, or fails if the store no longer holds the heights to start from.
+    /// Follows the store, once it holds a height, from the newest stored row, else from a peer's
+    /// state, else from genesis. Returns when the store's changes end, or fails if the store no
+    /// longer holds the heights to start from.
     pub async fn run(mut self) -> anyhow::Result<()> {
         self.store_genesis().await?;
         let mut changes = self.store.changes();
+        // Where to start depends on what the store holds: an empty store gives no height to take
+        // the state of from a peer, and would leave only genesis.
+        while self.store.newest().await?.is_none() {
+            if changes.changed().await.is_err() {
+                return Ok(());
+            }
+        }
         let (mut parent, mut height) = match self.start().await? {
             Some((leaf, state)) => {
                 let height = leaf.height();
-                tracing::info!(height, "resuming from the stored state");
+                tracing::info!(height, "following the chain after this height");
                 (Some((leaf, state)), height + 1)
             },
             None => (None, 0),
@@ -174,8 +205,9 @@ impl ChainFollower {
         Ok(())
     }
 
-    /// The leaf and state to continue after: the newest row's, or none to start at genesis. A
-    /// failed read is an error, to be tried again; a row that does not check out is ignored.
+    /// The leaf and state to continue after: the newest row's, else one from a peer, or none to
+    /// start at genesis. A failed read is an error, to be tried again; a row that does not check
+    /// out is ignored.
     async fn start(&mut self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
         let rows = self.tables.states().await?;
         if let Some((height, row)) = rows.last().cloned() {
@@ -196,6 +228,11 @@ impl ChainFollower {
                 Err(err) => tracing::warn!("ignoring the stored state: {err:#}"),
             }
         }
+        match self.bootstrap().await {
+            Ok(Some(start)) => return Ok(Some(start)),
+            Ok(None) => {},
+            Err(err) => tracing::warn!("taking the state from a peer failed: {err:#}"),
+        }
         let floor = self.store.floor().await?;
         if floor > 0 {
             bail!(
@@ -204,6 +241,147 @@ impl ChainFollower {
             );
         }
         Ok(None)
+    }
+
+    /// The leaf and state at the newest stored height, from the first peer that has the state,
+    /// checked against the stored header. Membership is first given what the blocks before would
+    /// have given it, and the state is then stored as the follower's first row. `None` if no peer
+    /// has the state.
+    async fn bootstrap(&mut self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
+        let Some(height) = self.store.newest().await? else {
+            return Ok(None);
+        };
+        let leaf = self
+            .store
+            .item(height)
+            .await?
+            .with_context(|| format!("height {height} is not stored"))?
+            .leaf;
+        let membership = Membership::new(&self.node)?;
+        self.peers
+            .refresh(membership.epoch_of(height), &membership)
+            .await;
+        let mut state = None;
+        for peer in self.peers.shuffled() {
+            match self.state_from(&peer, &leaf).await {
+                Ok(taken) => {
+                    tracing::info!(%peer, height, "took the state from a peer");
+                    state = Some(taken);
+                    break;
+                },
+                Err(err) => tracing::debug!(%peer, height, "no state from the peer: {err:#}"),
+            }
+        }
+        let Some(state) = state else {
+            return Ok(None);
+        };
+        self.prepare_membership(height, &membership).await?;
+        self.store_state(height, &state).await?;
+        Ok(Some((leaf, state)))
+    }
+
+    /// The state after `leaf` as `peer`'s catchup service has it, checked against the leaf's
+    /// header. The chain config comes from the store if it holds it.
+    async fn state_from(&self, peer: &Peer, leaf: &Leaf2) -> anyhow::Result<ValidatedState> {
+        let height = leaf.height();
+        let header = leaf.block_header();
+        let mut client = CatchupServiceClient::new(peer.channel.clone())
+            .max_decoding_message_size(MAX_ANSWER_SIZE);
+        let frontier: Option<BlocksFrontier> = match ValidatedState::from_header(header)
+            .block_merkle_tree
+            .num_leaves()
+        {
+            0 => None,
+            _ => Some(decoded(
+                client
+                    .get_blocks_frontier(HeightRequest { height })
+                    .await?
+                    .into_inner()
+                    .data,
+            )?),
+        };
+        let balances: Option<RewardSet> = match header.reward_merkle_tree_root() {
+            Either::Right(_) => Some(decoded(
+                client
+                    .get_reward_balances_v2(HeightRequest { height })
+                    .await?
+                    .into_inner()
+                    .data,
+            )?),
+            Either::Left(_) => None,
+        };
+        let commitment = header.chain_config().commit().to_string();
+        let chain_config = match self.tables.chain_config(&commitment).await? {
+            Some(config) => config,
+            None => decoded(
+                client
+                    .get_chain_config(ChainConfigRequest { commitment })
+                    .await?
+                    .into_inner()
+                    .data,
+            )?,
+        };
+        let row = StateRow {
+            frontier,
+            chain_config,
+            rewards_at: height,
+        };
+        self.rebuild(leaf, &row, balances)
+    }
+
+    /// Hands membership what the blocks up to `height` would have given it, had the follower
+    /// applied them: the epoch roots of the stored epochs up to `height`'s, which give the stake
+    /// tables up to two epochs later, and the DRB results of `height`'s epoch and the next. A DRB
+    /// result comes from the transition block before its epoch, or, where the store no longer
+    /// holds that block, is computed from the epoch root, which takes as long as the DRB demands.
+    async fn prepare_membership(&self, height: u64, membership: &Membership) -> anyhow::Result<()> {
+        let epoch_height = membership.epoch_height();
+        let epoch = *membership.epoch_of(height);
+        for e in epoch.saturating_sub(2)..=epoch {
+            let root = root_block_in_epoch(e, epoch_height);
+            if root <= height
+                && let Some(item) = self.store.item(root).await?
+            {
+                track_epoch(&self.node, &item.leaf).await?;
+            }
+        }
+        // The first two epochs run on the genesis committee and its DRB result.
+        let first = *membership.first_epoch();
+        for e in (epoch.max(first + 2))..=epoch + 1 {
+            let transition = transition_block_for_epoch(e - 1, epoch_height);
+            let coordinator = &self.node.coordinator;
+            let known = coordinator
+                .membership()
+                .snapshot(EpochNumber::new(e))
+                .is_some_and(|snapshot| snapshot.has_drb());
+            if transition > height || known {
+                continue;
+            }
+            match self.store.item(transition).await? {
+                Some(item) if item.leaf.next_drb_result.is_some() => {
+                    track_epoch(&self.node, &item.leaf).await?;
+                },
+                _ => {
+                    let root = root_block_in_epoch(e - 2, epoch_height);
+                    let item = self.store.item(root).await?.with_context(|| {
+                        format!(
+                            "the store holds neither the transition block {transition} nor the \
+                             epoch root {root} that give the DRB result of epoch {e}"
+                        )
+                    })?;
+                    tracing::info!(
+                        epoch = e,
+                        "computing the DRB result the store does not hold"
+                    );
+                    let drb = coordinator
+                        .compute_drb_result(EpochNumber::new(e), item.leaf)
+                        .await
+                        .map_err(|err| anyhow::anyhow!("computing the DRB result: {err}"))?;
+                    coordinator.supply_drb(EpochNumber::new(e), drb);
+                },
+            }
+        }
+        Ok(())
     }
 
     /// The state after `leaf` from its stored `row` and reward `balances`, checked against the
@@ -366,6 +544,10 @@ async fn apply(
     Ok(state)
 }
 
+fn decoded<V: DeserializeOwned>(bytes: Vec<u8>) -> anyhow::Result<V> {
+    Ok(bincode::deserialize(&bytes)?)
+}
+
 /// Hands membership what `leaf` tells it: an epoch root gives the stake table of the epoch two
 /// later, and a transition block the DRB result of the next epoch.
 async fn track_epoch(node: &NodeState, leaf: &Leaf2) -> anyhow::Result<()> {
@@ -402,6 +584,12 @@ mod tests {
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
+
+    /// A follower of `store` without peers to take the state from.
+    fn follower(store: ChainStore, node: NodeState) -> ChainFollower {
+        let peers = Peers::new(Tables::new(store.clone()), Vec::new(), None);
+        ChainFollower::new(store, node, peers)
+    }
 
     /// A store holding the genesis block, and the state after it.
     async fn genesis(node: &NodeState) -> (ChainStore, ValidatedState) {
@@ -449,11 +637,11 @@ mod tests {
     }
 
     async fn resumes(store: ChainStore, state: ValidatedState, node: NodeState) {
-        let mut first = ChainFollower::new(store.clone(), node.clone());
+        let mut first = follower(store.clone(), node.clone());
         assert!(first.start().await.unwrap().is_none());
 
         first.store_state(0, &state).await.unwrap();
-        let mut restarted = ChainFollower::new(store, node);
+        let mut restarted = follower(store, node);
         let (leaf, resumed) = restarted.start().await.unwrap().expect("a row");
         assert_eq!(leaf.height(), 0);
         assert_eq!(
@@ -478,7 +666,7 @@ mod tests {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         let (store, state) = genesis(&node).await;
         let tables = Tables::new(store.clone());
-        let mut follower = ChainFollower::new(store, node);
+        let mut follower = follower(store, node);
         let last = KEPT_HEIGHTS as u64 + 1;
         for height in 0..=last {
             follower.store_state(height, &state).await.unwrap();
@@ -500,6 +688,76 @@ mod tests {
         );
     }
 
+    /// Serves the catchup service of an API instance over `store`, returning its URL.
+    async fn serve_catchup(store: &ChainStore) -> url::Url {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let service = api_service::ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap())
+            .with_catchup(api_service::catchup::Catchup::new(store.clone(), 10));
+        tokio::spawn(service.serve(listener));
+        url
+    }
+
+    /// A follower without a row takes the state at the newest stored height from a peer's
+    /// catchup service, checks it against the stored header, and stores it as its first row.
+    #[tokio::test]
+    async fn takes_the_state_from_a_peer() {
+        let node = NodeState::mock()
+            .with_current_version(NEW_PROTOCOL_VERSION)
+            .with_epoch_height(10);
+        let (peer_store, state) = after_a_block(&node).await;
+        follower(peer_store.clone(), node.clone())
+            .store_state(0, &state)
+            .await
+            .unwrap();
+        let url = serve_catchup(&peer_store).await;
+
+        let store = ChainStore::new(MemBackend::default());
+        let item = peer_store.item(0).await.unwrap().unwrap();
+        store.put(&item, &Parts::default()).await.unwrap();
+        let peers = Peers::new(Tables::new(store.clone()), vec![url], None);
+        let mut follower = ChainFollower::new(store.clone(), node, peers);
+
+        let (leaf, taken) = follower.start().await.unwrap().expect("the peer's state");
+        assert_eq!(leaf.height(), 0);
+        assert_eq!(
+            taken.block_merkle_tree.commitment(),
+            state.block_merkle_tree.commitment()
+        );
+        assert_eq!(
+            taken.reward_merkle_tree_v2.commitment(),
+            state.reward_merkle_tree_v2.commitment()
+        );
+        assert!(Tables::new(store).state(0).await.unwrap().is_some());
+    }
+
+    /// A peer's state that does not match the stored header is not taken; with a store that
+    /// starts at genesis, the follower then starts there.
+    #[tokio::test]
+    async fn refuses_a_peer_state_that_does_not_match() {
+        let node = NodeState::mock()
+            .with_current_version(NEW_PROTOCOL_VERSION)
+            .with_epoch_height(10);
+        let (peer_store, peer_state) = genesis(&node).await;
+        follower(peer_store.clone(), node.clone())
+            .store_state(0, &peer_state)
+            .await
+            .unwrap();
+        let url = serve_catchup(&peer_store).await;
+        // A different block at the same height, whose block tree is not empty.
+        let (store, _) = after_a_block(&node).await;
+        let peers = Peers::new(Tables::new(store.clone()), vec![url], None);
+        let mut follower = ChainFollower::new(store.clone(), node, peers);
+
+        assert!(
+            follower.start().await.unwrap().is_none(),
+            "starts at genesis"
+        );
+        assert!(Tables::new(store).state(0).await.unwrap().is_none());
+    }
+
     /// A follower that the store prunes past stops instead of waiting for a height it will not
     /// get.
     #[tokio::test]
@@ -507,7 +765,7 @@ mod tests {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         let (store, _) = genesis(&node).await;
         let tables = Tables::new(store.clone());
-        let mut run = tokio::spawn(ChainFollower::new(store.clone(), node).run());
+        let mut run = tokio::spawn(follower(store.clone(), node).run());
         tokio::time::timeout(Duration::from_secs(10), async {
             while tables.state(0).await.unwrap().is_none() {
                 sleep(Duration::from_millis(20)).await;
@@ -530,7 +788,7 @@ mod tests {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         let (store, _) = genesis(&node).await;
         store.prune_below(1).await.unwrap();
-        let mut pruned = ChainFollower::new(store, node);
+        let mut pruned = follower(store, node);
         pruned.start().await.expect_err("nothing to start from");
     }
 }
