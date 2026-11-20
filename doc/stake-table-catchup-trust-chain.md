@@ -3,6 +3,28 @@
 How a node that is more than one epoch behind installs stake tables from the LC contract instead of walking every epoch,
 and what each fetched value is checked against. Mechanism details: `doc/agents/architecture.md` (Validator startup).
 
+## Notation
+
+- `F`: `finalizedState.blockHeight` of the LC contract, the highest block height with a proof accepted by the LC
+  contract.
+- `blockCommRoot`: `finalizedState.blockCommRoot`, a hash of the block Merkle root in the header at `F`.
+- `epoch(h)`: the epoch that contains block height `h`.
+- `table(e)`: the stake table of epoch `e`.
+- `root(e)`: the epoch root header of epoch `e`, 5 blocks before the end of `e`. Its `next_stake_table_hash` is the hash
+  of `table(e+1)`. Its L1 block fixes the stake table events that define `table(e+2)`.
+- held: in the node's memory or storage.
+- walk: the default catchup, one epoch at a time. Each epoch root leaf is fetched from a peer and its QC is checked
+  against the held table two epochs below.
+- seed: the step before the walk that installs a window of tables from proven epoch roots, anchored at the LC contract
+  (`LcContractSeed`).
+- window: the epochs `first..=last` whose tables one seed installs, at most 5.
+- anchor: the header at `F`, accepted when its block Merkle root matches `blockCommRoot`. Every epoch root the seed uses
+  is proven against it.
+- `start`: the top of the highest pair of consecutive held epochs.
+- `target`: the epoch catchup was asked for.
+- `first`, `last`: the lowest and highest epoch of the window.
+- preceding root: `root(first-3)`, fetched only for the block reward of `table(first)`.
+
 ## Summary
 
 - One trust root: the LC contract's SNARK-verified `finalizedState`, read over L1 RPC.
@@ -65,7 +87,7 @@ flowchart TD
 5. Block reward
    - Inputs: proven root fields (timestamp, `total_reward_distributed`) of the roots and the preceding root, stake of
      the derived table, initial token supply (constant or L1).
-   - V3 uses the fixed reward. A held reward is reused.
+   - At protocol version 0.3 the fixed reward is used. A held reward is reused.
 6. Epochs above the window
    - Normal walk: `epoch_root_leaf`, QC-checked against held table `e-2`.
    - Unchanged by the seed.
@@ -76,8 +98,8 @@ In `EpochMembershipCoordinator::catchup`.
 
 1. `held_pair_top` finds the highest held consecutive pair `(start-1, start)` in memory or storage.
 2. If `start + 1 < target`, the seed takes `seed_lock` and re-checks `start`.
-3. L1 reads: the finalized block number, the LC address (cached in a `OnceCell`), then `finalizedState`, both at that
-   finalized block.
+3. L1 reads: the finalized block number, the LC contract address (cached in a `OnceCell`), then `finalizedState`, both
+   at that finalized block.
 4. `seed_window` picks the epochs to install:
    - `last = min(target, epoch(F) + 1)`
    - `first = max(last - 4, start + 1, 3)`
@@ -92,7 +114,7 @@ In `EpochMembershipCoordinator::catchup`.
 7. `EpochCommittees::install_epoch_roots`, ascending, each root under `catchup_timeout`. Per root `e`, `install_root`:
    1. `store_epoch_root`
    2. `update_chain_config`
-   3. fixed block reward (V3 only)
+   3. fixed block reward (protocol version 0.3 only)
    4. Returns if the held committee of `e` already has a block reward, header and hash.
    5. Derives table `e` from events. A held table with a hash is reused, not re-derived.
    6. Runs the hash check of `e-1`.
@@ -112,7 +134,7 @@ In `StakeTableBackfill`.
 
 - Read order:
   1. Stored epochs (no L1 read when nothing is missing).
-  2. LC state.
+  2. LC contract state.
   3. One anchor.
   4. Initial token supply.
   5. Proven roots of the missing epochs below `F`: root, next root and preceding root per epoch. Chunks of 20 epochs,
@@ -125,7 +147,7 @@ In `StakeTableBackfill`.
 
 ## Follower differences
 
-- Same `LcContractSeed`, installed only when the follower has upstreams. A replay node without upstreams walks.
+- Same `LcContractSeed`, installed only when the follower has upstreams. Without upstreams the follower walks.
 - Provider: `--state-peers`, or the upstreams when unset. No request-response.
 - Requests one table from the coordinator: the next ingest epoch, or the one after once past the epoch root. Runs at
   init and at each poll.
