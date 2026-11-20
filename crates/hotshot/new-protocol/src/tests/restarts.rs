@@ -29,14 +29,14 @@ use crate::{
     consensus::ConsensusInput,
     coordinator::Coordinator,
     helpers::{proposal_commitment, test_upgrade_lock},
-    message::{Message, MessageType, ProposalFetchMessage, Validated},
+    message::{Message, MessageType, Proposal, ProposalFetchMessage, Validated},
     network::Cliquenet,
     tests::common::{
         assertions::{any, is_proposal_paired},
         harness::TestHarness,
         mock::MockCoordinator,
         runner::{NodeAction, NodeChange, TestRunner},
-        utils::{TestData, build_timeout_cert, mock_membership_with_num_nodes},
+        utils::{TestData, TestView, build_timeout_cert, mock_membership_with_num_nodes},
         views,
     },
 };
@@ -457,11 +457,113 @@ async fn restarted_node_does_not_serve_a_proposal_its_leader_did_not_sign() {
     );
 }
 
-/// The coordinator `node` restarts as: built by `Coordinator::maker`, as a
-/// node builds it, from the proposals `node` persisted. `node` decided
-/// nothing, so its anchor is still genesis.
+/// The first block of an epoch carries the Cert2 of the block before it,
+/// which the stored proposal has no field for. A node that restarts on that
+/// block serves the first block with the Cert2 it persisted for its anchor,
+/// so the peer fetching it accepts it.
+#[tokio::test]
+async fn restarted_node_serves_the_first_block_of_an_epoch_a_peer_accepts() {
+    let test_data = TestData::new_with_epoch_height(EPOCH_HEIGHT as usize + 1, EPOCH_HEIGHT).await;
+    let [.., boundary, first] = test_data.views.as_slice() else {
+        panic!("the views reach past the first epoch");
+    };
+    assert!(first.proposal.data.next_epoch_justify_qc.is_some());
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    let node_key = node.connect_info().0;
+    store_as_persisted(&node, &first.proposal).await;
+
+    let restarted = restart_at(node, node_index, Some(boundary)).await;
+    let served = restarted
+        .consensus()
+        .signed_proposals_for_fetch(&first.view_number);
+    let [served] = served.as_slice() else {
+        panic!("one proposal is served for the view, got {}", served.len());
+    };
+    assert_eq!(served.data, first.proposal.data);
+
+    let mut peer = TestHarness::new(1).await;
+    peer.apply_and_process(first.cert2_input());
+    peer.message(Message::<TestTypes, Validated> {
+        sender: node_key,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+            (*served).clone(),
+        ))),
+    });
+    timeout(
+        Duration::from_secs(5),
+        peer.process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|input| matches!(input, ConsensusInput::FetchedProposal(_)))
+        }),
+    )
+    .await
+    .expect("the peer accepts the proposal the restarted node serves");
+}
+
+/// A restarted node does not serve the first block of an epoch without the
+/// Cert2 of the block before it: the peer fetching it would refuse it. Here
+/// the node's anchor is an earlier block, so it holds no such Cert2.
+#[tokio::test]
+async fn restarted_node_does_not_serve_the_first_block_of_an_epoch_without_its_cert2() {
+    let test_data = TestData::new_with_epoch_height(EPOCH_HEIGHT as usize + 1, EPOCH_HEIGHT).await;
+    let [.., before_boundary, _, first] = test_data.views.as_slice() else {
+        panic!("the views reach past the first epoch");
+    };
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    store_as_persisted(&node, &first.proposal).await;
+
+    let restarted = restart_at(node, node_index, Some(before_boundary)).await;
+    let consensus = restarted.consensus();
+    assert!(
+        consensus
+            .signed_proposals_for_fetch(&first.view_number)
+            .is_empty()
+    );
+    assert!(
+        consensus
+            .proposals()
+            .contains(first.view_number, proposal_commitment(&first.proposal.data))
+    );
+}
+
+/// The epoch height of a [`TestHarness`] and of the node [`restart_at`] builds.
+const EPOCH_HEIGHT: u64 = 10;
+
+/// Write `proposal` to `node`'s storage the way `Storage::append_proposal`
+/// does, without running the node up to its view.
+async fn store_as_persisted(
+    node: &TestHarness,
+    proposal: &SignedProposal<TestTypes, Proposal<TestTypes>>,
+) {
+    node.storage()
+        .append_proposal_wrapper(&SignedProposal {
+            data: QuorumProposalWrapper::from(proposal.data.clone()),
+            signature: proposal.signature.clone(),
+            _pd: PhantomData,
+        })
+        .await
+        .unwrap();
+}
+
+/// [`restart_at`] genesis: `node` decided nothing.
 async fn restart(node: TestHarness, node_index: u64) -> MockCoordinator {
-    let epoch_height = 10;
+    restart_at(node, node_index, None).await
+}
+
+/// The coordinator `node` restarts as: built by `Coordinator::maker`, as a
+/// node builds it, from the proposals `node` persisted.
+///
+/// `anchor` is the view of the last block it decided, whose leaf and
+/// certificates the application persists; `None` if it decided nothing.
+async fn restart_at(
+    node: TestHarness,
+    node_index: u64,
+    anchor: Option<&TestView>,
+) -> MockCoordinator {
+    let epoch_height = EPOCH_HEIGHT;
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0; 32], node_index);
     let storage = node.storage().clone();
@@ -476,16 +578,27 @@ async fn restart(node: TestHarness, node_index: u64) -> MockCoordinator {
     )
     .await
     .unwrap();
+    let (anchor_leaf, anchor_state, high_qc, anchor_cert2) = match anchor {
+        Some(view) => (
+            view.leaf.clone(),
+            None,
+            view.cert1.clone(),
+            Some(view.cert2.clone()),
+        ),
+        None => (
+            genesis.anchor_leaf().clone(),
+            Some(genesis.anchor_state().clone()),
+            genesis.high_qc().clone(),
+            None,
+        ),
+    };
     let initializer = HotShotInitializer::load(
         TestInstanceState::default(),
         epoch_height,
         vec![],
-        (
-            genesis.anchor_leaf().clone(),
-            Some(genesis.anchor_state().clone()),
-        ),
+        (anchor_leaf, anchor_state),
         storage.restart_view().await,
-        genesis.high_qc().clone(),
+        high_qc,
         storage.last_actioned_view().await,
         storage.proposals_cloned().await,
         None,
@@ -523,6 +636,7 @@ async fn restart(node: TestHarness, node_index: u64) -> MockCoordinator {
         .storage(storage)
         .metrics(&NoMetrics)
         .consensus_metrics(ConsensusMetricsValue::new(&NoMetrics))
+        .maybe_anchor_cert2(anchor_cert2)
         .upgrade_config(UpgradeConfig::default())
         .external_tx(mpsc::unbounded_channel().0)
         .make()
