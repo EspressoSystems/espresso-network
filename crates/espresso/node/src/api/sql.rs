@@ -2985,6 +2985,83 @@ mod tests {
         }
     }
 
+    /// After it stores a reward tree, `save_and_gc_reward_tree_v2` deletes the trees and proofs
+    /// below the lower of two boundaries: the oldest of the 5 epochs it retains, and the boundary
+    /// of the height the L1 light client has finalized, which reward claims read. Storing the tree
+    /// at 100 while the light client has finalized 25 deletes the tree and proofs at 10, and keeps
+    /// them from 20 up, though retention alone would delete everything below 50.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_reward_lc_gc_below_finalized_boundary() {
+        use espresso_types::v0_3::RewardAmount;
+        use tokio::time::{Duration, Instant, sleep};
+
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+        let account = super::RewardAccountV2(Address::repeat_byte(1));
+        let tree = |balance: u64| {
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            tree.update(account, RewardAmount(U256::from(balance)))
+                .unwrap();
+            tree
+        };
+
+        for boundary in (10..100).step_by(10) {
+            storage
+                .save_reward_tree_v2(boundary, &tree(boundary))
+                .await
+                .unwrap();
+        }
+        for boundary in [10, 20] {
+            storage
+                .persist_proofs(
+                    boundary,
+                    [(bincode::serialize(&account).unwrap(), b"proof".to_vec())].into_iter(),
+                )
+                .await
+                .unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(storage.proof_exists(10).await && storage.proof_exists(20).await) {
+            assert!(Instant::now() < deadline, "setup: no proofs at 10 and 20");
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        let mut node_state = NodeState::mock().with_epoch_height(LC_EPOCH_HEIGHT);
+        cache_l1_finalized(&mut node_state, LC_FINALIZED).await;
+        storage
+            .save_and_gc_reward_tree_v2(&node_state, 100, EPOCH_REWARD_VERSION, &tree(100))
+            .await
+            .unwrap();
+
+        assert!(
+            storage.load_tree(10).await.is_err(),
+            "the tree at 10, below 20, the boundary of the L1-finalized height {LC_FINALIZED}, \
+             was not garbage collected"
+        );
+        assert!(
+            !storage.proof_exists(10).await,
+            "the proofs at 10, below 20, the boundary of the L1-finalized height {LC_FINALIZED}, \
+             were not garbage collected"
+        );
+        for boundary in (20..=100).step_by(10) {
+            assert!(
+                storage.load_tree(boundary).await.is_ok(),
+                "the tree at {boundary}, at or above the boundary of the L1-finalized height \
+                 {LC_FINALIZED}, was garbage collected"
+            );
+        }
+        assert!(
+            storage.proof_exists(20).await,
+            "the proofs at 20, the boundary of the L1-finalized height {LC_FINALIZED}, were \
+             garbage collected"
+        );
+    }
+
     /// The epoch height of the `test_reward_lc_*` storage tests.
     const LC_EPOCH_HEIGHT: u64 = 10;
 

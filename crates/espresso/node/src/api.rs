@@ -1234,11 +1234,6 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         async move {
             self.save_reward_tree_v2(height, merkle_tree).await?;
 
-            // Skip garbage collection in tests
-            if cfg!(any(test, feature = "testing")) {
-                return Ok(());
-            }
-
             let finalized_hotshot_height = match node_state.finalized_hotshot_height().await {
                 Ok(h) => h,
                 Err(err) => {
@@ -5347,6 +5342,110 @@ mod test {
                 Err(err) => bail!("no reward proofs: {path} answered {err}"),
             }
         }
+    }
+
+    /// The decaf incident of 2026-11-17, end to end: the L1 light client lags more than 5 epochs
+    /// behind the chain, and reward claims at its finalized height must still be served. The node
+    /// stores proofs for the boundary below the height the light client has finalized, not for the
+    /// chain's own heights, and garbage collection keeps that boundary's tree and proofs, while it
+    /// deletes the trees below it.
+    #[apply(sql_data_sources)]
+    async fn test_reward_lc_claims_while_light_client_lags<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 1;
+        // Inside epoch 5. Its boundary below, 40, is the first with rewards.
+        const FINALIZED: u64 = 4 * EPOCH_HEIGHT + EPOCH_HEIGHT / 2;
+        let claim_boundary = 4 * EPOCH_HEIGHT;
+        // 6 epochs past the finalized height's epoch, so that 5 epochs of retention alone would
+        // delete the claim boundary's tree.
+        let tip_boundary = (epoch_from_block_number(FINALIZED, EPOCH_HEIGHT) + 6) * EPOCH_HEIGHT;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        let address = network_config.staking_priv_keys()[0].signer.address();
+
+        wait_until_block_height(&client, "reward-state-v2/block-height", FINALIZED).await;
+        let below_claim_boundary = (EPOCH_HEIGHT..claim_boundary).step_by(EPOCH_HEIGHT as usize);
+        for height in below_claim_boundary.clone() {
+            client
+                .get::<Vec<u8>>(&reward_tree_path(height))
+                .send()
+                .await
+                .with_context(|| format!("setup: no reward tree at {height}"))?;
+        }
+        set_light_client_finalized_height(&network, FINALIZED).await?;
+        wait_until_block_height(&client, "reward-state-v2/block-height", tip_boundary).await;
+
+        wait_for_reward_proofs(&client, FINALIZED, address)
+            .await
+            .context("no reward claim at the L1-finalized height")?;
+        wait_for_reward_proofs_of_tree(&client, claim_boundary).await?;
+
+        let mut problems = vec![];
+        for height in below_claim_boundary {
+            match client
+                .get::<Vec<u8>>(&reward_tree_path(height))
+                .send()
+                .await
+            {
+                Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                Ok(_) => problems.push(format!(
+                    "the reward tree at {height}, below the claim boundary {claim_boundary}, was \
+                     not garbage collected"
+                )),
+                Err(err) => bail!("reward tree at {height}: {err}"),
+            }
+        }
+        if let Err(err) = client
+            .get::<Vec<u8>>(&reward_tree_path(claim_boundary))
+            .send()
+            .await
+        {
+            problems.push(format!(
+                "the reward tree at the claim boundary {claim_boundary} is gone: {err}"
+            ));
+        }
+        let above = ((claim_boundary + EPOCH_HEIGHT)..=tip_boundary).step_by(EPOCH_HEIGHT as usize);
+        for height in above {
+            match client
+                .get::<RewardAmount>(&format!(
+                    "reward-state-v2/reward-balance/{height}/{address}"
+                ))
+                .send()
+                .await
+            {
+                Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                Ok(_) => problems.push(format!(
+                    "reward proofs stored at {height}, above {claim_boundary}, the boundary of \
+                     the L1-finalized height {FINALIZED}"
+                )),
+                Err(err) => bail!("reward balance at {height}: {err}"),
+            }
+        }
+        ensure!(problems.is_empty(), "{}", problems.join("\n"));
+        Ok(())
     }
 
     /// From 0.3 to 0.5 every block paid its leader's commission and delegators, which only legacy
