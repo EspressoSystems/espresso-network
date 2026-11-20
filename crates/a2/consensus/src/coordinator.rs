@@ -86,9 +86,12 @@ use crate::{
 /// (the block header) for that view is still available.
 pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
-/// Views to retain in storage GC behind the decided view, so in-flight
-/// storage writes for recent views aren't aborted before they persist.
-const STORAGE_GC_MARGIN: u64 = 5;
+/// Views to retain in storage GC behind the decided view: every view that can still be decided,
+/// those after the decide floor, [`DECIDE_BUFFER`](crate::consensus::DECIDE_BUFFER) behind it.
+///
+/// A block decided late, in a gap, then still finds the payload this node stored for it, which it
+/// voted vote2 on only once that payload was on disk, and its decide log entry gets the payload.
+const STORAGE_GC_MARGIN: u64 = crate::consensus::DECIDE_BUFFER - 1;
 
 // The decide log's subscribers take an entry as final `FINALITY_VIEWS` behind the newest decide:
 // by then no missing view can be decided any more, and storage no longer adds late payloads,
