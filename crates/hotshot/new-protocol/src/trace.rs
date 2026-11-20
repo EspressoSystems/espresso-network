@@ -68,10 +68,10 @@ use std::{
 use committable::Committable;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    epoch::EpochLength,
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
     simple_vote::HasEpoch,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::epoch_from_block_number,
     vote::HasViewNumber,
 };
 
@@ -162,7 +162,7 @@ pub struct Recorder {
     ///
     /// A decided leaf carries no epoch of its own, so this is what turns its
     /// block number into one.
-    epoch_height: u64,
+    epoch_length: Option<EpochLength>,
     /// The anchor's certificate, as [`Recorder::preamble`] was given it or the
     /// first block on the anchor named it.
     ///
@@ -225,7 +225,7 @@ impl Recorder {
             headers: BTreeMap::new(),
             led: BTreeMap::new(),
             steps: 0,
-            epoch_height: 0,
+            epoch_length: None,
             anchor_lock: None,
             before_certificate_rule: Cell::new(false),
             fallback_anchor: None,
@@ -266,13 +266,13 @@ impl Recorder {
         node: &T::SignatureKey,
         anchor: &Leaf2<T>,
         anchor_cert: Option<&Certificate1<T>>,
-        epoch_height: u64,
+        epoch_length: EpochLength,
     ) {
         if self.identified {
             return;
         }
         self.identified = true;
-        self.epoch_height = epoch_height;
+        self.epoch_length = Some(epoch_length);
         self.anchor_lock = anchor_cert.map(cert1_json_raw);
         if self.path.is_none() {
             return;
@@ -284,7 +284,7 @@ impl Recorder {
             // model does not cover.
             ("anchorView", view_json(anchor.view_number())),
             ("decideBuffer", DECIDE_BUFFER.to_string()),
-            ("epochHeight", epoch_height.to_string()),
+            ("epochHeight", epoch_length.get().to_string()),
         ];
         if let Some(cert) = &self.anchor_lock {
             fields.push(("anchorCert", cert.clone()));
@@ -751,11 +751,14 @@ impl Recorder {
                 [consensus.current_view(), consensus.current_view() + 1]
                     .into_iter()
                     .flat_map(|view| {
-                        let epoch_height = self.epoch_height;
+                        let epoch_length = self.epoch_length;
                         let blocks = self.headers.get(&view).into_iter().flatten();
                         blocks.map(move |block| {
-                            let epoch = epoch_from_block_number(*block, epoch_height);
-                            (EpochNumber::new(epoch), view, *block)
+                            // Epoch 0 until the preamble names the epoch length.
+                            let epoch = epoch_length.map_or(EpochNumber::new(0), |epoch_length| {
+                                epoch_length.epoch_of(*block)
+                            });
+                            (epoch, view, *block)
                         })
                     }),
             )
@@ -1272,7 +1275,7 @@ impl Recorder {
                 let cert2 = cert2.as_ref()?;
                 let blocks: Vec<String> = leaves
                     .iter()
-                    .map(|l| leaf_json(l, self.epoch_height, &self.evidence.borrow()))
+                    .map(|l| leaf_json(l, self.epoch_length, &self.evidence.borrow()))
                     .collect();
                 return Some(tagged(
                     "decided",
@@ -1461,7 +1464,7 @@ fn header_json<T: NodeType>(header: &T::BlockHeader) -> String {
 /// from the proposal of the same identity the run had, as `evidence` maps them.
 fn leaf_json<T: NodeType>(
     leaf: &Leaf2<T>,
-    epoch_height: u64,
+    epoch_length: Option<EpochLength>,
     evidence: &HashMap<String, String>,
 ) -> String {
     let identity = ident(&leaf.commit());
@@ -1474,7 +1477,8 @@ fn leaf_json<T: NodeType>(
         ("viewNumber", view_json(leaf.view_number())),
         (
             "epoch",
-            leaf.epoch(epoch_height)
+            epoch_length
+                .and_then(|epoch_length| leaf.epoch(epoch_length))
                 .map_or_else(|| "0".to_string(), |e| e.to_string()),
         ),
         ("parentCert", cert1_json_raw(leaf.justify_qc())),

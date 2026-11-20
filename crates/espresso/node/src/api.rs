@@ -605,7 +605,7 @@ impl StateCertFetchingDataSource<SeqTypes> for ApiState {
             EpochNumber::new(epoch),
             coordinator.membership().first_epoch(),
             epoch_length,
-            decided.epoch(epoch_length.get()).map(|_| decided.height()),
+            decided.epoch(epoch_length).map(|_| decided.height()),
             handle.current_epoch().await,
         )?;
 
@@ -2669,7 +2669,7 @@ pub mod test_helpers {
         let mut events = node.event_stream();
         let leaf = node.decided_leaf().await;
         let current = leaf
-            .epoch(epoch_height)
+            .epoch(EpochLength::try_from(epoch_height).expect("a live node has epochs"))
             .map(|epoch| epoch.u64())
             .unwrap_or_default();
         // `wait_for_epochs` returns on the first epoch strictly greater than
@@ -5961,7 +5961,7 @@ mod test {
         let exit_epoch = network.peers[0]
             .decided_leaf()
             .await
-            .epoch(EPOCH_HEIGHT)
+            .epoch(epoch_length(EPOCH_HEIGHT))
             .unwrap()
             .u64();
 
@@ -6868,7 +6868,7 @@ mod test {
                         continue;
                     }
                     let membership = match coordinator.membership_for_epoch(
-                        leaf.epoch(EPOCH_HEIGHT)
+                        leaf.epoch(epoch_length(EPOCH_HEIGHT))
                             .expect("new-protocol leaves have an epoch"),
                     ) {
                         Ok(membership) => membership,
@@ -13192,7 +13192,7 @@ mod test {
         let current_epoch = network.peers[0]
             .decided_leaf()
             .await
-            .epoch(EPOCH_HEIGHT)
+            .epoch(epoch_length(EPOCH_HEIGHT))
             .unwrap();
         let target_epoch = current_epoch.u64() + 3;
         let mut events = network.peers[0].event_stream();
@@ -15031,7 +15031,7 @@ mod test {
 
         let first_epoch = {
             let leaf: LeafQueryData<SeqTypes> = leaves.next().await.unwrap();
-            leaf.leaf().epoch(EPOCH_HEIGHT).unwrap()
+            leaf.leaf().epoch(epoch_length(EPOCH_HEIGHT)).unwrap()
         };
 
         // Wait for two epoch changes (so we get to the first epoch that actually uses the stake
@@ -15041,7 +15041,7 @@ mod test {
             let desired_epoch = first_epoch + (i as u64) + 1;
             *epoch_height = loop {
                 let leaf = leaves.next().await.unwrap();
-                let epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
+                let epoch = leaf.leaf().epoch(epoch_length(EPOCH_HEIGHT)).unwrap();
                 if epoch > desired_epoch {
                     tracing::info!(
                         height = leaf.height(),
@@ -15103,7 +15103,7 @@ mod test {
     ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v2-v3")?;
         let replay = chain.replay::<D>().await?;
-        let epoch_height = chain.epoch_height();
+        let epoch_length = epoch_length(chain.epoch_height());
         let leaves: Vec<_> = chain.blocks.iter().map(|b| b.leaf.clone()).collect();
         let blocks: Vec<_> = chain.blocks.iter().map(|b| b.block.clone()).collect();
 
@@ -15112,11 +15112,11 @@ mod test {
             .find(|leaf| leaf.header().version() >= EPOCH_VERSION)
             .context("the chain upgrades to 0.3")?;
         let upgrade_height = upgraded.height();
-        let first_epoch = upgraded.leaf().epoch(epoch_height).unwrap();
+        let first_epoch = upgraded.leaf().epoch(epoch_length).unwrap();
         let epoch_change = |epoch: EpochNumber| {
             leaves
                 .iter()
-                .find(|leaf| leaf.leaf().epoch(epoch_height).is_some_and(|e| e > epoch))
+                .find(|leaf| leaf.leaf().epoch(epoch_length).is_some_and(|e| e > epoch))
                 .map(|leaf| leaf.height())
                 .context("the chain changes epoch")
         };
@@ -15134,7 +15134,14 @@ mod test {
             .chain(upgrade_height - 1..=upgrade_height + 1)
             .chain(epoch_heights[0] - 1..=epoch_heights[0] + 1)
             .chain(epoch_heights[1] - 1..=max_block);
-        check_light_client_proofs(&replay.client, &leaves, &blocks, heights, epoch_height).await;
+        check_light_client_proofs(
+            &replay.client,
+            &leaves,
+            &blocks,
+            heights,
+            epoch_length.get(),
+        )
+        .await;
         check_light_client_stake_table(&replay.client, &replay.persistence().await?, first_epoch)
             .await;
         Ok(())

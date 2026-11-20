@@ -1524,7 +1524,7 @@ async fn cross_epoch_boundary(
 async fn test_leader_proposes_with_computed_drb_in_epoch3() {
     // Need 28 views: epoch 1 (1-10), epoch 2 (11-20), epoch 3 (21-28).
     // Block 27 is the first block in epoch 3's transition window
-    // (is_epoch_transition(27, 10) = 27 % 10 = 7 >= 7).
+    // (in the transition window of a 10 block epoch: 27 % 10 = 7 >= 7).
     // Leader for view 28 = 28 % 10 = 8 → node 8.
     let test_data = TestData::new_with_epoch_height(29, EPOCH_HEIGHT).await;
     let leader_key = BLSPubKey::generated_from_seed_indexed([0; 32], 8).0;

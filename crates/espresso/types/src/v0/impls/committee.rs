@@ -2311,7 +2311,7 @@ mod tests {
     }
 
     // Build an epoch-root header for `epoch_height = 100`. Block height
-    // 95 satisfies `is_epoch_root(95, 100)` and produces target epoch 3
+    // 95 is the epoch root of the first 100 block epoch and produces target epoch 3
     // when passed to `add_epoch_root`.
     async fn build_epoch_root_header() -> Header {
         let instance = NodeState::mock_v2();

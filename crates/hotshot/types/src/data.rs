@@ -29,6 +29,7 @@ use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
+    epoch::EpochLength,
     message::{Proposal, UpgradeLock},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
@@ -1367,12 +1368,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.view_number
     }
     /// Epoch in which this leaf was created.
-    pub fn epoch(&self, epoch_height: u64) -> Option<EpochNumber> {
-        option_epoch_from_block_number(
-            self.with_epoch,
-            self.block_header.block_number(),
-            epoch_height,
-        )
+    pub fn epoch(&self, epoch_length: EpochLength) -> Option<EpochNumber> {
+        self.with_epoch
+            .then(|| epoch_length.epoch_of(self.block_header.block_number()))
     }
     /// Height of this leaf in the chain.
     ///

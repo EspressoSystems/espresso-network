@@ -242,7 +242,7 @@ impl TestHarness {
             consensus.public_key(),
             consensus.last_decided_leaf(),
             consensus.cert1_at(ViewNumber::genesis()),
-            consensus.epoch_length.get(),
+            consensus.epoch_length,
         );
         record_leader(&mut self.trace, consensus, &input);
         record_fallback_anchor(&mut self.trace, consensus);
@@ -405,7 +405,7 @@ impl TestHarness {
             consensus.public_key(),
             consensus.last_decided_leaf(),
             consensus.cert1_at(ViewNumber::genesis()),
-            consensus.epoch_length.get(),
+            consensus.epoch_length,
         );
         self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);

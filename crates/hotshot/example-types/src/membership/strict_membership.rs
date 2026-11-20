@@ -10,8 +10,9 @@ use async_broadcast::Receiver;
 use async_lock::RwLock as AsyncRwLock;
 use hotshot_types::{
     PeerConfig,
-    data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::{DrbResult, INITIAL_DRB_RESULT},
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::BlockHeader,
@@ -20,7 +21,6 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::StakeTableEntryType,
     },
-    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
 };
 use parking_lot::RwLock;
 
@@ -42,7 +42,8 @@ where
     inner: Arc<RwLock<Inner<T, S>>>,
     /// The members given to `new`, which run the views before the first epoch.
     genesis: GenesisStakeTables<T>,
-    epoch_height: BlockNumber,
+    /// `None` when `new` was given an epoch height of zero: a test without epochs.
+    epoch_length: Option<EpochLength>,
 }
 
 struct Inner<T: NodeType, S> {
@@ -94,7 +95,7 @@ where
                 fetcher: None,
             })),
             genesis,
-            epoch_height: epoch_height.into(),
+            epoch_length: EpochLength::try_from(epoch_height).ok(),
         };
         membership.seed_first_epoch(first_epoch);
         membership
@@ -137,6 +138,11 @@ where
         inner.drbs.insert(epoch);
         inner.table.add_epoch_root(*epoch);
         inner.table.add_drb_result(*epoch, drb);
+    }
+
+    fn epoch_length(&self) -> Result<EpochLength, StrictMembershipError> {
+        self.epoch_length
+            .ok_or_else(|| anyhow!("this membership has no epochs").into())
     }
 
     /// Run `e` and `e + 1` on the genesis stake table with the initial DRB result.
@@ -210,11 +216,11 @@ where
         hdr: T::BlockHeader,
         _coordinator: &EpochMembershipCoordinator<T>,
     ) -> Result<(), Self::Error> {
-        let epoch = epoch_from_block_number(hdr.block_number(), *self.epoch_height) + 2;
+        let epoch = self.epoch_length()?.epoch_of(hdr.block_number()) + 2;
 
         let mut inner = self.inner.write();
-        inner.epochs.insert(EpochNumber::new(epoch));
-        inner.table.add_epoch_root(epoch);
+        inner.epochs.insert(epoch);
+        inner.table.add_epoch_root(*epoch);
 
         Ok(())
     }
@@ -224,7 +230,10 @@ where
         e: EpochNumber,
         _coordinator: &EpochMembershipCoordinator<T>,
     ) -> Result<Leaf2<T>, Self::Error> {
-        let block_height = root_block_in_epoch(*e, *self.epoch_height);
+        let block_height = *self
+            .epoch_length()?
+            .root_inside(e)
+            .map_err(anyhow::Error::from)?;
 
         let (stake_table, fetcher) = {
             let inner = self.inner.read();
@@ -255,8 +264,6 @@ where
         e: EpochNumber,
         _coordinator: &EpochMembershipCoordinator<T>,
     ) -> Result<DrbResult, Self::Error> {
-        let epoch_height = self.epoch_height;
-
         let (epoch_drb, fetcher) = {
             let state = self.inner.read();
             let drb = state.table.get_epoch_drb(*e);
@@ -274,7 +281,10 @@ where
                 },
             };
 
-            let drb_block_height = transition_block_for_epoch(previous_epoch, *epoch_height);
+            let drb_block_height = *self
+                .epoch_length()?
+                .transition_leaving(EpochNumber::new(previous_epoch))
+                .map_err(anyhow::Error::from)?;
             let stake_table = self.inner.read().table.stake_table(previous_epoch);
             let fetcher = fetcher.expect("get_epoch_drb called before set_leaf_fetcher_network");
 

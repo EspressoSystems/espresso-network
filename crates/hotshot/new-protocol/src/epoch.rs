@@ -95,7 +95,7 @@ impl<T: NodeType> EpochManager<T> {
         // At every epoch root, trigger DRB computation for the epoch that
         // will use this root (epoch + 2).
         if self.epoch_length.position(block_number).is_root() {
-            let Some(epoch) = leaf.epoch(self.epoch_length.get()) else {
+            let Some(epoch) = leaf.epoch(self.epoch_length) else {
                 error!("Leaf has no epoch");
                 return;
             };
@@ -135,7 +135,7 @@ impl<T: NodeType> EpochManager<T> {
             .epoch_length
             .position(block_number)
             .is_transition_block()
-            && let Some(epoch) = leaf.epoch(self.epoch_length.get())
+            && let Some(epoch) = leaf.epoch(self.epoch_length)
             && let Some(drb) = leaf.next_drb_result
         {
             let target_epoch = epoch + 1;

@@ -112,13 +112,13 @@ pub async fn verify_leaf_chain<T: NodeType>(
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
-    let epoch_height = *coordinator.epoch_height();
+    let epoch_length = coordinator.epoch_length();
     let first_epoch = coordinator.membership().first_epoch();
     // Derive each QC's epoch from the height of the leaf it certifies; trusting
     // the epoch claimed in the QC would let a stale epoch's quorum pick the
     // stake table that verifies its own signatures.
     let validate_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
-        let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
+        let epoch = epoch_length.epoch_of(certified_height);
         let (entries, threshold) = match qc.data.epoch() {
             // QCs formed before epochs were enabled carry no epoch. Epochs start part way
             // through the first epoch, which runs on the genesis stake table like the

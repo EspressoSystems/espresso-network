@@ -32,6 +32,7 @@ use hotshot_types::{
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::drb_difficulty_selector,
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     initializer::{HotShotInitializer, load_start_epoch_info},
     message::UpgradeLock,
@@ -633,9 +634,9 @@ async fn connect_startup_peers(
     own_key: PubKey,
 ) -> anyhow::Result<Vec<PubKey>> {
     // Dials the N-1/N/N+1 window of the stored anchor; a node behind it is seeded after start.
-    let anchor_epoch = initializer
-        .anchor_leaf()
-        .epoch(initializer.epoch_height())
+    let anchor_epoch = EpochLength::try_from(initializer.epoch_height())
+        .ok()
+        .and_then(|epoch_length| initializer.anchor_leaf().epoch(epoch_length))
         .unwrap_or_else(EpochNumber::genesis);
     if let Err(err) = network.apply_epoch(anchor_epoch, membership_coordinator) {
         tracing::warn!(%anchor_epoch, %err, "coordinator apply_epoch failed at startup");
