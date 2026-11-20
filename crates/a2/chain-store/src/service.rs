@@ -46,7 +46,7 @@ impl proto::store_server::Store for StoreService {
             leaf: r.leaf,
             block: r.block,
             payload: r.payload,
-            item: r.item.into(),
+            item: r.item,
         };
         self.backend
             .put(row, parts_from(r.parts)?)
@@ -76,9 +76,7 @@ impl proto::store_server::Store for StoreService {
             .item(request.into_inner().height)
             .await
             .map_err(internal)?;
-        Ok(Response::new(proto::MaybeBytes {
-            data: data.map(|d| d.to_vec()),
-        }))
+        Ok(Response::new(proto::MaybeBytes { data }))
     }
 
     async fn get_part(
@@ -91,9 +89,7 @@ impl proto::store_server::Store for StoreService {
             .part(r.height, part_from(r.part)?)
             .await
             .map_err(internal)?;
-        Ok(Response::new(proto::MaybeBytes {
-            data: data.map(|d| d.to_vec()),
-        }))
+        Ok(Response::new(proto::MaybeBytes { data }))
     }
 
     async fn get_record(
@@ -107,7 +103,7 @@ impl proto::store_server::Store for StoreService {
             .map_err(internal)?;
         Ok(Response::new(match record {
             Some((item, parts)) => proto::RecordResponse {
-                item: Some(item.to_vec()),
+                item: Some(item),
                 parts: parts_to(parts),
             },
             None => proto::RecordResponse::default(),
@@ -203,9 +199,7 @@ impl proto::store_server::Store for StoreService {
             .app_get(&table_name(&r.table)?, &r.key)
             .await
             .map_err(internal)?;
-        Ok(Response::new(proto::MaybeBytes {
-            data: data.map(|d| d.to_vec()),
-        }))
+        Ok(Response::new(proto::MaybeBytes { data }))
     }
 
     async fn app_entries(
@@ -226,10 +220,7 @@ impl proto::store_server::Store for StoreService {
         Ok(Response::new(proto::AppEntriesResponse {
             entries: entries
                 .into_iter()
-                .map(|(key, value)| proto::AppEntry {
-                    key: key.to_vec(),
-                    value: value.to_vec(),
-                })
+                .map(|(key, value)| proto::AppEntry { key, value })
                 .collect(),
         }))
     }

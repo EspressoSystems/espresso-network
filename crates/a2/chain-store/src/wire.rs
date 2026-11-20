@@ -21,13 +21,10 @@ pub(crate) fn app_write_from(write: proto::AppTableWrite) -> Result<AppWrite, St
     match write.op {
         Some(Op::Put(entry)) => Ok(AppWrite::Put {
             table,
-            key: entry.key.into(),
-            value: entry.value.into(),
+            key: entry.key,
+            value: entry.value,
         }),
-        Some(Op::DeleteBefore(key)) => Ok(AppWrite::DeleteBefore {
-            table,
-            key: key.into(),
-        }),
+        Some(Op::DeleteBefore(key)) => Ok(AppWrite::DeleteBefore { table, key }),
         Some(Op::Clear(_)) => Ok(AppWrite::Clear { table }),
         None => Err(Status::invalid_argument("a write without an operation")),
     }
@@ -39,14 +36,11 @@ pub(crate) fn app_write_to(write: AppWrite) -> proto::AppTableWrite {
     match write {
         AppWrite::Put { table, key, value } => proto::AppTableWrite {
             table: table.to_string(),
-            op: Some(Op::Put(proto::AppEntry {
-                key: key.to_vec(),
-                value: value.to_vec(),
-            })),
+            op: Some(Op::Put(proto::AppEntry { key, value })),
         },
         AppWrite::DeleteBefore { table, key } => proto::AppTableWrite {
             table: table.to_string(),
-            op: Some(Op::DeleteBefore(key.to_vec())),
+            op: Some(Op::DeleteBefore(key)),
         },
         AppWrite::Clear { table } => proto::AppTableWrite {
             table: table.to_string(),
@@ -65,7 +59,7 @@ pub(crate) fn part_from(id: i32) -> Result<Part, Status> {
 pub(crate) fn parts_from(parts: Vec<proto::PartData>) -> Result<Vec<(Part, bytes::Bytes)>, Status> {
     parts
         .into_iter()
-        .map(|p| Ok((part_from(p.part)?, p.data.into())))
+        .map(|p| Ok((part_from(p.part)?, p.data)))
         .collect()
 }
 
@@ -74,7 +68,7 @@ pub(crate) fn parts_to(parts: Vec<(Part, bytes::Bytes)>) -> Vec<proto::PartData>
         .into_iter()
         .map(|(part, data)| proto::PartData {
             part: part.id().into(),
-            data: data.to_vec(),
+            data,
         })
         .collect()
 }

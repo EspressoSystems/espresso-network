@@ -10,6 +10,7 @@ alloy                 = { workspace = true }
 anyhow                = { workspace = true }
 async-trait           = { workspace = true }
 bincode               = { workspace = true }
+bytes                 = { workspace = true }
 catchup-api           = { workspace = true }
 chain-api             = { workspace = true }
 chain-store           = { workspace = true, features = ["remote"] }
@@ -40,7 +41,6 @@ versions              = { workspace = true }
 api-service           = { path = "../api-service" }
 async-lock            = { workspace = true }
 bitvec                = { workspace = true }
-bytes                 = { workspace = true }
 chain-store           = { workspace = true, features = ["testing"] }
 espresso-types        = { workspace = true, features = ["testing"] }
 hotshot-query-service = { workspace = true, features = ["testing"] }

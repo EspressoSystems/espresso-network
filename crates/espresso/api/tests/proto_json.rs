@@ -5,6 +5,7 @@
 //!
 //! Changing any expectation here is a breaking change for every v2 REST client.
 
+use bytes::Bytes;
 use espresso_api::proto;
 use serde_json::json;
 
@@ -128,7 +129,7 @@ fn deserialize_accepts_enum_names_and_numbers() {
 fn bytes_serialize_as_padded_base64() {
     let namespace = proto::AvidmGf2Namespace {
         range: Some(proto::ShardRange { start: 0, end: 2 }),
-        payload: vec![vec![0x0c, 0xff], vec![]],
+        payload: vec![vec![0x0c, 0xff].into(), Bytes::new()],
         mt_proofs: vec![],
     };
     // v1 writes these shards as arrays of numbers, so a client ported from it has to decode.

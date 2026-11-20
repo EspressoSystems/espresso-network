@@ -17,6 +17,7 @@ use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use anyhow::{Context, anyhow, ensure};
 use async_trait::async_trait;
+use bytes::Bytes;
 use committable::{Commitment, Committable};
 use consensus_api::{
     BODY_FORMAT, DecideLogClient, FINALITY_VIEWS,
@@ -193,7 +194,7 @@ async fn receive<Types: NodeType>(
                         Box::new(entry),
                         Vec::with_capacity(size as usize),
                     ));
-                    return receive_chunk(sink, chain, receiving, Vec::new()).await;
+                    return receive_chunk(sink, chain, receiving, Bytes::new()).await;
                 },
                 None => store(sink, chain, entry, None).await?,
             }
@@ -204,7 +205,7 @@ async fn receive<Types: NodeType>(
                 size: added.payload_size,
                 data: Vec::with_capacity(added.payload_size as usize),
             });
-            return receive_chunk(sink, chain, receiving, Vec::new()).await;
+            return receive_chunk(sink, chain, receiving, Bytes::new()).await;
         },
         Event::PayloadChunk(_) => {
             return Err(BadEntry(anyhow!("a payload chunk without an entry")).into());
@@ -218,11 +219,11 @@ async fn receive_chunk<Types: NodeType>(
     sink: &dyn Sink<Types>,
     chain: &mut Chain<Types>,
     receiving: &mut Option<Receiving<Types>>,
-    data: Vec<u8>,
+    data: Bytes,
 ) -> anyhow::Result<()> {
     let (received, expected) = match receiving.as_mut().expect("a payload is being received") {
         Receiving::Entry(entry, payload) => {
-            payload.extend(data);
+            payload.extend_from_slice(&data);
             (payload.len(), entry.payload_size)
         },
         Receiving::Payload {
@@ -230,7 +231,7 @@ async fn receive_chunk<Types: NodeType>(
             data: payload,
             ..
         } => {
-            payload.extend(data);
+            payload.extend_from_slice(&data);
             (payload.len(), *size)
         },
     };

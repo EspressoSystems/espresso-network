@@ -101,7 +101,7 @@ impl Backend for RemoteBackend {
                 leaf: row.leaf,
                 block: row.block,
                 payload: row.payload,
-                item: row.item.to_vec(),
+                item: row.item,
                 parts: parts_to(parts),
             })
             .await
@@ -128,7 +128,7 @@ impl Backend for RemoteBackend {
             .get_item(proto::HeightRequest { height })
             .await
             .map_err(status)?;
-        Ok(response.into_inner().data.map(Bytes::from))
+        Ok(response.into_inner().data)
     }
 
     async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>> {
@@ -140,7 +140,7 @@ impl Backend for RemoteBackend {
             })
             .await
             .map_err(status)?;
-        Ok(response.into_inner().data.map(Bytes::from))
+        Ok(response.into_inner().data)
     }
 
     async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
@@ -153,10 +153,7 @@ impl Backend for RemoteBackend {
         let Some(item) = response.item else {
             return Ok(None);
         };
-        Ok(Some((
-            item.into(),
-            parts_from(response.parts).map_err(status)?,
-        )))
+        Ok(Some((item, parts_from(response.parts).map_err(status)?)))
     }
 
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -234,11 +231,11 @@ impl Backend for RemoteBackend {
             .client()
             .app_get(proto::AppGetRequest {
                 table: table.to_string(),
-                key: key.to_vec(),
+                key: Bytes::copy_from_slice(key),
             })
             .await
             .map_err(status)?;
-        Ok(response.into_inner().data.map(Bytes::from))
+        Ok(response.into_inner().data)
     }
 
     async fn app_entries(
@@ -250,8 +247,8 @@ impl Backend for RemoteBackend {
             .client()
             .app_entries(proto::AppEntriesRequest {
                 table: table.to_string(),
-                from: keys.from.to_vec(),
-                until: keys.until.map(<[u8]>::to_vec),
+                from: Bytes::copy_from_slice(keys.from),
+                until: keys.until.map(Bytes::copy_from_slice),
                 limit: u32::try_from(keys.limit).unwrap_or(u32::MAX),
             })
             .await
@@ -260,7 +257,7 @@ impl Backend for RemoteBackend {
             .into_inner()
             .entries
             .into_iter()
-            .map(|entry| (entry.key.into(), entry.value.into()))
+            .map(|entry| (entry.key, entry.value))
             .collect())
     }
 

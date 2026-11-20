@@ -1,5 +1,6 @@
 //! Chain records as the chain service sends them.
 
+use bytes::Bytes;
 use chain_store::{Part, Record};
 
 use crate::proto;
@@ -12,11 +13,11 @@ pub const RECORD_RANGE_LIMIT: u64 = 100;
 pub fn to_proto(record: Record, skip_payloads: bool) -> proto::ChainRecord {
     let mut sent = proto::ChainRecord {
         height: record.height,
-        item: record.item.to_vec(),
+        item: record.item,
         ..Default::default()
     };
     for (part, data) in record.parts {
-        let data = Some(data.to_vec());
+        let data = Some(data);
         match part {
             Part::Payload if !skip_payloads => sent.payload = data,
             Part::VidCommon if !skip_payloads => sent.vid_common = data,
@@ -36,14 +37,14 @@ pub fn from_proto(record: proto::ChainRecord) -> Record {
         (Part::VidCommon, record.vid_common),
         (Part::Cert2, record.cert2),
         (Part::StateCert, record.state_cert),
-        (Part::CertsKnown, record.certs_known.then(Vec::new)),
+        (Part::CertsKnown, record.certs_known.then(Bytes::new)),
     ]
     .into_iter()
-    .filter_map(|(part, data)| Some((part, data?.into())))
+    .filter_map(|(part, data)| Some((part, data?)))
     .collect();
     Record {
         height: record.height,
-        item: record.item.into(),
+        item: record.item,
         parts,
     }
 }

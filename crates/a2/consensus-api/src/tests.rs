@@ -228,7 +228,7 @@ async fn a_late_payload_follows_its_entry() {
     assert_eq!(
         next_event(&mut stream).await,
         Some(Event::PayloadChunk(PayloadChunk {
-            data: b"late".to_vec()
+            data: Bytes::from_static(b"late")
         }))
     );
 }
@@ -421,7 +421,7 @@ async fn submit_reports_an_overloaded_node() {
     let mut client = client.expect("server did not start");
     let refused = client
         .submit_transaction(crate::proto::SubmitTransactionRequest {
-            transaction: vec![1, 2, 3],
+            transaction: Bytes::from_static(&[1, 2, 3]),
         })
         .await;
     assert_eq!(

@@ -148,13 +148,13 @@ impl Reader {
             .into_iter()
             .map(|tx| proto::Transaction {
                 namespace: namespace.0,
-                payload: tx.into_payload(),
+                payload: tx.into_payload().into(),
             })
             .collect();
         let proof = proto::NsProofPayload {
             ns_index: proof.ns_index as u64,
             ns_proof: proof.ns_proof.to_string(),
-            ns_payload: proof.ns_payload,
+            ns_payload: proof.ns_payload.into(),
         };
         Ok(proto::NamespaceProofResponse {
             proof: Some(proto::NsProof {

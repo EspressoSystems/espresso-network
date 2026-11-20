@@ -35,6 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .out_dir(&out_dir)
         .build_client(false)
+        // `Bytes` instead of `Vec<u8>`, so payloads pass through without a copy.
+        .bytes(".")
         // google.api types back the HTTP annotations consumed at build time by tonic-rest-build.
         // Nothing references them at runtime, so point them at a crate that does not exist: if a
         // future proto ever puts one in a message field, the result is an unresolved-crate error

@@ -8,6 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
+use bytes::Bytes;
 use catchup_api::proto::{
     AccountsRequest, ChainConfigRequest, EpochRequest, HeightRequest,
     catchup_service_client::CatchupServiceClient,
@@ -196,7 +197,7 @@ impl StateCatchup for ApiCatchup {
     ) -> anyhow::Result<Vec<FeeAccountProof>> {
         let encoded = accounts
             .iter()
-            .map(bincode::serialize)
+            .map(|account| bincode::serialize(account).map(Bytes::from))
             .collect::<Result<Vec<_>, _>>()?;
         self.ask("fee accounts", |mut client| {
             let encoded = encoded.clone();

@@ -95,8 +95,8 @@ fn payload_of(block: &MockBlock) -> Bytes {
 fn entry(chain: &MockChain, block: &MockBlock, newest: bool) -> Decided {
     let leaf = block.leaf.leaf();
     let vid_common = match block.vid_common.common() {
-        VidCommon::V2(common) => bincode::serialize(common).unwrap(),
-        _ => Vec::new(),
+        VidCommon::V2(common) => bincode::serialize(common).unwrap().into(),
+        _ => Default::default(),
     };
     Decided {
         height: block.height(),
@@ -108,15 +108,15 @@ fn entry(chain: &MockChain, block: &MockBlock, newest: bool) -> Decided {
         payload_size: None,
         body: Some(Body {
             format: BODY_FORMAT,
-            leaf: bincode::serialize(leaf).unwrap(),
-            cert1: bincode::serialize(block.leaf.qc()).unwrap(),
+            leaf: bincode::serialize(leaf).unwrap().into(),
+            cert1: bincode::serialize(block.leaf.qc()).unwrap().into(),
             cert2: newest
                 .then(|| chain.cert2(block))
                 .flatten()
-                .map(|cert| bincode::serialize(&cert).unwrap())
+                .map(|cert| bincode::serialize(&cert).unwrap().into())
                 .unwrap_or_default(),
             vid_common,
-            state_cert: Vec::new(),
+            state_cert: Default::default(),
         }),
     }
 }
@@ -344,7 +344,7 @@ async fn passes_the_state_certificate() {
         .body
         .as_mut()
         .unwrap()
-        .state_cert = bincode::serialize(&cert).unwrap();
+        .state_cert = bincode::serialize(&cert).unwrap().into();
     let sink = MemSink::new();
     let _ingester = spawn_ingester(serve(log).await, sink.clone());
 
@@ -424,7 +424,7 @@ async fn an_undecodable_entry_stops_the_ingester() {
     let log = FakeLog::new();
     log.decide(&chain, 0..=0);
     let mut bad = entry(&chain, &chain.blocks()[1], true);
-    bad.body.as_mut().unwrap().leaf = vec![1, 2, 3];
+    bad.body.as_mut().unwrap().leaf = vec![1, 2, 3].into();
     log.insert(bad);
     let sink = MemSink::new();
     let ingester = spawn_ingester(serve(log).await, sink.clone());

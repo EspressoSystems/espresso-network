@@ -3,6 +3,7 @@
 use std::{borrow::Borrow, collections::HashMap};
 
 use ark_serialize::CanonicalSerialize;
+use bytes::Bytes;
 use espresso_types::{
     AccountQueryData, BuilderSignature, FeeAccount, FeeAccountProof, FeeInfo, FeeMerkleProof,
     Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload, PubKey, SeqTypes, Transaction,
@@ -162,7 +163,7 @@ impl From<&Header> for proto::HeaderV1 {
             payload_commitment: header.payload_commitment().to_string(),
             builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
-                bytes: header.ns_table().encode().to_vec(),
+                bytes: Bytes::copy_from_slice(&header.ns_table().encode()),
             }),
             block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
             fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
@@ -184,7 +185,7 @@ impl From<&Header> for proto::HeaderV3 {
             payload_commitment: header.payload_commitment().to_string(),
             builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
-                bytes: header.ns_table().encode().to_vec(),
+                bytes: Bytes::copy_from_slice(&header.ns_table().encode()),
             }),
             block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
             fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
@@ -209,7 +210,7 @@ fn header_v4(header: &Header) -> proto::HeaderV4 {
         payload_commitment: header.payload_commitment().to_string(),
         builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
-            bytes: header.ns_table().encode().to_vec(),
+            bytes: Bytes::copy_from_slice(&header.ns_table().encode()),
         }),
         block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
         fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
@@ -236,7 +237,7 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         payload_commitment: header.payload_commitment().to_string(),
         builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
-            bytes: header.ns_table().encode().to_vec(),
+            bytes: Bytes::copy_from_slice(&header.ns_table().encode()),
         }),
         block_merkle_tree_root: header.block_merkle_tree_root().to_string(),
         fee_merkle_tree_root: header.fee_merkle_tree_root().to_string(),
@@ -460,7 +461,11 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
                             start: namespace.range().start as u64,
                             end: namespace.range().end as u64,
                         }),
-                        payload: namespace.payload().to_vec(),
+                        payload: namespace
+                            .payload()
+                            .iter()
+                            .map(|p| Bytes::copy_from_slice(p))
+                            .collect(),
                         mt_proofs: namespace
                             .mt_proofs()
                             .iter()
@@ -925,7 +930,7 @@ impl From<&UpgradeCertificate<SeqTypes>> for proto::UpgradeCertificate {
                 old_version: Some(cert.data.old_version.into()),
                 new_version: Some(cert.data.new_version.into()),
                 decide_by: cert.data.decide_by.u64(),
-                new_version_hash: cert.data.new_version_hash.clone(),
+                new_version_hash: cert.data.new_version_hash.clone().into(),
                 old_version_last_view: cert.data.old_version_last_view.u64(),
                 new_version_first_view: cert.data.new_version_first_view.u64(),
             }),
@@ -1006,9 +1011,9 @@ impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCe
 impl From<&Payload> for proto::Payload {
     fn from(payload: &Payload) -> Self {
         proto::Payload {
-            raw_payload: payload.raw_payload().to_vec(),
+            raw_payload: Bytes::copy_from_slice(payload.raw_payload()),
             ns_table: Some(proto::NsTable {
-                bytes: payload.ns_table().encode().to_vec(),
+                bytes: Bytes::copy_from_slice(&payload.ns_table().encode()),
             }),
         }
     }
@@ -1027,7 +1032,7 @@ impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
             view_change_evidence: leaf.view_change_evidence.as_ref().map(Into::into),
             next_drb_result: leaf
                 .next_drb_result
-                .map(|result| result.to_vec())
+                .map(|result| Bytes::copy_from_slice(&result))
                 .unwrap_or_default(),
             with_epoch: leaf.with_epoch,
         }
@@ -1248,7 +1253,7 @@ impl From<&StakeTableEvent> for proto::StakeTableEvent {
                 schnorr_vk: Some((&event.schnorrVK).into()),
                 commission: u32::from(event.commission),
                 bls_sig: Some((&event.blsSig).into()),
-                schnorr_sig: event.schnorrSig.to_vec(),
+                schnorr_sig: Bytes::copy_from_slice(&event.schnorrSig),
                 metadata_uri: event.metadataUri.clone(),
             }),
             StakeTableEvent::RegisterV3(event) => Event::RegisterV3(proto::ValidatorRegisteredV3 {
@@ -1257,9 +1262,9 @@ impl From<&StakeTableEvent> for proto::StakeTableEvent {
                 schnorr_vk: Some((&event.schnorrVK).into()),
                 commission: u32::from(event.commission),
                 bls_sig: Some((&event.blsSig).into()),
-                schnorr_sig: event.schnorrSig.to_vec(),
+                schnorr_sig: Bytes::copy_from_slice(&event.schnorrSig),
                 metadata_uri: event.metadataUri.clone(),
-                x25519_key: event.x25519Key.to_vec(),
+                x25519_key: Bytes::copy_from_slice(event.x25519Key.as_slice()),
                 p2p_addr: event.p2pAddr.clone(),
             }),
             StakeTableEvent::Deregister(event) => Event::Deregister(proto::ValidatorExit {
@@ -1297,7 +1302,7 @@ impl From<&StakeTableEvent> for proto::StakeTableEvent {
                     bls_vk: Some((&event.blsVK).into()),
                     schnorr_vk: Some((&event.schnorrVK).into()),
                     bls_sig: Some((&event.blsSig).into()),
-                    schnorr_sig: event.schnorrSig.to_vec(),
+                    schnorr_sig: Bytes::copy_from_slice(&event.schnorrSig),
                 })
             },
             StakeTableEvent::CommissionUpdate(event) => {
@@ -1311,7 +1316,7 @@ impl From<&StakeTableEvent> for proto::StakeTableEvent {
             StakeTableEvent::X25519KeyUpdate(event) => {
                 Event::X25519KeyUpdate(proto::X25519KeyUpdated {
                     validator: format!("{:#x}", event.validator),
-                    x25519_key: event.x25519Key.to_vec(),
+                    x25519_key: Bytes::copy_from_slice(event.x25519Key.as_slice()),
                 })
             },
             StakeTableEvent::P2pAddrUpdate(event) => Event::P2pAddrUpdate(proto::P2pAddrUpdated {
@@ -1356,7 +1361,7 @@ impl From<&AvidMNsProof> for proto::NsProofPayload {
     fn from(proof: &AvidMNsProof) -> Self {
         proto::NsProofPayload {
             ns_index: proof.0.ns_index as u64,
-            ns_payload: proof.0.ns_payload.to_vec(),
+            ns_payload: Bytes::copy_from_slice(&proof.0.ns_payload),
             ns_proof: proof.0.ns_proof.to_string(),
         }
     }
@@ -1366,7 +1371,7 @@ impl From<&AvidmGf2NsProof> for proto::NsProofPayload {
     fn from(proof: &AvidmGf2NsProof) -> Self {
         proto::NsProofPayload {
             ns_index: proof.0.ns_index as u64,
-            ns_payload: proof.0.ns_payload.to_vec(),
+            ns_payload: Bytes::copy_from_slice(&proof.0.ns_payload),
             ns_proof: proof.0.ns_proof.to_string(),
         }
     }
@@ -1380,21 +1385,21 @@ impl TryFrom<&TxProof> for proto::TxProof {
 
         let arm = match proof {
             TxProof::V0(advz) => Proof::V0(proto::AdvzTxProof {
-                tx_index: advz.tx_index().to_bytes().to_vec(),
-                payload_num_txs: advz.payload_num_txs().to_payload_bytes().to_vec(),
+                tx_index: Bytes::copy_from_slice(&advz.tx_index().to_bytes()),
+                payload_num_txs: Bytes::copy_from_slice(&advz.payload_num_txs().to_payload_bytes()),
                 payload_proof_num_txs: Some(advz.payload_proof_num_txs().try_into()?),
-                payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes(),
+                payload_tx_table_entries: advz.payload_tx_table_entries().to_payload_bytes().into(),
                 payload_proof_tx_table_entries: Some(
                     advz.payload_proof_tx_table_entries().try_into()?,
                 ),
                 payload_proof_tx: advz.payload_proof_tx().map(TryInto::try_into).transpose()?,
             }),
             TxProof::V1(avidm) => Proof::V1(proto::AvidmTxProof {
-                tx_index: avidm.tx_index().to_bytes().to_vec(),
+                tx_index: Bytes::copy_from_slice(&avidm.tx_index().to_bytes()),
                 ns_proof: Some(avidm.ns_proof().into()),
             }),
             TxProof::V2(gf2) => Proof::V2(proto::AvidmGf2TxProof {
-                tx_index: gf2.tx_index().to_bytes().to_vec(),
+                tx_index: Bytes::copy_from_slice(&gf2.tx_index().to_bytes()),
                 ns_proof: Some(gf2.ns_proof().into()),
             }),
         };
@@ -1433,7 +1438,7 @@ impl From<&Transaction> for proto::Transaction {
     fn from(tx: &Transaction) -> Self {
         proto::Transaction {
             namespace: tx.namespace().0,
-            payload: tx.payload().to_vec(),
+            payload: Bytes::copy_from_slice(tx.payload()),
         }
     }
 }
@@ -1519,8 +1524,8 @@ impl TryFrom<&NsProof> for proto::NsProof {
 
         let arm = match proof {
             NsProof::V0(advz) => Proof::V0(proto::AdvzNsProof {
-                ns_index: advz.ns_index.to_bytes().to_vec(),
-                ns_payload: advz.ns_payload.as_bytes_slice().to_vec(),
+                ns_index: Bytes::copy_from_slice(&advz.ns_index.to_bytes()),
+                ns_payload: Bytes::copy_from_slice(advz.ns_payload.as_bytes_slice()),
                 ns_proof: advz.ns_proof.as_ref().map(TryInto::try_into).transpose()?,
             }),
             NsProof::V1(avidm) => Proof::V1(avidm.into()),

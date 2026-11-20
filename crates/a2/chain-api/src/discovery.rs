@@ -1,6 +1,7 @@
 //! Discovery records as the discovery service lists them.
 
 use anyhow::Context;
+use bytes::Bytes;
 use consensus_api::discovery::{ServiceRecord, SignedServiceRecord};
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
@@ -14,9 +15,12 @@ pub fn listed(signed: SignedServiceRecord<SeqTypes>) -> proto::ServiceRecord {
     proto::ServiceRecord {
         signer: signed.signer.to_string(),
         epoch: *signed.record.epoch,
-        signed_message: signed.record.signed_bytes(),
+        signed_message: signed.record.signed_bytes().into(),
         api_url: signed.record.api_url,
-        api_key: signed.record.api_key.map(|key| key.to_vec()),
+        api_key: signed
+            .record
+            .api_key
+            .map(|key| Bytes::copy_from_slice(&key)),
         sequence: signed.record.sequence,
         signature: TaggedBase64::from(signed.signature).to_string(),
     }
@@ -26,7 +30,7 @@ pub fn listed(signed: SignedServiceRecord<SeqTypes>) -> proto::ServiceRecord {
 pub fn from_listed(listed: proto::ServiceRecord) -> anyhow::Result<SignedServiceRecord<SeqTypes>> {
     let api_key = listed
         .api_key
-        .map(|key| <[u8; 32]>::try_from(key.as_slice()))
+        .map(|key| <[u8; 32]>::try_from(&key[..]))
         .transpose()
         .context("an API key that is not 32 bytes")?;
     Ok(SignedServiceRecord {

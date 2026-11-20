@@ -544,8 +544,8 @@ async fn apply(
     Ok(state)
 }
 
-fn decoded<V: DeserializeOwned>(bytes: Vec<u8>) -> anyhow::Result<V> {
-    Ok(bincode::deserialize(&bytes)?)
+fn decoded<V: DeserializeOwned>(bytes: impl AsRef<[u8]>) -> anyhow::Result<V> {
+    Ok(bincode::deserialize(bytes.as_ref())?)
 }
 
 /// Hands membership what `leaf` tells it: an epoch root gives the stake table of the epoch two

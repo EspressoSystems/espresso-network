@@ -86,26 +86,29 @@ fn entry<T: NodeType>(
     let leaf = &decided.leaf;
     let body = Body {
         format: BODY_FORMAT,
-        leaf: bincode::serialize(leaf)?,
-        cert1: bincode::serialize(&decided.cert1)?,
+        leaf: bincode::serialize(leaf)?.into(),
+        cert1: bincode::serialize(&decided.cert1)?.into(),
         cert2: decided
             .cert2
             .as_ref()
             .map(bincode::serialize)
             .transpose()?
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into(),
         vid_common: decided
             .vid_common
             .as_ref()
             .map(bincode::serialize)
             .transpose()?
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into(),
         state_cert: decided
             .state_cert
             .as_ref()
             .map(bincode::serialize)
             .transpose()?
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into(),
     };
     Ok(DecidedEntry {
         height: leaf.height(),

@@ -2551,7 +2551,7 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::FeeMerkleTreeResponse {
-            tree: serialize_tree(&tree)?,
+            tree: serialize_tree(&tree)?.into(),
         }))
     }
 
@@ -2638,7 +2638,7 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::RewardMerkleTreeV1Response {
-            tree: serialize_tree(&tree)?,
+            tree: serialize_tree(&tree)?.into(),
         }))
     }
 
@@ -2668,7 +2668,7 @@ where
             .await
             .map_err(|err| to_status(not_found(format!("{err:#}"))))?;
         Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
-            tree,
+            tree: tree.into(),
         }))
     }
 
@@ -2733,7 +2733,7 @@ where
         let request = request.into_inner();
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
         let payload = required(request.payload, "payload")?;
-        let transaction = espresso_types::Transaction::new(namespace.into(), payload);
+        let transaction = espresso_types::Transaction::new(namespace.into(), payload.into());
         let hash = v1::SubmitApi::submit(self, transaction)
             .await
             .map_err(to_status)?;
@@ -4752,7 +4752,7 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
-            tree,
+            tree: tree.into(),
         }))
     }
 }

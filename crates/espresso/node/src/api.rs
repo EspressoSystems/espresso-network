@@ -9952,7 +9952,7 @@ mod test {
             .post("v2/submit/transaction")
             .body_json(&espresso_api::proto::SubmitTransactionRequest {
                 namespace: Some(103),
-                payload: Some(vec![103, 0]),
+                payload: Some(vec![103, 0].into()),
             })
             .unwrap()
             .send()
@@ -9969,7 +9969,7 @@ mod test {
                 serde_json::json!({ "payload": "" }),
                 espresso_api::proto::SubmitTransactionRequest {
                     namespace: None,
-                    payload: Some(vec![]),
+                    payload: Some(Default::default()),
                 },
             ),
             (
@@ -9985,7 +9985,7 @@ mod test {
                 serde_json::json!({ "namespace": 1u64 << 32, "payload": "" }),
                 espresso_api::proto::SubmitTransactionRequest {
                     namespace: Some(1 << 32),
-                    payload: Some(vec![]),
+                    payload: Some(Default::default()),
                 },
             ),
             (
@@ -9997,7 +9997,7 @@ mod test {
                 .unwrap(),
                 espresso_api::proto::SubmitTransactionRequest {
                     namespace: Some(104),
-                    payload: Some(oversized),
+                    payload: Some(oversized.into()),
                 },
             ),
         ];
@@ -10559,7 +10559,7 @@ mod test {
                 .iter()
                 .map(|transaction| espresso_api::proto::Transaction {
                     namespace: u64::from(transaction.namespace()),
-                    payload: transaction.payload().to_vec(),
+                    payload: transaction.payload().to_vec().into(),
                 })
                 .collect::<Vec<_>>()
         );

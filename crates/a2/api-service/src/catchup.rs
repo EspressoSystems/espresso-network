@@ -66,7 +66,7 @@ impl Catchup {
 
 fn encoded<T: Serialize>(value: &T) -> Result<Response<Encoded>, Status> {
     let data = bincode::serialize(value).map_err(|err| Status::internal(err.to_string()))?;
-    Ok(Response::new(Encoded { data }))
+    Ok(Response::new(Encoded { data: data.into() }))
 }
 
 #[tonic::async_trait]
@@ -85,12 +85,16 @@ impl CatchupService for Catchup {
                 .await
                 .map_err(to_status)?
                 .ok_or_else(|| Status::not_found(format!("no leaf at height {at}")))?;
-            leaves
-                .push(bincode::serialize(&item.leaf).map_err(|e| Status::internal(e.to_string()))?);
+            let leaf =
+                bincode::serialize(&item.leaf).map_err(|e| Status::internal(e.to_string()))?;
+            leaves.push(leaf.into());
             if let Some(cert2) = self.store.cert2(at).await.map_err(to_status)? {
                 let cert2 =
                     bincode::serialize(&cert2).map_err(|e| Status::internal(e.to_string()))?;
-                return Ok(Response::new(LeafChainResponse { leaves, cert2 }));
+                return Ok(Response::new(LeafChainResponse {
+                    leaves,
+                    cert2: cert2.into(),
+                }));
             }
         }
         Err(Status::not_found(format!(

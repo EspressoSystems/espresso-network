@@ -175,10 +175,7 @@ impl<S: Source> DecideLog for Service<S> {
             .await
             .map_err(internal)?
             .ok_or_else(|| Status::not_found("no service records"))?;
-        Ok(Response::new(ServiceRecordsResponse {
-            epoch,
-            records: records.into_iter().map(|r| r.to_vec()).collect(),
-        }))
+        Ok(Response::new(ServiceRecordsResponse { epoch, records }))
     }
 }
 
@@ -197,7 +194,7 @@ impl<N: Node> ConsensusNode for NodeService<N> {
         &self,
         request: Request<SubmitTransactionRequest>,
     ) -> Result<Response<SubmitTransactionResponse>, Status> {
-        let transaction = Bytes::from(request.into_inner().transaction);
+        let transaction = request.into_inner().transaction;
         match self.node.submit_transaction(transaction).await {
             Ok(()) => Ok(Response::new(SubmitTransactionResponse {})),
             Err(SubmitError::Invalid(reason)) => Err(Status::invalid_argument(reason)),
@@ -387,7 +384,7 @@ impl<S: Source> Feed<S> {
         while start < payload.len() {
             let end = (start + CHUNK_SIZE).min(payload.len());
             let chunk = PayloadChunk {
-                data: payload.slice(start..end).to_vec(),
+                data: payload.slice(start..end),
             };
             self.send(Event::PayloadChunk(chunk)).await?;
             start = end;

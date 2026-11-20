@@ -18,15 +18,17 @@ impl SubmitService for ApiService {
         request: Request<proto::SubmitTransactionRequest>,
     ) -> Result<Response<proto::SubmitTransactionResponse>, Status> {
         let r = request.into_inner();
-        let transaction =
-            Transaction::new(namespace(r.namespace)?, required(r.payload, "payload")?);
+        let transaction = Transaction::new(
+            namespace(r.namespace)?,
+            required(r.payload, "payload")?.into(),
+        );
         let hash = transaction.commit();
         let mut client = ConsensusNodeClient::new(self.consensus.clone());
         let encoded = bincode::serialize(&transaction)
             .map_err(|err| Status::internal(format!("encoding the transaction: {err}")))?;
         client
             .submit_transaction(ConsensusRequest {
-                transaction: encoded,
+                transaction: encoded.into(),
             })
             .await
             .map_err(|status| match status.code() {
