@@ -362,10 +362,13 @@ impl GapFiller {
                 break;
             }
             let item = checked_item(&record, &child)?;
-            let parts = checked_parts(item.leaf.block_header(), &record)
+            let mut parts = checked_parts(item.leaf.block_header(), &record)
                 .await
                 .inspect_err(|err| tracing::debug!(%peer, "payload not taken: {err:#}"))
                 .unwrap_or_default();
+            // The genesis block has no certificates to check, and belongs to no epoch whose
+            // certificates are checked.
+            parts.certs_known = record.height == 0;
             self.store.put(&item, &parts).await?;
             (end, child) = (record.height, item);
         }
@@ -707,6 +710,14 @@ mod tests {
         assert_eq!(&filled.cert1, item1.leaf.justify_qc());
         assert_eq!(store.payload(0).await.unwrap(), Some(payload));
         assert_eq!(store.vid_common(0).await.unwrap(), Some(common));
+        let genesis = store.record(0).await.unwrap().unwrap();
+        assert!(
+            genesis
+                .parts
+                .iter()
+                .any(|(part, _)| *part == Part::CertsKnown),
+            "genesis has no certificates to check"
+        );
     }
 
     /// A payload inside a peer's leaf is not covered by the leaf commitment, so it is not taken.

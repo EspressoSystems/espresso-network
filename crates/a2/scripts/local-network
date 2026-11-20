@@ -3,8 +3,10 @@
 # validators staked, and for each of the five validators of the demo genesis file a deployment of
 # a consensus node, an ingester, a store service on Postgres and an API instance. Ingesters find
 # the other deployments' API services through the validators' records, starting from the first.
-# Node 4's ingester starts a minute late, so its store misses what node 4 freed meanwhile, and it
-# fills that from the others. Logs go to RUNDIR. Stops everything on exit.
+# For its first minute node 4's ingester writes into a scratch store and acknowledges, so node 4
+# frees those heights; then a new ingester starts on node 4's real store, which therefore lacks
+# them and fills them, and later their certificates, from the other deployments. Logs go to
+# RUNDIR. Stops everything on exit.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -103,33 +105,42 @@ main() {
       >"$rundir/consensus-$i.log" 2>&1 &
   done
 
+  psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE scratch4" >/dev/null
+  store-service --address "127.0.0.1:8079" \
+    --database "postgres://root@127.0.0.1:${pg_port}/scratch4" >"$rundir/store-scratch-4.log" 2>&1 &
+  local scratch_store=$!
+
   sleep 5
   for i in 0 1 2 3 4; do
     api-service --port $((24000 + i)) --store "http://127.0.0.1:$((8070 + i))" \
       --consensus-api "127.0.0.1:$((9978 + i))" --genesis-file "$genesis" \
       >"$rundir/api-$i.log" 2>&1 &
     if ((i < 4)); then
-      start_ingester "$rundir" "$i" "$genesis" "$l1"
+      start_ingester "$rundir" "$i" "$genesis" "$l1" $((8070 + i)) "ingester-$i"
     fi
   done
+  start_ingester "$rundir" 4 "$genesis" "$l1" 8079 "ingester-scratch-4"
+  local scratch_ingester=$!
 
   echo "running; logs in $rundir"
   sleep 60
-  start_ingester "$rundir" 4 "$genesis" "$l1"
-  echo "ingester 4 started"
+  kill "$scratch_ingester" "$scratch_store"
+  start_ingester "$rundir" 4 "$genesis" "$l1" 8074 "ingester-4"
+  echo "ingester 4 moved to its real store"
   wait
 }
 
-# Starts the ingester of node $2, from its consensus node into its store, with genesis file $3 and
-# L1 $4. All but the first learn the other API services from the first.
+# Starts the ingester of node $2, with genesis file $3 and L1 $4, from its consensus node into the
+# store service on port $5, logging to $1/$6.log. All but the first learn the other API services
+# from the first.
 start_ingester() {
   local bootstrap=()
   if (($2 > 0)); then
     bootstrap=(--bootstrap http://127.0.0.1:24000)
   fi
-  ingester --consensus-api "127.0.0.1:$((9978 + $2))" --store "http://127.0.0.1:$((8070 + $2))" \
+  ingester --consensus-api "127.0.0.1:$((9978 + $2))" --store "http://127.0.0.1:$5" \
     --genesis-file "$3" --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
-    "${bootstrap[@]}" >"$1/ingester-$2.log" 2>&1 &
+    "${bootstrap[@]}" >"$1/$6.log" 2>&1 &
 }
 
 # Stops every process and removes the Postgres data, which lives outside RUNDIR.
