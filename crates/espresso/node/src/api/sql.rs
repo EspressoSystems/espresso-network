@@ -73,7 +73,9 @@ use crate::{
     context::TaskList,
     persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
     request_response::data_source::Storage as RequestResponseStorage,
-    state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
+    state::{
+        EmptyStateStart, compute_state_update, reward_proof_boundary, update_state_storage_loop,
+    },
     util::BoundedJoinSet,
 };
 
@@ -496,33 +498,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 .read()
                 .await
                 .context("opening transaction for load_proof")?;
-
-            let leaf = tx
-                .get_leaf(LeafId::<SeqTypes>::from(height as usize))
-                .await
-                .context(format!("leaf {height} not available"))?;
-
-            // For V5+, resolve to the last epoch boundary where proofs were stored.
-            // For V4, proofs exist at every height.
-            let proof_height = if leaf.header().version() < EPOCH_REWARD_VERSION
-                || is_last_block(height, epoch_height)
-            {
-                height
-            } else {
-                let prev_epoch_last_block =
-                    epoch_from_block_number(height, epoch_height).saturating_sub(1) * epoch_height;
-                let boundary_leaf = tx
-                    .get_leaf(LeafId::<SeqTypes>::from(prev_epoch_last_block as usize))
-                    .await
-                    .context(format!(
-                        "leaf at epoch boundary {prev_epoch_last_block} not available"
-                    ))?;
-                ensure!(
-                    boundary_leaf.header().version() >= EPOCH_REWARD_VERSION,
-                    "no epoch reward proofs available at boundary {prev_epoch_last_block}"
-                );
-                prev_epoch_last_block
-            };
+            let proof_height = reward_proof_height(&mut tx, height, epoch_height).await?;
 
             sqlx::query_scalar(
                 "SELECT proof FROM reward_merkle_tree_v2_proofs WHERE height = $1 AND account = $2",
@@ -731,13 +707,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 let epoch_height = node_state
                     .epoch_height
                     .context("epoch_height not set in node state")?;
+                let Some(boundary) = reward_proof_boundary(finalized_hotshot_height, epoch_height)
+                else {
+                    return Ok(());
+                };
+                tree_height = boundary;
                 if !is_last_block(finalized_hotshot_height, epoch_height) {
-                    tree_height = epoch_from_block_number(finalized_hotshot_height, epoch_height)
-                        .saturating_sub(1)
-                        * epoch_height;
-                    if tree_height == 0 {
-                        return Ok(());
-                    }
                     // A loop replaying history below the boundary may not have its leaf yet, and a
                     // failed read would fail the whole state update.
                     if height < tree_height {
@@ -799,6 +774,71 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
             Ok(())
         }
+    }
+}
+
+/// The height whose stored reward proofs answer a request at `height`: `height` itself for a V4
+/// leaf, whose proofs are stored at every height, else its epoch boundary, as V5+ stores proofs at
+/// boundaries only.
+///
+/// A leaf at or below the data pruned height counts as V5+, so that a pruned node, which has no
+/// leaves below its first block, can serve the proofs for the L1-finalized height that claims ask
+/// for. Proofs are garbage collected about 5 epochs back, and this binary runs only chains at 0.6
+/// or later, so a stored proof at a pruned height can be V4 only if the chain upgraded from 0.4
+/// within that window.
+async fn reward_proof_height<Mode: TransactionMode>(
+    tx: &mut Transaction<Mode>,
+    height: u64,
+    epoch_height: u64,
+) -> anyhow::Result<u64> {
+    match tx.get_leaf(LeafId::<SeqTypes>::from(height as usize)).await {
+        Ok(leaf) if leaf.header().version() < EPOCH_REWARD_VERSION => return Ok(height),
+        Ok(_) => {},
+        Err(err) => ensure_pruned(tx, height, err, format!("leaf {height} not available")).await?,
+    }
+    let boundary = reward_proof_boundary(height, epoch_height)
+        .with_context(|| format!("no reward proofs at {height}: it is in the first epoch"))?;
+    if boundary == height {
+        return Ok(height);
+    }
+    match tx
+        .get_leaf(LeafId::<SeqTypes>::from(boundary as usize))
+        .await
+    {
+        Ok(leaf) => ensure!(
+            leaf.header().version() >= EPOCH_REWARD_VERSION,
+            "no epoch reward proofs available at boundary {boundary}"
+        ),
+        Err(err) => {
+            let missing = format!("leaf at epoch boundary {boundary} not available");
+            ensure_pruned(tx, boundary, err, missing).await?
+        },
+    }
+    Ok(boundary)
+}
+
+/// Succeeds when the leaf at `height`, whose read failed with `err`, is at or below the data
+/// pruned height: the data pruner deleted it, or a fresh pruned database never had it. Otherwise
+/// returns `err` with `missing` as context. Either error keeps the leaf error.
+async fn ensure_pruned<Mode, E>(
+    tx: &mut Transaction<Mode>,
+    height: u64,
+    err: E,
+    missing: String,
+) -> anyhow::Result<()>
+where
+    Mode: TransactionMode,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    use hotshot_query_service::data_source::storage::pruning::PrunedHeightStorage as _;
+
+    let pruned = tx.load_pruned_height().await.with_context(|| {
+        format!("{missing} ({err:#}), and loading the data pruned height failed")
+    })?;
+    if pruned.is_some_and(|pruned| height <= pruned) {
+        Ok(())
+    } else {
+        Err(err).context(missing)
     }
 }
 
@@ -2867,6 +2907,288 @@ mod tests {
             storage.load_proof(5, account.clone(), 0).await.unwrap(),
             v4_proof,
         );
+    }
+
+    /// When the L1-finalized height lies inside an epoch, `persist_reward_proofs` stores proofs
+    /// from the reward tree at the newest epoch boundary below it, at that boundary: not from or at
+    /// the boundary one epoch lower, and not at the finalized height. In tests the finalized height
+    /// is the height passed in.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_persist_reward_proofs_inside_epoch_uses_boundary_below() {
+        use espresso_types::v0_3::RewardAmount;
+        use tokio::time::{Duration, Instant, sleep};
+
+        use super::{RewardAccountQueryDataV2, RewardAccountV2};
+
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let epoch_height = 10u64;
+        let boundary = 2 * epoch_height;
+        let lower_boundary = boundary - epoch_height;
+        let finalized = boundary + 5;
+        let account = RewardAccountV2(Address::repeat_byte(1));
+
+        let leaves = leaf_chain(0..=finalized, EPOCH_REWARD_VERSION).await;
+        let mut tx = storage.write().await.unwrap();
+        for leaf in &leaves {
+            tx.insert_leaf(leaf).await.unwrap();
+        }
+        Transaction::commit(tx).await.unwrap();
+
+        // The account's balance differs between the two trees, so a proof shows its tree.
+        for (height, balance) in [(lower_boundary, 1u64), (boundary, 2)] {
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            tree.update(account, RewardAmount(U256::from(balance)))
+                .unwrap();
+            storage.save_reward_tree_v2(height, &tree).await.unwrap();
+        }
+        assert!(
+            !storage.proof_exists(boundary).await,
+            "setup: no proofs at {boundary} yet"
+        );
+
+        let node_state = NodeState::mock().with_epoch_height(epoch_height);
+        storage
+            .persist_reward_proofs(&node_state, finalized, EPOCH_REWARD_VERSION)
+            .await
+            .unwrap();
+
+        // A spawned task writes the proofs, so they can land after the call returns.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !storage.proof_exists(boundary).await {
+            assert!(
+                Instant::now() < deadline,
+                "no proofs at the boundary {boundary} below the finalized height {finalized}"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+        let proof = storage
+            .load_proof(
+                boundary,
+                bincode::serialize(&account).unwrap(),
+                epoch_height,
+            )
+            .await
+            .unwrap();
+        let proof: RewardAccountQueryDataV2 = bincode::deserialize(&proof).unwrap();
+        assert_eq!(
+            proof.balance,
+            U256::from(2),
+            "the proofs at {boundary} come from the tree at {boundary}"
+        );
+        for height in [lower_boundary, finalized] {
+            assert!(
+                !storage.proof_exists(height).await,
+                "proofs stored at {height}, finalized height {finalized}"
+            );
+        }
+    }
+
+    /// On a fresh pruned node, `load_proof` at a pruned height inside an epoch returns the proof
+    /// stored at the newest boundary below it, though neither leaf is in storage. Reward claimants
+    /// ask at the L1-finalized height, which can be below the node's first block.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_pruned_height_inside_epoch() {
+        let db = TmpDb::init().await;
+        let epoch_height = 10;
+        let account = vec![0; 32];
+        // Pruned height 35.
+        let storage = fresh_pruned_storage(&db, 36..=40, &account, &[10, 20, 30, 40]).await;
+
+        for (height, boundary) in [(25, 20), (35, 30)] {
+            assert_eq!(
+                load_proof_text(&storage, height, &account, epoch_height).await,
+                stored_proof(boundary),
+                "pruned height {height}"
+            );
+        }
+    }
+
+    /// On a fresh pruned node, `load_proof` at a pruned height that ends an epoch returns the proof
+    /// stored at that height, not at the boundary below it.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_pruned_height_at_boundary() {
+        let db = TmpDb::init().await;
+        let epoch_height = 10;
+        let account = vec![0; 32];
+        // Pruned height 30, itself a boundary.
+        let storage = fresh_pruned_storage(&db, 31..=40, &account, &[10, 20, 30, 40]).await;
+
+        for height in [20, 30] {
+            assert_eq!(
+                load_proof_text(&storage, height, &account, epoch_height).await,
+                stored_proof(height),
+                "pruned boundary {height}"
+            );
+        }
+    }
+
+    /// `load_proof` at a stored V0.5 height inside an epoch returns the proof at the boundary below
+    /// it when the leaf at that boundary is pruned: the boundary is the pruned height, or below it.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_boundary_leaf_pruned() {
+        let epoch_height = 10;
+        let account = vec![0; 32];
+
+        for first_block in [31, 36] {
+            let db = TmpDb::init().await;
+            let storage =
+                fresh_pruned_storage(&db, first_block..=40, &account, &[20, 30, 40]).await;
+
+            for height in [first_block, 39] {
+                assert_eq!(
+                    load_proof_text(&storage, height, &account, epoch_height).await,
+                    stored_proof(30),
+                    "first block {first_block}, height {height}"
+                );
+            }
+        }
+    }
+
+    /// Guard: on a pruned node, a height above the pruned height whose leaf is not stored yet
+    /// (a future height) is an error, though its boundary has a proof. Only pruned heights may
+    /// fall back to their boundary, not every height whose leaf is missing.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_future_height_on_pruned_db_fails() {
+        let db = TmpDb::init().await;
+        let epoch_height = 10;
+        let account = vec![0; 32];
+        // Pruned height 35.
+        let storage = fresh_pruned_storage(&db, 36..=40, &account, &[10, 20, 30, 40]).await;
+
+        let result = try_load_proof_text(&storage, 45, &account, epoch_height).await;
+        assert!(result.is_err(), "future height 45: {result:?}");
+    }
+
+    /// Guard: a pruned height in the first epoch is an error, as no proofs are stored for the first
+    /// epoch: its boundary would be genesis. The proof row at 0 makes a fallback to genesis visible.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_pruned_first_epoch_fails() {
+        let epoch_height = 10;
+        let account = vec![0; 32];
+
+        // Pruned height 7, in the first epoch, and 35, above it.
+        for first_block in [8, 36] {
+            let db = TmpDb::init().await;
+            let storage =
+                fresh_pruned_storage(&db, first_block..=40, &account, &[0, 10, 20, 30, 40]).await;
+
+            let result = try_load_proof_text(&storage, 5, &account, epoch_height).await;
+            assert!(
+                result.is_err(),
+                "first block {first_block}, height 5: {result:?}"
+            );
+        }
+    }
+
+    /// Guard: a pruned height whose boundary has no stored proof is an error. It must not fall back
+    /// to a proof at another boundary, which holds other balances.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_proof_pruned_height_without_boundary_proof_fails() {
+        let db = TmpDb::init().await;
+        let epoch_height = 10;
+        let account = vec![0; 32];
+        // Pruned height 35, no proof at 20.
+        let storage = fresh_pruned_storage(&db, 36..=40, &account, &[10, 30, 40]).await;
+
+        let result = try_load_proof_text(&storage, 25, &account, epoch_height).await;
+        assert!(result.is_err(), "pruned height 25: {result:?}");
+    }
+
+    /// A fresh pruned database whose first block is the start of `leaves`, as a pruned node has
+    /// it after it stores its first decided block: the heights below the first block count as
+    /// pruned, and the V0.5 `leaves` are stored. It also stores a proof for `account` at each of
+    /// `boundaries`, each with its own contents (see `stored_proof`).
+    async fn fresh_pruned_storage(
+        db: &TmpDb,
+        leaves: std::ops::RangeInclusive<u64>,
+        account: &[u8],
+        boundaries: &[u64],
+    ) -> SqlStorage {
+        use hotshot_query_service::data_source::storage::pruning::PruneStorage;
+
+        let mut opt = tmp_options(db);
+        opt.prune = true;
+        let storage = SqlStorage::connect(
+            Config::try_from(&opt).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+
+        let first_block = *leaves.start();
+        storage.init_pruned_height(first_block).await.unwrap();
+        let mut tx = storage.write().await.unwrap();
+        for leaf in leaf_chain(leaves, EPOCH_REWARD_VERSION).await {
+            tx.insert_leaf(&leaf).await.unwrap();
+        }
+        for &boundary in boundaries {
+            tx.upsert(
+                "reward_merkle_tree_v2_proofs",
+                ["height", "account", "proof"],
+                ["height", "account"],
+                [(
+                    boundary as i64,
+                    account.to_vec(),
+                    stored_proof(boundary).into_bytes(),
+                )],
+            )
+            .await
+            .unwrap();
+        }
+        Transaction::commit(tx).await.unwrap();
+
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(
+            tx.load_pruned_height().await.unwrap(),
+            Some(first_block - 1),
+            "setup: the heights below the first block {first_block} count as pruned"
+        );
+        storage
+    }
+
+    /// The contents of the proof `fresh_pruned_storage` stores at `boundary`.
+    fn stored_proof(boundary: u64) -> String {
+        format!("proof at {boundary}")
+    }
+
+    /// The proof `load_proof` returns, as text. Panics with the error chain on an error.
+    async fn load_proof_text(
+        storage: &SqlStorage,
+        height: u64,
+        account: &[u8],
+        epoch_height: u64,
+    ) -> String {
+        let proof = storage
+            .load_proof(height, account.to_vec(), epoch_height)
+            .await
+            .unwrap_or_else(|err| panic!("load_proof({height}): {err:#}"));
+        String::from_utf8(proof).unwrap()
+    }
+
+    /// The result of `load_proof`, with a returned proof as text.
+    async fn try_load_proof_text(
+        storage: &SqlStorage,
+        height: u64,
+        account: &[u8],
+        epoch_height: u64,
+    ) -> anyhow::Result<String> {
+        let proof = storage
+            .load_proof(height, account.to_vec(), epoch_height)
+            .await?;
+        Ok(String::from_utf8(proof)?)
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
