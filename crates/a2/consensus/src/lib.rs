@@ -25,7 +25,7 @@ pub(crate) mod vote;
 pub(crate) mod proposal;
 
 #[cfg(any(test, feature = "trace"))]
-pub(crate) mod trace;
+pub mod trace;
 
 #[cfg(test)]
 mod tests;

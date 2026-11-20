@@ -12,11 +12,15 @@
 //! API service resumes there instead of applying the chain from genesis again. A store pruned past
 //! the heights the follower needs, without a snapshot to start after them, cannot be followed.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use anyhow::{Context, bail, ensure};
 use bytes::Bytes;
-use chain_store::{AppWrite, ChainStore};
+use chain_store::{AppWrite, ChainStore, TableName};
 use committable::Committable;
 use either::Either;
 use espresso_types::{
@@ -45,7 +49,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(1);
 pub const SNAPSHOT_INTERVAL: u64 = 64;
 
 /// The application table of the chain store the snapshot is kept in, and its key.
-const TABLE: &str = "chain-state";
+static TABLE: LazyLock<TableName> = LazyLock::new(|| TableName::of("chain-state"));
 const SNAPSHOT: &[u8] = b"snapshot";
 
 type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
@@ -178,7 +182,7 @@ impl ChainFollower {
 
     /// The leaf and state of the stored snapshot, checked against the leaf's header.
     async fn resume(&self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
-        let Some(bytes) = self.store.app_get(TABLE, SNAPSHOT).await? else {
+        let Some(bytes) = self.store.app_get(&TABLE, SNAPSHOT).await? else {
             return Ok(None);
         };
         let snapshot: Snapshot = bincode::deserialize(&bytes).context("decoding the snapshot")?;
@@ -260,7 +264,7 @@ impl ChainFollower {
         };
         self.store
             .app_write(vec![AppWrite::Put {
-                table: TABLE.into(),
+                table: TABLE.clone(),
                 key: Bytes::from_static(SNAPSHOT),
                 value: bincode::serialize(&snapshot)?.into(),
             }])

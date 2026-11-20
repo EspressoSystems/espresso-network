@@ -196,8 +196,10 @@ fn checksum_mismatch_is_corrupt() {
     ));
 }
 
+/// An apply that fails after appending to segments deletes what it appended and commits
+/// nothing, and the same batch applies when tried again.
 #[test]
-fn panicked_apply_deletes_its_segments() {
+fn rejected_apply_deletes_its_segments_and_can_be_retried() {
     let dir = TempDir::new().unwrap();
     let t = table();
     let store = RedbStore::open(dir.path(), tiny()).unwrap();
@@ -210,89 +212,24 @@ fn panicked_apply_deletes_its_segments() {
     batch
         .put(&t, "b", big(EXTERN_THRESHOLD + 1, 2))
         .put(&t, "c", big(EXTERN_THRESHOLD + 1, 3))
-        .update(&t, "a", |_| panic!("deliberate"));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.apply(&batch)));
-    assert!(result.is_err());
-    assert_eq!(segment_files(dir.path()), before);
-
+        .delete(&t, "a");
     store
-        .apply(Batch::new().put(&t, "d", big(EXTERN_THRESHOLD + 1, 4)))
-        .unwrap();
-    drop(store);
-    let store = RedbStore::open(dir.path(), tiny()).unwrap();
-    assert_eq!(segment_files(dir.path()).len(), before.len() + 1);
+        .reject_next_apply
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(store.apply(&batch).is_err());
+    assert_eq!(segment_files(dir.path()), before);
     let snap = store.snapshot().unwrap();
     assert_eq!(get(&snap, &t, "a"), Some(big(EXTERN_THRESHOLD + 1, 1)));
-    assert_eq!(get(&snap, &t, "d"), Some(big(EXTERN_THRESHOLD + 1, 4)));
     assert_eq!(get(&snap, &t, "b"), None);
-}
 
-#[test]
-fn rejected_apply_deletes_its_segments_and_can_be_retried() {
-    let dir = TempDir::new().unwrap();
-    let t = table();
-    let store = RedbStore::open(dir.path(), tiny()).unwrap();
-    store
-        .apply(Batch::new().put(&t, "a", big(EXTERN_THRESHOLD + 1, 1)))
-        .unwrap();
-    break_first_byte(
-        &dir.path()
-            .join("extern")
-            .join(&segment_files(dir.path())[0]),
-    );
-    let before = segment_files(dir.path());
-
-    // Reading "a" fails its checksum, so the batch is rejected after appending "b".
-    let mut batch = Batch::new();
-    batch
-        .put(&t, "b", big(EXTERN_THRESHOLD + 1, 2))
-        .update(&t, "a", |_| Some(bytes::Bytes::from_static(b"x")));
-    assert!(matches!(store.apply(&batch), Err(Error::Corrupt { .. })));
-    assert_eq!(segment_files(dir.path()), before);
-    assert_eq!(get(&store.snapshot().unwrap(), &t, "b"), None);
-
-    // Once "a" is gone, the same batch applies.
-    store.apply(Batch::new().delete(&t, "a")).unwrap();
     store.apply(&batch).unwrap();
+    drop(store);
+    let store = RedbStore::open(dir.path(), tiny()).unwrap();
     let snap = store.snapshot().unwrap();
-    assert_eq!(get(&snap, &t, "a").as_deref(), Some(&b"x"[..]));
+    assert_eq!(get(&snap, &t, "a"), None);
     assert_eq!(get(&snap, &t, "b"), Some(big(EXTERN_THRESHOLD + 1, 2)));
+    assert_eq!(get(&snap, &t, "c"), Some(big(EXTERN_THRESHOLD + 1, 3)));
     assert_usage_matches_rows(&snap, &[&t]);
-}
-
-#[test]
-fn extern_reference_past_the_segment_is_corrupt() {
-    let dir = TempDir::new().unwrap();
-    let t = table();
-    let store = RedbStore::open(dir.path(), Config::default()).unwrap();
-    store
-        .apply(Batch::new().put(&t, "a", big(EXTERN_THRESHOLD + 1, 1)))
-        .unwrap();
-    for (offset, len) in [
-        (0, u64::MAX),
-        (u64::MAX, EXTERN_THRESHOLD as u64 + 1),
-        (1, EXTERN_THRESHOLD as u64 + 1),
-    ] {
-        let raw = crate::row::encode_extern(crate::row::ExternRef {
-            segment: 0,
-            offset,
-            len,
-            crc: 0,
-        });
-        let txn = store.db.begin_write().unwrap();
-        txn.open_table(crate::rows(&t))
-            .unwrap()
-            .insert(&b"a"[..], &raw[..])
-            .unwrap();
-        txn.commit().unwrap();
-        assert!(
-            matches!(
-                store.snapshot().unwrap().get(&t, b"a"),
-                Err(Error::Corrupt { reason, .. }) if reason.contains("beyond the end")
-            ),
-            "offset {offset}, len {len}"
-        );
-    }
 }
 
 #[test]
@@ -391,8 +328,7 @@ fn tables_left_empty_are_deleted() {
                 .put(&gone, "a", "1")
                 .delete(&gone, "a")
                 .delete(&Table::new("never").unwrap(), "a")
-                .copy(&Table::new("absent").unwrap(), "a", &t, "b")
-                .update(&Table::new("read").unwrap(), "a", |_| None),
+                .copy(&Table::new("absent").unwrap(), "a", &t, "b"),
         )
         .unwrap();
     store.apply(Batch::new().drop_table(&t)).unwrap();

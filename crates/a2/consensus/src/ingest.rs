@@ -59,7 +59,7 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
     }
 
     async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), Error> {
-        self.blocking(move |s| s.ack(&ranges)).await
+        Ok(self.store.ack(&ranges).await?)
     }
 
     async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error> {

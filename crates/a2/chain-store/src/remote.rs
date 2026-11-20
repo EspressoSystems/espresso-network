@@ -8,7 +8,7 @@ use tokio::{sync::watch, task::JoinSet, time::sleep};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
-    AppWrite, Backend, Column, KeyBounds, Part, Row,
+    AppWrite, Backend, Column, KeyBounds, Part, Row, TableName,
     wire::{
         MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to,
         proto::{self, store_client::StoreClient},
@@ -229,7 +229,7 @@ impl Backend for RemoteBackend {
         Ok(response.into_inner().heights)
     }
 
-    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+    async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         let response = self
             .client()
             .app_get(proto::AppGetRequest {
@@ -243,7 +243,7 @@ impl Backend for RemoteBackend {
 
     async fn app_entries(
         &self,
-        table: &str,
+        table: &TableName,
         keys: KeyBounds<'_>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
         let response = self

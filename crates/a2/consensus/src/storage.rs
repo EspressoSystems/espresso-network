@@ -30,7 +30,10 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -39,7 +42,7 @@ use crate::{
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
     state::StateEntry,
-    store::{self, ConsensusStore},
+    store::{self, Anchor, ConsensusStore, ForeignWrite, Restored},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
@@ -186,6 +189,10 @@ pub struct Storage<T: NodeType, S> {
 
     decided_state: Option<Box<dyn DecidedState<T>>>,
 
+    /// Writes from outside the writer, such as acknowledgements of the decide log, which join
+    /// the next batch.
+    foreign: mpsc::UnboundedReceiver<ForeignWrite>,
+
     /// Payloads written since this writer started, until garbage collection.
     written_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
 
@@ -196,7 +203,35 @@ pub struct Storage<T: NodeType, S> {
     /// The view garbage was last collected before; no payload is awaited for earlier views.
     collected_before: ViewNumber,
 
+    /// The latest of each value the store may only raise, as written or queued.
+    marks: Marks,
+
     metrics: Option<StorageMetrics>,
+}
+
+/// The latest of each value the store may only raise: the lock, the boundary certificate, the
+/// acted and restart views, and the height of the anchor. The writer compares against them
+/// before it queues a write, so a value is never lowered.
+#[derive(Clone, Copy, Debug, Default)]
+struct Marks {
+    locked: Option<LockView>,
+    boundary: Option<LockView>,
+    acted: Option<ViewNumber>,
+    restart: Option<ViewNumber>,
+    anchor: Option<u64>,
+}
+
+impl Marks {
+    /// The values a restarted node finds in its store.
+    fn of<T: NodeType>(restored: &Restored<T>) -> Self {
+        Self {
+            locked: restored.locked_qc.as_ref().map(LockView::of),
+            boundary: restored.boundary_qc.as_ref().map(LockView::of),
+            acted: restored.acted_view,
+            restart: restored.restart_view,
+            anchor: restored.anchor.as_ref().map(|anchor| anchor.leaf.height()),
+        }
+    }
 }
 
 /// A batch and what to report once it is durable.
@@ -205,8 +240,16 @@ struct Pending<T: NodeType> {
     outputs: Vec<StorageOutput<T>>,
     timers: Vec<Measurement>,
 
-    /// Whether the batch writes to the decide log.
-    writes_decide_log: bool,
+    /// The writes from outside the writer, applied after `batch` in the same commit, and where
+    /// to report them. They are kept apart so that a failing one can be dropped without
+    /// holding up the writer's own.
+    foreign_batch: Batch,
+    foreign: Vec<oneshot::Sender<anyhow::Result<()>>>,
+
+    /// Whether the batch adds to the decide log, which its readers then hear of, and whether
+    /// it changes the decide log's size, which is then measured.
+    adds_to_decide_log: bool,
+    resizes_decide_log: bool,
 }
 
 impl<T: NodeType> Default for Pending<T> {
@@ -215,14 +258,40 @@ impl<T: NodeType> Default for Pending<T> {
             batch: Batch::new(),
             outputs: Vec::new(),
             timers: Vec::new(),
-            writes_decide_log: false,
+            foreign_batch: Batch::new(),
+            foreign: Vec::new(),
+            adds_to_decide_log: false,
+            resizes_decide_log: false,
         }
     }
 }
 
 impl<T: NodeType> Pending<T> {
+    /// Whether there is nothing to write and nothing to report. Outputs can wait without a
+    /// write: those of writes that would not raise a stored value.
     fn is_empty(&self) -> bool {
-        self.batch.is_empty()
+        self.writes_nothing() && self.outputs.is_empty() && self.foreign.is_empty()
+    }
+
+    fn writes_nothing(&self) -> bool {
+        self.batch.is_empty() && self.foreign_batch.is_empty()
+    }
+
+    /// The writer's batch with the foreign writes after it.
+    fn combined(&self) -> Batch {
+        let mut batch = self.batch.clone();
+        batch.append(self.foreign_batch.clone());
+        batch
+    }
+
+    /// Reports the foreign writes as durable, or as failed with `error`.
+    fn report(&mut self, error: Option<&str>) {
+        for done in self.foreign.drain(..) {
+            let _ = done.send(match error {
+                None => Ok(()),
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+            });
+        }
     }
 }
 
@@ -232,13 +301,19 @@ struct Applied<T: NodeType> {
 }
 
 impl<T: NodeType, S: Store> Storage<T, S> {
+    /// The writer of `store`, which holds `restored`, as [`ConsensusStore::load`] reads it. The
+    /// writer never lowers the values that may only rise, starting from those in `restored`.
     pub fn new(
         store: ConsensusStore<T, S>,
         private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+        restored: &Restored<T>,
     ) -> Self {
+        let marks = Marks::of(restored);
         let signature =
             T::SignatureKey::sign(private_key, &[]).expect("signing empty data cannot fail");
         let decide_log_bytes = store.decide_log_bytes();
+        let (writer, foreign) = mpsc::unbounded_channel();
+        store.attach_writer(writer);
         Self {
             store,
             signature,
@@ -250,9 +325,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             decide_log_full: false,
             state_certs: BTreeMap::new(),
             decided_state: None,
+            foreign,
             written_payloads: BTreeSet::new(),
             awaited_payloads: BTreeMap::new(),
             collected_before: ViewNumber::genesis(),
+            marks,
             metrics: None,
         }
     }
@@ -308,7 +385,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             written = written.and_then(|()| {
                 store::put_decided_payload(&mut self.pending.batch, height, view, &commitment)
             });
-            self.pending.writes_decide_log = true;
+            self.pending.adds_to_decide_log = true;
+            self.pending.resizes_decide_log = true;
         }
         self.queued(written, StorageOutput::Payload(view, commitment), |m| {
             &m.append_da
@@ -317,8 +395,13 @@ impl<T: NodeType, S: Store> Storage<T, S> {
 
     /// Persists the own certificate of the last block of an epoch. Nothing waits on it.
     pub fn append_boundary_qc2(&mut self, qc: Certificate1<T>) {
-        if let Err(err) = store::put_boundary_qc(&mut self.pending.batch, &qc) {
-            error!(%err, view = %qc.view_number(), "failed to encode boundary qc");
+        let lock = LockView::of(&qc);
+        if self.marks.boundary >= Some(lock) {
+            return;
+        }
+        match store::put_boundary_qc(&mut self.pending.batch, &qc) {
+            Ok(()) => self.marks.boundary = Some(lock),
+            Err(err) => error!(%err, view = %qc.view_number(), "failed to encode boundary qc"),
         }
     }
 
@@ -326,7 +409,12 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// matching phase-2 vote.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
         let lock = LockView::of(&high_qc);
-        let written = store::put_locked_qc(&mut self.pending.batch, &high_qc);
+        // An earlier lock leaves the stored one, and is durable as soon as that is.
+        let written = match self.marks.locked < Some(lock) {
+            true => store::put_locked_qc(&mut self.pending.batch, &high_qc)
+                .inspect(|()| self.marks.locked = Some(lock)),
+            false => Ok(()),
+        };
         self.queued(written, StorageOutput::HighQc(lock), |m| &m.append_high_qc);
     }
 
@@ -386,14 +474,24 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         });
     }
 
+    /// Records that this node acted in `view`: proposals, votes and timeout votes raise the
+    /// acted view; votes also raise the restart view past `view`.
     pub fn record_action(&mut self, view: ViewNumber, kind: ActionKind) {
-        store::record_action(&mut self.pending.batch, view, kind);
+        if self.marks.acted < Some(view) {
+            store::put_acted_view(&mut self.pending.batch, view);
+            self.marks.acted = Some(view);
+        }
+        if kind == ActionKind::Vote && self.marks.restart < Some(view + 1) {
+            store::put_restart_view(&mut self.pending.batch, view + 1);
+            self.marks.restart = Some(view + 1);
+        }
         self.queued(Ok(()), StorageOutput::Action(view, kind), |m| {
             &m.record_action
         });
     }
 
-    /// Appends a decide to the decide log and moves the anchor: `leaves` newest first, with
+    /// Appends a decide to the decide log and moves the anchor forward to its newest leaf:
+    /// `leaves` newest first, with
     /// the certificates that decided the newest, and this node's VID share and state of each.
     pub fn append_decided(
         &mut self,
@@ -420,8 +518,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             &state_certs,
         ) {
             Ok(()) => {
-                self.pending.writes_decide_log = true;
+                self.pending.adds_to_decide_log = true;
+                self.pending.resizes_decide_log = true;
                 self.await_payloads(leaves);
+                self.advance_anchor(leaves, cert1, cert2);
             },
             Err(err) => {
                 error!(%err, view = %cert1.view_number(), "failed to encode decided leaves");
@@ -433,9 +533,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         };
         for (i, leaf) in leaves.iter().enumerate().rev() {
             let writes = decided_state.decided(leaf, states.get(i).and_then(Option::as_ref));
-            if let Err(err) = store::put_app(&mut self.pending.batch, &writes) {
-                error!(%err, view = %leaf.view_number(), "failed to write the decided state");
-            }
+            store::put_app(&mut self.pending.batch, &writes);
         }
     }
 
@@ -456,6 +554,33 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             warn!(%err, %view, "failed to finalize state certificates");
         }
         self.state_certs = self.state_certs.split_off(&(view + 1));
+    }
+
+    /// Moves the anchor to the newest of `leaves`, unless a decide that fills a gap leaves it
+    /// behind the anchor.
+    fn advance_anchor(
+        &mut self,
+        leaves: &[Leaf2<T>],
+        cert1: &Certificate1<T>,
+        cert2: Option<&Certificate2<T>>,
+    ) {
+        let Some(newest) = leaves.first() else {
+            return;
+        };
+        if self.marks.anchor >= Some(newest.height()) {
+            return;
+        }
+        let mut leaf = newest.clone();
+        leaf.unfill_block_payload();
+        let anchor = Anchor {
+            leaf,
+            cert1: cert1.clone(),
+            cert2: cert2.cloned(),
+        };
+        match store::put_anchor(&mut self.pending.batch, &anchor) {
+            Ok(()) => self.marks.anchor = Some(newest.height()),
+            Err(err) => error!(%err, height = newest.height(), "failed to encode the anchor"),
+        }
     }
 
     /// Remembers the decided `leaves` whose payloads are not stored, so that a payload stored
@@ -503,20 +628,41 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             if let Some(full) = self.decide_log_full_changed() {
                 return Ok(StorageOutput::DecideLogFull(full));
             }
+            // Writes from outside that arrived while a batch was applied join the next one.
+            while let Ok(write) = self.foreign.try_recv() {
+                self.take_foreign(write);
+            }
             let idle = self.applying.is_none() && self.pending.is_empty();
             // A clone, since `apply_next` borrows `self`. It has seen what the original has.
             let mut decide_log_bytes = self.decide_log_bytes.clone();
-            tokio::select! {
-                applied = self.apply_next(), if !idle => applied?,
-                // The sender lives as long as the store, which this writer holds.
-                _ = decide_log_bytes.changed() => {},
+            if idle {
+                tokio::select! {
+                    // The sender lives as long as the store, which this writer holds.
+                    _ = decide_log_bytes.changed() => {},
+                    Some(write) = self.foreign.recv() => self.take_foreign(write),
+                }
+            } else {
+                tokio::select! {
+                    applied = self.apply_next() => applied?,
+                    _ = decide_log_bytes.changed() => {},
+                }
             }
         }
+    }
+
+    /// Adds a write from outside the writer to the next batch, so that it shares its commit.
+    fn take_foreign(&mut self, write: ForeignWrite) {
+        self.pending.foreign_batch.append(write.batch);
+        self.pending.resizes_decide_log |= write.resizes_decide_log;
+        self.pending.foreign.push(write.done);
     }
 
     /// Applies every queued write, for shutdown.
     pub async fn flush(mut self) {
         info!("flushing storage during shutdown");
+        while let Ok(write) = self.foreign.try_recv() {
+            self.take_foreign(write);
+        }
         while self.applying.is_some() || !self.pending.is_empty() {
             if let Err(err) = self.apply_next().await {
                 error!(%err, "storage failed during shutdown");
@@ -533,6 +679,14 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     async fn apply_next(&mut self) -> Result<(), StorageError> {
         if self.applying.is_none() {
             let pending = mem::take(&mut self.pending);
+            if pending.writes_nothing() {
+                // Nothing to write, and everything queued before is durable: no batch is being
+                // applied.
+                let mut pending = pending;
+                pending.report(None);
+                self.durable.extend(pending.outputs);
+                return Ok(());
+            }
             self.applying = Some(self.spawn(pending, Duration::ZERO));
         }
         let applying = self.applying.as_mut().expect("set above");
@@ -547,20 +701,26 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self.applying = None;
         match applied.result {
             Ok(()) => {
-                let Pending {
-                    outputs,
-                    writes_decide_log,
-                    ..
-                } = applied.pending;
-                if writes_decide_log {
+                let mut pending = applied.pending;
+                pending.report(None);
+                if pending.adds_to_decide_log {
                     self.store.announce();
                 }
-                self.durable.extend(outputs);
+                self.durable.extend(pending.outputs);
             },
-            Err(err @ consensus_store::Error::Poisoned(_)) => return Err(err.into()),
+            Err(err @ consensus_store::Error::Poisoned(_)) => {
+                let mut pending = applied.pending;
+                pending.report(Some(&err.to_string()));
+                return Err(err.into());
+            },
             Err(err) => {
                 warn!(%err, "failed to apply storage batch, retrying");
-                self.applying = Some(self.spawn(applied.pending, RETRY_DELAY));
+                // A foreign write may be what fails; it is reported failed and dropped, so that
+                // it cannot hold up the writes consensus waits on.
+                let mut pending = applied.pending;
+                pending.report(Some(&err.to_string()));
+                pending.foreign_batch = Batch::new();
+                self.applying = Some(self.spawn(pending, RETRY_DELAY));
             },
         }
         Ok(())
@@ -616,10 +776,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         tokio::task::spawn_blocking(move || {
             std::thread::sleep(delay);
             let timer = apply_histogram.map(Measurement::start);
-            let result = store.store().apply(&pending.batch);
+            let result = store.store().apply(&pending.combined());
             drop(timer);
             if result.is_ok()
-                && pending.writes_decide_log
+                && pending.resizes_decide_log
                 && let Err(err) = store.measure_decide_log()
             {
                 warn!(%err, "failed to measure the decide log");

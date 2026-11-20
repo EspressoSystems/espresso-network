@@ -278,6 +278,8 @@ where
                 .as_ref()
                 .map(|m| m.consensus.update_leaf_duration.clone().into()),
         );
+        // Before `restored` is taken apart: the writer starts from what the store holds.
+        let storage = Storage::new(store, &private_key, &restored);
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
         for p in restored.proposals.values() {
@@ -460,7 +462,7 @@ where
                 upgrade_lock,
             ))
             .storage({
-                let storage = Storage::new(store, &private_key)
+                let storage = storage
                     .with_metrics(metrics)
                     .with_decide_log_limit(decide_log_limit);
                 match decided_state {

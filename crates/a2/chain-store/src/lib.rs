@@ -41,7 +41,7 @@ pub mod testing;
 #[cfg(any(feature = "remote", feature = "service"))]
 pub mod wire;
 
-pub use app_tables::{AppTables, AppWrite};
+pub use app_tables::{AppTables, AppWrite, TableName};
 pub use backend::{Backend, Column, KeyBounds, Part, Row};
 
 /// The store's record of one block height.
@@ -148,13 +148,13 @@ pub enum Lookup {
 /// The application tables of the store, which the ingester keeps the data it derives in.
 #[async_trait]
 impl AppTables for ChainStore {
-    async fn get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+    async fn get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         self.app_get(table, key).await
     }
 
     async fn entries(
         &self,
-        table: &str,
+        table: &TableName,
         from: &[u8],
         until: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
@@ -282,7 +282,7 @@ impl ChainStore {
     }
 
     /// The value of `key` in the application table `table`.
-    pub async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+    pub async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         self.backend.app_get(table, key).await
     }
 
@@ -291,7 +291,7 @@ impl ChainStore {
     /// grows with the table.
     pub async fn app_entries(
         &self,
-        table: &str,
+        table: &TableName,
         from: &[u8],
         until: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
@@ -423,20 +423,21 @@ mod tests {
     #[tokio::test]
     async fn app_entries_read_every_page() {
         let store = ChainStore::new(mem::MemBackend::default());
+        let t = TableName::of("t");
         let count = 2 * APP_PAGE as u32 + 5;
         let writes = (0..count)
             .map(|i| AppWrite::Put {
-                table: "t".into(),
+                table: t.clone(),
                 key: Bytes::copy_from_slice(&i.to_be_bytes()),
                 value: Bytes::new(),
             })
             .collect();
         store.app_write(writes).await.unwrap();
 
-        let all = store.app_entries("t", &[], None).await.unwrap();
+        let all = store.app_entries(&t, &[], None).await.unwrap();
         assert_eq!(all.len(), count as usize);
         let until = 1500u32.to_be_bytes();
-        let before = store.app_entries("t", &[], Some(&until)).await.unwrap();
+        let before = store.app_entries(&t, &[], Some(&until)).await.unwrap();
         assert_eq!(before.len(), 1500);
         assert_eq!(before.last().unwrap().0[..], 1499u32.to_be_bytes());
     }

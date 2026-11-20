@@ -9,9 +9,11 @@
 //! Each part is checked against the anchor's header when it is loaded, and a part that does not
 //! match is left out, to be fetched as for a node without the store.
 
+use std::sync::LazyLock;
+
 use alloy::primitives::Address;
 use anyhow::Context;
-use app_tables::AppWrite;
+use app_tables::{AppWrite, TableName};
 use committable::{Commitment, Committable};
 use consensus::{state::StateEntry, storage::DecidedState};
 use espresso_types::{
@@ -29,10 +31,10 @@ use crate::store::NodeStore;
 type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
 /// Fixed keys to the parts of the decided state other than the reward accounts.
-const STATE: &str = "decided-state";
+static STATE: LazyLock<TableName> = LazyLock::new(|| TableName::of("decided-state"));
 
 /// Reward account address to its balance in the v2 reward tree.
-const REWARD_ACCOUNTS: &str = "reward-accounts";
+static REWARD_ACCOUNTS: LazyLock<TableName> = LazyLock::new(|| TableName::of("reward-accounts"));
 
 /// The frontier of the block tree.
 const FRONTIER: &[u8] = b"frontier";
@@ -65,7 +67,7 @@ pub fn load(store: &NodeStore, anchor: &Leaf2) -> anyhow::Result<ValidatedState>
     let root = header.reward_merkle_tree_root().right();
     if root.is_some() && get::<RewardMerkleCommitmentV2>(store, REWARD_ROOT)? == root {
         let accounts = store
-            .app_entries(REWARD_ACCOUNTS, &[], None)?
+            .app_entries(&REWARD_ACCOUNTS, &[], None)?
             .into_iter()
             .map(|(key, value)| {
                 let account = RewardAccountV2(Address::try_from(&key[..])?);
@@ -167,7 +169,7 @@ impl DecidedState<SeqTypes> for DecidedStateWriter {
                 }
             } else if let Some(tree) = complete {
                 writes.push(AppWrite::Clear {
-                    table: REWARD_ACCOUNTS.into(),
+                    table: REWARD_ACCOUNTS.clone(),
                 });
                 for (account, balance) in tree.iter() {
                     writes.push(put_account(account, balance)?);
@@ -201,7 +203,7 @@ impl DecidedState<SeqTypes> for DecidedStateWriter {
 /// The value under `key`, or `None` if it is missing or no longer decodes, as after a release that
 /// changed its type: it is then rebuilt from later decides, and must not stop the node.
 fn get<V: serde::de::DeserializeOwned>(store: &NodeStore, key: &[u8]) -> anyhow::Result<Option<V>> {
-    let Some(bytes) = store.app_get(STATE, key)? else {
+    let Some(bytes) = store.app_get(&STATE, key)? else {
         return Ok(None);
     };
     Ok(bincode::deserialize(&bytes)
@@ -214,7 +216,7 @@ fn get<V: serde::de::DeserializeOwned>(store: &NodeStore, key: &[u8]) -> anyhow:
 
 fn put(key: &[u8], value: &impl serde::Serialize) -> anyhow::Result<AppWrite> {
     Ok(AppWrite::Put {
-        table: STATE.into(),
+        table: STATE.clone(),
         key: key.to_vec().into(),
         value: bincode::serialize(value)?.into(),
     })
@@ -222,7 +224,7 @@ fn put(key: &[u8], value: &impl serde::Serialize) -> anyhow::Result<AppWrite> {
 
 fn put_account(account: &RewardAccountV2, balance: &RewardAmount) -> anyhow::Result<AppWrite> {
     Ok(AppWrite::Put {
-        table: REWARD_ACCOUNTS.into(),
+        table: REWARD_ACCOUNTS.clone(),
         key: account.0.to_vec().into(),
         value: bincode::serialize(balance)?.into(),
     })
@@ -253,7 +255,7 @@ mod tests {
         let s1 = next(&s0, &leaf0, &[(A, 1), (B, 2)]);
         let leaf1 = child(&leaf0, &s1);
         let writes = writer.decided(&leaf1, Some(&entry(&leaf1, &s1, Some(&[A, B]))));
-        store.app_write(&writes).unwrap();
+        store.app_write(&writes).await.unwrap();
         assert_restored(&store, &leaf1, &s1);
 
         let s2 = next(&s1, &leaf1, &[(A, 5)]);
@@ -264,7 +266,7 @@ mod tests {
             1,
             "only the changed account is written"
         );
-        store.app_write(&writes).unwrap();
+        store.app_write(&writes).await.unwrap();
         assert_restored(&store, &leaf2, &s2);
     }
 
@@ -279,11 +281,15 @@ mod tests {
         let leaf1 = child(&leaf0, &s1);
         store
             .app_write(&writer.decided(&leaf1, Some(&entry(&leaf1, &s1, None))))
+            .await
             .unwrap();
 
         let s2 = next(&s1, &leaf1, &[(A, 3)]);
         let leaf2 = child(&leaf1, &s2);
-        store.app_write(&writer.decided(&leaf2, None)).unwrap();
+        store
+            .app_write(&writer.decided(&leaf2, None))
+            .await
+            .unwrap();
         let restored = load(&store, &leaf2).unwrap();
         assert!(
             restored
@@ -298,12 +304,13 @@ mod tests {
         let leaf3 = child(&leaf2, &s3);
         let writes = writer.decided(&leaf3, Some(&entry(&leaf3, &s3, Some(&[B]))));
         assert_eq!(account_writes(&writes), 0);
-        store.app_write(&writes).unwrap();
+        store.app_write(&writes).await.unwrap();
 
         let s4 = next(&next(&s2, &leaf2, &[(B, 4)]), &leaf3, &[(B, 6)]);
         let leaf4 = child(&leaf3, &s4);
         store
             .app_write(&writer.decided(&leaf4, Some(&entry(&leaf4, &s4, Some(&[B])))))
+            .await
             .unwrap();
         assert_restored(&store, &leaf4, &s4);
     }
@@ -333,6 +340,7 @@ mod tests {
         let leaf1 = child(&leaf0, &s1);
         store
             .app_write(&writer.decided(&leaf1, Some(&entry(&leaf1, &s1, None))))
+            .await
             .unwrap();
 
         let s2 = next(&s1, &leaf1, &[(A, 2)]);
@@ -444,7 +452,7 @@ mod tests {
     fn account_writes(writes: &[AppWrite]) -> usize {
         writes
             .iter()
-            .filter(|w| matches!(w, AppWrite::Put { table, .. } if *table == REWARD_ACCOUNTS))
+            .filter(|w| matches!(w, AppWrite::Put { table, .. } if *table == *REWARD_ACCOUNTS))
             .count()
     }
 

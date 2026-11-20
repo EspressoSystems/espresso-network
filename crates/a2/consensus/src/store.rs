@@ -14,7 +14,7 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use app_tables::{AppTables, AppWrite};
+use app_tables::{AppTables, AppWrite, TableName};
 use async_trait::async_trait;
 use consensus_store::{Batch, Bytes, KeyRange, Snapshot, Store, Table, key};
 use hotshot_types::{
@@ -24,12 +24,11 @@ use hotshot_types::{
     simple_certificate::{
         Certificate1, Certificate2, LightClientStateUpdateCertificateV2, UpgradeCertificate,
     },
-    simple_vote::LockView,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vid::avidm_gf2::AvidmGf2Common,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::discovery::SignedServiceRecord;
 
@@ -107,6 +106,17 @@ struct Changes {
 
     /// The bytes the decide log takes up, with the payloads of its entries.
     decide_log_bytes: watch::Sender<u64>,
+
+    /// The writer of the store while one runs, which every other write goes through.
+    writer: watch::Sender<Option<mpsc::UnboundedSender<ForeignWrite>>>,
+}
+
+/// A write that does not come from the writer: an acknowledgement or a write to the
+/// application's tables. The writer adds it to its batch and reports once it is durable.
+pub(crate) struct ForeignWrite {
+    pub(crate) batch: Batch,
+    pub(crate) resizes_decide_log: bool,
+    pub(crate) done: oneshot::Sender<anyhow::Result<()>>,
 }
 
 /// One decided leaf, as the decide log holds it. Its payload is stored apart.
@@ -232,6 +242,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         let changes = Changes {
             decide_log_writes: watch::channel(0).0,
             decide_log_bytes: watch::channel(decide_log_bytes).0,
+            writer: watch::channel(None).0,
         };
         Self {
             store,
@@ -264,7 +275,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         self.changes.decide_log_writes.send_modify(|n| *n += 1);
     }
 
-    pub fn store(&self) -> &Arc<S> {
+    pub(crate) fn store(&self) -> &Arc<S> {
         &self.store
     }
 
@@ -376,7 +387,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     }
 
     /// Frees the decide log entries of the heights in `ranges`, and their payloads.
-    pub fn ack(&self, ranges: &[Range<u64>]) -> anyhow::Result<()> {
+    pub async fn ack(&self, ranges: &[Range<u64>]) -> anyhow::Result<()> {
         let mut batch = Batch::new();
         for range in ranges.iter().filter(|range| !range.is_empty()) {
             let heights = || {
@@ -389,8 +400,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
                 .delete_range(&DECIDE_LOG, heights())
                 .delete_range(&DECIDED_PAYLOADS, heights());
         }
-        self.store.apply(&batch)?;
-        self.measure_decide_log()
+        self.write(batch, true).await
     }
 
     /// Whether the payload of the block with commitment `commitment` proposed in `view` is
@@ -420,16 +430,16 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
 
     /// The value of `key` in the application's `table`. Consensus does not read these tables. A
     /// table name is lowercase ASCII letters, digits, `_` and `-`.
-    pub fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+    pub fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         let snap = self.store.snapshot()?;
-        Ok(snap.get(&app_table(table)?, key)?)
+        Ok(snap.get(&app_table(table), key)?)
     }
 
     /// The entries of the application's `table` with keys from `from` on, and before `until` if
     /// set, in key order.
     pub fn app_entries(
         &self,
-        table: &str,
+        table: &TableName,
         from: &[u8],
         until: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
@@ -440,16 +450,58 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             None => KeyRange::starting_at(from),
         };
         Ok(snap
-            .range(&app_table(table)?, &range)?
+            .range(&app_table(table), &range)?
             .collect::<Result<_, _>>()?)
     }
 
     /// Applies `writes` to the application's tables, all or none.
-    pub fn app_write(&self, writes: &[AppWrite]) -> anyhow::Result<()> {
+    pub async fn app_write(&self, writes: &[AppWrite]) -> anyhow::Result<()> {
         let mut batch = Batch::new();
-        put_app(&mut batch, writes)?;
-        self.store.apply(&batch)?;
-        Ok(())
+        put_app(&mut batch, writes);
+        self.write(batch, false).await
+    }
+
+    /// Makes `writer` the writer of the store: from now on every other write goes through it.
+    pub(crate) fn attach_writer(&self, writer: mpsc::UnboundedSender<ForeignWrite>) {
+        self.changes.writer.send_replace(Some(writer));
+    }
+
+    /// Applies `batch` through the writer, in its next commit, so that it does not contend with
+    /// the writes consensus waits on. Without a writer, as while the node starts, or once it has
+    /// stopped, the batch is applied directly.
+    ///
+    /// A write the writer took but did not report, because it stopped, is not applied again: it
+    /// may have been, and a later write to the same key could be lost.
+    async fn write(&self, batch: Batch, resizes_decide_log: bool) -> anyhow::Result<()> {
+        let writer = self.changes.writer.borrow().clone();
+        let batch = match writer {
+            Some(writer) => {
+                let (done, durable) = oneshot::channel();
+                let write = ForeignWrite {
+                    batch,
+                    resizes_decide_log,
+                    done,
+                };
+                match writer.send(write) {
+                    Ok(()) => {
+                        return durable
+                            .await
+                            .context("the writer stopped before it reported the write")?;
+                    },
+                    Err(returned) => returned.0.batch,
+                }
+            },
+            None => batch,
+        };
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            store.store.apply(&batch)?;
+            if resizes_decide_log {
+                store.measure_decide_log()?;
+            }
+            Ok(())
+        })
+        .await?
     }
 
     /// Whether [`Self::import`] has run on this store.
@@ -476,10 +528,10 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             put_boundary_qc(&mut batch, qc)?;
         }
         if let Some(view) = import.acted_view {
-            raise_view(&mut batch, ACTED_VIEW, view);
+            put_acted_view(&mut batch, view);
         }
         if let Some(view) = import.restart_view {
-            raise_view(&mut batch, RESTART_VIEW, view);
+            put_restart_view(&mut batch, view);
         }
         if let Some(cert) = &import.upgrade_cert {
             put_upgrade_cert(&mut batch, cert)?;
@@ -493,7 +545,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         if let Some(anchor) = &import.anchor {
             put_anchor(&mut batch, anchor)?;
         }
-        put_app(&mut batch, &import.app)?;
+        put_app(&mut batch, &import.app);
         batch.put(&SAFETY, IMPORTED, Bytes::new());
         self.store.apply(&batch)?;
         Ok(())
@@ -503,7 +555,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     ///
     /// Like the decide path of the storage this replaces, every certificate in the range is
     /// kept, by its epoch.
-    pub fn finalize_state_certs(
+    pub(crate) fn finalize_state_certs(
         &self,
         batch: &mut Batch,
         decided: ViewNumber,
@@ -529,16 +581,17 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     }
 }
 
-/// Records that this node acted in `view`, as the storage this replaces did: proposals, votes
-/// and timeout votes raise the acted view; votes also raise the restart view past `view`.
-pub fn record_action(batch: &mut Batch, view: ViewNumber, kind: crate::storage::ActionKind) {
-    raise_view(batch, ACTED_VIEW, view);
-    if kind == crate::storage::ActionKind::Vote {
-        raise_view(batch, RESTART_VIEW, view + 1);
-    }
+/// Stores `view` as the latest view this node acted in.
+pub(crate) fn put_acted_view(batch: &mut Batch, view: ViewNumber) {
+    batch.put(&SAFETY, ACTED_VIEW, key::u64(*view).to_vec());
 }
 
-pub fn put_proposal<T: NodeType>(
+/// Stores `view` as the view a restarted node resumes in.
+pub(crate) fn put_restart_view(batch: &mut Batch, view: ViewNumber) {
+    batch.put(&SAFETY, RESTART_VIEW, key::u64(*view).to_vec());
+}
+
+pub(crate) fn put_proposal<T: NodeType>(
     batch: &mut Batch,
     proposal: &SignedProposal<T, Proposal<T>>,
 ) -> anyhow::Result<()> {
@@ -553,7 +606,7 @@ pub fn put_proposal<T: NodeType>(
 /// Gives the decide log entry at `height`, written without its payload, the payload stored for
 /// the block with commitment `commitment` proposed in `view`. Like the copy at the decide, it
 /// shares the stored value rather than writing it again.
-pub fn put_decided_payload(
+pub(crate) fn put_decided_payload(
     batch: &mut Batch,
     height: u64,
     view: ViewNumber,
@@ -569,7 +622,7 @@ pub fn put_decided_payload(
 }
 
 /// Stores the encoded payload of the block with commitment `commitment` proposed in `view`.
-pub fn put_payload(
+pub(crate) fn put_payload(
     batch: &mut Batch,
     view: ViewNumber,
     commitment: &VidCommitment2,
@@ -583,7 +636,7 @@ pub fn put_payload(
     Ok(())
 }
 
-pub fn put_pending_state_cert<T: NodeType>(
+pub(crate) fn put_pending_state_cert<T: NodeType>(
     batch: &mut Batch,
     view: ViewNumber,
     cert: &LightClientStateUpdateCertificateV2<T>,
@@ -596,17 +649,26 @@ pub fn put_pending_state_cert<T: NodeType>(
     Ok(())
 }
 
-/// Stores `qc` as the lock, unless the stored lock is later.
-pub fn put_locked_qc<T: NodeType>(batch: &mut Batch, qc: &Certificate1<T>) -> anyhow::Result<()> {
-    put_latest_cert(batch, LOCKED_QC, qc)
+/// Stores `qc` as the lock. The writer checks that it is later than the stored one.
+pub(crate) fn put_locked_qc<T: NodeType>(
+    batch: &mut Batch,
+    qc: &Certificate1<T>,
+) -> anyhow::Result<()> {
+    batch.put(&SAFETY, LOCKED_QC, encode(qc)?);
+    Ok(())
 }
 
-/// Stores `qc` as the boundary certificate, unless the stored one is later.
-pub fn put_boundary_qc<T: NodeType>(batch: &mut Batch, qc: &Certificate1<T>) -> anyhow::Result<()> {
-    put_latest_cert(batch, BOUNDARY_QC, qc)
+/// Stores `qc` as the boundary certificate. The writer checks that it is later than the stored
+/// one.
+pub(crate) fn put_boundary_qc<T: NodeType>(
+    batch: &mut Batch,
+    qc: &Certificate1<T>,
+) -> anyhow::Result<()> {
+    batch.put(&SAFETY, BOUNDARY_QC, encode(qc)?);
+    Ok(())
 }
 
-pub fn put_upgrade_cert<T: NodeType>(
+pub(crate) fn put_upgrade_cert<T: NodeType>(
     batch: &mut Batch,
     cert: &UpgradeCertificate<T>,
 ) -> anyhow::Result<()> {
@@ -619,7 +681,7 @@ pub fn put_upgrade_cert<T: NodeType>(
 ///
 /// Each payload is shared with the payload table, not written again. Moves the anchor to the
 /// newest leaf, unless a later one is stored: a decide that fills a gap trails the anchor.
-pub fn put_decided<T: NodeType>(
+pub(crate) fn put_decided<T: NodeType>(
     batch: &mut Batch,
     leaves: &[Leaf2<T>],
     cert1: &Certificate1<T>,
@@ -654,18 +716,6 @@ pub fn put_decided<T: NodeType>(
         };
         batch.put(&DECIDE_LOG, height, encode(&decided)?);
     }
-    if let Some(newest) = leaves.first() {
-        let mut leaf = newest.clone();
-        leaf.unfill_block_payload();
-        put_anchor(
-            batch,
-            &Anchor {
-                leaf,
-                cert1: cert1.clone(),
-                cert2: cert2.cloned(),
-            },
-        )?;
-    }
     Ok(())
 }
 
@@ -680,44 +730,36 @@ fn decide_log_bytes(snap: &impl Snapshot) -> Result<u64, consensus_store::Error>
 /// The application tables of the store, whose calls block, so they run on a blocking thread.
 #[async_trait]
 impl<T: NodeType, S: Store> AppTables for ConsensusStore<T, S> {
-    async fn get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
-        let (store, table, key) = (self.clone(), table.to_owned(), key.to_vec());
+    async fn get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        let (store, table, key) = (self.clone(), table.clone(), key.to_vec());
         tokio::task::spawn_blocking(move || store.app_get(&table, &key)).await?
     }
 
     async fn entries(
         &self,
-        table: &str,
+        table: &TableName,
         from: &[u8],
         until: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
-        let (store, table, from) = (self.clone(), table.to_owned(), from.to_vec());
+        let (store, table, from) = (self.clone(), table.clone(), from.to_vec());
         let until = until.map(<[u8]>::to_vec);
         tokio::task::spawn_blocking(move || store.app_entries(&table, &from, until.as_deref()))
             .await?
     }
 
     async fn write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.app_write(&writes)).await?
+        self.app_write(&writes).await
     }
 }
 
-/// Stores `anchor`, unless the stored anchor is of a later height.
-fn put_anchor<T: NodeType>(batch: &mut Batch, anchor: &Anchor<T>) -> anyhow::Result<()> {
-    let height = anchor.leaf.height();
-    let bytes = encode(anchor)?;
-    batch.update(&SAFETY, ANCHOR, move |current| {
-        let stored = current.and_then(|v| decode::<Anchor<T>>(v).ok());
-        stored
-            .is_none_or(|s| s.leaf.height() < height)
-            .then(|| bytes.clone())
-    });
+/// Stores `anchor` as the latest decided leaf.
+pub(crate) fn put_anchor<T: NodeType>(batch: &mut Batch, anchor: &Anchor<T>) -> anyhow::Result<()> {
+    batch.put(&SAFETY, ANCHOR, encode(anchor)?);
     Ok(())
 }
 
 /// Deletes the proposals and payloads of views before `view`.
-pub fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
+pub(crate) fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
     let before = || KeyRange::before(Bytes::copy_from_slice(&key::u64(*view)));
     batch
         .delete_range(&PROPOSALS, before())
@@ -725,7 +767,7 @@ pub fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
 }
 
 /// Replaces the stored record of the record's signer in its epoch.
-pub fn put_service_record<T: NodeType>(
+pub(crate) fn put_service_record<T: NodeType>(
     batch: &mut Batch,
     record: &SignedServiceRecord<T>,
 ) -> anyhow::Result<()> {
@@ -736,7 +778,7 @@ pub fn put_service_record<T: NodeType>(
 }
 
 /// Deletes the records of the epochs before `epoch`.
-pub fn drop_service_records(batch: &mut Batch, epoch: EpochNumber) {
+pub(crate) fn drop_service_records(batch: &mut Batch, epoch: EpochNumber) {
     batch.delete_range(
         &SERVICE_RECORDS,
         KeyRange::before(Bytes::copy_from_slice(&key::u64(*epoch))),
@@ -744,48 +786,20 @@ pub fn drop_service_records(batch: &mut Batch, epoch: EpochNumber) {
 }
 
 /// Queues `writes` to the application's tables in `batch`.
-pub fn put_app(batch: &mut Batch, writes: &[AppWrite]) -> anyhow::Result<()> {
+pub(crate) fn put_app(batch: &mut Batch, writes: &[AppWrite]) {
     for write in writes {
         match write {
             AppWrite::Put { table, key, value } => {
-                batch.put(&app_table(table)?, key.clone(), value.clone());
+                batch.put(&app_table(table), key.clone(), value.clone());
             },
             AppWrite::DeleteBefore { table, key } => {
-                batch.delete_range(&app_table(table)?, KeyRange::before(key.clone()));
+                batch.delete_range(&app_table(table), KeyRange::before(key.clone()));
             },
             AppWrite::Clear { table } => {
-                batch.delete_range(&app_table(table)?, KeyRange::all());
+                batch.delete_range(&app_table(table), KeyRange::all());
             },
         }
     }
-    Ok(())
-}
-
-/// A monotonic compare-and-set: the stored certificate is replaced only by a later lock.
-///
-/// A stored value that fails to decode is replaced, so a corrupt row cannot block the lock.
-fn put_latest_cert<T: NodeType>(
-    batch: &mut Batch,
-    name: &'static [u8],
-    qc: &Certificate1<T>,
-) -> anyhow::Result<()> {
-    let lock = LockView::of(qc);
-    let bytes = encode(qc)?;
-    batch.update(&SAFETY, name, move |current| {
-        let stored = current.and_then(|v| decode::<Certificate1<T>>(v).ok());
-        stored
-            .is_none_or(|s| LockView::of(&s) < lock)
-            .then(|| bytes.clone())
-    });
-    Ok(())
-}
-
-/// Raises the view stored under `name` to `view`, if it is lower.
-fn raise_view(batch: &mut Batch, name: &'static [u8], view: ViewNumber) {
-    batch.update(&SAFETY, name, move |current| {
-        let stored = current.and_then(key::decode_u64);
-        (stored < Some(*view)).then(|| Bytes::copy_from_slice(&key::u64(*view)))
-    });
 }
 
 fn payload_key(view: ViewNumber, commitment: &VidCommitment2) -> anyhow::Result<Vec<u8>> {
@@ -842,9 +856,10 @@ fn decode<V: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<V> {
     Ok(bincode::deserialize(bytes)?)
 }
 
-/// The application's table `name`, apart from the consensus tables.
-fn app_table(name: &str) -> anyhow::Result<Table> {
-    Table::new(format!("app-{name}")).with_context(|| format!("application table name {name:?}"))
+/// The application's table `name`, apart from the consensus tables. An application table name
+/// leaves room for the prefix within the store's own rules.
+fn app_table(name: &TableName) -> Table {
+    Table::new(format!("app-{name}")).expect("an application table name makes a valid table")
 }
 
 fn table(name: &str) -> Table {

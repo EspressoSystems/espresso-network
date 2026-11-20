@@ -213,10 +213,11 @@ impl TestHarness {
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .share_validator(share_validator)
-            .storage(crate::storage::Storage::new(
-                crate::store::ConsensusStore::new(Arc::new(MemStore::new())),
-                &private_key,
-            ))
+            .storage({
+                let store = crate::store::ConsensusStore::new(Arc::new(MemStore::new()));
+                let restored = store.load().expect("a new store loads");
+                crate::storage::Storage::new(store, &private_key, &restored)
+            })
             .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())

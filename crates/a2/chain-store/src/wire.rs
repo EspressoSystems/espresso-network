@@ -3,7 +3,7 @@
 
 use tonic::Status;
 
-use crate::{AppWrite, Part};
+use crate::{AppWrite, Part, TableName};
 
 /// The store service's protocol, generated from `proto/espresso/a2/store/v1`.
 pub mod proto {
@@ -16,7 +16,8 @@ pub const MAX_MESSAGE_SIZE: usize = 64 << 20;
 #[cfg(feature = "service")]
 pub(crate) fn app_write_from(write: proto::AppTableWrite) -> Result<AppWrite, Status> {
     use proto::app_table_write::Op;
-    let table = write.table;
+    let table =
+        TableName::new(&write.table).map_err(|err| Status::invalid_argument(format!("{err:#}")))?;
     match write.op {
         Some(Op::Put(entry)) => Ok(AppWrite::Put {
             table,
@@ -37,18 +38,18 @@ pub(crate) fn app_write_to(write: AppWrite) -> proto::AppTableWrite {
     use proto::app_table_write::Op;
     match write {
         AppWrite::Put { table, key, value } => proto::AppTableWrite {
-            table,
+            table: table.to_string(),
             op: Some(Op::Put(proto::AppEntry {
                 key: key.to_vec(),
                 value: value.to_vec(),
             })),
         },
         AppWrite::DeleteBefore { table, key } => proto::AppTableWrite {
-            table,
+            table: table.to_string(),
             op: Some(Op::DeleteBefore(key.to_vec())),
         },
         AppWrite::Clear { table } => proto::AppTableWrite {
-            table,
+            table: table.to_string(),
             op: Some(Op::Clear(proto::Empty {})),
         },
     }

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
 
-use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row, TableName};
 
 #[derive(Debug)]
 pub struct MemBackend {
@@ -18,7 +18,7 @@ pub struct MemBackend {
 struct State {
     rows: BTreeMap<u64, Row>,
     parts: BTreeMap<(u64, Part), Bytes>,
-    app: BTreeMap<(String, Bytes), Bytes>,
+    app: BTreeMap<(TableName, Bytes), Bytes>,
     floor: u64,
 }
 
@@ -157,17 +157,17 @@ impl Backend for MemBackend {
         }))
     }
 
-    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
-        let key = (table.to_string(), Bytes::copy_from_slice(key));
+    async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+        let key = (table.clone(), Bytes::copy_from_slice(key));
         Ok(self.read(|state| state.app.get(&key).cloned()))
     }
 
     async fn app_entries(
         &self,
-        table: &str,
+        table: &TableName,
         keys: KeyBounds<'_>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
-        let from = (table.to_string(), Bytes::copy_from_slice(keys.from));
+        let from = (table.clone(), Bytes::copy_from_slice(keys.from));
         Ok(self.read(|state| {
             state
                 .app

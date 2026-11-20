@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use app_tables::AppWrite;
+use app_tables::{AppWrite, TableName};
 use committable::RawCommitmentBuilder;
 use consensus_store::{
     Batch, Bytes, Error, Store,
@@ -36,7 +36,10 @@ fn test_storage() -> (
 ) {
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
-    (Storage::new(store.clone(), &private_key), store)
+    (
+        Storage::new(store.clone(), &private_key, &store.load().unwrap()),
+        store,
+    )
 }
 
 /// A write surfaces exactly one completion, once it is in the store.
@@ -97,6 +100,37 @@ async fn test_writes_share_one_commit() {
     // The views only ever rise.
     assert_eq!(store.load().unwrap().acted_view, Some(ViewNumber::new(9)));
     assert_nothing_more(&mut storage).await;
+}
+
+/// A write from outside the writer joins the writer's batch and shares its commit, and is
+/// reported once that commit is durable.
+#[tokio::test]
+async fn test_foreign_writes_share_the_writers_commit() {
+    let (mut storage, store) = test_storage();
+    let writes = [AppWrite::Put {
+        table: TableName::new("a").unwrap(),
+        key: Bytes::from_static(&[1]),
+        value: Bytes::from_static(b"one"),
+    }];
+    let mut write = std::pin::pin!(store.app_write(&writes));
+    assert!(
+        futures::poll!(write.as_mut()).is_pending(),
+        "the write waits for the writer"
+    );
+    let view = ViewNumber::new(3);
+    storage.record_action(view, ActionKind::Vote);
+
+    let (written, mut outputs) = driving(&mut storage, write).await;
+    written.unwrap();
+    if outputs.is_empty() {
+        outputs.push(storage.next().await.unwrap());
+    }
+    assert_eq!(outputs, vec![StorageOutput::Action(view, ActionKind::Vote)]);
+    assert_eq!(store.store().commits.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        store.app_get(&TableName::new("a").unwrap(), &[1]).unwrap(),
+        Some(Bytes::from_static(b"one"))
+    );
 }
 
 /// A payload write reports the block it stored, and garbage collection removes it.
@@ -170,6 +204,58 @@ async fn test_lock_is_monotonic_and_survives_gc() {
     assert_eq!(restored.boundary_qc, Some(later));
 }
 
+/// A restarted writer starts from the values its store holds, and does not lower them.
+#[tokio::test]
+async fn test_restarted_writer_keeps_the_stored_marks() {
+    let (mut storage, store) = test_storage();
+    let epoch = EpochNumber::genesis();
+    let membership = mock_membership().membership_for_epoch(epoch).unwrap();
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let cert_at = |view: u64| {
+        let leaf = RawCommitmentBuilder::new("leaf").u64(view).finalize();
+        build_cert1(
+            leaf,
+            epoch,
+            view,
+            &membership,
+            ViewNumber::new(view),
+            &public_key,
+            &private_key,
+        )
+    };
+    let next = async |storage: &mut Storage<TestTypes, FlakyStore>| {
+        timeout(Duration::from_secs(5), storage.next())
+            .await
+            .expect("an output")
+            .unwrap()
+    };
+    let later = cert_at(10);
+    storage.append_high_qc2(later.clone());
+    storage.record_action(ViewNumber::new(12), ActionKind::Vote);
+    next(&mut storage).await;
+    next(&mut storage).await;
+
+    let mut restarted = Storage::new(store.clone(), &private_key, &store.load().unwrap());
+    restarted.append_high_qc2(cert_at(8));
+    restarted.record_action(ViewNumber::new(11), ActionKind::Vote);
+    // Neither raises a stored value, so both are reported without a write.
+    let commits = store.store().commits.load(Ordering::Relaxed);
+    assert_eq!(
+        next(&mut restarted).await,
+        StorageOutput::HighQc(LockView::of(&cert_at(8)))
+    );
+    assert_eq!(
+        next(&mut restarted).await,
+        StorageOutput::Action(ViewNumber::new(11), ActionKind::Vote)
+    );
+    assert_eq!(store.store().commits.load(Ordering::Relaxed), commits);
+
+    let restored = store.load().unwrap();
+    assert_eq!(restored.locked_qc, Some(later));
+    assert_eq!(restored.acted_view, Some(ViewNumber::new(12)));
+    assert_eq!(restored.restart_view, Some(ViewNumber::new(13)));
+}
+
 /// A store that can no longer tell whether a commit happened stops the writer.
 #[tokio::test]
 async fn test_poisoned_store_is_an_error() {
@@ -177,6 +263,22 @@ async fn test_poisoned_store_is_an_error() {
     store.store().poisoned.store(true, Ordering::Relaxed);
     storage.record_action(ViewNumber::new(1), ActionKind::Vote);
     assert!(storage.next().await.is_err());
+}
+
+/// Runs `work` while driving `storage`, which writes from outside the writer wait on, and
+/// returns what `work` gives with the outputs the writer reported meanwhile.
+async fn driving<S: consensus_store::Store, R>(
+    storage: &mut Storage<TestTypes, S>,
+    work: impl Future<Output = R>,
+) -> (R, Vec<StorageOutput<TestTypes>>) {
+    let mut work = std::pin::pin!(work);
+    let mut outputs = Vec::new();
+    loop {
+        tokio::select! {
+            result = &mut work => return (result, outputs),
+            output = storage.next() => outputs.push(output.expect("the writer works")),
+        }
+    }
 }
 
 async fn assert_nothing_more(storage: &mut Storage<TestTypes, FlakyStore>) {
@@ -299,12 +401,11 @@ async fn test_decide_log() {
     );
     assert_eq!(store.decided_from(0, usize::MAX).unwrap().len(), 3);
 
-    store
-        .ack(&[Range {
-            start: 0,
-            end: v2.leaf.height(),
-        }])
-        .unwrap();
+    let ranges = [Range {
+        start: 0,
+        end: v2.leaf.height(),
+    }];
+    driving(&mut storage, store.ack(&ranges)).await.0.unwrap();
     let left: Vec<_> = store
         .decided_from(0, usize::MAX)
         .unwrap()
@@ -320,7 +421,8 @@ async fn test_decide_log() {
 async fn test_decide_log_limit() {
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
-    let mut storage = Storage::new(store.clone(), &private_key).with_decide_log_limit(1);
+    let mut storage =
+        Storage::new(store.clone(), &private_key, &store.load().unwrap()).with_decide_log_limit(1);
     let data = super::common::utils::TestData::new(1).await;
     let v0 = &data.views[0];
     let view = ViewNumber::new(5);
@@ -346,14 +448,18 @@ async fn test_decide_log_limit() {
     assert_nothing_more(&mut storage).await;
 
     let end = v0.leaf.height() + 1;
-    store.ack(&[Range { start: 0, end }]).unwrap();
-    assert_eq!(
-        timeout(Duration::from_secs(5), storage.next())
-            .await
-            .expect("the freed log is reported")
-            .unwrap(),
-        StorageOutput::DecideLogFull(false)
-    );
+    let ranges = [Range { start: 0, end }];
+    let (acked, mut outputs) = driving(&mut storage, store.ack(&ranges)).await;
+    acked.unwrap();
+    if outputs.is_empty() {
+        outputs.push(
+            timeout(Duration::from_secs(5), storage.next())
+                .await
+                .expect("the freed log is reported")
+                .unwrap(),
+        );
+    }
+    assert_eq!(outputs, vec![StorageOutput::DecideLogFull(false)]);
     assert_nothing_more(&mut storage).await;
 }
 
@@ -403,7 +509,7 @@ async fn test_decided_state_written_with_the_decide() {
         ) -> Vec<AppWrite> {
             self.0 += 1;
             vec![AppWrite::Put {
-                table: "order".into(),
+                table: TableName::new("order").unwrap(),
                 key: self.0.to_be_bytes().to_vec().into(),
                 value: [
                     leaf.height().to_be_bytes().as_slice(),
@@ -437,7 +543,7 @@ async fn test_decided_state_written_with_the_decide() {
     let batches = store.store().commits.load(Ordering::SeqCst);
     assert_eq!(batches, 1, "the decided state joins the decide's batch");
     let order: Vec<_> = store
-        .app_entries("order", &[], None)
+        .app_entries(&TableName::new("order").unwrap(), &[], None)
         .unwrap()
         .into_iter()
         .map(|(_, value)| value)
@@ -458,7 +564,7 @@ async fn test_decided_state_written_with_the_decide() {
 async fn test_app_tables() {
     let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
     let put = |table: &str, key: u8, value: &[u8]| AppWrite::Put {
-        table: table.into(),
+        table: TableName::new(table).unwrap(),
         key: vec![key].into(),
         value: Bytes::copy_from_slice(value),
     };
@@ -481,38 +587,59 @@ async fn test_app_tables() {
             ],
         })
         .unwrap();
-    assert_eq!(store.app_get("a", &[1]).unwrap(), Some(bytes(b"one")));
-    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(bytes(b"other")));
-    assert_eq!(store.app_get("a", &[3]).unwrap(), None);
+    assert_eq!(
+        store.app_get(&TableName::new("a").unwrap(), &[1]).unwrap(),
+        Some(bytes(b"one"))
+    );
+    assert_eq!(
+        store.app_get(&TableName::new("b").unwrap(), &[1]).unwrap(),
+        Some(bytes(b"other"))
+    );
+    assert_eq!(
+        store.app_get(&TableName::new("a").unwrap(), &[3]).unwrap(),
+        None
+    );
 
     store
         .app_write(&[
             put("a", 3, b"three"),
             AppWrite::DeleteBefore {
-                table: "a".into(),
+                table: TableName::new("a").unwrap(),
                 key: vec![2].into(),
             },
         ])
+        .await
         .unwrap();
     assert_eq!(
-        store.app_entries("a", &[], None).unwrap(),
+        store
+            .app_entries(&TableName::new("a").unwrap(), &[], None)
+            .unwrap(),
         vec![(bytes(&[2]), bytes(b"two")), (bytes(&[3]), bytes(b"three"))]
     );
     assert_eq!(
-        store.app_entries("a", &[3], None).unwrap(),
+        store
+            .app_entries(&TableName::new("a").unwrap(), &[3], None)
+            .unwrap(),
         vec![(bytes(&[3]), bytes(b"three"))]
     );
 
     store
-        .app_write(&[AppWrite::Clear { table: "a".into() }])
+        .app_write(&[AppWrite::Clear {
+            table: TableName::new("a").unwrap(),
+        }])
+        .await
         .unwrap();
-    assert!(store.app_entries("a", &[], None).unwrap().is_empty());
-    assert_eq!(store.app_get("b", &[1]).unwrap(), Some(bytes(b"other")));
-
     assert!(
-        store.app_get("Not a name", &[1]).is_err(),
-        "invalid table names are refused"
+        store
+            .app_entries(&TableName::new("a").unwrap(), &[], None)
+            .unwrap()
+            .is_empty()
     );
+    assert_eq!(
+        store.app_get(&TableName::new("b").unwrap(), &[1]).unwrap(),
+        Some(bytes(b"other"))
+    );
+
     assert!(store.imported().unwrap());
 }
 

@@ -17,7 +17,7 @@ pub mod conformance;
 #[cfg(any(test, feature = "testing"))]
 pub mod mem;
 
-pub use batch::{Batch, Bounds, KeyRange, Op, UpdateFn};
+pub use batch::{Batch, Bounds, KeyRange, Op};
 pub use bytes::Bytes;
 pub use table::{InvalidTableName, Table};
 

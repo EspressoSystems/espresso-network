@@ -62,12 +62,6 @@ impl State {
             Op::DeleteRange { table, keys } => {
                 self.table_mut(table).retain(|k, _| !keys.contains(k));
             },
-            Op::Update { table, key, f } => {
-                let current = self.get(table, key);
-                if let Some(value) = f(current.as_deref()) {
-                    self.table_mut(table).insert(key.clone(), value);
-                }
-            },
             Op::Copy {
                 from,
                 from_key,

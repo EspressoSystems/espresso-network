@@ -7,11 +7,11 @@
 //! come from the API services, which keep history. The events are kept in full, since a stake
 //! table is computed from all events before its epoch.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::LazyLock};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
-use app_tables::{AppTables, AppWrite};
+use app_tables::{AppTables, AppWrite, TableName};
 use async_trait::async_trait;
 use bytes::Bytes;
 use espresso_types::{
@@ -37,29 +37,30 @@ use indexmap::IndexMap;
 pub const RETAINED_EPOCHS: u64 = espresso_types::RECENT_STAKE_TABLES_LIMIT;
 
 /// Epoch to its stake table, block reward and stake table hash.
-const STAKE: &str = "stake";
+static STAKE: LazyLock<TableName> = LazyLock::new(|| TableName::of("stake"));
 
 /// Epoch to every validator registered on L1 then, active or not.
-const VALIDATORS: &str = "validators";
+static VALIDATORS: LazyLock<TableName> = LazyLock::new(|| TableName::of("validators"));
 
 /// Epoch to its DRB result.
-const DRB_RESULTS: &str = "drb-results";
+static DRB_RESULTS: LazyLock<TableName> = LazyLock::new(|| TableName::of("drb-results"));
 
 /// Epoch to the progress of its DRB computation.
-const DRB_INPUTS: &str = "drb-inputs";
+static DRB_INPUTS: LazyLock<TableName> = LazyLock::new(|| TableName::of("drb-inputs"));
 
 /// Epoch to the header of its root block.
-const EPOCH_ROOTS: &str = "epoch-roots";
+static EPOCH_ROOTS: LazyLock<TableName> = LazyLock::new(|| TableName::of("epoch-roots"));
 
 /// `(L1 block, log index)` to a stake-table event.
-const EVENTS: &str = "stake-events";
+static EVENTS: LazyLock<TableName> = LazyLock::new(|| TableName::of("stake-events"));
 
 /// The L1 block up to which [`EVENTS`] holds every event, under [`EVENTS_UNTIL`].
-const EVENTS_META: &str = "stake-events-meta";
+static EVENTS_META: LazyLock<TableName> = LazyLock::new(|| TableName::of("stake-events-meta"));
 const EVENTS_UNTIL: &[u8] = b"until";
 
 /// The per-epoch tables, which keep only the latest epochs.
-const PER_EPOCH: [&str; 5] = [STAKE, VALIDATORS, DRB_RESULTS, DRB_INPUTS, EPOCH_ROOTS];
+static PER_EPOCH: [&LazyLock<TableName>; 5] =
+    [&STAKE, &VALIDATORS, &DRB_RESULTS, &DRB_INPUTS, &EPOCH_ROOTS];
 
 /// The membership tables of a store: the consensus store of a consensus node, or the chain store
 /// of an API service.
@@ -75,7 +76,7 @@ impl<A: AppTables> MembershipStore<A> {
 
     async fn get<V: serde::de::DeserializeOwned + Send + 'static>(
         &self,
-        table: &'static str,
+        table: &TableName,
         epoch: EpochNumber,
     ) -> anyhow::Result<Option<V>> {
         let bytes = self.store.get(table, &epoch_key(epoch)).await?;
@@ -91,7 +92,7 @@ impl<A: AppTables> MembershipStore<A> {
 
     /// The L1 block up to which the store holds every stake-table event.
     async fn events_until(&self) -> anyhow::Result<Option<u64>> {
-        match self.store.get(EVENTS_META, EVENTS_UNTIL).await? {
+        match self.store.get(&EVENTS_META, EVENTS_UNTIL).await? {
             Some(bytes) => {
                 Ok(Some(u64::from_be_bytes(bytes[..].try_into().map_err(
                     |_| anyhow::anyhow!("malformed stake-event watermark"),
@@ -104,13 +105,13 @@ impl<A: AppTables> MembershipStore<A> {
     /// The DRB results the store holds, each with the root of its epoch if the store has it, for
     /// a restarted node to begin with.
     pub async fn start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
-        let results = self.store.entries(DRB_RESULTS, &[], None).await?;
+        let results = self.store.entries(&DRB_RESULTS, &[], None).await?;
         let mut info = Vec::with_capacity(results.len());
         for (key, value) in results {
             let epoch = epoch_of(&key)?;
             let drb_result: DrbResult = bincode::deserialize(&value)
                 .with_context(|| format!("decoding the DRB result of epoch {epoch}"))?;
-            let block_header = self.get(EPOCH_ROOTS, epoch).await?;
+            let block_header = self.get(&EPOCH_ROOTS, epoch).await?;
             info.push(InitializerEpochInfo {
                 epoch,
                 drb_result,
@@ -124,11 +125,11 @@ impl<A: AppTables> MembershipStore<A> {
 #[async_trait]
 impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
-        self.get(STAKE, epoch).await
+        self.get(&STAKE, epoch).await
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
-        let entries = self.store.entries(STAKE, &[], None).await?;
+        let entries = self.store.entries(&STAKE, &[], None).await?;
         let mut stakes = entries
             .into_iter()
             .rev()
@@ -145,16 +146,16 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     }
 
     async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
-        let entries = self.store.entries(STAKE, &[], None).await?;
+        let entries = self.store.entries(&STAKE, &[], None).await?;
         entries.iter().map(|(k, _)| epoch_of(k)).collect()
     }
 
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
-        self.get(DRB_RESULTS, epoch).await
+        self.get(&DRB_RESULTS, epoch).await
     }
 
     async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
-        self.get(EPOCH_ROOTS, epoch).await
+        self.get(&EPOCH_ROOTS, epoch).await
     }
 
     async fn store_epoch_root(
@@ -163,7 +164,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         block_header: Header,
     ) -> anyhow::Result<()> {
         self.write(vec![put(
-            EPOCH_ROOTS,
+            &EPOCH_ROOTS,
             epoch,
             bincode::serialize(&block_header)?,
         )])
@@ -180,11 +181,11 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         stake_table_hash: Option<StakeTableHash>,
     ) -> anyhow::Result<()> {
         let stake: StakeTuple = (stake, block_reward, stake_table_hash);
-        let mut writes = vec![put(STAKE, epoch, bincode::serialize(&stake)?)];
+        let mut writes = vec![put(&STAKE, epoch, bincode::serialize(&stake)?)];
         if let Some(oldest) = (*epoch + 1).checked_sub(RETAINED_EPOCHS) {
             let before = Bytes::copy_from_slice(&epoch_key(EpochNumber::new(oldest)));
             writes.extend(PER_EPOCH.map(|table| AppWrite::DeleteBefore {
-                table: table.into(),
+                table: (**table).clone(),
                 key: before.clone(),
             }));
         }
@@ -202,14 +203,14 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
             .into_iter()
             .map(|((block, index), event)| {
                 Ok(AppWrite::Put {
-                    table: EVENTS.into(),
+                    table: EVENTS.clone(),
                     key: Bytes::copy_from_slice(&event_key(block, index)),
                     value: serde_json::to_vec(&event)?.into(),
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         writes.push(AppWrite::Put {
-            table: EVENTS_META.into(),
+            table: EVENTS_META.clone(),
             key: Bytes::from_static(EVENTS_UNTIL),
             value: Bytes::copy_from_slice(&l1_finalized.to_be_bytes()),
         });
@@ -234,7 +235,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         let entries = self
             .store
             .entries(
-                EVENTS,
+                &EVENTS,
                 &event_key(from_l1_block, 0),
                 last.checked_add(1)
                     .map(|next| event_key(next, 0))
@@ -260,19 +261,19 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
     async fn delete_stake_tables(&self) -> anyhow::Result<()> {
         self.write(vec![
             AppWrite::Clear {
-                table: EVENTS.into(),
+                table: EVENTS.clone(),
             },
             AppWrite::Clear {
-                table: EVENTS_META.into(),
+                table: EVENTS_META.clone(),
             },
             AppWrite::Clear {
-                table: VALIDATORS.into(),
+                table: VALIDATORS.clone(),
             },
             AppWrite::Clear {
-                table: DRB_RESULTS.into(),
+                table: DRB_RESULTS.clone(),
             },
             AppWrite::Clear {
-                table: EPOCH_ROOTS.into(),
+                table: EPOCH_ROOTS.clone(),
             },
         ])
         .await
@@ -284,7 +285,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         all_validators: IndexMap<Address, RegisteredValidator<PubKey>>,
     ) -> anyhow::Result<()> {
         self.write(vec![put(
-            VALIDATORS,
+            &VALIDATORS,
             epoch,
             serde_json::to_vec(&all_validators)?,
         )])
@@ -297,7 +298,7 @@ impl<A: AppTables> MembershipPersistence for MembershipStore<A> {
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
-        let Some(bytes) = self.store.get(VALIDATORS, &epoch_key(epoch)).await? else {
+        let Some(bytes) = self.store.get(&VALIDATORS, &epoch_key(epoch)).await? else {
             bail!("no validators stored for epoch {epoch}");
         };
         let map: RegisteredValidatorMap = serde_json::from_slice(&bytes)
@@ -362,7 +363,7 @@ impl<A: AppTables> Storage<SeqTypes> for MembershipStore<A> {
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
         self.write(vec![put(
-            DRB_RESULTS,
+            &DRB_RESULTS,
             epoch,
             bincode::serialize(&drb_result)?,
         )])
@@ -380,7 +381,7 @@ impl<A: AppTables> Storage<SeqTypes> for MembershipStore<A> {
     /// Refuses to replace the progress of the same computation with older progress.
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         let epoch = EpochNumber::new(drb_input.epoch);
-        if let Some(stored) = self.get::<DrbInput>(DRB_INPUTS, epoch).await? {
+        if let Some(stored) = self.get::<DrbInput>(&DRB_INPUTS, epoch).await? {
             if stored.difficulty_level != drb_input.difficulty_level {
                 tracing::error!("Overwriting {stored:?} in storage with {drb_input:?}");
             } else if stored.iteration >= drb_input.iteration {
@@ -388,7 +389,7 @@ impl<A: AppTables> Storage<SeqTypes> for MembershipStore<A> {
             }
         }
         self.write(vec![put(
-            DRB_INPUTS,
+            &DRB_INPUTS,
             epoch,
             bincode::serialize(&drb_input)?,
         )])
@@ -396,15 +397,15 @@ impl<A: AppTables> Storage<SeqTypes> for MembershipStore<A> {
     }
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
-        self.get(DRB_INPUTS, EpochNumber::new(epoch))
+        self.get(&DRB_INPUTS, EpochNumber::new(epoch))
             .await?
             .with_context(|| format!("no DRB progress stored for epoch {epoch}"))
     }
 }
 
-fn put(table: &str, epoch: EpochNumber, value: Vec<u8>) -> AppWrite {
+fn put(table: &TableName, epoch: EpochNumber, value: Vec<u8>) -> AppWrite {
     AppWrite::Put {
-        table: table.into(),
+        table: table.clone(),
         key: Bytes::copy_from_slice(&epoch_key(epoch)),
         value: value.into(),
     }

@@ -13,7 +13,7 @@ use sqlx::{
 };
 use tokio::{sync::watch, task::JoinSet};
 
-use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row, TableName};
 
 /// The channel writes are announced on.
 const CHANNEL: &str = "chain_store";
@@ -315,10 +315,10 @@ impl Backend for PostgresBackend {
         Ok(heights.into_iter().map(|h| h as u64).collect())
     }
 
-    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
+    async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         let value: Option<Vec<u8>> =
             sqlx::query_scalar("SELECT value FROM chain_app WHERE tbl = $1 AND key = $2")
-                .bind(table)
+                .bind(table.as_str())
                 .bind(key)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -328,7 +328,7 @@ impl Backend for PostgresBackend {
     /// Postgres orders `bytea` bytewise, as the other backends order keys.
     async fn app_entries(
         &self,
-        table: &str,
+        table: &TableName,
         keys: KeyBounds<'_>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>> {
         let rows = sqlx::query(
@@ -336,7 +336,7 @@ impl Backend for PostgresBackend {
              WHERE tbl = $1 AND key >= $2 AND ($3::BYTEA IS NULL OR key < $3)
              ORDER BY key LIMIT $4",
         )
-        .bind(table)
+        .bind(table.as_str())
         .bind(keys.from)
         .bind(keys.until)
         .bind(i64::try_from(keys.limit).unwrap_or(i64::MAX))
@@ -360,7 +360,7 @@ impl Backend for PostgresBackend {
                         "INSERT INTO chain_app (tbl, key, value) VALUES ($1, $2, $3) ON CONFLICT \
                          (tbl, key) DO UPDATE SET value = EXCLUDED.value",
                     )
-                    .bind(table)
+                    .bind(table.as_str())
                     .bind(&key[..])
                     .bind(&value[..])
                     .execute(&mut *tx)
@@ -368,14 +368,14 @@ impl Backend for PostgresBackend {
                 },
                 AppWrite::DeleteBefore { table, key } => {
                     sqlx::query("DELETE FROM chain_app WHERE tbl = $1 AND key < $2")
-                        .bind(table)
+                        .bind(table.as_str())
                         .bind(&key[..])
                         .execute(&mut *tx)
                         .await?;
                 },
                 AppWrite::Clear { table } => {
                     sqlx::query("DELETE FROM chain_app WHERE tbl = $1")
-                        .bind(table)
+                        .bind(table.as_str())
                         .execute(&mut *tx)
                         .await?;
                 },

@@ -9,7 +9,7 @@ use futures::{Stream, stream};
 use tonic::{Request, Response, Status};
 
 use crate::{
-    Backend, Column, KeyBounds, Row,
+    Backend, Column, KeyBounds, Row, TableName,
     wire::{
         MAX_MESSAGE_SIZE, app_write_from, part_from, parts_from, parts_to,
         proto::{self, store_server::StoreServer},
@@ -200,7 +200,7 @@ impl proto::store_server::Store for StoreService {
         let r = request.into_inner();
         let data = self
             .backend
-            .app_get(&r.table, &r.key)
+            .app_get(&table_name(&r.table)?, &r.key)
             .await
             .map_err(internal)?;
         Ok(Response::new(proto::MaybeBytes {
@@ -220,7 +220,7 @@ impl proto::store_server::Store for StoreService {
         };
         let entries = self
             .backend
-            .app_entries(&r.table, keys)
+            .app_entries(&table_name(&r.table)?, keys)
             .await
             .map_err(internal)?;
         Ok(Response::new(proto::AppEntriesResponse {
@@ -278,4 +278,9 @@ impl proto::store_server::Store for StoreService {
 
 fn internal(err: anyhow::Error) -> Status {
     Status::internal(format!("{err:#}"))
+}
+
+/// The application table `name` a client asked for.
+fn table_name(name: &str) -> Result<TableName, Status> {
+    TableName::new(name).map_err(|err| Status::invalid_argument(format!("{err:#}")))
 }

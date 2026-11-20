@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use app_tables::AppWrite;
+use app_tables::{AppWrite, TableName};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
@@ -43,13 +43,13 @@ pub trait Backend: Send + Sync + 'static {
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
 
     /// The value of `key` in the application table `table`.
-    async fn app_get(&self, table: &str, key: &[u8]) -> anyhow::Result<Option<Bytes>>;
+    async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>>;
 
     /// Up to `keys.limit` entries of the application table `table` with keys from `keys.from`
     /// and before `keys.until`, in bytewise key order.
     async fn app_entries(
         &self,
-        table: &str,
+        table: &TableName,
         keys: KeyBounds<'_>,
     ) -> anyhow::Result<Vec<(Bytes, Bytes)>>;
 

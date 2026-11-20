@@ -38,7 +38,7 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     let [v0, v1, v2] = [&data.views[0], &data.views[1], &data.views[2]];
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
-    let mut storage = Storage::new(store.clone(), &private_key);
+    let mut storage = Storage::new(store.clone(), &private_key, &store.load().unwrap());
     let mut client = serve(IngestSource::new(store.clone(), EPOCH_HEIGHT)).await;
 
     let mut decided = client
@@ -118,15 +118,27 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     }
 
     // An acknowledged height is gone, and a new subscriber learns where the log starts.
-    client
-        .ack(consensus_api::proto::AckRequest {
+    // The acknowledgement goes through the writer, which the test drives meanwhile.
+    {
+        let ack = client.ack(consensus_api::proto::AckRequest {
             ranges: vec![consensus_api::proto::HeightRange {
                 start: 0,
                 end: v2.leaf.height(),
             }],
-        })
-        .await
-        .unwrap();
+        });
+        let mut ack = std::pin::pin!(ack);
+        loop {
+            tokio::select! {
+                acked = &mut ack => {
+                    acked.unwrap();
+                    break;
+                },
+                output = storage.next() => {
+                    output.unwrap();
+                },
+            }
+        }
+    }
     let mut late = client
         .subscribe(SubscribeRequest { from_height: 0 })
         .await
@@ -148,7 +160,7 @@ async fn a_late_payload_reaches_the_ingester() {
     let [v0, v1, v2] = [&data.views[0], &data.views[1], &data.views[2]];
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
-    let mut storage = Storage::new(store.clone(), &private_key);
+    let mut storage = Storage::new(store.clone(), &private_key, &store.load().unwrap());
     let mut client = serve(IngestSource::new(store.clone(), EPOCH_HEIGHT)).await;
     let mut decided = client
         .subscribe(SubscribeRequest { from_height: 0 })

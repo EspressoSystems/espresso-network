@@ -2,15 +2,13 @@
 //! segment appends and reference counts that go with it.
 
 use std::{
-    any::Any,
     collections::{BTreeMap, BTreeSet},
     io,
     os::unix::fs::FileExt,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
 };
 
 use bytes::Bytes;
-use consensus_store::{Batch, EXTERN_THRESHOLD, Error, KeyRange, Op, Table, UpdateFn, Usage};
+use consensus_store::{Batch, EXTERN_THRESHOLD, Error, KeyRange, Op, Table, Usage};
 use redb::{Durability, ReadableTable, ReadableTableMetadata, WriteTransaction};
 
 use crate::{
@@ -20,9 +18,6 @@ use crate::{
 };
 
 /// Applies `batch` on top of the committed state `writer`, and returns the new committed state.
-///
-/// A panic in an update closure aborts the transaction, deletes the segments it created, and
-/// then continues unwinding.
 pub fn apply(store: &RedbStore, writer: &Writer, batch: &Batch) -> Result<Writer, Failure> {
     let mut txn = store
         .db
@@ -32,16 +27,15 @@ pub fn apply(store: &RedbStore, writer: &Writer, batch: &Batch) -> Result<Writer
         .map_err(|e| Failure::Rejected(backend(e)))?;
     let mut apply = Apply::new(store, &txn, writer.clone());
     let result = apply.run(batch);
-    let Done {
-        writer,
-        created,
-        panic,
-    } = apply.done();
-    if let Some(panic) = panic {
-        let _ = txn.abort();
-        discard(store, &created);
-        resume_unwind(panic);
-    }
+    #[cfg(test)]
+    let result = match store
+        .reject_next_apply
+        .swap(false, std::sync::atomic::Ordering::Relaxed)
+    {
+        true => Err(Error::Backend("injected".into())),
+        false => result,
+    };
+    let Done { writer, created } = apply.done();
     let freed = match result {
         Ok(freed) => freed,
         Err(e) => {
@@ -99,16 +93,12 @@ struct Apply<'a> {
 
     /// The usage of each table this transaction changes, as it leaves it.
     usage: BTreeMap<Table, Usage>,
-
-    /// The payload of a panic in an update closure.
-    panic: Option<Box<dyn Any + Send>>,
 }
 
 /// What a finished [`Apply`] leaves, once its tables are closed.
 struct Done {
     writer: Writer,
     created: Vec<u64>,
-    panic: Option<Box<dyn Any + Send>>,
 }
 
 /// What a row contributes to the bookkeeping.
@@ -154,7 +144,6 @@ impl<'a> Apply<'a> {
             touched: BTreeSet::new(),
             refs: BTreeMap::new(),
             usage: BTreeMap::new(),
-            panic: None,
         }
     }
 
@@ -175,7 +164,6 @@ impl<'a> Apply<'a> {
         Done {
             writer: self.writer,
             created: self.created,
-            panic: self.panic,
         }
     }
 
@@ -184,7 +172,6 @@ impl<'a> Apply<'a> {
             Op::Put { table, key, value } => self.put(table, key, value),
             Op::Delete { table, key } => self.delete(table, key),
             Op::DeleteRange { table, keys } => self.delete_range(table, keys),
-            Op::Update { table, key, f } => self.update(table, key, f),
             Op::Copy {
                 from,
                 from_key,
@@ -231,28 +218,6 @@ impl<'a> Apply<'a> {
             self.account(table, info, Change::Removed)?;
         }
         Ok(())
-    }
-
-    fn update(&mut self, table: &Table, key: &[u8], f: &UpdateFn) -> Result<(), Error> {
-        let store = self.store;
-        let current = match self.table(table)?.get(key).map_err(backend)? {
-            Some(raw) => Some(
-                Row::decode(table, key, raw.value())?
-                    .read(table, key, |id| store.segments.get(id))?,
-            ),
-            None => None,
-        };
-        let new = match catch_unwind(AssertUnwindSafe(|| f(current.as_deref()))) {
-            Ok(new) => new,
-            Err(panic) => {
-                self.panic = Some(panic);
-                return Err(Error::Backend("update closure panicked".into()));
-            },
-        };
-        match new {
-            Some(value) => self.put(table, key, &value),
-            None => Ok(()),
-        }
     }
 
     fn copy(

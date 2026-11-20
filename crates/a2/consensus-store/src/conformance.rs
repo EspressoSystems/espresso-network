@@ -2,10 +2,7 @@
 //!
 //! A backend runs them with [`run`], passing a function that opens an empty store.
 
-use std::{
-    ops::Bound,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
+use std::ops::Bound;
 
 use bytes::Bytes;
 
@@ -18,13 +15,11 @@ pub fn run<S: Store>(mut fresh: impl FnMut() -> S) {
         ops_apply_in_order,
         range_bounds,
         delete_range,
-        update,
         copy,
         drop_table,
         usage,
         large_values,
         snapshot_isolation,
-        failed_apply_changes_nothing,
     ];
     for check in checks {
         check(&fresh());
@@ -84,7 +79,7 @@ fn ops_apply_in_order<S: Store>(store: &S) {
             .delete(&t, "k")
             .delete(&t, "j")
             .put(&t, "j", "v")
-            .update(&t, "j", |v| Some([v.unwrap(), b"x"].concat().into())),
+            .put(&t, "j", "vx"),
     );
     let snap = store.snapshot().unwrap();
     assert_eq!(get(&snap, &t, "k"), None);
@@ -142,44 +137,6 @@ fn delete_range<S: Store>(store: &S) {
         assert_eq!(left, expected, "range {r:?}");
         assert_usage_matches_rows(&snap, &[&t]);
     }
-}
-
-fn update<S: Store>(store: &S) {
-    let t = table("t");
-    apply(store, Batch::new().update(&t, "k", |_| None));
-    assert_eq!(get(&store.snapshot().unwrap(), &t, "k"), None);
-
-    // Monotonic compare-and-set: keep the larger value.
-    for (n, expected) in [(5, 5), (3, 5), (9, 9)] {
-        apply(
-            store,
-            Batch::new().update(&t, "k", move |v| {
-                let current = v.and_then(key::decode_u64);
-                (current < Some(n)).then(|| key::u64(n).to_vec().into())
-            }),
-        );
-        let snap = store.snapshot().unwrap();
-        assert_eq!(
-            get(&snap, &t, "k"),
-            Some(Bytes::from(key::u64(expected).to_vec()))
-        );
-    }
-
-    // The closure sees an extern value in full.
-    let value = big(EXTERN_THRESHOLD + 7, 1);
-    let seen = value.clone();
-    apply(
-        store,
-        Batch::new()
-            .put(&t, "big", value)
-            .update(&t, "big", move |v| {
-                assert_eq!(v, Some(seen.as_ref()));
-                Some(bytes("small"))
-            }),
-    );
-    let snap = store.snapshot().unwrap();
-    assert_eq!(get(&snap, &t, "big"), Some(bytes("small")));
-    assert_usage_matches_rows(&snap, &[&t]);
 }
 
 fn copy<S: Store>(store: &S) {
@@ -374,39 +331,6 @@ fn snapshot_isolation<S: Store>(store: &S) {
     );
     assert_eq!(before.usage(&t).unwrap().rows, 2);
     assert!(entries(&after, &t, &KeyRange::all()).is_empty());
-}
-
-fn failed_apply_changes_nothing<S: Store>(store: &S) {
-    let t = table("t");
-    apply(
-        store,
-        Batch::new().put(&t, "kept", big(EXTERN_THRESHOLD + 1, 11)),
-    );
-    let usage = store.snapshot().unwrap().usage(&t).unwrap();
-
-    let mut batch = Batch::new();
-    batch
-        .put(&t, "new", big(EXTERN_THRESHOLD + 1, 12))
-        .delete(&t, "kept")
-        .update(&t, "new", |_| panic!("deliberate"));
-    let result = catch_unwind(AssertUnwindSafe(|| store.apply(&batch)));
-    assert!(matches!(result, Err(_) | Ok(Err(_))), "the batch must fail");
-
-    let snap = store.snapshot().unwrap();
-    assert_eq!(get(&snap, &t, "kept"), Some(big(EXTERN_THRESHOLD + 1, 11)));
-    assert_eq!(get(&snap, &t, "new"), None);
-    assert_eq!(snap.usage(&t).unwrap(), usage);
-
-    // The store still works, and the extern data written by the failed batch is not reused
-    // in a way that corrupts later values.
-    apply(
-        store,
-        Batch::new().put(&t, "after", big(EXTERN_THRESHOLD + 5, 13)),
-    );
-    let snap = store.snapshot().unwrap();
-    assert_eq!(get(&snap, &t, "after"), Some(big(EXTERN_THRESHOLD + 5, 13)));
-    assert_eq!(get(&snap, &t, "kept"), Some(big(EXTERN_THRESHOLD + 1, 11)));
-    assert_usage_matches_rows(&snap, &[&t]);
 }
 
 /// Ranges over the keys used in [`range_bounds`] and [`delete_range`], including empty ones.

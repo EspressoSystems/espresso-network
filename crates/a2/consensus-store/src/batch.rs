@@ -1,4 +1,4 @@
-use std::{fmt, ops::Bound, sync::Arc};
+use std::{fmt, ops::Bound};
 
 use bytes::Bytes;
 
@@ -7,7 +7,7 @@ use crate::Table;
 /// Write operations that [`Store::apply`](crate::Store::apply) applies in order, atomically.
 ///
 /// Each operation sees the effects of those before it.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Batch {
     ops: Vec<Op>,
 }
@@ -47,24 +47,6 @@ impl Batch {
         })
     }
 
-    /// Read-modify-write of one key.
-    ///
-    /// `f` gets the current value and returns the new one, or `None` to leave the key as it is.
-    /// It runs inside `apply`, possibly more than once if `apply` is retried, so it must not
-    /// have side effects.
-    pub fn update(
-        &mut self,
-        table: &Table,
-        key: impl Into<Bytes>,
-        f: impl Fn(Option<&[u8]>) -> Option<Bytes> + Send + Sync + 'static,
-    ) -> &mut Self {
-        self.push(Op::Update {
-            table: table.clone(),
-            key: key.into(),
-            f: Arc::new(f),
-        })
-    }
-
     /// Sets the value of `to_key` in `to` to the value of `from_key` in `from`.
     ///
     /// An extern value is shared, not written again. If `from_key` is absent, nothing happens.
@@ -90,6 +72,12 @@ impl Batch {
         })
     }
 
+    /// Appends the operations of `other`, which then apply after those already queued.
+    pub fn append(&mut self, other: Batch) -> &mut Self {
+        self.ops.extend(other.ops);
+        self
+    }
+
     pub fn ops(&self) -> &[Op] {
         &self.ops
     }
@@ -105,7 +93,7 @@ impl Batch {
 }
 
 /// See the [`Batch`] method of the same name.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Op {
     Put {
         table: Table,
@@ -120,11 +108,6 @@ pub enum Op {
         table: Table,
         keys: KeyRange,
     },
-    Update {
-        table: Table,
-        key: Bytes,
-        f: UpdateFn,
-    },
     Copy {
         from: Table,
         from_key: Bytes,
@@ -135,8 +118,6 @@ pub enum Op {
         table: Table,
     },
 }
-
-pub type UpdateFn = Arc<dyn Fn(Option<&[u8]>) -> Option<Bytes> + Send + Sync>;
 
 impl fmt::Debug for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -157,11 +138,6 @@ impl fmt::Debug for Op {
                 .field("table", table)
                 .field("keys", keys)
                 .finish(),
-            Self::Update { table, key, .. } => f
-                .debug_struct("Update")
-                .field("table", table)
-                .field("key", key)
-                .finish_non_exhaustive(),
             Self::Copy {
                 from,
                 from_key,

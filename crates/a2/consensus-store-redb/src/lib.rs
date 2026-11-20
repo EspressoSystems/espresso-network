@@ -70,6 +70,10 @@ pub struct RedbStore {
     /// Makes the next commit report failure although it succeeded.
     #[cfg(test)]
     fail_next_commit: AtomicBool,
+
+    /// Makes the next apply fail after its operations, before it commits.
+    #[cfg(test)]
+    reject_next_apply: AtomicBool,
 }
 
 impl RedbStore {
@@ -102,6 +106,8 @@ impl RedbStore {
             config,
             #[cfg(test)]
             fail_next_commit: AtomicBool::new(false),
+            #[cfg(test)]
+            reject_next_apply: AtomicBool::new(false),
         })
     }
 
