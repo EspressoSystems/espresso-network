@@ -9,7 +9,7 @@ use std::{
 };
 
 use bon::{Builder, bon};
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
@@ -289,17 +289,24 @@ where
                     _ => None,
                 });
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
-        // They are kept signed, so this node can serve them to a peer fetching
-        // them, as one fetching an epoch's boundary block for a re-vote.
-        let saved_proposals = initializer
+        // Those signed by their leader are kept signed, so this node can serve
+        // them to a peer fetching them, as one fetching an epoch's boundary
+        // block for a re-vote. A row written before the leader's signature
+        // was stored carries one the peer refuses, so it is not served.
+        let (signed, unsigned): (Vec<_>, Vec<_>) = initializer
             .saved_proposals()
             .values()
             .map(|p| SignedProposal {
                 data: message::Proposal::from(p.data.clone()),
                 signature: p.signature.clone(),
                 _pd: std::marker::PhantomData,
-            });
-        consensus.seed_signed_proposals(saved_proposals);
+            })
+            .partition(|p| is_signed_by_leader(&membership_coordinator, p));
+        for p in &unsigned {
+            warn!(view = %p.data.view_number, "not serving stored proposal: not leader-signed");
+        }
+        consensus.seed_signed_proposals(signed);
+        consensus.seed_proposals(unsigned.into_iter().map(|p| p.data));
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
         // re-enters a view it may have voted or proposed in before it went
@@ -2627,6 +2634,22 @@ pub enum GcScope {
 pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
     current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
         && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
+}
+
+/// Whether `proposal` carries the signature of its view's leader, as a peer
+/// fetching it requires.
+///
+/// Also false while the leader of its epoch is not known: only a verified
+/// copy is served.
+fn is_signed_by_leader<T: NodeType>(
+    membership: &EpochMembershipCoordinator<T>,
+    proposal: &SignedProposal<T, Proposal<T>>,
+) -> bool {
+    let leader = membership
+        .leader_snapshot(proposal.data.epoch)
+        .and_then(|epoch| epoch.leader(proposal.data.view_number).ok());
+    let leaf: Leaf2<T> = proposal.data.clone().into();
+    leader.is_some_and(|leader| leader.validate(&proposal.signature, leaf.commit().as_ref()))
 }
 
 /// A payload built locally and awaiting DA persistence.

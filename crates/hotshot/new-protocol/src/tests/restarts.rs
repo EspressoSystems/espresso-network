@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, net::Ipv4Addr, time::Duration};
+use std::{collections::BTreeMap, marker::PhantomData, net::Ipv4Addr, time::Duration};
 
 use committable::Committable;
 use hotshot_example_types::{
@@ -9,12 +9,13 @@ use hotshot_example_types::{
 use hotshot_types::{
     addr::NetAddr,
     consensus::ConsensusMetricsValue,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     event::HotShotAction,
     initializer::HotShotInitializer,
     light_client::StateKeyPair,
+    message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    traits::{metrics::NoMetrics, signature_key::SignatureKey, storage::Storage as _},
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
@@ -27,7 +28,7 @@ use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 use crate::{
     consensus::ConsensusInput,
     coordinator::Coordinator,
-    helpers::test_upgrade_lock,
+    helpers::{proposal_commitment, test_upgrade_lock},
     message::{Message, MessageType, ProposalFetchMessage, Validated},
     network::Cliquenet,
     tests::common::{
@@ -421,6 +422,39 @@ async fn restarted_node_serves_a_persisted_proposal_a_peer_accepts() {
     )
     .await
     .expect("the peer accepts the proposal the restarted node serves");
+}
+
+/// A stored proposal whose signature is not its leader's, as in rows written
+/// before the leader's signature was stored, is restored but not served: the
+/// peer fetching it would refuse it.
+#[tokio::test]
+async fn restarted_node_does_not_serve_a_proposal_its_leader_did_not_sign() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    let (_, node_private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+    node.storage()
+        .append_proposal_wrapper(&SignedProposal {
+            data: QuorumProposalWrapper::from(view.proposal.data.clone()),
+            signature: BLSPubKey::sign(&node_private_key, &[]).unwrap(),
+            _pd: PhantomData,
+        })
+        .await
+        .unwrap();
+
+    let restarted = restart(node, node_index).await;
+    let consensus = restarted.consensus();
+    assert!(
+        consensus
+            .signed_proposals_for_fetch(&view.view_number)
+            .is_empty()
+    );
+    assert!(
+        consensus
+            .proposals()
+            .contains(view.view_number, proposal_commitment(&view.proposal.data))
+    );
 }
 
 /// The coordinator `node` restarts as: built by `Coordinator::maker`, as a
