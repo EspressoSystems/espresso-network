@@ -110,6 +110,8 @@ impl<T: NodeType> LeaderMembership<T> {
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     membership: Arc<TYPES::Membership>,
     catchup_map: Attempts,
+    /// Walks to a stake table for callers that do not need its DRB result.
+    table_walk_map: Attempts,
     stake_table_map: Attempts,
     drb_computations: DrbComputations,
     epoch_length: EpochLength,
@@ -128,6 +130,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: self.catchup_map.clone(),
+            table_walk_map: self.table_walk_map.clone(),
             stake_table_map: self.stake_table_map.clone(),
             drb_computations: Arc::clone(&self.drb_computations),
             epoch_length: self.epoch_length,
@@ -152,6 +155,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         Self {
             membership: membership.into(),
             catchup_map: Attempts::default(),
+            table_walk_map: Attempts::default(),
             stake_table_map: Attempts::default(),
             drb_computations: Arc::default(),
             epoch_length: epoch_length.into(),
@@ -392,6 +396,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Bring `epoch` to a usable membership: its stake table, then its DRB.
+    async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+        self.catchup_tables(epoch).await?;
+        self.drb_ready(epoch).await
+    }
+
+    /// Make `epoch`'s stake table present.
     ///
     /// Walks from the latest consecutive pair of stake tables this node holds
     /// to `epoch`, fetching what is missing one epoch at a time. `epoch` is
@@ -405,7 +415,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// epoch, so whichever reaches an epoch first fetches it while the others
     /// wait for its result. Every walk awaits attempts in increasing epoch
     /// order and an attempt awaits none, so no two can wait on each other.
-    async fn catchup(&self, epoch: EpochNumber) -> Result<()> {
+    async fn catchup_tables(&self, epoch: EpochNumber) -> Result<()> {
         let seeded = self.membership.first_epoch() + 1;
 
         if epoch <= seeded {
@@ -451,7 +461,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             try_epoch += 1;
         }
 
-        self.drb_ready(epoch).await
+        Ok(())
     }
 
     /// The top `start` of the highest consecutive held pair `(start-1, start)` with
@@ -572,17 +582,46 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         }
     }
 
-    /// Get the stake table for `epoch`, blocking on catchup if necessary.
+    /// Get the stake table for `epoch`, blocking on the walk to it if necessary.
     ///
     /// Unlike `stake_table_for_epoch`, this returns the result rather than
-    /// kicking off catchup and immediately returning an error. Used at startup
-    /// to drive the existing catchup chain synchronously before consensus is
-    /// running.
+    /// kicking off catchup and immediately returning an error. It neither
+    /// waits for the epoch's DRB result nor starts acquiring it, which
+    /// `membership_for_epoch` does: peers lack the DRB result of an epoch at
+    /// the tip, and computing it is slow by design.
     pub async fn wait_for_stake_table(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
-        match self.stake_table_for_epoch(epoch) {
-            Ok(mem) => Ok(mem),
-            Err(_) => self.wait_for_catchup(epoch).await,
+        if let Some(membership) = self.epoch_membership(epoch) {
+            return Ok(membership);
         }
+        self.table_walk(epoch)
+            .await
+            .map_err(|err| anytrace::error!("Catchup for epoch {epoch} failed: {err:?}"))?;
+        self.epoch_membership(epoch).ok_or_else(|| {
+            anytrace::error!("Catchup for epoch {epoch} reported success but left no stake table")
+        })
+    }
+
+    /// The walk to `epoch`'s stake table, started unless one is already running.
+    ///
+    /// As in `spawn_catchup`, the work runs in its own task and the task
+    /// spawned here holds the claim on the epoch, so a caller that stops
+    /// waiting neither cancels the walk nor lets the next caller start a
+    /// second one.
+    fn table_walk(&self, epoch: EpochNumber) -> Attempt {
+        let (attempt, entry) = self.table_walk_map.get_or_insert(epoch, || {
+            let coordinator = self.clone();
+            async move { coordinator.catchup_tables(epoch).await }.boxed()
+        });
+        if let Some(entry) = entry {
+            let walk = attempt.clone();
+            spawn(async move {
+                let _entry = entry; // Dropping the entry removes the attempt.
+                if let Err(err) = walk.await {
+                    warn!(%epoch, %err, "stake table walk failed");
+                }
+            });
+        }
+        attempt
     }
 
     /// Call this method if you think catchup is in progress for a given epoch
@@ -593,6 +632,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     pub async fn wait_for_catchup(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
         let failed = |err| anytrace::error!("Catchup for epoch {epoch} failed: {err:?}");
         if let Some(attempt) = self.catchup_map.get_attempt(epoch) {
+            attempt.await.map_err(failed)?;
+        } else if let Some(attempt) = self.table_walk_map.get_attempt(epoch) {
             attempt.await.map_err(failed)?;
         } else if let Some(attempt) = self.stake_table_map.get_attempt(epoch) {
             attempt.await.map_err(failed)?;
