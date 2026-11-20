@@ -18,6 +18,8 @@ The default shell is the small, fast daily driver. Add-on shells contain everyth
 - `nix develop .#mutation`: contracts + `dregs` for mutation testing
 - `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `just doc-figures`, `just doc-contracts`
 - `nix develop .#go`: Go toolchain for `sdks/go/`
+- `nix develop .#lean`: `elan` (`lake`) + minimal texlive for `just lean::*`, `just test-lean-*`. On Linux, toolchains
+  live in `~/.cache/nix-elan/<elan store path>/`, one directory per elan build; delete old ones by hand.
 - `nix develop .#python`: `python3`, `uv`, `ruff`, `ty` for repo scripts
 - `nix develop .#aws`: python + `opentofu`, `awscli2` for `scripts/network-bench/aws`
 - `nix develop .#dockerShell`: `docker`

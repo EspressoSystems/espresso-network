@@ -3,6 +3,7 @@ mod claude ".github/claude/claude.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
 mod soak "crates/process-metrics/justfile"
 mod bench "scripts/network-bench/justfile"
+mod lean "lean/justfile"
 
 default:
     just --list
@@ -200,14 +201,12 @@ test-all:
 # fails the recipe, after the check has run on the traces recorded.
 #
 # Record runs of the new-protocol tests and check each against `lean/new-protocol-spec`.
+[script("scripts/with-tools", "lean", "cargo", "lake")]
 test-lean-check dir="":
-    #!/usr/bin/env bash
-    set -uo pipefail
     (cd lean/new-protocol-diff && lake build check) || exit 1
     # Given a directory, record nothing and check what is already there.
     if [ -n "{{dir}}" ]; then
-      lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
-      exit $?
+      exec lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
     fi
     # A fixed path, cleared first, so runs overwrite rather than accumulate.
     # Under `target` because it is build output: gitignored, and cleaned with it.
@@ -226,9 +225,8 @@ test-lean-check dir="":
 
 # Replay random settings `first` to `first + count - 1` of the Lean simulator to the
 # Rust node and check each trace. Each draws faults, committees, timing and delays.
+[script("scripts/with-tools", "lean", "cargo", "lake")]
 test-lean-scenarios first="1" count="48":
-    #!/usr/bin/env bash
-    set -uo pipefail
     (cd lean/new-protocol-diff && lake build sim check) || exit 1
     scenarios="$(pwd)/target/np-scenarios"
     traces="$(pwd)/target/np-scenario-traces"
