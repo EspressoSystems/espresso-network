@@ -59,7 +59,8 @@ pub trait Backend: Send + Sync + 'static {
     /// Deletes rows and parts before `height`, and raises the floor to it.
     async fn prune_below(&self, height: u64) -> anyhow::Result<()>;
 
-    /// A value that changes after each committed write by any writer.
+    /// A value that changes after each committed write to the chain by any writer: items,
+    /// parts and pruning. Writes to the application tables do not change it.
     fn changes(&self) -> watch::Receiver<u64>;
 }
 

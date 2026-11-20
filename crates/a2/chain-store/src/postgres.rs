@@ -381,7 +381,9 @@ impl Backend for PostgresBackend {
                 },
             }
         }
-        self.commit(tx).await
+        // Not a write to the chain, so not announced.
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn prune_below(&self, height: u64) -> anyhow::Result<()> {

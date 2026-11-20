@@ -271,7 +271,6 @@ impl Backend for RemoteBackend {
             })
             .await
             .map_err(status)?;
-        self.wrote();
         Ok(())
     }
 

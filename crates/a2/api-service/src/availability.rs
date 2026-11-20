@@ -334,9 +334,7 @@ impl AvailabilityService for ApiService {
             .reader
             .namespace_proof(height, namespace, Wait::Briefly)
             .await?;
-        Ok(Response::new(proto::NamespaceProofResponse::try_from(
-            &proof,
-        )?))
+        Ok(Response::new(proof))
     }
 
     async fn get_namespace_proof_range(
@@ -357,9 +355,7 @@ impl AvailabilityService for ApiService {
                 },
             )
             .await?;
-        Ok(Response::new(proto::NamespaceProofRangeResponse::try_from(
-            &*proofs,
-        )?))
+        Ok(Response::new(proto::NamespaceProofRangeResponse { proofs }))
     }
 
     async fn get_incorrect_encoding_proof(
@@ -426,7 +422,7 @@ impl AvailabilityService for ApiService {
             from,
             |reader, height| async move {
                 let block = reader.block(height, Wait::Forever).await?;
-                Ok(proto::BlockResponse::from(&block))
+                Ok(espresso_api::block_by_reference(&block))
             },
         )))
     }
@@ -442,7 +438,7 @@ impl AvailabilityService for ApiService {
             from,
             |reader, height| async move {
                 let payload = PayloadQueryData::from(reader.block(height, Wait::Forever).await?);
-                Ok(proto::PayloadResponse::from(&payload))
+                Ok(espresso_api::payload_by_reference(&payload))
             },
         )))
     }
@@ -484,10 +480,9 @@ impl AvailabilityService for ApiService {
         Ok(Response::new(self.reader.stream(
             from,
             move |reader, height| async move {
-                let proof = reader
+                reader
                     .namespace_proof(height, namespace, Wait::Forever)
-                    .await?;
-                proto::NamespaceProofResponse::try_from(&proof)
+                    .await
             },
         )))
     }

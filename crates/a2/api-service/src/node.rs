@@ -1,9 +1,6 @@
 //! The node service: the chain height.
 
-use espresso_api::{
-    error::to_status,
-    proto::{self, node_service_server::NodeService},
-};
+use espresso_api::proto::{self, node_service_server::NodeService};
 use tonic::{Request, Response, Status};
 
 use crate::ApiService;
@@ -20,7 +17,7 @@ impl NodeService for ApiService {
         &self,
         _: Request<proto::GetNodeBlockHeightRequest>,
     ) -> Result<Response<proto::NodeBlockHeightResponse>, Status> {
-        let newest = self.reader.store().newest().await.map_err(to_status)?;
+        let newest = self.reader.newest().await?;
         Ok(Response::new(proto::NodeBlockHeightResponse {
             height: newest.map_or(0, |h| h + 1),
         }))

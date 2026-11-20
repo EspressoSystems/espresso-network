@@ -38,6 +38,7 @@ url                         = { workspace = true }
 versions                    = { workspace = true }
 
 [dev-dependencies]
+blake3         = { workspace = true }
 alloy          = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 http-client    = { workspace = true }

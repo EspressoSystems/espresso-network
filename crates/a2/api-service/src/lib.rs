@@ -42,13 +42,16 @@ mod request;
 mod server;
 mod status;
 mod submit;
+mod tip;
 
 use reader::Reader;
 
 /// The services of the API, over one store and one consensus node.
-#[derive(Clone)]
 pub struct ApiService {
     reader: Reader,
+
+    /// The follower of the store's tip, which `serve` runs.
+    follower: Option<tip::Follower>,
 
     /// What the ingester writes besides blocks.
     tables: Tables,
@@ -65,9 +68,11 @@ pub struct ApiService {
 
 impl ApiService {
     pub fn new(store: ChainStore, consensus_api: SocketAddr) -> Self {
+        let (follower, tip) = tip::follower(store.clone());
         Self {
             tables: Tables::new(store.clone()),
-            reader: Reader::new(store),
+            reader: Reader::new(store, tip),
+            follower: Some(follower),
             consensus: consensus_api::channel(consensus_api),
             catchup: None,
             compat: None,
@@ -90,12 +95,14 @@ impl ApiService {
         }
     }
 
-    /// Serves the API on `listener` until it fails.
-    pub async fn serve(self, listener: TcpListener) -> anyhow::Result<()> {
+    /// Serves the API on `listener`, and follows the store's tip, until either stops.
+    pub async fn serve(mut self, listener: TcpListener) -> anyhow::Result<()> {
+        let follower = self.follower.take().expect("an API service is served once");
         let catchup = self.catchup.clone();
         let compat = self.compat.clone();
         let service = Arc::new(self);
         let mut rest = rest::availability_service_rest_router(service.clone())
+            .merge(espresso_api::payload_data::router(service.clone()))
             .merge(rest::status_service_rest_router(service.clone()))
             .merge(rest::node_service_rest_router(service.clone()))
             .merge(rest::submit_service_rest_router(service.clone()));
@@ -112,7 +119,10 @@ impl ApiService {
         if let Some(catchup) = catchup {
             grpc.add_service(CatchupServiceServer::from_arc(catchup));
         }
-        server::serve(listener, rest, grpc).await
+        tokio::select! {
+            served = server::serve(listener, rest, grpc) => served,
+            () = follower.run() => Err(anyhow::anyhow!("the store's changes ended")),
+        }
     }
 }
 
@@ -213,6 +223,63 @@ mod tests {
 
         let (status, _) = get(&format!("{url}/v2/availability/leaf?height=1")).await;
         assert_eq!(status, 404);
+    }
+
+    /// A streamed block carries its payload by reference only, and the reference's URL serves the
+    /// raw bytes it describes, for good.
+    #[tokio::test]
+    async fn streams_the_payload_by_reference() {
+        let (store, url) = serve().await;
+        let (item, _) = genesis().await;
+        // Any bytes: the store does not check them against the header.
+        let payload = vec![7u8; 1000];
+        store
+            .put(
+                &item,
+                &Parts {
+                    payload: Some(payload.clone().into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut response = reqwest::Client::new()
+            .get(format!("{url}/v2/availability/stream/blocks?from=0"))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        let mut text = String::new();
+        while !text.contains("\n\n") {
+            let chunk = response.chunk().await.unwrap().unwrap();
+            text.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        let data = text
+            .lines()
+            .find_map(|line| line.strip_prefix("data:"))
+            .unwrap();
+        let block: Value = serde_json::from_str(data.trim()).unwrap();
+        assert!(block.get("payload").is_none(), "no payload inline: {block}");
+        let reference = &block["payloadRef"];
+
+        let fetched = reqwest::get(format!("{url}{}", reference["url"].as_str().unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(fetched.status(), 200);
+        assert!(
+            fetched.headers()["cache-control"]
+                .to_str()
+                .unwrap()
+                .contains("immutable")
+        );
+        let bytes = fetched.bytes().await.unwrap();
+        assert_eq!(&bytes[..], &payload[..]);
+        assert_eq!(
+            reference["blake3"].as_str().unwrap(),
+            blake3::hash(&bytes).to_hex().as_str()
+        );
+        assert_eq!(reference["size"], Value::from(bytes.len().to_string()));
     }
 
     #[tokio::test]

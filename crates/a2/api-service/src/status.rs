@@ -2,10 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use espresso_api::{
-    error::to_status,
-    proto::{self, status_service_server::StatusService},
-};
+use espresso_api::proto::{self, status_service_server::StatusService};
 use hotshot_types::traits::block_contents::BlockHeader;
 use tonic::{Request, Response, Status};
 
@@ -18,7 +15,7 @@ impl StatusService for ApiService {
         &self,
         _: Request<proto::GetBlockHeightRequest>,
     ) -> Result<Response<proto::BlockHeightResponse>, Status> {
-        let newest = self.reader.store().newest().await.map_err(to_status)?;
+        let newest = self.reader.newest().await?;
         Ok(Response::new(proto::BlockHeightResponse {
             height: newest.map_or(0, |h| h + 1),
         }))
@@ -31,10 +28,8 @@ impl StatusService for ApiService {
     ) -> Result<Response<proto::TimeSinceLastDecideResponse>, Status> {
         let newest = self
             .reader
-            .store()
             .newest()
-            .await
-            .map_err(to_status)?
+            .await?
             .ok_or_else(|| Status::not_found("no block is stored yet"))?;
         let item = self.reader.item(newest, Wait::Briefly).await?;
         let now = SystemTime::now()

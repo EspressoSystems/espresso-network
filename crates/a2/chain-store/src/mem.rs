@@ -182,19 +182,19 @@ impl Backend for MemBackend {
     }
 
     async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
-        self.write(|state| {
-            for write in writes {
-                match write {
-                    AppWrite::Put { table, key, value } => {
-                        state.app.insert((table, key), value);
-                    },
-                    AppWrite::DeleteBefore { table, key } => {
-                        state.app.retain(|(t, k), _| *t != table || *k >= key);
-                    },
-                    AppWrite::Clear { table } => state.app.retain(|(t, _), _| *t != table),
-                }
+        // Not a write to the chain, so not announced.
+        let mut state = self.state.lock().unwrap();
+        for write in writes {
+            match write {
+                AppWrite::Put { table, key, value } => {
+                    state.app.insert((table, key), value);
+                },
+                AppWrite::DeleteBefore { table, key } => {
+                    state.app.retain(|(t, k), _| *t != table || *k >= key);
+                },
+                AppWrite::Clear { table } => state.app.retain(|(t, _), _| *t != table),
             }
-        });
+        }
         Ok(())
     }
 
@@ -220,5 +220,24 @@ mod tests {
     #[tokio::test]
     async fn conforms() {
         crate::testing::conformance(&MemBackend::default()).await;
+    }
+
+    /// Readers follow the chain, which application writes do not change.
+    #[tokio::test]
+    async fn application_writes_do_not_change_the_chain() {
+        let backend = MemBackend::default();
+        let mut changes = backend.changes();
+        changes.borrow_and_update();
+        backend
+            .app_write(vec![AppWrite::Put {
+                table: TableName::new("a").unwrap(),
+                key: Bytes::from_static(b"k"),
+                value: Bytes::from_static(b"v"),
+            }])
+            .await
+            .unwrap();
+        assert!(!changes.has_changed().unwrap());
+        backend.prune_below(1).await.unwrap();
+        assert!(changes.has_changed().unwrap());
     }
 }

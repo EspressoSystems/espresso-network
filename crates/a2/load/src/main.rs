@@ -38,6 +38,11 @@ struct Options {
     /// The namespace to submit to.
     #[arg(long, default_value_t = 4242)]
     namespace: u64,
+
+    /// Further clients that stream every block from the same API service, as many subscribers
+    /// do. They only count the blocks they receive.
+    #[arg(long, default_value_t = 0)]
+    subscribers: usize,
 }
 
 #[tokio::main]
@@ -50,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let from = block_height(&http, &options.api).await?;
     // Read until the last transactions have had time to be decided.
     let until = Instant::now() + options.duration + Duration::from_secs(15);
-    let (submitted, received) = tokio::join!(
+    let (submitted, received, subscribed) = tokio::join!(
         submit(&http, &options),
         read(
             http.clone(),
@@ -59,9 +64,16 @@ async fn main() -> anyhow::Result<()> {
             from,
             until
         ),
+        subscribe(&options, from, until),
     );
     let submitted = submitted?;
     report(&options, submitted, &received);
+    if let (Some(min), Some(max)) = (subscribed.iter().min(), subscribed.iter().max()) {
+        println!(
+            "{} subscribers received between {min} and {max} blocks",
+            subscribed.len()
+        );
+    }
     Ok(())
 }
 
@@ -95,6 +107,51 @@ async fn submit(http: &reqwest::Client, options: &Options) -> anyhow::Result<u64
     }
     eprintln!("submitted {sequence}, accepted {accepted}");
     Ok(accepted)
+}
+
+/// Streams every block from `from` on, `options.subscribers` times, until `until`, returning how
+/// many blocks each subscriber received.
+async fn subscribe(options: &Options, from: u64, until: Instant) -> Vec<u64> {
+    let Ok(url) = options
+        .api
+        .join(&format!("v2/availability/stream/blocks?from={from}"))
+    else {
+        return Vec::new();
+    };
+    let deadline = tokio::time::Instant::from_std(until);
+    let subscribers = (0..options.subscribers).map(|_| {
+        let url = url.clone();
+        async move {
+            let mut blocks = 0;
+            let counting = count_events(reqwest::Client::new(), url, &mut blocks);
+            let _ = tokio::time::timeout_at(deadline, counting).await;
+            blocks
+        }
+    });
+    futures::future::join_all(subscribers).await
+}
+
+/// Counts the events the stream at `url` sends into `count`.
+async fn count_events(http: reqwest::Client, url: Url, count: &mut u64) {
+    let Ok(response) = http
+        .get(url)
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+    else {
+        return;
+    };
+    let mut body = response.bytes_stream();
+    // The last byte of what came before, so an event end split between chunks is found.
+    let mut last = 0u8;
+    while let Some(Ok(chunk)) = body.next().await {
+        for &byte in chunk.iter() {
+            if last == b'\n' && byte == b'\n' {
+                *count += 1;
+            }
+            last = byte;
+        }
+    }
 }
 
 /// What the stream delivered: per height, the latencies of the transactions in it, in
@@ -141,10 +198,13 @@ async fn read_into(
     };
     let mut body = response.bytes_stream();
     let mut buffer = String::new();
+    // Where in `buffer` to look for the end of an event; everything before is searched already.
+    let mut searched = 0;
     let mut height = from;
     while let Some(Ok(chunk)) = body.next().await {
         buffer.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(end) = buffer.find("\n\n") {
+        while let Some(end) = buffer[searched..].find("\n\n").map(|end| searched + end) {
+            searched = 0;
             let event: String = buffer.drain(..end + 2).collect();
             let Some(data) = event.lines().find_map(|line| line.strip_prefix("data:")) else {
                 continue;
@@ -153,6 +213,11 @@ async fn read_into(
             let latencies = latencies(data.trim(), now_micros());
             received.blocks.insert(height, (arrived, latencies));
             height += 1;
+        }
+        // The last byte can start an event's end that the next chunk completes.
+        searched = buffer.len().saturating_sub(1);
+        while !buffer.is_char_boundary(searched) {
+            searched -= 1;
         }
     }
 }

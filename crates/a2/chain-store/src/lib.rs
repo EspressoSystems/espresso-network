@@ -324,8 +324,9 @@ impl ChainStore {
         self.backend.prune_below(height).await
     }
 
-    /// A value that changes after every committed write, by any writer. A reader waiting for a
-    /// height looks again whenever it changes.
+    /// A value that changes after every committed write to the chain, by any writer: items,
+    /// parts and pruning, but not the application tables. A reader waiting for a height looks
+    /// again whenever it changes.
     pub fn changes(&self) -> watch::Receiver<u64> {
         self.backend.changes()
     }
