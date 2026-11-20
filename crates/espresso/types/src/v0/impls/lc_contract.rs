@@ -3,14 +3,14 @@
 use std::ops::RangeInclusive;
 
 use anyhow::ensure;
+use ark_serialize::CanonicalSerialize;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
-    light_client::CircuitField,
-    traits::block_contents::BlockHeader,
+    data::EpochNumber,
+    light_client::{CircuitField, hash_bytes_to_field},
     utils::{epoch_from_block_number, root_block_in_epoch},
 };
 
-use crate::{BlockMerkleCommitment, Header};
+use crate::BlockMerkleCommitment;
 
 /// The LC contract's `finalizedState` at one L1 finalized block: `F` and the block commitment
 /// root of the header at `F`. Only headers below `F` are provable against that header.
@@ -84,85 +84,59 @@ impl LcContractFinalizedState {
         })
     }
 
-    /// Accepts `header` iff it is at `F` and `Header::get_light_client_state(..).block_comm_root`
-    /// equals the LC contract's, and returns its block Merkle root, the only part to trust. Pure.
-    pub fn verify_header(&self, header: &Header) -> anyhow::Result<BlockMerkleCommitment> {
+    /// Accepts `root` iff its hash equals the contract's `blockCommRoot`. The commitment includes
+    /// the leaf count, so a root of another height cannot match. Pure.
+    pub fn verify_block_merkle_root(&self, root: &BlockMerkleCommitment) -> anyhow::Result<()> {
         ensure!(
-            header.height() == self.height,
-            "header is at height {}, expected {}",
-            header.height(),
+            block_comm_root(root)? == self.block_comm_root,
+            "block Merkle root does not match the LC contract block commitment root at height {}",
             self.height
         );
-        let block_comm_root = header
-            .get_light_client_state(ViewNumber::new(0))?
-            .block_comm_root;
-        ensure!(
-            block_comm_root == self.block_comm_root,
-            "header at height {} does not match the LC contract block commitment root",
-            self.height
-        );
-        Ok(header.block_merkle_tree_root())
+        Ok(())
     }
+}
+
+/// The hash of `root` as the LC contract stores it in `blockCommRoot`.
+pub(crate) fn block_comm_root(root: &BlockMerkleCommitment) -> anyhow::Result<CircuitField> {
+    let mut bytes = vec![];
+    root.serialize_compressed(&mut bytes)?;
+    Ok(hash_bytes_to_field(&bytes)?)
 }
 
 #[cfg(test)]
 mod tests {
     use committable::Commitment;
-    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
-    use hotshot_types::traits::BlockPayload;
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleTreeScheme};
     use proptest::prelude::*;
     use rstest::rstest;
 
     use super::*;
-    use crate::{BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, NodeState, Payload};
+    use crate::{BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree};
 
     const EPOCH_HEIGHT: u64 = 100;
-
-    /// A V4 genesis header moved to `height`.
-    async fn header_at(height: u64) -> Header {
-        let mut instance = NodeState::mock_v2();
-        instance.genesis_version = versions::version(0, 4);
-        let (payload, metadata) =
-            Payload::from_transactions(&[], &instance.genesis_state, &instance)
-                .await
-                .expect("payload");
-        match Header::genesis(&instance, payload, &metadata, MOCK_UPGRADE.base) {
-            Header::V4(mut fields) => {
-                fields.height = height;
-                Header::V4(fields)
-            },
-            other => panic!("expected a V4 header, got {other:?}"),
-        }
-    }
-
-    fn state_of(header: &Header) -> LcContractFinalizedState {
-        LcContractFinalizedState {
-            height: header.height(),
-            block_comm_root: header
-                .get_light_client_state(ViewNumber::new(0))
-                .unwrap()
-                .block_comm_root,
-        }
-    }
-
-    /// Only the header at `F` with the contract's block commitment root is accepted.
-    #[tokio::test]
-    async fn verify_header_cases_ok() {
-        let header = header_at(62).await;
-        let lc = state_of(&header);
-
-        assert_eq!(
-            lc.verify_header(&header).unwrap(),
-            header.block_merkle_tree_root()
-        );
-        lc.verify_header(&header_at(61).await).unwrap_err();
-
+    /// A block Merkle tree commitment holding `leaves` leaves, each derived from `seed`.
+    fn root_of(leaves: u64, seed: u8) -> BlockMerkleCommitment {
         let mut tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
-        tree.push(Commitment::from_raw([1; 32])).unwrap();
-        let mut forged = header;
-        *forged.block_merkle_tree_root_mut() = tree.commitment();
-        lc.verify_header(&forged).unwrap_err();
+        for i in 0..leaves {
+            tree.push(Commitment::from_raw([seed.wrapping_add(i as u8); 32]))
+                .unwrap();
+        }
+        tree.commitment()
+    }
+
+    /// Only the root the contract holds at `F` is accepted: not a forged root, nor one of another
+    /// height.
+    #[test]
+    fn verify_block_merkle_root_cases_ok() {
+        let root = root_of(62, 0);
+        let lc = LcContractFinalizedState {
+            height: 62,
+            block_comm_root: block_comm_root(&root).unwrap(),
+        };
+
+        lc.verify_block_merkle_root(&root).unwrap();
+        lc.verify_block_merkle_root(&root_of(61, 0)).unwrap_err();
+        lc.verify_block_merkle_root(&root_of(62, 1)).unwrap_err();
     }
 
     fn finalized_state(height: u64) -> LcContractFinalizedState {

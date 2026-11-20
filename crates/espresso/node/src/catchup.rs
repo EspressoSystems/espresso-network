@@ -547,7 +547,9 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .send()
                 .await?;
             let first = leaf_chain.first().context("empty leaf chain")?;
-            lc_contract_state.verify_header(first.block_header())
+            let root = first.block_header().block_merkle_tree_root();
+            lc_contract_state.verify_block_merkle_root(&root)?;
+            anyhow::Ok(root)
         })
         .await
     }

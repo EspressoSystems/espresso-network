@@ -1512,16 +1512,10 @@ impl BlockHeader<SeqTypes> for Header {
     }
 
     fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
-        let mut block_comm_root_bytes = vec![];
-        self.block_merkle_tree_root()
-            .serialize_compressed(&mut block_comm_root_bytes)?;
-
         Ok(LightClientState {
             view_number: view.u64(),
             block_height: self.height(),
-            block_comm_root: hotshot_types::light_client::hash_bytes_to_field(
-                &block_comm_root_bytes,
-            )?,
+            block_comm_root: super::lc_contract::block_comm_root(&self.block_merkle_tree_root())?,
         })
     }
 

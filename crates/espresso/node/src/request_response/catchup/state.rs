@@ -582,7 +582,9 @@ fn verified_lc_contract_root(
         bail!("expected leaf response");
     };
     let header = leaves.first().context("empty leaf chain")?.block_header();
-    lc_contract_state.verify_header(header)
+    let root = header.block_merkle_tree_root();
+    lc_contract_state.verify_block_merkle_root(&root)?;
+    Ok(root)
 }
 
 /// The header in `response`, if its proof verifies against `root` and it is at `height`.
@@ -634,7 +636,10 @@ mod tests {
     /// Accepts only the leaf at the contract height; `None` expects success.
     #[rstest]
     #[case::contract_height(Answer::Leaf(62), None)]
-    #[case::other_height(Answer::Leaf(61), Some("header is at height 61, expected 62"))]
+    #[case::other_height(
+        Answer::Leaf(61),
+        Some("does not match the LC contract block commitment root")
+    )]
     #[case::wrong_variant(Answer::Proof(15), Some("expected leaf response"))]
     #[tokio::test]
     async fn lc_contract_root_cases(#[case] answer: Answer, #[case] error: Option<&str>) {

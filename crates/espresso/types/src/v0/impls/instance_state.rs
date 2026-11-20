@@ -871,7 +871,9 @@ pub mod mock {
                 .headers
                 .get(&lc_contract_state.height)
                 .context("no header at the LC contract height")?;
-            lc_contract_state.verify_header(header)
+            let root = header.block_merkle_tree_root();
+            lc_contract_state.verify_block_merkle_root(&root)?;
+            Ok(root)
         }
 
         async fn try_fetch_proven_header(

@@ -6,8 +6,7 @@ use espresso_types::{
     BlockMerkleCommitment, Header, LcContractFinalizedState, traits::StateCatchup,
 };
 
-/// The block Merkle root of the header at `lc_contract_state.height`, which `verify_header`
-/// accepted. One request; `retry` scales the peers' timeout.
+/// The block Merkle root at `lc_contract_state.height`, which `verify_block_merkle_root` accepted. One request; `retry` scales the peers' timeout.
 pub(crate) async fn fetch_anchor_root(
     peers: &dyn StateCatchup,
     lc_contract_state: &LcContractFinalizedState,
