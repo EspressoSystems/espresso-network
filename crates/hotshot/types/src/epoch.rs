@@ -82,6 +82,14 @@ impl EpochLength {
         self.block_before_boundary(epoch, TRANSITION_DISTANCE)
     }
 
+    /// The last block of the latest epoch that has ended by `height`, which is `height` itself
+    /// when it ends an epoch. `None` until the first epoch ends.
+    pub fn boundary_at_or_before(self, height: impl Into<BlockNumber>) -> Option<BlockNumber> {
+        let height = *height.into();
+        let boundary = height - height % self.get();
+        (boundary > 0).then(|| BlockNumber::new(boundary))
+    }
+
     pub fn position(self, height: impl Into<BlockNumber>) -> EpochPosition {
         let height = height.into();
         EpochPosition {
@@ -445,6 +453,11 @@ mod tests {
         }
         assert_eq!(length.first_block(epoch(1)), Ok(height(0)));
         assert_eq!(length.first_block(epoch(2)), Ok(height(11)));
+        assert_eq!(length.boundary_at_or_before(height(0)), None);
+        assert_eq!(length.boundary_at_or_before(height(9)), None);
+        assert_eq!(length.boundary_at_or_before(height(10)), Some(height(10)));
+        assert_eq!(length.boundary_at_or_before(height(11)), Some(height(10)));
+        assert_eq!(length.boundary_at_or_before(height(20)), Some(height(20)));
     }
 
     #[test]
@@ -733,6 +746,15 @@ mod tests {
             let expected = if h == 0 { 1 } else { (h as u128).div_ceil(blocks as u128) };
             let epoch = length.epoch_of(height(h));
             if *epoch as u128 != expected || length.position(height(h)).epoch() != epoch {
+                return false;
+            }
+            let position = length.position(height(h));
+            let boundary = if position.is_last() {
+                Some(height(h))
+            } else {
+                epoch.checked_rewind(1).and_then(|previous| length.last_block(previous)).ok()
+            };
+            if length.boundary_at_or_before(height(h)) != boundary {
                 return false;
             }
             let first = length.first_block(epoch).unwrap();

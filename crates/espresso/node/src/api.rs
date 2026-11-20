@@ -1237,11 +1237,16 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 1
             };
             let current_epoch = epoch_length.epoch_of(height);
-            // First block of the oldest epoch we still want to retain.
-            let epoch_start_block =
-                current_epoch.saturating_sub(epochs_to_retain) * epoch_length.get();
+            // The last block of the newest epoch that is not retained. Only trees below it are
+            // collected.
+            let Ok(retained_from) = current_epoch
+                .checked_rewind(epochs_to_retain)
+                .and_then(|epoch| epoch_length.last_block(epoch))
+            else {
+                return Ok(());
+            };
 
-            let gc_height = epoch_start_block.min(finalized_hotshot_height);
+            let gc_height = (*retained_from).min(finalized_hotshot_height);
 
             if let Err(err) = self.garbage_collect(gc_height).await {
                 tracing::info!(gc_height, "failed to garbage collect: {err:#}");
@@ -7113,12 +7118,13 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = *coordinator.epoch_length().epoch_of(height);
+            let position = coordinator.epoch_length().position(height);
+            let epoch = *position.epoch();
             let header_total_distributed = header
                 .total_reward_distributed()
                 .expect("total_reward_distributed should exist");
 
-            if epoch > 3 && height % epoch_height == 0 {
+            if epoch > 3 && position.is_last() {
                 let prev_block_reward = coordinator
                     .membership()
                     .epoch_block_reward(EpochNumber::new(epoch - 1))
@@ -7156,7 +7162,8 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = *coordinator.epoch_length().epoch_of(height);
+            let position = coordinator.epoch_length().position(height);
+            let epoch = *position.epoch();
             if epoch <= 2 {
                 continue;
             }
@@ -7164,7 +7171,7 @@ mod test {
             let header_leader_counts = header
                 .leader_counts()
                 .expect("V5+ header must have leader_counts");
-            if (height - 1) % epoch_height == 0 {
+            if position.is_first() {
                 expected_counts.clear();
             }
 
@@ -7192,7 +7199,7 @@ mod test {
                 "leader_counts mismatch at height {height} (epoch {epoch})"
             );
 
-            if height % epoch_height == 0 {
+            if position.is_last() {
                 let total: u16 = expected_counts.values().sum();
                 assert_eq!(
                     total, epoch_height as u16,
@@ -13513,7 +13520,9 @@ mod test {
             let decided_leaf = network.server.decided_leaf().await;
             // Reward trees are persisted only at epoch boundaries, and rewards are distributed only
             // there, so the last boundary holds the same tree as the decided state.
-            let height = decided_leaf.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
+            let height = *epoch_length(EPOCH_HEIGHT)
+                .boundary_at_or_before(decided_leaf.height())
+                .expect("four epochs have ended");
 
             // Submit two transactions to the same namespace in separate blocks
             // so the namespace-filtered WS stream produces ≥2 messages.
@@ -14593,7 +14602,9 @@ mod test {
 
         network.stop_consensus().await;
         // Reward trees are stored only at epoch boundaries, the only blocks that change them.
-        let height = network.server.decided_leaf().await.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
+        let height = *epoch_length(EPOCH_HEIGHT)
+            .boundary_at_or_before(network.server.decided_leaf().await.height())
+            .expect("three epochs have ended");
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
         let err = client
