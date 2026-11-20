@@ -58,15 +58,15 @@ flowchart TD
 
 ## Trust chain
 
-| #   | Value                        | From                    | Checked by                                  |
-| --- | ---------------------------- | ----------------------- | ------------------------------------------- |
-| 0   | LC contract address          | L1, finalized block     | trusted                                     |
-| 1   | `F`, `blockCommRoot`         | L1, finalized block     | SNARK, in the contract                      |
-| 2   | Header at `F`                | peer                    | its `block_comm_root` equals the contract's |
-| 3   | Root headers below `F`       | peer                    | Merkle proof against header `F`             |
-| 4   | Table of epoch `e`           | stored and L1 events    | `root(e-2)` hash against table `e-1`        |
-| 5   | Block reward                 | proven roots, table `e` | links 3 and 4                               |
-| 6   | Epochs above the seed window | peer leaves             | QC against table `e-2`                      |
+| #   | Value                        | From                                                               | Checked by                                         |
+| --- | ---------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
+| 0   | LC contract address          | L1, finalized block                                                | trusted                                            |
+| 1   | `F`, `blockCommRoot`         | L1, finalized block                                                | SNARK, in the contract                             |
+| 2   | Header at `F`                | peer                                                               | its `block_comm_root` equals the contract's        |
+| 3   | Root headers below `F`       | peer                                                               | Merkle proof against header `F`                    |
+| 4   | Table of epoch `e`           | stored and L1 events                                               | hash at the next root, when both hashes exist      |
+| 5   | Block reward                 | root headers (link 3), stake of table `e` (link 4), initial supply | no separate check; computed or reused from storage |
+| 6   | Epochs above the seed window | peer leaves                                                        | QC against table `e-2`                             |
 
 ### Link details
 
@@ -102,9 +102,9 @@ flowchart TD
 
 In `EpochMembershipCoordinator::catchup`.
 
-1. `held_pair_top` finds the highest held consecutive pair `(top_held_epoch-1, top_held_epoch)`. It searches down from
-   `min(requested_epoch - 1, highest epoch in memory)`, loading from storage as it goes. A stored pair above the highest
-   epoch in memory is not found.
+1. Startup loads the 20 newest stored tables into memory. `held_pair_top` finds the highest held consecutive pair
+   `(top_held_epoch-1, top_held_epoch)`, searching down from the lower of `requested_epoch - 1` and the highest
+   in-memory epoch.
 2. If `top_held_epoch + 1 < requested_epoch`, the seed takes `seed_lock` and re-checks `top_held_epoch`.
 3. L1 reads: the finalized block number, the LC contract address (cached in a `OnceCell`), then `finalizedState`, both
    at that finalized block.
@@ -128,8 +128,8 @@ In `EpochMembershipCoordinator::catchup`.
    5. Derives table `e` from events. A held table with a hash is reused, not re-derived.
    6. Runs the hash check of `e-1`.
    7. Stores the held table of `e-1`, then puts table `e` in memory. Table `e` is not stored here, so the seed does not
-      persist `table(seed_window_last)`. The memory put is skipped when the new table has no reward and the held one
-      has.
+      persist `table(seed_window_last)`. Seed and backfill installs need a reward; a missing reward is an error before
+      the memory update.
 8. `backfill.request_fill()` runs after the install step, whether or not it succeeded. A failure before the install step
    does not call it.
 9. The walk runs from `seed_window_last + 1` to `requested_epoch`.
@@ -200,7 +200,9 @@ stake table events. Not needed today: the event-derived install is fast enough.
    request-response request and HTTP endpoint).
 3. Accept it iff `state.commit()` equals the proven `root(e-1).next_stake_table_hash`. The hash commits to the full
    state: all registered validators, exits and used keys (`ValidatorSet::from_state`). A mismatch rejects that peer's
-   answer and asks the next peer; no process exit, since the peer is untrusted.
+   answer and asks the next peer; no process exit, since the peer is untrusted. Only for tables selected at protocol
+   version 0.7 or later (`CANONICAL_STAKE_TABLE_ORDER_VERSION`). Before it, registration order can change the selected
+   committee and `state.commit()` does not cover that order, so those tables stay derived from events.
 4. Derive the active set locally with `select_active_validator_set` at the protocol version of `root(e-2)`, as today.
    `root(e-1)` only supplies the hash. Across an upgrade the two roots can carry different selection rules. Block reward
    as today.
@@ -208,8 +210,10 @@ stake table events. Not needed today: the event-derived install is fast enough.
 
 ### Effects
 
-- No L1 event replay on the startup path. L1 RPC stays trusted for the LC contract reads, which anchor every proof; only
-  the event reads drop out.
+- The seed no longer replays stake table events. The cold L1 event scan stays on startup: startup awaits
+  `prefetch_stake_table_events`, a full scan on an empty database, before the coordinator exists. Moving that scan off
+  startup also requires changing the prefetch.
+- L1 RPC stays trusted for the LC contract reads, which anchor every proof.
 - Every peer-supplied table is hash-checked at install.
 - `table(e)` needs proven `root(e-1)`. The LC contract rejects an `F` past the epoch root of its epoch, so
   `root(epoch(F)) >= F` and `table(epoch(F) + 1)` is never provable. The seed window top drops to `epoch(F)`, or that
@@ -222,4 +226,4 @@ stake table events. Not needed today: the event-derived install is fast enough.
   the state from stored events or storage gains the full state.
 - Later epochs still derive tables by replaying all events from L1 block 0 (`validator_set_from_stored_events`). Without
   incremental derivation (verified state of `e` plus events after `root(e-2).l1_finalized`), the full event history is
-  still fetched before the next epoch root; the variant only moves that cost off the startup path.
+  still needed before the next epoch root, so the startup prefetch cannot simply be dropped.
