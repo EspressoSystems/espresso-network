@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow, ensure};
 use async_lock::RwLock;
 use committable::Committable;
@@ -1244,11 +1245,22 @@ where
     }
 }
 
+/// The quorum of the active validators selected from `state`.
+///
+/// Fails if their stakes together do not fit in 256 bits. The state may come from events a
+/// server sent, where each stake fits but nothing bounds their sum, and the quorum's
+/// threshold is taken from the sum.
 fn stake_table_state_to_quorum(
     state: &StakeTableState,
     protocol_version: Version,
 ) -> Result<StakeTable> {
     let vs = ValidatorSet::from_state(state, protocol_version)?;
+    vs.active_validators()
+        .values()
+        .try_fold(U256::ZERO, |total, validator| {
+            total.checked_add(validator.stake)
+        })
+        .context("total stake of the active validators overflows")?;
     Ok(vs
         .active_validators()
         .values()
@@ -2834,6 +2846,36 @@ mod test {
                 .await
                 .expect("the light client accepts the network's certificate");
         }
+    }
+
+    /// Validators whose stakes each fit in 256 bits but together do not give no quorum.
+    ///
+    /// A replay accepts such events, since it bounds each validator's stake only.
+    #[test]
+    fn test_quorum_rejects_total_stake_overflow() {
+        let half = U256::from(1) << 255;
+        let mut state = StakeTableState::default();
+        let delegate_half = |state: &mut StakeTableState| {
+            let mut validator: RegisteredValidator<PubKey> = random_validator().into();
+            validator.stake = half;
+            validator.delegators = [(Address::random(), half)].into_iter().collect();
+            let mut events = vec![];
+            register_validator_events(&mut events, &validator.try_into().unwrap());
+            for event in events {
+                state.apply_event(event).unwrap().unwrap();
+            }
+        };
+
+        delegate_half(&mut state);
+        let quorum: Vec<StakeTableEntry<PubKey>> =
+            stake_table_state_to_quorum(&state, DRB_AND_HEADER_UPGRADE_VERSION)
+                .unwrap()
+                .into();
+        assert_eq!(quorum.len(), 1);
+
+        delegate_half(&mut state);
+        let err = stake_table_state_to_quorum(&state, DRB_AND_HEADER_UPGRADE_VERSION).unwrap_err();
+        assert!(err.to_string().contains("total stake"), "{err:#}");
     }
 
     /// Stake tables with the same hash must give the same committee, or a server could

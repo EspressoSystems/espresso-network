@@ -147,6 +147,11 @@ workflows:
         - 'rui314/setup-mold@v1'
         - 'swatinem/rust-cache@v2'
         - 'taiki-e/install-action@v2'
+    '.github/workflows/stake-table.yml':
+        - 'actions/checkout@v7'
+        - 'leanprover/lean-action@v1'
+        - 'swatinem/rust-cache@v2'
+        - 'taiki-e/install-action@v2'
     '.github/workflows/tag-release.yml':
         - 'actions/checkout@v7'
     '.github/workflows/test.yml':
