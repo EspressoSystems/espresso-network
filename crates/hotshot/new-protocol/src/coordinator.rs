@@ -952,7 +952,7 @@ where
             ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "persist proposal");
-                self.storage.append_proposal(proposal.data.clone());
+                self.storage.append_proposal(proposal.clone());
                 // Two blocks can be built for one view. Here we know which one
                 // wins and we persist just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
@@ -987,7 +987,7 @@ where
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "proposal paired with vid share");
                 self.storage.append_vid(vid_share.clone());
-                self.storage.append_proposal(proposal.data.clone());
+                self.storage.append_proposal(proposal.clone());
                 // Same gate as the in-memory store in `Consensus::apply`: persisting
                 // unconditionally writes a `state_cert` row under a view the sender
                 // chose, which decide promotes into `finalized_state_cert` under the

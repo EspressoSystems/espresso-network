@@ -1,18 +1,43 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, net::Ipv4Addr, time::Duration};
 
-use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
+use committable::Committable;
+use hotshot_example_types::{
+    node_types::{TEST_VERSIONS, TestTypes},
+    state_types::TestInstanceState,
+    storage_types::TestStorage,
+};
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    addr::NetAddr,
+    consensus::ConsensusMetricsValue,
+    data::{EpochNumber, Leaf2, ViewNumber},
     event::HotShotAction,
+    initializer::HotShotInitializer,
+    light_client::StateKeyPair,
     signature_key::BLSPubKey,
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    upgrade_config::UpgradeConfig,
+    x25519::Keypair,
+};
+use tokio::{
+    sync::mpsc,
+    time::{sleep, timeout},
 };
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use crate::tests::common::{
-    runner::{NodeAction, NodeChange, TestRunner},
-    utils::{build_timeout_cert, mock_membership_with_num_nodes},
-    views,
+use crate::{
+    consensus::ConsensusInput,
+    coordinator::Coordinator,
+    helpers::test_upgrade_lock,
+    message::{Message, MessageType, ProposalFetchMessage, Validated},
+    network::Cliquenet,
+    tests::common::{
+        assertions::{any, is_proposal_paired},
+        harness::TestHarness,
+        mock::MockCoordinator,
+        runner::{NodeAction, NodeChange, TestRunner},
+        utils::{TestData, build_timeout_cert, mock_membership_with_num_nodes},
+        views,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -324,6 +349,149 @@ async fn late_start_f_nodes_with_epochs() {
         .run()
         .await
         .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Serving persisted proposals after a restart
+// ---------------------------------------------------------------------------
+
+/// A node that restarts answers a fetch for a proposal it persisted before
+/// with the leader's signature, so the peer fetching it accepts it.
+///
+/// Fetch requests are broadcast, so this copy is the only answer once every
+/// node holding the proposal has restarted.
+#[tokio::test]
+async fn restarted_node_serves_a_persisted_proposal_a_peer_accepts() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_index = 0;
+
+    let mut node = TestHarness::new(node_index).await;
+    let node_key = node.connect_info().0;
+    for fragment in view.vid_share_inputs(&node_key) {
+        node.message(fragment);
+    }
+    node.message(view.proposal_input());
+    node.process_until_output(|outputs| any(outputs, is_proposal_paired))
+        .await;
+    let storage = node.storage().clone();
+    timeout(Duration::from_secs(5), async {
+        while !storage
+            .proposals_cloned()
+            .await
+            .contains_key(&view.view_number)
+        {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the node persists the proposal");
+
+    let restarted = restart(node, node_index).await;
+    let served = restarted
+        .consensus()
+        .signed_proposals_for_fetch(&view.view_number);
+    let [served] = served.as_slice() else {
+        panic!("one proposal is served for the view, got {}", served.len());
+    };
+    assert_eq!(served.data, view.proposal.data);
+    let leaf: Leaf2<TestTypes> = served.data.clone().into();
+    assert!(
+        view.leader_public_key
+            .validate(&served.signature, leaf.commit().as_ref()),
+        "the served proposal carries the leader's signature"
+    );
+
+    let mut peer = TestHarness::new(1).await;
+    // A commit without its proposal makes the peer fetch it.
+    peer.apply_and_process(view.cert2_input());
+    peer.message(Message::<TestTypes, Validated> {
+        sender: node_key,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+            (*served).clone(),
+        ))),
+    });
+    timeout(
+        Duration::from_secs(5),
+        peer.process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|input| matches!(input, ConsensusInput::FetchedProposal(_)))
+        }),
+    )
+    .await
+    .expect("the peer accepts the proposal the restarted node serves");
+}
+
+/// The coordinator `node` restarts as: built by `Coordinator::maker`, as a
+/// node builds it, from the proposals `node` persisted. `node` decided
+/// nothing, so its anchor is still genesis.
+async fn restart(node: TestHarness, node_index: u64) -> MockCoordinator {
+    let epoch_height = 10;
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+    let state_key_pair = StateKeyPair::generate_from_seed_indexed([0; 32], node_index);
+    let storage = node.storage().clone();
+    let membership = node.membership().clone();
+    drop(node);
+
+    let genesis = HotShotInitializer::<TestTypes>::from_genesis(
+        TestInstanceState::default(),
+        epoch_height,
+        vec![],
+        TEST_VERSIONS.vid2,
+    )
+    .await
+    .unwrap();
+    let initializer = HotShotInitializer::load(
+        TestInstanceState::default(),
+        epoch_height,
+        vec![],
+        (
+            genesis.anchor_leaf().clone(),
+            Some(genesis.anchor_state().clone()),
+        ),
+        storage.restart_view().await,
+        genesis.high_qc().clone(),
+        storage.last_actioned_view().await,
+        storage.proposals_cloned().await,
+        None,
+        None,
+    );
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    let network = Cliquenet::create(
+        "test-restart",
+        public_key,
+        Keypair::derive_from::<BLSPubKey>(&private_key).unwrap(),
+        NetAddr::Inet(
+            Ipv4Addr::LOCALHOST.into(),
+            test_utils::reserve_tcp_port().unwrap(),
+        ),
+        vec![],
+        None,
+        upgrade_lock.clone(),
+        Box::new(NoMetrics),
+    )
+    .await
+    .unwrap();
+
+    Coordinator::maker()
+        .membership_coordinator(membership)
+        .network(network)
+        .initializer(&initializer)
+        .upgrade_lock(upgrade_lock)
+        .public_key(public_key)
+        .private_key(private_key)
+        .state_private_key(state_key_pair.sign_key_ref().clone())
+        .stake_table_capacity(10)
+        .timeout_duration(Duration::from_secs(30))
+        .empty_block_delay(Duration::from_secs(1))
+        .block_sizes(BTreeMap::new())
+        .storage(storage)
+        .metrics(&NoMetrics)
+        .consensus_metrics(ConsensusMetricsValue::new(&NoMetrics))
+        .upgrade_config(UpgradeConfig::default())
+        .external_tx(mpsc::unbounded_channel().0)
+        .make()
 }
 
 /// A restarted node votes and proposes only in views after every view it acted
