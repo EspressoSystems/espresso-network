@@ -9,7 +9,7 @@ edition     = { workspace = true }
 anyhow                = { workspace = true }
 async-trait           = { workspace = true }
 bincode               = { workspace = true }
-chain-store           = { workspace = true }
+chain-store           = { workspace = true, features = ["remote"] }
 clap                  = { workspace = true }
 committable           = { workspace = true }
 consensus-api         = { workspace = true }

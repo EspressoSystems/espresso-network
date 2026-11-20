@@ -9,12 +9,12 @@ use futures::{Stream, stream};
 use tonic::{Request, Response, Status};
 
 use crate::{
-    AppWrite, Backend, Column, KeyBounds, Part, Row,
-    proto::{self, store_server::StoreServer},
+    Backend, Column, KeyBounds, Row,
+    wire::{
+        MAX_MESSAGE_SIZE, app_write_from, part_from, parts_from, parts_to,
+        proto::{self, store_server::StoreServer},
+    },
 };
-
-/// The largest message the store service and its clients send, which a payload bounds.
-pub const MAX_MESSAGE_SIZE: usize = 64 << 20;
 
 /// The most application table entries one answer holds.
 const MAX_APP_ENTRIES: usize = 4096;
@@ -276,69 +276,6 @@ impl proto::store_server::Store for StoreService {
     }
 }
 
-fn app_write_from(write: proto::AppTableWrite) -> Result<AppWrite, Status> {
-    use proto::app_table_write::Op;
-    let table = write.table;
-    match write.op {
-        Some(Op::Put(entry)) => Ok(AppWrite::Put {
-            table,
-            key: entry.key.into(),
-            value: entry.value.into(),
-        }),
-        Some(Op::DeleteBefore(key)) => Ok(AppWrite::DeleteBefore {
-            table,
-            key: key.into(),
-        }),
-        Some(Op::Clear(_)) => Ok(AppWrite::Clear { table }),
-        None => Err(Status::invalid_argument("a write without an operation")),
-    }
-}
-
-pub(crate) fn app_write_to(write: AppWrite) -> proto::AppTableWrite {
-    use proto::app_table_write::Op;
-    match write {
-        AppWrite::Put { table, key, value } => proto::AppTableWrite {
-            table,
-            op: Some(Op::Put(proto::AppEntry {
-                key: key.to_vec(),
-                value: value.to_vec(),
-            })),
-        },
-        AppWrite::DeleteBefore { table, key } => proto::AppTableWrite {
-            table,
-            op: Some(Op::DeleteBefore(key.to_vec())),
-        },
-        AppWrite::Clear { table } => proto::AppTableWrite {
-            table,
-            op: Some(Op::Clear(proto::Empty {})),
-        },
-    }
-}
-
 fn internal(err: anyhow::Error) -> Status {
     Status::internal(format!("{err:#}"))
-}
-
-pub(crate) fn part_from(id: i32) -> Result<Part, Status> {
-    i16::try_from(id)
-        .ok()
-        .and_then(Part::from_id)
-        .ok_or_else(|| Status::invalid_argument(format!("no part {id}")))
-}
-
-pub(crate) fn parts_from(parts: Vec<proto::PartData>) -> Result<Vec<(Part, bytes::Bytes)>, Status> {
-    parts
-        .into_iter()
-        .map(|p| Ok((part_from(p.part)?, p.data.into())))
-        .collect()
-}
-
-pub(crate) fn parts_to(parts: Vec<(Part, bytes::Bytes)>) -> Vec<proto::PartData> {
-    parts
-        .into_iter()
-        .map(|(part, data)| proto::PartData {
-            part: part.id().into(),
-            data: data.to_vec(),
-        })
-        .collect()
 }

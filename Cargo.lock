@@ -2369,6 +2369,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes",
+ "chain-store",
  "committable",
  "espresso-types",
  "futures",

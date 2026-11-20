@@ -6,6 +6,12 @@ authors     = { workspace = true }
 edition     = { workspace = true }
 
 [features]
+# The Postgres backend.
+postgres = ["dep:sqlx"]
+# The client of the store service, a backend over gRPC.
+remote = ["dep:prost", "dep:tonic", "dep:tonic-prost"]
+# The store service, which serves a backend over gRPC.
+service = ["dep:futures", "dep:prost", "dep:tonic", "dep:tonic-prost"]
 # The conformance suite every backend runs, and a throwaway Postgres server to run it against.
 testing = ["dep:test-utils"]
 
@@ -17,21 +23,23 @@ bincode       = { workspace = true }
 bytes         = { workspace = true }
 committable   = { workspace = true }
 espresso-types = { workspace = true }
-futures       = { workspace = true }
+futures       = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
-prost         = { workspace = true }
+prost         = { workspace = true, optional = true }
 serde         = { workspace = true }
-sqlx          = { workspace = true }
+sqlx          = { workspace = true, optional = true }
 test-utils    = { workspace = true, optional = true }
 tokio         = { workspace = true, features = ["sync", "time", "rt"] }
-tonic         = { workspace = true }
-tonic-prost   = { workspace = true }
+tonic         = { workspace = true, optional = true }
+tonic-prost   = { workspace = true, optional = true }
 tracing       = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
+# Every backend, for the conformance suite and the remote tests.
+chain-store    = { path = ".", features = ["postgres", "remote", "service", "testing"] }
 espresso-types = { workspace = true, features = ["testing"] }
 test-utils     = { workspace = true }
 tokio          = { workspace = true, features = ["full"] }

@@ -9,8 +9,10 @@ use tonic::transport::{Channel, Endpoint};
 
 use crate::{
     AppWrite, Backend, Column, KeyBounds, Part, Row,
-    proto::{self, store_client::StoreClient},
-    service::{MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to},
+    wire::{
+        MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to,
+        proto::{self, store_client::StoreClient},
+    },
 };
 
 /// How long the client waits before following the store's changes again after the stream failed.
