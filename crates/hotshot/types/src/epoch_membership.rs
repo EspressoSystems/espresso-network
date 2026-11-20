@@ -17,7 +17,7 @@ use versions::DRB_FIX_VERSION;
 
 use crate::{
     PeerConfig, PeerConnectInfo,
-    data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::{
         DRB_PROGRESS_LOAD_TIMEOUT, DrbDifficultySelectorFn, DrbInput, DrbResult, Heartbeat,
         compute_drb_result,
@@ -167,11 +167,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     pub fn epoch_length(&self) -> EpochLength {
         self.epoch_length
-    }
-
-    /// The epoch length as a raw block count, for callers not yet on [`EpochLength`].
-    pub fn epoch_height(&self) -> BlockNumber {
-        BlockNumber::new(self.epoch_length.get())
     }
 
     /// The bound on a single catchup step.

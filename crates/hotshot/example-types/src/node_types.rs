@@ -277,7 +277,7 @@ mod tests {
             optional_timeout_evidence,
         },
         simple_vote::{HasEpoch, TimeoutData2, VersionedVoteData},
-        utils::{genesis_epoch_from_version, option_epoch_from_block_number},
+        utils::genesis_epoch_from_version,
     };
     use serde::{Deserialize, Serialize};
     use versions::{EPOCH_VERSION, Upgrade, version};
@@ -431,37 +431,6 @@ mod tests {
             versioned_data_commitment_0 != versioned_data_commitment_1,
             "left: {versioned_data_commitment_0:?}, right: {versioned_data_commitment_1:?}"
         );
-    }
-
-    #[test]
-    fn test_option_epoch_from_block_number() {
-        // block 0 is always epoch 0
-        let epoch = option_epoch_from_block_number(true, 1, 10);
-        assert_eq!(Some(EpochNumber::new(1)), epoch);
-
-        let epoch = option_epoch_from_block_number(true, 1, 10);
-        assert_eq!(Some(EpochNumber::new(1)), epoch);
-
-        let epoch = option_epoch_from_block_number(true, 10, 10);
-        assert_eq!(Some(EpochNumber::new(1)), epoch);
-
-        let epoch = option_epoch_from_block_number(true, 11, 10);
-        assert_eq!(Some(EpochNumber::new(2)), epoch);
-
-        let epoch = option_epoch_from_block_number(true, 20, 10);
-        assert_eq!(Some(EpochNumber::new(2)), epoch);
-
-        let epoch = option_epoch_from_block_number(true, 21, 10);
-        assert_eq!(Some(EpochNumber::new(3)), epoch);
-
-        let epoch = option_epoch_from_block_number(true, 21, 0);
-        assert_eq!(None, epoch);
-
-        let epoch = option_epoch_from_block_number(false, 21, 10);
-        assert_eq!(None, epoch);
-
-        let epoch = option_epoch_from_block_number(false, 21, 0);
-        assert_eq!(None, epoch);
     }
 
     #[test]

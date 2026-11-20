@@ -624,6 +624,40 @@ mod tests {
         );
     }
 
+    /// The modular arithmetic the node used before `EpochLength`, for every length that holds a
+    /// root.
+    #[test]
+    fn positions_match_the_modular_formulas() {
+        for blocks in 6..=50 {
+            let length = epoch_length(blocks);
+            for h in 0..=blocks * 5 + 1 {
+                let position = length.position(height(h));
+                let positive = h > 0;
+                assert_eq!(position.is_last(), positive && h % blocks == 0);
+                assert_eq!(position.is_root(), positive && (h + 5) % blocks == 0);
+                assert_eq!(
+                    position.is_transition_block(),
+                    positive && (h + 3) % blocks == 0
+                );
+                assert_eq!(
+                    position.is_epoch_transition(),
+                    positive && (h % blocks >= blocks - 3 || h % blocks == 0)
+                );
+                assert_eq!(
+                    position.is_at_or_after_root(),
+                    positive && (h % blocks == 0 || h % blocks >= blocks - 5)
+                );
+            }
+            for e in 1..=5 {
+                assert_eq!(length.root_inside(epoch(e)), Ok(height(e * blocks - 5)));
+                assert_eq!(
+                    length.transition_leaving(epoch(e)),
+                    Ok(height(e * blocks - 3))
+                );
+            }
+        }
+    }
+
     #[test]
     fn maximum_height_position_is_total() {
         for blocks in [1, 2, 3, 5, 6, 10, u64::MAX - 1, u64::MAX] {

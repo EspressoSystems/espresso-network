@@ -1786,6 +1786,8 @@ pub mod testing {
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
+        let epoch_length =
+            EpochLength::try_from(epoch_height).expect("a chain that changes epoch has epochs");
         let mut last_seen = None;
         while let Some(event) = events.next().await {
             // A decide carries its most recent leaf first.
@@ -1793,7 +1795,7 @@ pub mod testing {
                 CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
                 _ => continue,
             };
-            let epoch = leaf.epoch(epoch_height);
+            let epoch = leaf.epoch(epoch_length);
             tracing::debug!(
                 "Node decided at height: {}, epoch: {epoch:?}",
                 leaf.height(),

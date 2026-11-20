@@ -4,7 +4,7 @@ use anyhow::Result;
 use espresso_node::Genesis;
 use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
-use hotshot_types::{traits::block_contents::BlockHeader, utils::epoch_from_block_number};
+use hotshot_types::traits::block_contents::BlockHeader;
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, LARGE_BLOCK_VERSION,
     NEW_PROTOCOL_VERSION, Upgrade,
@@ -116,7 +116,7 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
     let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
-    let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
+    let first_epoch = *genesis.epoch_length()?.epoch_of(epoch_start_block);
 
     let first_reward_block = if upgrade.target >= EPOCH_REWARD_VERSION {
         Some((first_epoch + 3) * epoch_length + 1)

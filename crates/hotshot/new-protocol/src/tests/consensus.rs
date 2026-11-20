@@ -4306,7 +4306,7 @@ async fn test_unvalidated_state_cert_is_not_stored() {
         "fixture precondition: an ordinary proposal carries no state_cert"
     );
 
-    // Use the QC's real epoch and view, so only `is_epoch_root` can reject this forgery.
+    // Use the QC's real epoch and view, so only the epoch root check can reject this forgery.
     let qc_epoch = view
         .proposal
         .data

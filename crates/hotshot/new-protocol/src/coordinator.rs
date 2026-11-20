@@ -223,7 +223,7 @@ where
         let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
-            .epoch(membership_coordinator.epoch_length().get())
+            .epoch(membership_coordinator.epoch_length())
             .unwrap_or(EpochNumber::genesis());
         let cert1 = initializer.high_qc().clone();
         let parent_proposal = message::Proposal {

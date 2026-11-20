@@ -21,6 +21,7 @@ use hotshot_types::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon,
         VidDisperseShare, VidShare, ns_table::parse_ns_table, vid_disperse::AvidmGf2DisperseShare,
     },
+    epoch::EpochLength,
     event::LeafInfo,
     new_protocol::CoordinatorEvent,
     signature_key::BLSPubKey,
@@ -31,7 +32,6 @@ use hotshot_types::{
         block_contents::{EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
         signature_key::SignatureKey,
     },
-    utils::epoch_from_block_number,
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
 use versions::NEW_PROTOCOL_VERSION;
@@ -79,15 +79,20 @@ impl MockBlock {
 pub struct MockChain {
     blocks: Vec<MockBlock>,
     num_nodes: usize,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl MockChain {
+    /// # Panics
+    ///
+    /// Panics if `epoch_height` is zero.
     pub async fn new(num_nodes: usize, epoch_height: u64) -> Self {
+        let epoch_length =
+            EpochLength::try_from(epoch_height).expect("a mock chain has a positive epoch height");
         Self {
-            blocks: vec![genesis(epoch_height).await],
+            blocks: vec![genesis(epoch_length).await],
             num_nodes,
-            epoch_height,
+            epoch_length,
         }
     }
 
@@ -143,7 +148,7 @@ impl MockChain {
                 block_header: header.clone(),
                 view_number: parent.view_number() + 1,
                 epoch: Some(self.epoch(height)),
-                justify_qc: qc_for(parent, self.epoch_height),
+                justify_qc: qc_for(parent, self.epoch_length),
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,
                 view_change_evidence: None,
@@ -151,7 +156,7 @@ impl MockChain {
                 state_cert: None,
             },
         });
-        let qc = qc_for(&leaf, self.epoch_height);
+        let qc = qc_for(&leaf, self.epoch_length);
 
         self.blocks.push(MockBlock {
             leaf: LeafQueryData::new(leaf, qc).unwrap(),
@@ -236,7 +241,7 @@ impl MockChain {
     }
 
     fn epoch(&self, height: u64) -> EpochNumber {
-        EpochNumber::new(epoch_from_block_number(height, self.epoch_height))
+        self.epoch_length.epoch_of(height)
     }
 }
 
@@ -340,7 +345,7 @@ pub fn genesis_vid(header: &MockHeader) -> (VidCommon, Vec<VidShare>) {
     (vid_common, vid_shares)
 }
 
-async fn genesis(epoch_height: u64) -> MockBlock {
+async fn genesis(epoch_length: EpochLength) -> MockBlock {
     let leaf = Leaf2::<MockTypes>::genesis(
         &Default::default(),
         &Default::default(),
@@ -350,7 +355,7 @@ async fn genesis(epoch_height: u64) -> MockBlock {
     let header = leaf.block_header().clone();
     let (vid_common, vid_shares) = genesis_vid(&header);
 
-    let qc = qc_for(&leaf, epoch_height);
+    let qc = qc_for(&leaf, epoch_length);
     MockBlock {
         leaf: LeafQueryData::new(leaf, qc).unwrap(),
         block: BlockQueryData::new(header.clone(), MockPayload::genesis()),
@@ -359,15 +364,12 @@ async fn genesis(epoch_height: u64) -> MockBlock {
     }
 }
 
-/// A QC certifying `leaf`, with the epoch its height falls in under `epoch_height`.
-fn qc_for(leaf: &Leaf2<MockTypes>, epoch_height: u64) -> QuorumCertificate2<MockTypes> {
+/// A QC certifying `leaf`, with the epoch its height falls in under `epoch_length`.
+fn qc_for(leaf: &Leaf2<MockTypes>, epoch_length: EpochLength) -> QuorumCertificate2<MockTypes> {
     let height = leaf.block_header().block_number;
     let data = QuorumData2 {
         leaf_commit: leaf.commit(),
-        epoch: Some(EpochNumber::new(epoch_from_block_number(
-            height,
-            epoch_height,
-        ))),
+        epoch: Some(epoch_length.epoch_of(height)),
         block_number: Some(height),
     };
     QuorumCertificate2::new(data, data.commit(), leaf.view_number(), None, PhantomData)

@@ -508,7 +508,7 @@ impl ConsensusSource for FollowerConsensus {
         let decided = self.decided.borrow();
         decided
             .as_ref()
-            .and_then(|leaf| leaf.leaf().epoch(self.epoch_length.get()))
+            .and_then(|leaf| leaf.leaf().epoch(self.epoch_length))
     }
 
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
@@ -729,7 +729,7 @@ impl<P: SequencerPersistence> Follower<P> {
     /// membership already knows the result, as after a restart or a catchup walk.
     async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
         let height = leaf.height();
-        let Some(epoch) = leaf.epoch(self.epoch_length.get()) else {
+        let Some(epoch) = leaf.epoch(self.epoch_length) else {
             return Ok(());
         };
         let position = self.epoch_length.position(height);
