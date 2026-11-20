@@ -7,7 +7,8 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 
 - `F`: `finalizedState.blockHeight` of the LC contract, the highest block height with a proof accepted by the LC
   contract.
-- `blockCommRoot`: `finalizedState.blockCommRoot`, a hash of the block Merkle root in the header at `F`.
+- `blockCommRoot`: `finalizedState.blockCommRoot`, a hash of the block Merkle root at height `F` (the tree over blocks
+  `0..F-1`).
 - `epoch(h)`: the epoch that contains block height `h`.
 - `table(e)`: the stake table of epoch `e`.
 - `root(e)`: the epoch root header of epoch `e`, 5 blocks before the end of `e`. Its `next_stake_table_hash` is the hash
@@ -18,8 +19,8 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 - seed: the step before the walk that installs a seed window of tables from proven epoch roots, anchored at the LC
   contract (`LcContractSeed`).
 - seed window: the epochs `seed_window_first..=seed_window_last` whose tables one seed installs, at most 5.
-- anchor: the header at `F`, accepted when its block Merkle root matches `blockCommRoot`. Every epoch root the seed uses
-  is proven against it.
+- `anchor_root`: a block Merkle root whose hash equals `blockCommRoot`. A peer sends it inside the header at `F`; no
+  other field of that header is used or trusted. Every epoch root the seed uses is proven against it.
 - `top_held_epoch` (`start` in code): the top of the highest pair of consecutive held epochs.
 - `requested_epoch` (`epoch` or `target` in code): the epoch catchup was asked for.
 - `seed_window_first`, `seed_window_last` (`first`, `last` in code): the lowest and highest epoch of the seed window.
@@ -40,7 +41,7 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 ## Summary
 
 - One trust root: the LC contract's SNARK-verified `finalizedState`, read over L1 RPC.
-- Peers supply data only. The seed's peer answers (anchor header, header proofs) are checked against that root before
+- Peers supply data only. The seed's peer answers (`anchor_root`, header proofs) are checked against that root before
   use. Chain configs fetched from peers are checked against the commitment in a proven header. Leaves of the walk above
   the seed window and of `drb_ready` are QC-checked against the installed tables.
 - Trusted inputs:
@@ -59,9 +60,9 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 flowchart TD
     CC[chain config: stake_table_contract] -->|L1 RPC, finalized block| ST[StakeTableV3.lightClient]
     ST -->|L1 RPC, finalized block| LC["LcContract.finalizedState: F, blockCommRoot (SNARK-verified)"]
-    LC --> A["Anchor header at F (peer)"]
-    A -->|"verify_header: height == F, block_comm_root matches"| AR[block Merkle root of header F]
-    AR --> P["Epoch root headers below F (peer HeaderProof)"]
+    LC --> AR["anchor_root: block Merkle root (peer, carried in header F)"]
+    AR -->|"hash equals blockCommRoot"| AV[verified anchor_root]
+    AV --> P["Epoch root headers below F (peer HeaderProof)"]
     P -->|verify_at_height| R[proven epoch roots]
     R --> T["Stake table of epoch e, derived from stake table events up to root(e-2).l1_finalized"]
     T -->|"hash check: root(e-2).next_stake_table_hash vs table(e-1)"| I["install: store table(e-1), put table(e) in memory"]
@@ -74,8 +75,8 @@ flowchart TD
 | --- | ---------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
 | 0   | LC contract address          | L1, finalized block                                                | trusted                                            |
 | 1   | `F`, `blockCommRoot`         | L1, finalized block                                                | SNARK, in the contract                             |
-| 2   | Header at `F`                | peer                                                               | its `block_comm_root` equals the contract's        |
-| 3   | Root headers below `F`       | peer                                                               | Merkle proof against header `F`                    |
+| 2   | `anchor_root`                | peer                                                               | hash equals `blockCommRoot`                        |
+| 3   | Root headers below `F`       | peer                                                               | Merkle proof against `anchor_root`                 |
 | 4   | Table of epoch `e`           | stored and L1 events                                               | hash at the next root, when both hashes exist      |
 | 5   | Block reward                 | root headers (link 3), stake of table `e` (link 4), initial supply | no separate check; computed or reused from storage |
 | 6   | Epochs above the seed window | peer leaves                                                        | QC against table `e-2`                             |
@@ -88,13 +89,13 @@ flowchart TD
 1. `F`, `blockCommRoot`
    - `LightClientV3.finalizedState()` at the L1 finalized block.
    - Trusts L1 RPC, the LC contract owner and the circuit.
-2. Header at `F`
-   - First leaf of `/v1/catchup/{F}/leafchain`, or request-response.
-   - `verify_header`: height is `F` and `light_client_state.block_comm_root` equals the contract's.
-   - Leaf chain QCs are not checked. Only the header's Merkle root is used.
+2. `anchor_root`
+   - Carried in the header at `F`: first leaf of `/v1/catchup/{F}/leafchain`, or request-response.
+   - `verify_header` returns only this root, after checking that its hash equals `blockCommRoot`.
+   - The header's other fields and the leaf chain QCs are not checked or used.
 3. Root headers below `F`
    - `HeaderProof` from `/v1/light-client/header/{F}/{h}`, or `Request::HeaderProof` over request-response.
-   - `verify_at_height(anchor_root, h)`: Merkle proof against the block Merkle root of header `F`.
+   - `verify_at_height(anchor_root, h)`: Merkle proof against `anchor_root`.
 4. Table of epoch `e`
    - Derived from stake table events up to `root(e-2).l1_finalized`: stored events, plus L1 for what storage lacks
      (`StoredThenL1`).
@@ -126,10 +127,10 @@ In `EpochMembershipCoordinator::catchup`.
    - At most 5 tables, covering the requested epoch's DRB and rewards.
    - `preceding_root = root(seed_window_first - 3)` when `seed_window_first > first_epoch + 4`.
    - Returns `None` (no seed) when the walk from `top_held_epoch` reaches `requested_epoch` or `epoch(F)` without one.
-5. Anchor: the header at `F`, then `verify_header`.
+5. `anchor_root`, from the header at `F`, via `verify_header`.
 6. Proven headers: the preceding root first, then `root(e-2)` for each `e` in the seed window, ascending. Up to 3
    requests in flight.
-   - The anchor and each proven header get up to 5 attempts, or 1 with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE`.
+   - `anchor_root` and each proven header get up to 5 attempts, or 1 with `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE`.
    - One HTTP attempt asks the state peers in turn.
 7. `EpochCommittees::install_epoch_roots`, ascending, each root under `catchup_timeout`. Per root `e`, `install_root`:
    1. `store_epoch_root`. A failure is logged and the install continues, so a seed can succeed with the root header
@@ -157,7 +158,7 @@ In `StakeTableBackfill`.
 - Read order:
   1. Stored epochs (no L1 read when nothing is missing).
   2. LC contract state.
-  3. One anchor.
+  3. One `anchor_root`.
   4. Initial token supply.
   5. Proven roots of the missing epochs below `F`: root, next root and preceding root per epoch. Chunks of 20 epochs,
      newest chunk first. Inside a chunk, one request at a time, heights ascending.
@@ -193,8 +194,8 @@ In `StakeTableBackfill`.
 
 ## Design notes
 
-- The leaf chain at `F` supplies only the header at `F`. Its QCs are not verified; the `block_comm_root` match against
-  the SNARK-verified contract state is the stronger check.
+- The leaf chain at `F` only carries `anchor_root`, in its first header. Its QCs and the header's other fields are
+  unverified and unused.
 - Only headers below `F` are provable: the block Merkle tree in header `F` commits to blocks `0..F-1`. Hence
   `seed_window_last` is capped at `epoch(F) + 1`; that table comes from `root(epoch(F) - 1)`, which is below `F`.
 - `next_stake_table_hash` lags one root: a root decides the hash of the epoch before the one it defines. Installing
@@ -207,7 +208,7 @@ stake table events. Not needed today: the event-derived install is fast enough.
 
 ### Outline
 
-1. Same anchor as today: LC contract `finalizedState`, header at `F`, proven epoch roots below `F`.
+1. Same anchor as today: LC contract `finalizedState`, `anchor_root`, proven epoch roots below `F`.
 2. For each table `e` in the seed window, request the full `StakeTableState` of epoch `e` from a peer (new
    request-response request and HTTP endpoint).
 3. Accept it iff `state.commit()` equals the proven `root(e-1).next_stake_table_hash`. The hash commits to the full
