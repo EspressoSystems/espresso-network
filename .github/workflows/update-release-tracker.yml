@@ -76,5 +76,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ inputs.issue || github.event.issue.number }}
-          REF: ${{ inputs.ref || github.event.pull_request.base.ref || github.ref }}
+          REF: ${{ inputs.ref || github.ref }}
         run: scripts/release refresh --ref "$REF" ${ISSUE:+--issue "$ISSUE"}
