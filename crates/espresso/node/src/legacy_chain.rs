@@ -34,7 +34,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     addr::NetAddr, network::NetworkConfig, simple_certificate::LightClientStateUpdateCertificateV2,
-    utils::epoch_from_block_number, x25519,
+    x25519,
 };
 use http_client::{Client, error::ClientErr};
 use serde::{Deserialize, Serialize};
@@ -141,7 +141,11 @@ impl LegacyChain {
 
     /// The epoch of the last recorded block.
     pub fn last_epoch(&self) -> u64 {
-        epoch_from_block_number(self.tip(), self.epoch_height())
+        let epoch_length = self
+            .genesis
+            .epoch_length()
+            .expect("a recorded chain has epochs");
+        *epoch_length.epoch_of(self.tip())
     }
 
     /// Starts a query node on this chain and returns once it has stored every block and derived

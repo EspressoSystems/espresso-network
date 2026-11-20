@@ -8,12 +8,12 @@ use espresso_types::SeqTypes;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch::EpochLength,
     light_client::StateVerKey,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
     traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
-    utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
 };
 
 /// Error type for state certificate fetching
@@ -49,7 +49,7 @@ pub enum StateCertFetchError {
 pub(crate) fn ensure_cert_can_exist(
     epoch: EpochNumber,
     first_epoch: EpochNumber,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     decided_height: Option<u64>,
     current_epoch: Option<EpochNumber>,
 ) -> Result<(), StateCertFetchError> {
@@ -66,11 +66,11 @@ pub(crate) fn ensure_cert_can_exist(
         return Ok(());
     }
     // The cert signs the root block inside `epoch` itself, not the `epoch - 2` root that sets its
-    // stake table. `epoch` comes from the URL, so epochs past the decided one are rejected before
-    // `root_block_in_epoch` multiplies it.
-    if epoch.u64() > epoch_from_block_number(decided_height, epoch_height)
-        || decided_height < root_block_in_epoch(epoch.u64(), epoch_height)
-    {
+    // stake table. An epoch without a root has no cert either.
+    let root_decided = epoch_length
+        .root_inside(epoch)
+        .is_ok_and(|root| *root <= decided_height);
+    if epoch > epoch_length.epoch_of(decided_height) || !root_decided {
         return Err(StateCertFetchError::RootNotDecided {
             epoch: epoch.u64(),
             decided_height,
@@ -85,24 +85,22 @@ pub fn validate_state_cert(
     cert: &LightClientStateUpdateCertificateV2<SeqTypes>,
     stake_table: &HSStakeTable<SeqTypes>,
     expected_epoch: EpochNumber,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     upgrade_lock: &UpgradeLock<SeqTypes>,
 ) -> anyhow::Result<()> {
     // Validators publish state signatures for ordinary blocks to a public relay, over the
     // same digest verified below. Only epoch roots ever carry a genuine certificate, so
     // without this a peer could assemble one from harvested relay signatures.
+    let position = epoch_length.position(cert.light_client_state.block_height);
     ensure!(
-        is_epoch_root(cert.light_client_state.block_height, epoch_height),
+        position.is_root(),
         "state certificate is for block {}, which is not an epoch root",
         cert.light_client_state.block_height
     );
 
     // `cert.epoch` is outside the signed digest, so a peer can set it to whatever was
     // requested. `block_height` is inside it, so derive the epoch from that instead.
-    let derived_epoch = EpochNumber::new(epoch_from_block_number(
-        cert.light_client_state.block_height,
-        epoch_height,
-    ));
+    let derived_epoch = position.epoch();
     if derived_epoch != expected_epoch {
         bail!(
             "state certificate is for block {} in epoch {derived_epoch}, but epoch \
@@ -198,6 +196,7 @@ mod tests {
         stake_table::HSStakeTable,
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     };
+    use light_client::testing::epoch_length;
     use versions::{Upgrade, version};
 
     use super::*;
@@ -310,7 +309,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect("well-formed certificate must validate");
@@ -347,7 +346,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(2),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect_err(
@@ -362,11 +361,9 @@ mod tests {
     fn test_cert_with_mislabelled_epoch_is_rejected() {
         // `ROOT_BLOCK` is an epoch root and derives to the requested epoch, so only the
         // label check can reject this.
-        assert!(is_epoch_root(ROOT_BLOCK, EPOCH_HEIGHT));
-        assert_eq!(
-            epoch_from_block_number(ROOT_BLOCK, EPOCH_HEIGHT),
-            FIXTURE_EPOCH
-        );
+        let position = epoch_length(EPOCH_HEIGHT).position(ROOT_BLOCK);
+        assert!(position.is_root());
+        assert_eq!(*position.epoch(), FIXTURE_EPOCH);
 
         let (mut cert, stake_table) = valid_cert_and_stake_table();
         cert.epoch = EpochNumber::new(2);
@@ -375,7 +372,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect_err("a cert whose label disagrees with its signed block height must be rejected");
@@ -388,8 +385,9 @@ mod tests {
     fn test_cert_for_a_non_epoch_root_block_is_rejected() {
         // Block 99 is inside epoch 1 but is not its root, so only the epoch-root check
         // can reject it: the signatures are valid and the derived epoch matches.
-        assert!(!is_epoch_root(99, EPOCH_HEIGHT));
-        assert_eq!(epoch_from_block_number(99, EPOCH_HEIGHT), FIXTURE_EPOCH);
+        let position = epoch_length(EPOCH_HEIGHT).position(99);
+        assert!(!position.is_root());
+        assert_eq!(*position.epoch(), FIXTURE_EPOCH);
 
         let (cert, stake_table) =
             cert_and_stake_table(99, FixedBytes::<32>::from(SIGNED_AUTH_ROOT));
@@ -397,7 +395,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect_err("a cert for a block that is not an epoch root must be rejected");
@@ -413,7 +411,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect_err("certificate with a mutated auth_root must be rejected");
@@ -435,7 +433,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect_err("a zeroed auth_root must not disable the LCV3 check");
@@ -452,7 +450,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 3),
         )
         .expect("genuine pre-V4 certificates must still validate");
@@ -469,7 +467,7 @@ mod tests {
             &cert,
             &stake_table,
             EpochNumber::new(FIXTURE_EPOCH),
-            EPOCH_HEIGHT,
+            epoch_length(EPOCH_HEIGHT),
             &upgrade_lock_at(0, 5),
         )
         .expect_err("legacy LCV3 slot must not satisfy the V4 check");
@@ -489,7 +487,7 @@ mod tests {
         ensure_cert_can_exist(
             EpochNumber::new(epoch),
             EpochNumber::new(DECAF_FIRST_EPOCH),
-            DECAF_EPOCH_HEIGHT,
+            epoch_length(DECAF_EPOCH_HEIGHT),
             Some(decided_height),
             current_epoch.map(EpochNumber::new),
         )
@@ -542,7 +540,7 @@ mod tests {
         let err = ensure_cert_can_exist(
             EpochNumber::new(DECAF_FIRST_EPOCH),
             EpochNumber::new(DECAF_FIRST_EPOCH),
-            DECAF_EPOCH_HEIGHT,
+            epoch_length(DECAF_EPOCH_HEIGHT),
             None,
             None,
         )

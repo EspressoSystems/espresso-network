@@ -9,8 +9,8 @@ use espresso_contract_deployer::network_config::{
     fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
 };
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, stake_table::one_honest_threshold,
-    traits::signature_key::StakeTableEntryType, utils::epoch_from_block_number,
+    data::EpochNumber, epoch::EpochLength, light_client::StateVerKey,
+    stake_table::one_honest_threshold, traits::signature_key::StakeTableEntryType,
 };
 use url::Url;
 
@@ -144,11 +144,12 @@ impl StakeTableTracker {
                     (blocks_per_epoch, epoch_start_block)
                 }
             };
-        if block_height <= epoch_start_block || blocks_per_epoch == 0 {
-            return self.genesis_stake_table_info().await;
-        }
+        let epoch_length = match EpochLength::try_from(blocks_per_epoch) {
+            Ok(epoch_length) if block_height > epoch_start_block => epoch_length,
+            _ => return self.genesis_stake_table_info().await,
+        };
 
-        let epoch = epoch_from_block_number(block_height, blocks_per_epoch);
+        let epoch = *epoch_length.epoch_of(block_height);
         tracing::trace!("Acquire read lock for stake table info");
         let read_guard = self.inner.read().await;
         if let Some(stake_table_info) = read_guard.stake_table_infos.get(&epoch) {
