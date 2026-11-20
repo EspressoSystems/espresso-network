@@ -82,8 +82,8 @@ Probes are HEAD requests.
   window absorbs the short count. A cert no peer has costs one 5 s step 2 request per re-check; confirmed rows are
   re-checked only by the representative (once a minute per node), the recovery queue and the weekly sweep.
 - A stake table of epoch `e` is probed with the chunk holding block `(e - 2) * epoch_height`, the epoch boundary five
-  blocks after the root block the node builds it from (`root_block_in_epoch` subtracts 5); a state cert with the chunk
-  holding `e * epoch_height`. The alert total below uses the same block.
+  blocks after the root block the node builds it from (`EpochLength::root_inside` subtracts 5); a state cert with the
+  chunk holding `e * epoch_height`. The alert total below uses the same block.
 - Heights are judged against each node's own block height: a failed poll keeps the old height, an answered lower height
   is followed (a node restored from an older backup is lagging, not missing data). Nothing above the node's own height
   minus 10 is probed by follow or the sweep or counted, and the retention window follows the node's own height. The tip

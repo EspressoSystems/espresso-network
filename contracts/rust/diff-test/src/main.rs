@@ -22,7 +22,7 @@ use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_t
 use hotshot_state_prover::v3::mock_ledger::{
     MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST, gen_plonk_proof_for_test,
 };
-use hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};
+use hotshot_types::epoch::EpochLength;
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
@@ -561,11 +561,13 @@ fn main() {
                 panic!("Should provide arg1=blockNum, arg2=blocksPerEpoch");
             }
             let block_num = cli.args[0].parse::<u64>().unwrap();
-            let epoch_height = cli.args[1].parse::<u64>().unwrap();
+            let epoch_length = EpochLength::try_from(cli.args[1].parse::<u64>().unwrap())
+                .expect("blocksPerEpoch must be positive");
 
-            let epoch = epoch_from_block_number(block_num, epoch_height);
-            let is_epoch_root = is_epoch_root(block_num, epoch_height);
-            let is_gt_epoch_root = is_ge_epoch_root(block_num, epoch_height) && !is_epoch_root;
+            let position = epoch_length.position(block_num);
+            let epoch = *position.epoch();
+            let is_epoch_root = position.is_root();
+            let is_gt_epoch_root = position.is_at_or_after_root() && !is_epoch_root;
             println!(
                 "{}",
                 (epoch, is_epoch_root, is_gt_epoch_root)
