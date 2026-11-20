@@ -8,13 +8,18 @@
 //! transactions; the API service connects with [`ConsensusNodeClient`]. See the proto files in
 //! `proto/espresso/consensus/v1/` for the services.
 
-use std::{collections::BTreeMap, ops::Range, pin::Pin, sync::Arc};
+use std::{
+    collections::BTreeMap, net::SocketAddr, ops::Range, pin::Pin, sync::Arc, time::Duration,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use tokio::sync::{mpsc, watch};
-use tonic::{Request, Response, Status};
+use tonic::{
+    Request, Response, Status,
+    transport::{Channel, Endpoint},
+};
 
 pub mod discovery;
 
@@ -47,6 +52,27 @@ const BATCH: usize = 64;
 /// any more, and its payload no longer joins the decide log. Consensus decides a missing view
 /// only within this many views of the newest decide, and adds a late payload within fewer.
 pub const FINALITY_VIEWS: u64 = 20;
+
+/// How long a request to the consensus node may take.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often the connection to the consensus node is pinged, and how long a ping may go
+/// unanswered before the connection is dropped.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A channel to the consensus node's API at `addr`, for its unary requests. It connects on first
+/// use and again whenever the connection fails, so all requests share one connection.
+pub fn channel(addr: SocketAddr) -> Channel {
+    Endpoint::from_shared(format!("http://{addr}"))
+        .expect("a socket address makes a valid URI")
+        .connect_timeout(REQUEST_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
+        .keep_alive_while_idle(true)
+        .connect_lazy()
+}
 
 /// What the service serves: the consensus node's decide log and payloads.
 #[async_trait]

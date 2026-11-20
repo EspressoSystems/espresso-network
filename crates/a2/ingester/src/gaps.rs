@@ -23,6 +23,10 @@ use std::{
 };
 
 use anyhow::{Context, bail, ensure};
+use chain_api::{
+    proto::{GetRecordsRequest, chain_service_client::ChainServiceClient},
+    records::{RECORD_RANGE_LIMIT, from_proto},
+};
 use chain_store::{ChainStore, Item, Part, Parts, Record};
 use committable::Committable;
 use consensus_api::FINALITY_VIEWS;
@@ -43,10 +47,8 @@ use tonic::transport::{ClientTlsConfig, Endpoint};
 use url::Url;
 
 use crate::{
-    Membership,
-    chain::{RECORD_RANGE_LIMIT, from_proto},
+    membership::Membership,
     peers::{Peer, Peers},
-    proto::{GetRecordsRequest, chain_service_client::ChainServiceClient},
 };
 
 /// The least time between two passes.
@@ -60,8 +62,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How often a connection to another service is pinged, and how long a ping may go unanswered
 /// before the connection is dropped.
-pub(crate) const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
-pub(crate) const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The largest record a peer may send, which a payload bounds.
 const MAX_RECORD_SIZE: usize = 64 << 20;
@@ -594,6 +596,7 @@ pub(crate) fn runs(heights: &BTreeSet<u64>) -> Vec<Range<u64>> {
 
 #[cfg(test)]
 mod tests {
+    use api_service::ApiService;
     use bytes::Bytes;
     use chain_store::mem::MemBackend;
     use espresso_types::{BlockMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState};
@@ -607,7 +610,6 @@ mod tests {
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
-    use crate::ApiService;
 
     /// The genesis block with its payload and VID common data, and a block after it.
     async fn chain() -> ((Item, Bytes, VidCommon), Item) {
@@ -673,7 +675,7 @@ mod tests {
     /// behind the newest final.
     fn filling_with(item1: &Item, peer: Url, finality: u64) -> ChainStore {
         let store = ChainStore::new(MemBackend::default());
-        let peers = Peers::new("127.0.0.1:1".parse().unwrap(), vec![peer], None);
+        let peers = Peers::new(chain_api::Tables::new(store.clone()), vec![peer], None);
         let mut filler = GapFiller::new(store.clone(), peers, None);
         filler.finality = finality;
         let item1 = item1.clone();
@@ -741,7 +743,7 @@ mod tests {
         let (_, item1) = chain().await;
         let store = ChainStore::new(MemBackend::default());
         store.put(&item1, &Parts::default()).await.unwrap();
-        let peers = Peers::new("127.0.0.1:1".parse().unwrap(), Vec::new(), None);
+        let peers = Peers::new(chain_api::Tables::new(store.clone()), Vec::new(), None);
         let mut filler = GapFiller::new(store, peers, None);
         filler.finality = 2;
 

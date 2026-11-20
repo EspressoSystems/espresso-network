@@ -1,0 +1,28 @@
+[package]
+name        = "chain-api"
+description = "What a deployment's ingester shares with API instances and other API services: the chain and discovery services, and the tables it writes for API instances"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+anyhow         = { workspace = true }
+bincode        = { workspace = true }
+bytes          = { workspace = true }
+chain-store    = { workspace = true }
+committable    = { workspace = true }
+consensus-api  = { workspace = true }
+espresso-types = { workspace = true }
+hotshot-types  = { workspace = true }
+jf-merkle-tree-compat = { workspace = true }
+prost          = { workspace = true }
+serde          = { workspace = true }
+tagged-base64  = { workspace = true }
+tonic          = { workspace = true }
+tonic-prost    = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
+[lints]
+workspace = true

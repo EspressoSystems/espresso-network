@@ -1,32 +1,33 @@
-//! The state of the chain at recent heights, for consensus nodes catching up.
+//! The state of the chain at recent heights, for consensus nodes catching up through the API
+//! instances.
 //!
-//! The API service follows its store in height order, as a consensus node follows the chain: it
+//! The ingester follows its store in height order, as a consensus node follows the chain: it
 //! applies each block's header to the state of its parent and checks the result against the roots
 //! the header commits to, and it hands each epoch root and each DRB result to membership, which
-//! needs both to know the leaders whose rewards the state pays at the end of an epoch. It keeps the
-//! states of the newest heights, which is what a node that is behind asks for: it fetches the state
-//! an API service has and applies the headers after it itself.
+//! needs both to know the leaders whose rewards the state pays at the end of an epoch.
 //!
-//! The [`ChainFollower`] alone writes the states; the [`ChainStates`] it hands out read them. Every
-//! [`SNAPSHOT_INTERVAL`] heights it stores a snapshot of what the next blocks need, so a restarted
-//! API service resumes there instead of applying the chain from genesis again. A store pruned past
-//! the heights the follower needs, without a snapshot to start after them, cannot be followed.
+//! For each of the newest [`KEPT_HEIGHTS`] heights it writes what the state holds besides its
+//! header's roots into the store's [`Tables`]: the frontier of the block tree, the chain config,
+//! and the reward balances, these only at the heights where they changed. The fee tree does not
+//! change under the new protocol; it is written once, from genesis, as are the chain configs the
+//! genesis file knows. API instances answer catchup requests from these rows, and a restarted
+//! ingester resumes from the newest one instead of applying the chain from genesis again. A store
+//! pruned past the heights the follower needs, without a row to start after them, cannot be
+//! followed.
 
 use std::{
-    collections::BTreeMap,
-    sync::{Arc, LazyLock},
+    collections::{BTreeSet, VecDeque},
     time::Duration,
 };
 
 use anyhow::{Context, bail, ensure};
-use bytes::Bytes;
-use chain_store::{AppWrite, ChainStore, TableName};
-use committable::Committable;
+use chain_api::{StateRow, Tables};
+use chain_store::ChainStore;
+use committable::{Commitment, Committable};
 use either::Either;
 use espresso_types::{
-    BlockMerkleTree, ChainConfig, Leaf2, NodeState, ValidatedState,
-    v0_3::RewardAmount,
-    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
+    ChainConfig, Leaf2, NodeState, ValidatedState,
+    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
 };
 use hotshot_types::{
     traits::states::ValidatedState as _,
@@ -34,80 +35,57 @@ use hotshot_types::{
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use membership::null_catchup::NullStateCatchup;
-use serde::{Deserialize, Serialize};
-use tokio::{sync::watch, time::sleep};
+use tokio::time::sleep;
 
 /// How many of the newest heights the state is kept for.
-const KEPT_HEIGHTS: u64 = 256;
+pub const KEPT_HEIGHTS: usize = 256;
 
 /// How long to wait before applying a block again that could not be applied, for instance because
 /// membership does not have the stake table of its epoch yet.
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
-/// How many heights apart snapshots are stored. The store must keep more heights than this, or it
-/// prunes the snapshot's height before the next one is stored.
-pub const SNAPSHOT_INTERVAL: u64 = 64;
+type RewardRoot = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
 
-/// The application table of the chain store the snapshot is kept in, and its key.
-static TABLE: LazyLock<TableName> = LazyLock::new(|| TableName::of("chain-state"));
-const SNAPSHOT: &[u8] = b"snapshot";
-
-type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
-
-/// Creates the follower of `store` and the reader of the states it keeps.
-pub fn follower(store: ChainStore, node: NodeState) -> (ChainFollower, ChainStates) {
-    let (states, rx) = watch::channel(BTreeMap::new());
-    (
-        ChainFollower {
-            store,
-            node,
-            states,
-        },
-        ChainStates(rx),
-    )
-}
-
-/// The states of the newest heights the API service has applied.
-#[derive(Clone, Debug)]
-pub struct ChainStates(watch::Receiver<BTreeMap<u64, Arc<ValidatedState>>>);
-
-impl ChainStates {
-    /// The state after the block at `height`, if it is among the newest kept.
-    pub fn at(&self, height: u64) -> Option<Arc<ValidatedState>> {
-        self.0.borrow().get(&height).cloned()
-    }
-
-    /// The newest height whose state is kept.
-    pub fn newest(&self) -> Option<u64> {
-        self.0.borrow().keys().next_back().copied()
-    }
-
-    /// The newest state kept, with its height.
-    pub fn latest(&self) -> Option<(u64, Arc<ValidatedState>)> {
-        let states = self.0.borrow();
-        let (height, state) = states.last_key_value()?;
-        Some((*height, state.clone()))
-    }
-}
-
-/// Applies the blocks of the store in height order, and keeps the newest states.
+/// Applies the blocks of the store in height order, and stores what the newest states hold.
 #[derive(Debug)]
 pub struct ChainFollower {
     store: ChainStore,
+    tables: Tables,
     node: NodeState,
-    states: watch::Sender<BTreeMap<u64, Arc<ValidatedState>>>,
+
+    /// The heights of the kept rows, oldest first, each with the height its reward balances are
+    /// stored under.
+    kept: VecDeque<(u64, u64)>,
+
+    /// The root of the reward tree of the newest row, and the height its balances are stored
+    /// under.
+    rewards: Option<(RewardRoot, u64)>,
+
+    /// The chain configs stored since the follower started.
+    configs: BTreeSet<Commitment<ChainConfig>>,
 }
 
 impl ChainFollower {
-    /// Follows the store from the snapshot, or from genesis without one. Returns when the store's
-    /// changes end, or fails if the store no longer holds the heights to start from.
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub fn new(store: ChainStore, node: NodeState) -> Self {
+        Self {
+            tables: Tables::new(store.clone()),
+            store,
+            node,
+            kept: VecDeque::new(),
+            rewards: None,
+            configs: BTreeSet::new(),
+        }
+    }
+
+    /// Follows the store from the newest stored row, or from genesis without one. Returns when
+    /// the store's changes end, or fails if the store no longer holds the heights to start from.
+    pub async fn run(mut self) -> anyhow::Result<()> {
+        self.store_genesis().await?;
         let mut changes = self.store.changes();
         let (mut parent, mut height) = match self.start().await? {
             Some((leaf, state)) => {
                 let height = leaf.height();
-                tracing::info!(height, "resuming from the stored snapshot");
-                self.keep(height, Arc::new(state.clone()));
+                tracing::info!(height, "resuming from the stored state");
                 (Some((leaf, state)), height + 1)
             },
             None => (None, 0),
@@ -121,7 +99,7 @@ impl ChainFollower {
                     if floor > height {
                         bail!("the store pruned height {height} before it was applied");
                     }
-                    // Not stored yet; the ingester or the gap filler stores it.
+                    // Not stored yet; the decide log or the gap filler stores it.
                     if changes.changed().await.is_err() {
                         return Ok(());
                     }
@@ -139,63 +117,111 @@ impl ChainFollower {
                     apply(&self.node, parent_state, parent_leaf, &item.leaf).await
                 },
             };
-            let state = match state {
-                Ok(state) => state,
-                Err(err) => {
-                    tracing::warn!(height, "applying the block failed: {err:#}");
-                    sleep(RETRY_DELAY).await;
-                    continue;
+            let stored = match state {
+                Ok(state) => match track_epoch(&self.node, &item.leaf).await {
+                    Ok(()) => self.store_state(height, &state).await.map(|()| state),
+                    Err(err) => Err(err.context("membership did not take the block")),
                 },
+                Err(err) => Err(err.context("applying the block failed")),
             };
-            if let Err(err) = track_epoch(&self.node, &item.leaf).await {
-                tracing::warn!(height, "membership did not take the block: {err:#}");
-                sleep(RETRY_DELAY).await;
-                continue;
+            match stored {
+                Ok(state) => {
+                    parent = Some((item.leaf, state));
+                    height += 1;
+                },
+                Err(err) => {
+                    tracing::warn!(height, "{err:#}");
+                    sleep(RETRY_DELAY).await;
+                },
             }
-            self.keep(height, Arc::new(state.clone()));
-            if height % SNAPSHOT_INTERVAL == 0
-                && let Err(err) = self.snapshot(height, &state).await
-            {
-                tracing::warn!(height, "storing the snapshot failed: {err:#}");
-            }
-            parent = Some((item.leaf, state));
-            height += 1;
         }
     }
 
-    /// The leaf and state to continue after: the snapshot's, or none to start at genesis.
-    async fn start(&self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
-        match self.resume().await {
-            Ok(Some(start)) => return Ok(Some(start)),
-            Ok(None) => {},
-            Err(err) => tracing::warn!("ignoring the stored snapshot: {err:#}"),
+    /// Stores what does not change, or changes only by upgrade: the fee accounts and the chain
+    /// configs of the genesis file.
+    async fn store_genesis(&mut self) -> anyhow::Result<()> {
+        let fees = ValidatedState::genesis(&self.node).0.fee_merkle_tree;
+        let accounts: Vec<_> = fees
+            .iter()
+            .map(|(account, amount)| (*account, *amount))
+            .collect();
+        ensure!(
+            accounts.len() as u64 == fees.num_leaves(),
+            "the genesis fee tree is missing accounts"
+        );
+        self.tables.put_fee_accounts(&accounts).await?;
+        let upgrades = self
+            .node
+            .upgrades
+            .values()
+            .filter_map(|upgrade| upgrade.upgrade_type.chain_config());
+        let configs: Vec<_> = [self.node.chain_config, self.node.genesis_chain_config]
+            .into_iter()
+            .chain(upgrades)
+            .collect();
+        for config in configs {
+            self.store_chain_config(&config).await?;
+        }
+        Ok(())
+    }
+
+    async fn store_chain_config(&mut self, config: &ChainConfig) -> anyhow::Result<()> {
+        let commitment = config.commit();
+        if !self.configs.contains(&commitment) {
+            self.tables.put_chain_config(config).await?;
+            self.configs.insert(commitment);
+        }
+        Ok(())
+    }
+
+    /// The leaf and state to continue after: the newest row's, or none to start at genesis. A
+    /// failed read is an error, to be tried again; a row that does not check out is ignored.
+    async fn start(&mut self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
+        let rows = self.tables.states().await?;
+        if let Some((height, row)) = rows.last().cloned() {
+            let item = self.store.item(height).await?;
+            let balances = self.tables.rewards(row.rewards_at).await?;
+            let resumed = item
+                .with_context(|| format!("height {height} is not stored"))
+                .and_then(|item| {
+                    let state = self.rebuild(&item.leaf, &row, balances)?;
+                    Ok((item.leaf, state))
+                });
+            match resumed {
+                Ok((leaf, state)) => {
+                    self.kept = rows.iter().map(|(h, row)| (*h, row.rewards_at)).collect();
+                    self.rewards = Some((state.reward_merkle_tree_v2.commitment(), row.rewards_at));
+                    return Ok(Some((leaf, state)));
+                },
+                Err(err) => tracing::warn!("ignoring the stored state: {err:#}"),
+            }
         }
         let floor = self.store.floor().await?;
         if floor > 0 {
             bail!(
-                "the store keeps heights from {floor} on and no usable snapshot of the state; it \
-                 cannot be followed from genesis"
+                "the store keeps heights from {floor} on and no usable state; it cannot be \
+                 followed from genesis"
             );
         }
         Ok(None)
     }
 
-    /// The leaf and state of the stored snapshot, checked against the leaf's header.
-    async fn resume(&self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
-        let Some(bytes) = self.store.app_get(&TABLE, SNAPSHOT).await? else {
-            return Ok(None);
-        };
-        let snapshot: Snapshot = bincode::deserialize(&bytes).context("decoding the snapshot")?;
-        let item = self
-            .store
-            .item(snapshot.height)
-            .await?
-            .with_context(|| format!("height {} is not stored", snapshot.height))?;
-        let header = item.leaf.block_header();
+    /// The state after `leaf` from its stored `row` and reward `balances`, checked against the
+    /// leaf's header.
+    fn rebuild(
+        &self,
+        leaf: &Leaf2,
+        row: &StateRow,
+        balances: Option<chain_api::RewardSet>,
+    ) -> anyhow::Result<ValidatedState> {
+        let header = leaf.block_header();
         let mut state = ValidatedState::from_header(header);
 
         if let Some(last) = state.block_merkle_tree.num_leaves().checked_sub(1) {
-            let frontier = snapshot.frontier.context("no frontier of the block tree")?;
+            let frontier = row
+                .frontier
+                .clone()
+                .context("no frontier of the block tree")?;
             let elem = *frontier.elem().context("a frontier without its element")?;
             state
                 .block_merkle_tree
@@ -204,10 +230,10 @@ impl ChainFollower {
         }
 
         ensure!(
-            snapshot.chain_config.commit() == header.chain_config().commit(),
+            row.chain_config.commit() == header.chain_config().commit(),
             "the chain config is not the header's"
         );
-        state.chain_config = snapshot.chain_config.into();
+        state.chain_config = row.chain_config.into();
 
         // The fee tree does not change under the new protocol.
         let genesis = ValidatedState::genesis(&self.node).0;
@@ -218,20 +244,22 @@ impl ChainFollower {
         state.fee_merkle_tree = genesis.fee_merkle_tree;
 
         if let Either::Right(root) = header.reward_merkle_tree_root() {
-            let tree =
-                RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, snapshot.rewards)
-                    .context("rebuilding the reward tree")?;
+            let balances = balances
+                .with_context(|| format!("no reward balances at height {}", row.rewards_at))?;
+            let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
+                .context("rebuilding the reward tree")?;
             ensure!(
                 tree.commitment() == root,
                 "the reward tree is not the header's"
             );
             state.reward_merkle_tree_v2 = tree;
         }
-        Ok(Some((item.leaf, state)))
+        Ok(state)
     }
 
-    /// Stores what the blocks after `height` need of `state`, the state after it.
-    async fn snapshot(&self, height: u64, state: &ValidatedState) -> anyhow::Result<()> {
+    /// Stores what `state`, the state after `height`, holds besides its header's roots, and
+    /// forgets the rows of heights no longer among the newest kept.
+    async fn store_state(&mut self, height: u64, state: &ValidatedState) -> anyhow::Result<()> {
         let frontier = match state.block_merkle_tree.num_leaves().checked_sub(1) {
             Some(last) => {
                 let (_, frontier) = state
@@ -247,49 +275,42 @@ impl ChainFollower {
             .chain_config
             .resolve()
             .context("the chain config is not resolved")?;
+        self.store_chain_config(&chain_config).await?;
+
         let tree = &state.reward_merkle_tree_v2;
-        let rewards: Vec<_> = tree
-            .iter()
-            .map(|(account, amount)| (*account, *amount))
-            .collect();
-        ensure!(
-            rewards.len() as u64 == tree.num_leaves(),
-            "the reward tree is missing accounts"
-        );
-        let snapshot = Snapshot {
-            height,
+        let root = tree.commitment();
+        let (rewards, rewards_at) = match self.rewards {
+            Some((stored, at)) if stored == root => (None, at),
+            _ => {
+                let balances: Vec<_> = tree
+                    .iter()
+                    .map(|(account, amount)| (*account, *amount))
+                    .collect();
+                ensure!(
+                    balances.len() as u64 == tree.num_leaves(),
+                    "the reward tree is missing accounts"
+                );
+                (Some(balances), height)
+            },
+        };
+
+        let mut kept = self.kept.clone();
+        kept.push_back((height, rewards_at));
+        while kept.len() > KEPT_HEIGHTS {
+            kept.pop_front();
+        }
+        let (keep_from, keep_rewards_from) = *kept.front().expect("one was just added");
+        let row = StateRow {
             frontier,
             chain_config,
-            rewards,
+            rewards_at,
         };
-        self.store
-            .app_write(vec![AppWrite::Put {
-                table: TABLE.clone(),
-                key: Bytes::from_static(SNAPSHOT),
-                value: bincode::serialize(&snapshot)?.into(),
-            }])
-            .await
+        self.tables
+            .put_state(height, &row, rewards.as_ref(), keep_from, keep_rewards_from)
+            .await?;
+        (self.kept, self.rewards) = (kept, Some((root, rewards_at)));
+        Ok(())
     }
-
-    fn keep(&self, height: u64, state: Arc<ValidatedState>) {
-        self.states.send_modify(|states| {
-            states.insert(height, state);
-            while states.len() as u64 > KEPT_HEIGHTS {
-                states.pop_first();
-            }
-        });
-    }
-}
-
-/// What the blocks after `height` need of the state after it, besides the roots its header
-/// holds: the frontier of the block tree, unless it is empty, the chain config and every reward
-/// balance.
-#[derive(Serialize, Deserialize)]
-struct Snapshot {
-    height: u64,
-    frontier: Option<BlocksFrontier>,
-    chain_config: ChainConfig,
-    rewards: Vec<(RewardAccountV2, RewardAmount)>,
 }
 
 /// The state after `leaf`, its parent's being `parent_state`, checked against the roots its header
@@ -418,9 +439,9 @@ mod tests {
         (store, state)
     }
 
-    /// A restarted follower resumes from the snapshot with the state it stored.
+    /// A restarted follower resumes from the newest row with the state it stored.
     #[tokio::test]
-    async fn resumes_from_the_snapshot() {
+    async fn resumes_from_the_newest_row() {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         for (store, state) in [genesis(&node).await, after_a_block(&node).await] {
             resumes(store, state, node.clone()).await;
@@ -428,12 +449,12 @@ mod tests {
     }
 
     async fn resumes(store: ChainStore, state: ValidatedState, node: NodeState) {
-        let (first, _) = follower(store.clone(), node.clone());
+        let mut first = ChainFollower::new(store.clone(), node.clone());
         assert!(first.start().await.unwrap().is_none());
 
-        first.snapshot(0, &state).await.unwrap();
-        let (restarted, _) = follower(store, node);
-        let (leaf, resumed) = restarted.start().await.unwrap().expect("a snapshot");
+        first.store_state(0, &state).await.unwrap();
+        let mut restarted = ChainFollower::new(store, node);
+        let (leaf, resumed) = restarted.start().await.unwrap().expect("a row");
         assert_eq!(leaf.height(), 0);
         assert_eq!(
             resumed.block_merkle_tree.commitment(),
@@ -450,21 +471,51 @@ mod tests {
         );
     }
 
+    /// Reward balances are written only where they change, and rows and balances older than the
+    /// newest kept heights are forgotten.
+    #[tokio::test]
+    async fn keeps_the_newest_rows_and_shares_unchanged_rewards() {
+        let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
+        let (store, state) = genesis(&node).await;
+        let tables = Tables::new(store.clone());
+        let mut follower = ChainFollower::new(store, node);
+        let last = KEPT_HEIGHTS as u64 + 1;
+        for height in 0..=last {
+            follower.store_state(height, &state).await.unwrap();
+        }
+
+        let rows = tables.states().await.unwrap();
+        assert_eq!(rows.len(), KEPT_HEIGHTS);
+        assert_eq!(rows.first().unwrap().0, 2);
+        assert!(rows.iter().all(|(_, row)| row.rewards_at == 0));
+        assert!(tables.rewards(0).await.unwrap().is_some());
+        assert!(tables.rewards(1).await.unwrap().is_none());
+        assert_eq!(
+            tables
+                .chain_config(&state.chain_config.commit().to_string())
+                .await
+                .unwrap()
+                .map(|config| config.commit()),
+            Some(state.chain_config.commit())
+        );
+    }
+
     /// A follower that the store prunes past stops instead of waiting for a height it will not
     /// get.
     #[tokio::test]
     async fn stops_when_pruned_past() {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         let (store, _) = genesis(&node).await;
-        let (follower, states) = follower(store.clone(), node);
-        let mut run = tokio::spawn(follower.run());
+        let tables = Tables::new(store.clone());
+        let mut run = tokio::spawn(ChainFollower::new(store.clone(), node).run());
         tokio::time::timeout(Duration::from_secs(10), async {
-            while states.newest() != Some(0) {
+            while tables.state(0).await.unwrap().is_none() {
                 sleep(Duration::from_millis(20)).await;
             }
         })
         .await
         .expect("genesis is applied");
+        assert!(tables.fee_accounts().await.unwrap().is_some());
         store.prune_below(2).await.unwrap();
         tokio::time::timeout(Duration::from_secs(10), &mut run)
             .await
@@ -473,13 +524,13 @@ mod tests {
             .expect_err("it was pruned past");
     }
 
-    /// A store pruned past genesis, without a snapshot, cannot be followed.
+    /// A store pruned past genesis, without a row, cannot be followed.
     #[tokio::test]
-    async fn refuses_a_pruned_store_without_a_snapshot() {
+    async fn refuses_a_pruned_store_without_a_row() {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         let (store, _) = genesis(&node).await;
         store.prune_below(1).await.unwrap();
-        let (pruned, _) = follower(store, node);
+        let mut pruned = ChainFollower::new(store, node);
         pruned.start().await.expect_err("nothing to start from");
     }
 }

@@ -1,4 +1,5 @@
-//! The ingester: copies the chain a consensus node decides into the API service's store.
+//! The ingester: copies the chain a consensus node decides into its deployment's store, and does
+//! the deployment's derived work once, however many API instances serve the store.
 //!
 //! It reads the decide log over the ingester API (`consensus-api`), writes each block to a
 //! [`Sink`], usually a [`ChainStore`], and acknowledges it, which lets consensus free it: once it
@@ -6,6 +7,11 @@
 //! the node's own consensus is not verified again; the ingester checks only that each leaf fits
 //! its neighbours, so that one pointed at the wrong node or a store restored to the wrong place
 //! does not mix two chains.
+//!
+//! Beside the decide log it runs the [`GapFiller`], which fills final gaps and checks the
+//! certificates of filled heights from other API services, the [`ChainFollower`], which keeps the
+//! recent state that state catchup needs, and the [`Publisher`], which writes the stake tables and
+//! discovery records. Membership, derived from L1, serves all three.
 
 use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
@@ -33,7 +39,20 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use tokio::time::interval;
 
+mod certs;
+mod gaps;
+mod membership;
+mod peers;
+mod publish;
+mod state;
+mod state_cert;
 mod store;
+
+pub use gaps::GapFiller;
+pub use membership::{Membership, node_state};
+pub use peers::Peers;
+pub use publish::Publisher;
+pub use state::ChainFollower;
 
 /// How long the ingester waits before reconnecting after the connection fails.
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);

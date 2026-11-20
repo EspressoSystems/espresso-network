@@ -10,6 +10,7 @@ members = [
     "crates/a2/api-service",
     "crates/a2/app-tables",
     "crates/a2/catchup-api",
+    "crates/a2/chain-api",
     "crates/a2/load",
     "crates/a2/chain-store",
     "crates/a2/consensus",
@@ -76,6 +77,7 @@ default-members = [
     "crates/a2/api-service",
     "crates/a2/app-tables",
     "crates/a2/catchup-api",
+    "crates/a2/chain-api",
     "crates/a2/chain-store",
     "crates/a2/consensus",
     "crates/a2/consensus-api",
@@ -191,6 +193,7 @@ committable = { git = "https://github.com/EspressoSystems/commit.git", features 
 ] }
 app-tables = { path = "crates/a2/app-tables" }
 catchup-api = { path = "crates/a2/catchup-api" }
+chain-api = { path = "crates/a2/chain-api" }
 chain-store = { path = "crates/a2/chain-store" }
 consensus = { path = "crates/a2/consensus" }
 consensus-api = { path = "crates/a2/consensus-api" }

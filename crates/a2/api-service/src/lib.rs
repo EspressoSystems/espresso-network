@@ -1,17 +1,24 @@
-//! The API service: serves the v2 API, over HTTP and gRPC on one port, from the chain store.
+//! An API instance: serves the v2 API, over HTTP and gRPC on one port, from the chain store.
 //!
-//! It reads only the store, which the ingester fills from consensus and the [`GapFiller`] from
-//! other API services. Consensus is reached only to submit transactions and to ask for the
-//! validators' discovery records. A read of a height the store lacks waits a moment for it, and a
-//! stream waits at a missing height until the store has it, so a client following the chain sees
-//! every height in order.
+//! It holds no state and runs no background work. It reads only the store, which the ingester of
+//! its deployment fills: with the blocks from consensus and from other API services, and with the
+//! stake tables, discovery records and recent state it derives (`chain_api::Tables`). Consensus
+//! is reached only to submit transactions. A read of a height the store lacks waits a moment for
+//! it, and a stream waits at a missing height until the store has it, so a client following the
+//! chain sees every height in order.
 //!
 //! Besides the v2 services of `espresso-api`, it serves services of its own over gRPC only: the
-//! chain service, which other API services fill their gaps from, and the discovery service.
+//! chain service, which other ingesters fill their gaps from, and the discovery service.
 
 use std::{net::SocketAddr, sync::Arc};
 
 use catchup_api::proto::catchup_service_server::CatchupServiceServer;
+use chain_api::{
+    Tables,
+    proto::{
+        chain_service_server::ChainServiceServer, discovery_service_server::DiscoveryServiceServer,
+    },
+};
 use chain_store::ChainStore;
 use espresso_api::{
     proto::{
@@ -21,38 +28,21 @@ use espresso_api::{
     },
     rest,
 };
-use proto::{
-    chain_service_server::ChainServiceServer, discovery_service_server::DiscoveryServiceServer,
-};
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
 
-/// The services of the API service's own, generated from `proto/espresso/a2/v1`.
-pub mod proto {
-    tonic::include_proto!("espresso.a2.v1");
-}
-
 mod availability;
 pub mod catchup;
-mod certs;
 mod chain;
-pub mod chain_state;
 pub mod compat;
 mod discovery;
-mod gaps;
-pub mod membership;
 mod node;
-mod peers;
 mod reader;
 mod request;
 mod server;
-mod state_cert;
 mod status;
 mod submit;
 
-pub use gaps::GapFiller;
-pub use membership::Membership;
-pub use peers::Peers;
 use reader::Reader;
 
 /// The services of the API, over one store and one consensus node.
@@ -60,11 +50,13 @@ use reader::Reader;
 pub struct ApiService {
     reader: Reader,
 
-    /// The channel to the consensus node's API, for submissions and discovery records.
+    /// What the ingester writes besides blocks.
+    tables: Tables,
+
+    /// The channel to the consensus node's API, for submissions.
     consensus: Channel,
 
-    /// What consensus nodes that are behind catch up from, if this API service follows the
-    /// chain's state.
+    /// What consensus nodes that are behind catch up from, if served.
     catchup: Option<Arc<catchup::Catchup>>,
 
     /// The v1 paths the state relay server and the prover read, if served.
@@ -74,8 +66,9 @@ pub struct ApiService {
 impl ApiService {
     pub fn new(store: ChainStore, consensus_api: SocketAddr) -> Self {
         Self {
+            tables: Tables::new(store.clone()),
             reader: Reader::new(store),
-            consensus: discovery::consensus_channel(consensus_api),
+            consensus: consensus_api::channel(consensus_api),
             catchup: None,
             compat: None,
         }

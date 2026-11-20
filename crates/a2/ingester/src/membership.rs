@@ -1,26 +1,24 @@
-//! The stake tables of the chain, which the API service derives as consensus does: the genesis
-//! file gives the stake table of the first epochs, and each later one comes from the stake table
+//! The stake tables of the chain, which the ingester derives as consensus does: the genesis file
+//! gives the stake table of the first epochs, and each later one comes from the stake table
 //! contract's events on L1 up to the root block of the epoch two before. The root blocks come from
 //! the store, so the stake tables follow what the store holds.
 //!
-//! The API service needs them to check what the chain does not commit to, the `Certificate2` that
-//! decided a block directly and the state certificate of an epoch root, and to apply the rewards an
-//! epoch pays. It keeps them, and the L1 events they come from, in the store.
+//! The ingester needs them to check what the chain does not commit to, the `Certificate2` that
+//! decided a block directly and the state certificate of an epoch root, to apply the rewards an
+//! epoch pays, and to check discovery records. It keeps them, and the L1 events they come from, in
+//! the store, and publishes the stake tables there for the API instances.
 
 use std::{ops::Range, sync::Arc};
 
-use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
 use chain_store::ChainStore;
 use committable::Committable;
 use espresso_genesis::Genesis;
 use espresso_types::{Header, Leaf2, NodeState, SeqTypes};
 use hotshot_types::{
-    ValidatorConfig,
     data::EpochNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    network::NetworkConfig,
     simple_certificate::{Certificate2, LightClientStateUpdateCertificateV2},
     stake_table::HSStakeTable,
     traits::{
@@ -36,8 +34,8 @@ use versions::Upgrade;
 
 use crate::state_cert::validate_state_cert;
 
-/// The node state of the chain `genesis` starts, as an API service keeps it: stake tables in
-/// `store`, read from the L1 at `l1`, and no catchup, since the API service follows the chain
+/// The node state of the chain `genesis` starts, as an ingester keeps it: stake tables in
+/// `store`, read from the L1 at `l1`, and no catchup, since the ingester follows the chain
 /// itself. A restart finds the stake tables and L1 events in the store, and reads from L1 only what
 /// is newer.
 pub async fn node_state(
@@ -45,7 +43,7 @@ pub async fn node_state(
     l1: Vec<Url>,
     store: ChainStore,
 ) -> anyhow::Result<NodeState> {
-    let network_config = network_config(genesis)?;
+    let network_config = genesis.unstaked_network_config()?;
     membership::node_state::node_state(
         genesis,
         &network_config,
@@ -55,20 +53,6 @@ pub async fn node_state(
         &NoMetrics,
     )
     .await
-}
-
-/// The network config of the chain `genesis` starts: its genesis stake table and its epochs.
-pub fn network_config(genesis: &Genesis) -> anyhow::Result<NetworkConfig<SeqTypes>> {
-    // The API service has no stake, so any key serves to read the genesis stake table.
-    let key =
-        ValidatorConfig::<SeqTypes>::generated_from_seed_indexed([0; 32], 0, U256::ONE, false)
-            .public_key;
-    let mut config = genesis
-        .network_config(&key)
-        .context("the genesis file has no stake table")?;
-    config.config.epoch_height = genesis.epoch_height.unwrap_or_default();
-    config.config.epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
-    Ok(config)
 }
 
 /// The stake tables of the chain, as far as the store's epoch roots reach.
@@ -198,7 +182,7 @@ pub(crate) mod testing {
 
     use std::num::NonZeroU64;
 
-    use alloy::primitives::FixedBytes;
+    use alloy::primitives::{FixedBytes, U256};
     use async_lock::Mutex as AsyncMutex;
     use bitvec::vec::BitVec;
     use chain_store::mem::MemBackend;

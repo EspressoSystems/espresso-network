@@ -1,15 +1,20 @@
 //! The API services a gap filler asks: those the validators of the current epoch name in their
 //! signed service records.
 //!
-//! Records change only when the epoch does, so the cache is refreshed once per epoch. It asks the
-//! API service's own consensus node, which collects the records, and while that has none, the
-//! bootstrap API services, which list the records their consensus nodes hold. A record counts only
-//! if it is for the epoch, is signed by its signer, and its signer is staked in the epoch, whoever
-//! sent it. Until the cache holds records, the bootstrap URLs are the peers. The API service's own
+//! Records change only when the epoch does, so the cache is refreshed once per epoch. It takes the
+//! records the [`Publisher`](crate::publish::Publisher) stored from the deployment's consensus
+//! node, and while there are none, those the bootstrap API services list. A record counts only if
+//! it is for the epoch, is signed by its signer, and its signer is staked in the epoch, whoever
+//! sent it. Until the cache holds records, the bootstrap URLs are the peers. The deployment's own
 //! URL is never a peer.
 
-use std::{fmt, net::SocketAddr};
+use std::fmt;
 
+use chain_api::{
+    Tables,
+    discovery::from_listed,
+    proto::{GetPeersRequest, discovery_service_client::DiscoveryServiceClient},
+};
 use consensus_api::discovery::SignedServiceRecord;
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
@@ -17,20 +22,15 @@ use rand::seq::SliceRandom;
 use tonic::transport::Channel;
 use url::Url;
 
-use crate::{
-    Membership,
-    discovery::{consensus_channel, from_listed, service_records},
-    gaps::endpoint,
-    proto::{GetPeersRequest, discovery_service_client::DiscoveryServiceClient},
-};
+use crate::{gaps::endpoint, membership::Membership};
 
 pub struct Peers {
-    /// The channel to the API service's consensus node.
-    consensus: Channel,
+    /// Where the records of the deployment's consensus node are stored.
+    tables: Tables,
 
     bootstrap: Vec<Peer>,
 
-    /// The URL other services reach this API service at, left out of the peers.
+    /// The URL other services reach this deployment's API at, left out of the peers.
     own: Option<Url>,
 
     /// The peers the records of `epoch` name.
@@ -60,7 +60,7 @@ impl fmt::Display for Peer {
 }
 
 impl Peers {
-    pub fn new(consensus_api: SocketAddr, bootstrap: Vec<Url>, own: Option<Url>) -> Self {
+    pub fn new(tables: Tables, bootstrap: Vec<Url>, own: Option<Url>) -> Self {
         let bootstrap = bootstrap
             .into_iter()
             .filter(|url| Some(url) != own.as_ref())
@@ -71,7 +71,7 @@ impl Peers {
             })
             .collect();
         Self {
-            consensus: consensus_channel(consensus_api),
+            tables,
             bootstrap,
             own,
             peers: Vec::new(),
@@ -89,29 +89,31 @@ impl Peers {
         peers
     }
 
-    /// Takes the records of `epoch`, unless the cache holds them already. Keeps the cache as it
-    /// is if nobody has valid records of `epoch` yet, to be asked again on the next call.
+    /// Takes the stored records of `epoch`, which the publisher completes as validators send
+    /// them, so they are read again on every call. Asks the bootstrap services once per epoch
+    /// while none are stored. Keeps the cache as it is if nobody has valid records of `epoch` yet,
+    /// to be asked again on the next call.
     pub async fn refresh(&mut self, epoch: EpochNumber, membership: &Membership) {
-        if self.epoch == Some(epoch) {
-            return;
-        }
-        let mut urls = match service_records(self.consensus.clone(), Some(*epoch)).await {
-            Ok((_, records)) => valid_urls(records, epoch, membership),
-            Err(status) => {
-                tracing::debug!(%epoch, %status, "no records from consensus");
+        let stored = match self.tables.service_records(Some(epoch)).await {
+            Ok(Some((_, records))) => self.urls(&valid_records(records, epoch, membership)),
+            Ok(None) => Vec::new(),
+            Err(err) => {
+                tracing::warn!(%epoch, "reading the stored records failed: {err:#}");
                 Vec::new()
             },
         };
-        if urls.is_empty() {
-            urls = self.ask_bootstrap(epoch, membership).await;
-        }
-        if urls.is_empty() {
+        let urls = match (stored.is_empty(), self.epoch == Some(epoch)) {
+            (false, _) => stored,
+            (true, true) => return,
+            (true, false) => self.ask_bootstrap(epoch, membership).await,
+        };
+        let current: Vec<_> = self.peers.iter().map(|peer| &peer.url).collect();
+        if urls.is_empty() || (self.epoch == Some(epoch) && urls.iter().eq(current)) {
             return;
         }
         tracing::info!(%epoch, peers = urls.len(), "peers of the epoch");
         let peers = urls
             .into_iter()
-            .filter(|url| Some(url) != self.own.as_ref())
             .filter_map(|url| {
                 match self
                     .peers
@@ -130,12 +132,25 @@ impl Peers {
         (self.peers, self.epoch) = (peers, Some(epoch));
     }
 
+    /// The distinct URLs the `records` name, but for the deployment's own.
+    fn urls(&self, records: &[SignedServiceRecord<SeqTypes>]) -> Vec<Url> {
+        let mut urls = Vec::new();
+        for record in records {
+            match record.record.api_url.parse::<Url>() {
+                Ok(url) if Some(&url) == self.own.as_ref() || urls.contains(&url) => {},
+                Ok(url) => urls.push(url),
+                Err(err) => tracing::debug!(%err, "a record with a bad API URL"),
+            }
+        }
+        urls
+    }
+
     /// The URLs of the valid records of `epoch` the first bootstrap API service with any lists.
     async fn ask_bootstrap(&self, epoch: EpochNumber, membership: &Membership) -> Vec<Url> {
         for peer in &self.bootstrap {
             match listed_records(peer, epoch).await {
                 Ok(records) => {
-                    let urls = valid_urls(records, epoch, membership);
+                    let urls = self.urls(&valid_records(records, epoch, membership));
                     if !urls.is_empty() {
                         return urls;
                     }
@@ -170,43 +185,42 @@ async fn listed_records(
         .collect())
 }
 
-/// The distinct URLs of the `records` of `epoch` that are signed by a validator staked in it.
-fn valid_urls(
+/// The `records` of `epoch` that are signed by a validator staked in it.
+pub(crate) fn valid_records(
     records: Vec<SignedServiceRecord<SeqTypes>>,
     epoch: EpochNumber,
     membership: &Membership,
-) -> Vec<Url> {
+) -> Vec<SignedServiceRecord<SeqTypes>> {
     let Some(table) = membership.stake_table(epoch) else {
         tracing::debug!(%epoch, "no stake table to check the records against");
         return Vec::new();
     };
-    let mut urls = Vec::new();
-    for record in records {
-        let staked = table
-            .0
-            .iter()
-            .any(|peer| peer.stake_table_entry.stake_key == record.signer);
-        if record.record.epoch != epoch || !staked || !record.is_valid() {
-            tracing::debug!(signer = %record.signer, "a record that does not check out");
-            continue;
-        }
-        match record.record.api_url.parse::<Url>() {
-            Ok(url) if !urls.contains(&url) => urls.push(url),
-            Ok(_) => {},
-            Err(err) => tracing::debug!(%err, "a record with a bad API URL"),
-        }
-    }
-    urls
+    records
+        .into_iter()
+        .filter(|record| {
+            let staked = table
+                .0
+                .iter()
+                .any(|peer| peer.stake_table_entry.stake_key == record.signer);
+            let valid = record.record.epoch == epoch && staked && record.is_valid();
+            if !valid {
+                tracing::debug!(signer = %record.signer, "a record that does not check out");
+            }
+            valid
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
+    use chain_api::discovery::listed;
+    use chain_store::{ChainStore, mem::MemBackend};
     use consensus_api::discovery::ServiceRecord;
 
     use super::*;
-    use crate::{discovery::listed, membership::testing::*};
+    use crate::membership::testing::*;
 
     fn url(port: u16) -> Url {
         format!("http://127.0.0.1:{port}").parse().unwrap()
@@ -229,7 +243,7 @@ mod tests {
     #[tokio::test]
     async fn uses_the_bootstrap_urls_but_not_its_own() {
         let peers = Peers::new(
-            "127.0.0.1:1".parse().unwrap(),
+            Tables::new(ChainStore::new(MemBackend::default())),
             vec![url(1), url(2), url(3)],
             Some(url(3)),
         );
@@ -255,7 +269,49 @@ mod tests {
         .into_iter()
         .map(|record| from_listed(listed(record)).unwrap())
         .collect();
-        let urls = valid_urls(records, EpochNumber::new(epoch), &membership);
+        let peers = Peers::new(
+            Tables::new(ChainStore::new(MemBackend::default())),
+            Vec::new(),
+            None,
+        );
+        let urls = peers.urls(&valid_records(
+            records,
+            EpochNumber::new(epoch),
+            &membership,
+        ));
         assert_eq!(urls, vec![url(10)]);
+    }
+
+    /// Records the publisher stores later in the epoch replace those taken earlier, and the
+    /// deployment's own URL is left out of them.
+    #[tokio::test]
+    async fn takes_records_stored_later_in_the_epoch() {
+        let membership = membership();
+        let epoch = EpochNumber::new(FIRST_EPOCH + 1);
+        let tables = Tables::new(ChainStore::new(MemBackend::default()));
+        let mut peers = Peers::new(tables.clone(), Vec::new(), Some(url(12)));
+        let store = |signers: &[u64]| {
+            let records: Vec<_> = signers
+                .iter()
+                .map(|&signer| record(signer, *epoch, &url(10 + signer as u16)))
+                .collect();
+            let tables = tables.clone();
+            async move {
+                tables
+                    .put_service_records(epoch, &records, epoch)
+                    .await
+                    .unwrap()
+            }
+        };
+        let urls = |peers: &Peers| -> BTreeSet<_> {
+            peers.shuffled().into_iter().map(|peer| peer.url).collect()
+        };
+
+        store(&[0]).await;
+        peers.refresh(epoch, &membership).await;
+        assert_eq!(urls(&peers), BTreeSet::from([url(10)]));
+        store(&[0, 1, 2]).await;
+        peers.refresh(epoch, &membership).await;
+        assert_eq!(urls(&peers), BTreeSet::from([url(10), url(11)]));
     }
 }

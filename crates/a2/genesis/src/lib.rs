@@ -189,6 +189,19 @@ impl Genesis {
         Some(config)
     }
 
+    /// The network config of a process without stake, such as an ingester or an API instance:
+    /// the genesis stake table and the epochs.
+    pub fn unstaked_network_config(&self) -> anyhow::Result<NetworkConfig<SeqTypes>> {
+        // Any key outside the stake table reads it.
+        let (key, _) = PubKey::generated_from_seed_indexed([0; 32], u64::MAX);
+        let mut config = self
+            .network_config(&key)
+            .context("the genesis file has no stake table")?;
+        config.config.epoch_height = self.epoch_height.unwrap_or_default();
+        config.config.epoch_start_block = self.epoch_start_block.unwrap_or_default();
+        Ok(config)
+    }
+
     /// The first epoch, which runs on the genesis stake table.
     ///
     /// Fails when `epoch_height` is missing or zero.

@@ -19,7 +19,11 @@ use std::{collections::BTreeSet, ops::Range};
 use chain_store::{Item, Part, Parts};
 use hotshot_types::data::EpochNumber;
 
-use crate::{GapFiller, Membership, gaps::runs, peers::Peer};
+use crate::{
+    gaps::{GapFiller, runs},
+    membership::Membership,
+    peers::Peer,
+};
 
 /// How many epoch roots one pass derives stake tables from.
 const ROOTS_PER_PASS: usize = 8;
@@ -213,13 +217,14 @@ async fn checked_certs(
 mod tests {
     use std::time::Duration;
 
+    use api_service::ApiService;
     use chain_store::{ChainStore, mem::MemBackend};
     use hotshot_types::simple_certificate::QuorumCertificate2;
     use tokio::net::TcpListener;
     use url::Url;
 
     use super::*;
-    use crate::{ApiService, membership::testing::*};
+    use crate::{membership::testing::*, peers::Peers};
 
     const EPOCH: u64 = FIRST_EPOCH + 1;
 
@@ -278,7 +283,11 @@ mod tests {
 
     /// A filler over `store`, asking `peer`, that has looked for gaps and found none.
     async fn filler(store: &ChainStore, peer: &Url) -> GapFiller {
-        let peers = crate::Peers::new("127.0.0.1:1".parse().unwrap(), vec![peer.clone()], None);
+        let peers = Peers::new(
+            chain_api::Tables::new(store.clone()),
+            vec![peer.clone()],
+            None,
+        );
         let mut filler = GapFiller::new(store.clone(), peers, None);
         let newest = store.newest().await.unwrap().unwrap();
         (filler.newest, filler.items_from) = (Some(newest), newest + 1);

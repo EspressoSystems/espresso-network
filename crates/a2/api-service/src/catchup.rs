@@ -1,22 +1,18 @@
-//! The catchup service: leaves from the store, and state from the heights the API service has
-//! applied, for consensus nodes that are behind. They check every answer themselves.
-
-use std::sync::Arc;
+//! The catchup service: leaves from the store, and the state of the newest heights as the
+//! ingester stored it, for consensus nodes that are behind. They check every answer themselves.
 
 use catchup_api::proto::{
     AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HeightRequest, LeafChainResponse,
     catchup_service_server::CatchupService,
 };
+use chain_api::{StateRow, Tables};
 use chain_store::ChainStore;
-use committable::Committable;
 use espresso_api::error::to_status;
-use espresso_types::{FeeAccount, FeeAccountProof, NodeState, ValidatedState};
+use espresso_types::{FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeMerkleTree};
 use hotshot_types::{data::EpochNumber, utils::root_block_in_epoch};
-use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::Serialize;
+use tokio::sync::OnceCell;
 use tonic::{Request, Response, Status};
-
-use crate::chain_state::ChainStates;
 
 /// How many leaves after the one asked for a chain may take to reach a `Certificate2`.
 const MAX_CHAIN: u64 = 64;
@@ -24,23 +20,47 @@ const MAX_CHAIN: u64 = 64;
 /// What the catchup service answers from.
 pub struct Catchup {
     store: ChainStore,
-    chain: ChainStates,
-    node: NodeState,
+    tables: Tables,
+    epoch_height: u64,
+
+    /// The fee tree, which does not change under the new protocol, built on first use from the
+    /// accounts the ingester stored.
+    fees: OnceCell<FeeMerkleTree>,
 }
 
 impl Catchup {
-    pub fn new(store: ChainStore, chain: ChainStates, node: NodeState) -> Self {
-        Self { store, chain, node }
+    pub fn new(store: ChainStore, epoch_height: u64) -> Self {
+        Self {
+            tables: Tables::new(store.clone()),
+            store,
+            epoch_height,
+            fees: OnceCell::new(),
+        }
     }
 
-    /// The state after the block at `height`, which must be among those kept.
-    fn state(&self, height: u64) -> Result<Arc<ValidatedState>, Status> {
-        self.chain.at(height).ok_or_else(|| {
-            Status::not_found(format!(
-                "no state kept for height {height}; the newest is {:?}",
-                self.chain.newest()
-            ))
-        })
+    /// What the state after `height` holds besides its header's roots, which the ingester keeps
+    /// for the newest heights only.
+    async fn state(&self, height: u64) -> Result<StateRow, Status> {
+        self.tables
+            .state(height)
+            .await
+            .map_err(to_status)?
+            .ok_or_else(|| Status::not_found(format!("no state kept for height {height}")))
+    }
+
+    async fn fee_tree(&self) -> Result<&FeeMerkleTree, Status> {
+        self.fees
+            .get_or_try_init(|| async {
+                let accounts = self
+                    .tables
+                    .fee_accounts()
+                    .await
+                    .map_err(to_status)?
+                    .ok_or_else(|| Status::unavailable("the fee accounts are not stored yet"))?;
+                FeeMerkleTree::from_kv_set(FEE_MERKLE_TREE_HEIGHT, accounts)
+                    .map_err(|err| Status::internal(format!("building the fee tree: {err}")))
+            })
+            .await
     }
 }
 
@@ -83,14 +103,16 @@ impl CatchupService for Catchup {
         request: Request<AccountsRequest>,
     ) -> Result<Response<Encoded>, Status> {
         let r = request.into_inner();
-        let state = self.state(r.height)?;
+        // The fee tree is the same at every height; the height must still be one kept.
+        self.state(r.height).await?;
+        let tree = self.fee_tree().await?;
         let proofs = r
             .accounts
             .iter()
             .map(|bytes| {
                 let account: FeeAccount = bincode::deserialize(bytes)
                     .map_err(|_| Status::invalid_argument("an undecodable account"))?;
-                FeeAccountProof::prove(&state.fee_merkle_tree, account.0)
+                FeeAccountProof::prove(tree, account.0)
                     .map(|(proof, _)| proof)
                     .ok_or_else(|| Status::internal(format!("no proof of account {account}")))
             })
@@ -103,16 +125,11 @@ impl CatchupService for Catchup {
         request: Request<HeightRequest>,
     ) -> Result<Response<Encoded>, Status> {
         let height = request.into_inner().height;
-        let state = self.state(height)?;
-        let tree = &state.block_merkle_tree;
-        let last = tree
-            .num_leaves()
-            .checked_sub(1)
+        let frontier = self
+            .state(height)
+            .await?
+            .frontier
             .ok_or_else(|| Status::not_found("the block tree is empty"))?;
-        let (_, frontier) = tree
-            .lookup(last)
-            .expect_ok()
-            .map_err(|_| Status::internal("the block tree forgot its frontier"))?;
         encoded(&frontier)
     }
 
@@ -120,15 +137,15 @@ impl CatchupService for Catchup {
         &self,
         request: Request<HeightRequest>,
     ) -> Result<Response<Encoded>, Status> {
-        let state = self.state(request.into_inner().height)?;
-        let tree = &state.reward_merkle_tree_v2;
-        let balances: Vec<_> = tree
-            .iter()
-            .map(|(account, amount)| (*account, *amount))
-            .collect();
-        if balances.len() as u64 != tree.num_leaves() {
-            return Err(Status::internal("the reward tree is missing accounts"));
-        }
+        let height = request.into_inner().height;
+        let at = self.state(height).await?.rewards_at;
+        let balances = self
+            .tables
+            .rewards(at)
+            .await
+            .map_err(to_status)?
+            // Pruned since the row was read: the height is no longer kept.
+            .ok_or_else(|| Status::not_found(format!("no state kept for height {height}")))?;
         encoded(&balances)
     }
 
@@ -137,29 +154,15 @@ impl CatchupService for Catchup {
         request: Request<ChainConfigRequest>,
     ) -> Result<Response<Encoded>, Status> {
         let commitment = request.into_inner().commitment;
-        let latest = self
-            .chain
-            .latest()
-            .and_then(|(_, state)| state.chain_config.resolve());
-        let known = [
-            Some(self.node.chain_config),
-            Some(self.node.genesis_chain_config),
-            latest,
-        ]
-        .into_iter()
-        .flatten()
-        .chain(
-            self.node
-                .upgrades
-                .values()
-                .filter_map(|upgrade| upgrade.upgrade_type.chain_config()),
-        );
-        for config in known {
-            if config.commit().to_string() == commitment {
-                return encoded(&config);
-            }
+        match self
+            .tables
+            .chain_config(&commitment)
+            .await
+            .map_err(to_status)?
+        {
+            Some(config) => encoded(&config),
+            None => Err(Status::not_found(format!("no chain config {commitment}"))),
         }
-        Err(Status::not_found(format!("no chain config {commitment}")))
     }
 
     async fn get_state_cert(
@@ -167,8 +170,7 @@ impl CatchupService for Catchup {
         request: Request<EpochRequest>,
     ) -> Result<Response<Encoded>, Status> {
         let epoch = request.into_inner().epoch;
-        let epoch_height = self.node.epoch_height.unwrap_or_default();
-        let root = root_block_in_epoch(epoch, epoch_height);
+        let root = root_block_in_epoch(epoch, self.epoch_height);
         match self.store.state_cert(root).await.map_err(to_status)? {
             Some(cert) => encoded(&cert),
             None => Err(Status::not_found(format!(
@@ -184,20 +186,66 @@ mod tests {
     use chain_store::mem::MemBackend;
 
     use super::*;
-    use crate::chain_state;
 
     /// A leaf chain asked for at any height is answered, by not found if nothing is there.
     #[tokio::test]
     async fn a_leaf_chain_at_the_last_height_is_not_found() {
         let store = ChainStore::new(MemBackend::default());
-        let node = NodeState::mock();
-        let (_, states) = chain_state::follower(store.clone(), node.clone());
-        let catchup = Catchup::new(store, states, node);
+        let catchup = Catchup::new(store, 10);
 
         let status = catchup
             .get_leaf_chain(Request::new(HeightRequest { height: u64::MAX }))
             .await
             .expect_err("nothing is stored");
         assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    /// State is answered from the rows the ingester stored, for the heights kept only.
+    #[tokio::test]
+    async fn answers_from_the_stored_state() {
+        let store = ChainStore::new(MemBackend::default());
+        let tables = Tables::new(store.clone());
+        let config = espresso_types::v0_3::ChainConfig::default();
+        let row = StateRow {
+            frontier: None,
+            chain_config: config,
+            rewards_at: 4,
+        };
+        tables
+            .put_state(4, &row, Some(&Vec::new()), 4, 4)
+            .await
+            .unwrap();
+        tables.put_state(5, &row, None, 4, 4).await.unwrap();
+        tables.put_chain_config(&config).await.unwrap();
+        tables.put_fee_accounts(&[]).await.unwrap();
+        let catchup = Catchup::new(store, 10);
+        let height = |height| Request::new(HeightRequest { height });
+
+        let balances = catchup.get_reward_balances_v2(height(5)).await.unwrap();
+        let balances: chain_api::RewardSet =
+            bincode::deserialize(&balances.into_inner().data).unwrap();
+        assert!(balances.is_empty());
+        let status = catchup
+            .get_reward_balances_v2(height(6))
+            .await
+            .expect_err("no state kept for height 6");
+        assert_eq!(status.code(), tonic::Code::NotFound);
+        let status = catchup
+            .get_blocks_frontier(height(5))
+            .await
+            .expect_err("the block tree is empty");
+        assert_eq!(status.code(), tonic::Code::NotFound);
+        catchup
+            .get_fee_accounts(Request::new(AccountsRequest {
+                height: 5,
+                accounts: Vec::new(),
+            }))
+            .await
+            .unwrap();
+        let commitment = committable::Committable::commit(&config).to_string();
+        catchup
+            .get_chain_config(Request::new(ChainConfigRequest { commitment }))
+            .await
+            .unwrap();
     }
 }

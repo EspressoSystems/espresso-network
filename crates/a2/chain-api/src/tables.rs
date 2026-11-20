@@ -1,0 +1,237 @@
+//! The tables the ingester writes into the chain store for the API instances.
+//!
+//! The ingester alone writes them; API instances only read them, and trust them as they trust the
+//! blocks the ingester copies. Epochs and heights are keys as big-endian `u64`, so they sort in
+//! order and older ones are deleted by a key range.
+
+use std::sync::LazyLock;
+
+use anyhow::Context;
+use bytes::Bytes;
+use chain_store::{AppWrite, ChainStore, TableName};
+use committable::Committable;
+use consensus_api::discovery::SignedServiceRecord;
+use espresso_types::{
+    BlockMerkleTree, ChainConfig, FeeAccount, FeeAmount, SeqTypes, v0_3::RewardAmount,
+    v0_4::RewardAccountV2,
+};
+use hotshot_types::{PeerConfig, data::EpochNumber};
+use jf_merkle_tree_compat::MerkleTreeScheme;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+/// Height to the [`StateRow`] of the state after it, for the newest heights the ingester applied.
+static STATES: LazyLock<TableName> = LazyLock::new(|| TableName::of("catchup-states"));
+
+/// Height to the reward balances of the state after it, written only where they changed.
+static REWARDS: LazyLock<TableName> = LazyLock::new(|| TableName::of("catchup-rewards"));
+
+/// The commitment of a chain config, as a string, to the chain config.
+static CHAIN_CONFIGS: LazyLock<TableName> = LazyLock::new(|| TableName::of("chain-configs"));
+
+/// The accounts of the fee tree, which does not change under the new protocol.
+static FEES: LazyLock<TableName> = LazyLock::new(|| TableName::of("fee-accounts"));
+const FEES_KEY: &[u8] = b"genesis";
+
+/// Epoch to its stake table.
+static STAKE_TABLES: LazyLock<TableName> = LazyLock::new(|| TableName::of("stake-tables"));
+
+/// Epoch to the valid discovery records of the epoch, as the consensus node received them.
+static SERVICE_RECORDS: LazyLock<TableName> = LazyLock::new(|| TableName::of("service-records"));
+
+pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
+
+/// Every reward balance of a state.
+pub type RewardSet = Vec<(RewardAccountV2, RewardAmount)>;
+
+/// What a state holds besides the roots its block's header commits to, and besides the fee tree,
+/// which does not change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateRow {
+    /// The frontier of the block tree, unless the tree is empty.
+    pub frontier: Option<BlocksFrontier>,
+
+    pub chain_config: ChainConfig,
+
+    /// The height under which [`Tables::rewards`] finds the reward balances of the state: the
+    /// first height whose state had them.
+    pub rewards_at: u64,
+}
+
+/// The tables of a chain store that the ingester writes for the API instances.
+#[derive(Clone, Debug)]
+pub struct Tables {
+    store: ChainStore,
+}
+
+impl Tables {
+    pub fn new(store: ChainStore) -> Self {
+        Self { store }
+    }
+
+    /// What the state after `height` holds besides its header's roots, if it is among the newest
+    /// heights kept.
+    pub async fn state(&self, height: u64) -> anyhow::Result<Option<StateRow>> {
+        self.get(&STATES, &height.to_be_bytes()).await
+    }
+
+    /// Every kept [`StateRow`], with its height, in height order.
+    pub async fn states(&self) -> anyhow::Result<Vec<(u64, StateRow)>> {
+        self.store
+            .app_entries(&STATES, &[], None)
+            .await?
+            .into_iter()
+            .map(|(key, value)| Ok((u64_of(&key)?, decode(&value)?)))
+            .collect()
+    }
+
+    /// The reward balances first written for the state after `at`.
+    pub async fn rewards(&self, at: u64) -> anyhow::Result<Option<RewardSet>> {
+        self.get(&REWARDS, &at.to_be_bytes()).await
+    }
+
+    /// The chain config whose commitment, as a string, is `commitment`.
+    pub async fn chain_config(&self, commitment: &str) -> anyhow::Result<Option<ChainConfig>> {
+        self.get(&CHAIN_CONFIGS, commitment.as_bytes()).await
+    }
+
+    /// The accounts of the fee tree.
+    pub async fn fee_accounts(&self) -> anyhow::Result<Option<Vec<(FeeAccount, FeeAmount)>>> {
+        self.get(&FEES, FEES_KEY).await
+    }
+
+    /// The stake table of `epoch`.
+    pub async fn stake_table(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<Vec<PeerConfig<SeqTypes>>>> {
+        self.get(&STAKE_TABLES, &epoch.to_be_bytes()).await
+    }
+
+    /// The discovery records of `epoch`, or of the latest epoch with records if `epoch` is
+    /// `None`, with the epoch they are for.
+    pub async fn service_records(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Option<(EpochNumber, Vec<SignedServiceRecord<SeqTypes>>)>> {
+        let entry = match epoch {
+            Some(epoch) => self
+                .store
+                .app_get(&SERVICE_RECORDS, &epoch.to_be_bytes())
+                .await?
+                .map(|value| (Bytes::copy_from_slice(&epoch.to_be_bytes()), value)),
+            None => self
+                .store
+                .app_entries(&SERVICE_RECORDS, &[], None)
+                .await?
+                .pop(),
+        };
+        let Some((key, value)) = entry else {
+            return Ok(None);
+        };
+        Ok(Some((EpochNumber::new(u64_of(&key)?), decode(&value)?)))
+    }
+
+    /// Stores `row`, of the state after `height`, with the reward balances of the state if they
+    /// changed at `height`, and forgets the rows before `keep_from` and the reward balances
+    /// before `keep_rewards_from`.
+    pub async fn put_state(
+        &self,
+        height: u64,
+        row: &StateRow,
+        rewards: Option<&RewardSet>,
+        keep_from: u64,
+        keep_rewards_from: u64,
+    ) -> anyhow::Result<()> {
+        let mut writes = vec![put(&STATES, &height.to_be_bytes(), row)?];
+        if let Some(rewards) = rewards {
+            writes.push(put(&REWARDS, &height.to_be_bytes(), rewards)?);
+        }
+        writes.extend([
+            delete_before(&STATES, keep_from),
+            delete_before(&REWARDS, keep_rewards_from),
+        ]);
+        self.store.app_write(writes).await
+    }
+
+    pub async fn put_chain_config(&self, config: &ChainConfig) -> anyhow::Result<()> {
+        let key = config.commit().to_string();
+        self.store
+            .app_write(vec![put(&CHAIN_CONFIGS, key.as_bytes(), config)?])
+            .await
+    }
+
+    pub async fn put_fee_accounts(
+        &self,
+        accounts: &[(FeeAccount, FeeAmount)],
+    ) -> anyhow::Result<()> {
+        self.store
+            .app_write(vec![put(&FEES, FEES_KEY, &accounts)?])
+            .await
+    }
+
+    pub async fn put_stake_table(
+        &self,
+        epoch: EpochNumber,
+        table: &[PeerConfig<SeqTypes>],
+    ) -> anyhow::Result<()> {
+        self.store
+            .app_write(vec![put(&STAKE_TABLES, &epoch.to_be_bytes(), &table)?])
+            .await
+    }
+
+    /// Stores the records of `epoch` and forgets those of the epochs before `keep_from`.
+    pub async fn put_service_records(
+        &self,
+        epoch: EpochNumber,
+        records: &[SignedServiceRecord<SeqTypes>],
+        keep_from: EpochNumber,
+    ) -> anyhow::Result<()> {
+        self.store
+            .app_write(vec![
+                put(&SERVICE_RECORDS, &epoch.to_be_bytes(), &records)?,
+                delete_before(&SERVICE_RECORDS, *keep_from),
+            ])
+            .await
+    }
+
+    async fn get<V: DeserializeOwned>(
+        &self,
+        table: &TableName,
+        key: &[u8],
+    ) -> anyhow::Result<Option<V>> {
+        self.store
+            .app_get(table, key)
+            .await?
+            .map(|value| decode(&value).with_context(|| format!("decoding a row of {table}")))
+            .transpose()
+    }
+}
+
+fn put<V: Serialize + ?Sized>(
+    table: &TableName,
+    key: &[u8],
+    value: &V,
+) -> anyhow::Result<AppWrite> {
+    Ok(AppWrite::Put {
+        table: table.clone(),
+        key: Bytes::copy_from_slice(key),
+        value: bincode::serialize(value)?.into(),
+    })
+}
+
+fn delete_before(table: &TableName, key: u64) -> AppWrite {
+    AppWrite::DeleteBefore {
+        table: table.clone(),
+        key: Bytes::copy_from_slice(&key.to_be_bytes()),
+    }
+}
+
+fn decode<V: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<V> {
+    Ok(bincode::deserialize(bytes)?)
+}
+
+fn u64_of(key: &[u8]) -> anyhow::Result<u64> {
+    Ok(u64::from_be_bytes(
+        key.try_into().context("a key that is not a u64")?,
+    ))
+}

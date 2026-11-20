@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Runs an a2 network on this machine: anvil as L1 with the Espresso contracts and the demo
 # validators staked, and for each of the five validators of the demo genesis file a deployment of
-# a consensus node and an API service, with its own ingester and store service on Postgres. API
-# services find each other through the validators' records, starting from the first. Node 4's
-# ingester starts a minute late, so its store misses what node 4 freed meanwhile, and its API
-# service fills that from the others. Logs go to RUNDIR. Stops everything on exit.
+# a consensus node, an ingester, a store service on Postgres and an API instance. Ingesters find
+# the other deployments' API services through the validators' records, starting from the first.
+# Node 4's ingester starts a minute late, so its store misses what node 4 freed meanwhile, and it
+# fills that from the others. Logs go to RUNDIR. Stops everything on exit.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -105,30 +105,31 @@ main() {
 
   sleep 5
   for i in 0 1 2 3 4; do
-    local bootstrap=()
-    if ((i > 0)); then
-      bootstrap=(--bootstrap http://127.0.0.1:24000)
-    fi
     api-service --port $((24000 + i)) --store "http://127.0.0.1:$((8070 + i))" \
-      --consensus-api "127.0.0.1:$((9978 + i))" --public-url "http://127.0.0.1:$((24000 + i))" \
-      "${bootstrap[@]}" --genesis-file "$genesis" --l1-provider "$l1" \
+      --consensus-api "127.0.0.1:$((9978 + i))" --genesis-file "$genesis" \
       >"$rundir/api-$i.log" 2>&1 &
     if ((i < 4)); then
-      start_ingester "$rundir" "$i"
+      start_ingester "$rundir" "$i" "$genesis" "$l1"
     fi
   done
 
   echo "running; logs in $rundir"
   sleep 60
-  start_ingester "$rundir" 4
+  start_ingester "$rundir" 4 "$genesis" "$l1"
   echo "ingester 4 started"
   wait
 }
 
-# Starts the ingester of node $2, from its consensus node into its store.
+# Starts the ingester of node $2, from its consensus node into its store, with genesis file $3 and
+# L1 $4. All but the first learn the other API services from the first.
 start_ingester() {
+  local bootstrap=()
+  if (($2 > 0)); then
+    bootstrap=(--bootstrap http://127.0.0.1:24000)
+  fi
   ingester --consensus-api "127.0.0.1:$((9978 + $2))" --store "http://127.0.0.1:$((8070 + $2))" \
-    >"$1/ingester-$2.log" 2>&1 &
+    --genesis-file "$3" --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
+    "${bootstrap[@]}" >"$1/ingester-$2.log" 2>&1 &
 }
 
 # Stops every process and removes the Postgres data, which lives outside RUNDIR.

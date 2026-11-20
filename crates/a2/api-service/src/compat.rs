@@ -14,27 +14,28 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use chain_api::Tables;
 use chain_store::ChainStore;
 use espresso_types::{SeqTypes, v0_4::StateCertQueryDataV2};
-use hotshot_types::{PeerConfig, data::EpochNumber, network::NetworkConfig};
+use hotshot_types::{data::EpochNumber, network::NetworkConfig, utils::root_block_in_epoch};
 use serde_json::json;
-
-use crate::Membership;
 
 /// What the v1 paths answer from.
 pub struct Compat {
     store: ChainStore,
-    membership: Membership,
+
+    /// The stake tables, which the ingester writes.
+    tables: Tables,
 
     /// The chain's configuration from its genesis file: its epochs and genesis stake table.
     config: NetworkConfig<SeqTypes>,
 }
 
 impl Compat {
-    pub fn new(store: ChainStore, membership: Membership, config: NetworkConfig<SeqTypes>) -> Self {
+    pub fn new(store: ChainStore, config: NetworkConfig<SeqTypes>) -> Self {
         Self {
+            tables: Tables::new(store.clone()),
             store,
-            membership,
             config,
         }
     }
@@ -51,13 +52,14 @@ impl Compat {
 }
 
 async fn stake_table(State(compat): State<Arc<Compat>>, Path(epoch): Path<u64>) -> Response {
-    match compat.membership.stake_table(EpochNumber::new(epoch)) {
-        Some(table) => Json::<Vec<PeerConfig<SeqTypes>>>(table.0).into_response(),
-        None => (
+    match compat.tables.stake_table(EpochNumber::new(epoch)).await {
+        Ok(Some(table)) => Json(table).into_response(),
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             format!("no stake table of epoch {epoch} yet"),
         )
             .into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")).into_response(),
     }
 }
 
@@ -77,7 +79,7 @@ async fn hotshot_config(State(compat): State<Arc<Compat>>) -> Response {
 }
 
 async fn state_cert(State(compat): State<Arc<Compat>>, Path(epoch): Path<u64>) -> Response {
-    let root = compat.membership.root_of(EpochNumber::new(epoch));
+    let root = root_block_in_epoch(epoch, compat.config.config.epoch_height);
     match compat.store.state_cert(root).await {
         Ok(Some(cert)) => Json(StateCertQueryDataV2::<SeqTypes>(cert)).into_response(),
         Ok(None) => (
@@ -91,9 +93,17 @@ async fn state_cert(State(compat): State<Arc<Compat>>, Path(epoch): Path<u64>) -
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::U256;
     use chain_store::{Parts, mem::MemBackend};
     use espresso_contract_deployer::network_config::{
         fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
+    };
+    use espresso_types::PubKey;
+    use hotshot_types::{
+        PeerConfig,
+        light_client::{StateKeyPair, StateVerKey},
+        simple_certificate::LightClientStateUpdateCertificateV2,
+        traits::signature_key::SignatureKey,
     };
     use http_client::{Client, error::ClientErr};
     use tokio::net::TcpListener;
@@ -101,7 +111,21 @@ mod tests {
     use vbs::version::StaticVersion;
 
     use super::*;
-    use crate::{ApiService, membership::testing::*};
+    use crate::ApiService;
+
+    const EPOCH_HEIGHT: u64 = 10;
+
+    fn committee() -> Vec<PeerConfig<SeqTypes>> {
+        (0..4)
+            .map(|i| PeerConfig {
+                stake_table_entry: PubKey::generated_from_seed_indexed([0; 32], i)
+                    .0
+                    .stake_table_entry(U256::from(100)),
+                state_ver_key: StateKeyPair::generate_from_seed_indexed([0; 32], i).ver_key(),
+                connect_info: None,
+            })
+            .collect()
+    }
 
     /// Serves the v1 paths over `store`, returning the API's URL as the relay server is given it.
     async fn serve(store: ChainStore) -> Url {
@@ -113,7 +137,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let service = ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap())
-            .with_compat(Compat::new(store, membership(), config));
+            .with_compat(Compat::new(store, config));
         tokio::spawn(service.serve(listener));
         url.parse().unwrap()
     }
@@ -121,27 +145,40 @@ mod tests {
     /// The relay server reads the epoch layout and the stake tables with these very functions.
     #[tokio::test]
     async fn answers_the_relay_server() {
-        let url = serve(ChainStore::new(MemBackend::default())).await;
+        let store = ChainStore::new(MemBackend::default());
+        let epoch = EpochNumber::new(2);
+        Tables::new(store.clone())
+            .put_stake_table(epoch, &committee())
+            .await
+            .unwrap();
+        let url = serve(store).await;
         let (epoch_height, start) = fetch_epoch_config_from_sequencer(&url).await.unwrap();
         assert_eq!((epoch_height, start), (EPOCH_HEIGHT, 1));
 
         let genesis = fetch_stake_table_from_sequencer(&url, None).await.unwrap();
         assert_eq!(genesis.0, committee());
-        let epoch = EpochNumber::new(FIRST_EPOCH + 1);
         let table = fetch_stake_table_from_sequencer(&url, Some(epoch))
             .await
             .unwrap();
         assert_eq!(table.0, committee());
+        fetch_stake_table_from_sequencer(&url, Some(epoch + 1))
+            .await
+            .expect_err("no stake table of the next epoch yet");
     }
 
     /// The prover reads the state certificate of an epoch as JSON, as here.
     #[tokio::test]
     async fn answers_the_prover() {
         let store = ChainStore::new(MemBackend::default());
-        let membership = membership();
-        let epoch = FIRST_EPOCH + 1;
-        let root = membership.root_of(EpochNumber::new(epoch));
-        let cert = crate::membership::testing::state_cert(root, &[0, 1]);
+        let epoch = 2;
+        let root = root_block_in_epoch(epoch, EPOCH_HEIGHT);
+        let cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
+            epoch: EpochNumber::new(epoch),
+            light_client_state: Default::default(),
+            next_stake_table_state: Default::default(),
+            signatures: Vec::<(StateVerKey, _, _)>::new(),
+            auth_root: Default::default(),
+        };
         let parts = Parts {
             state_cert: Some(cert.clone()),
             ..Default::default()
