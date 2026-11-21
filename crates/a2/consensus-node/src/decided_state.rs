@@ -68,31 +68,20 @@ pub fn load(store: &NodeStore, anchor: &Leaf2) -> anyhow::Result<ValidatedState>
         state.chain_config = config.into();
     }
 
-    let root = header.reward_merkle_tree_root().right();
-    if root.is_some() && get::<RewardMerkleCommitmentV2>(store, REWARD_ROOT)? == root {
-        let accounts = store
-            .app_entries(&REWARD_ACCOUNTS, &[], None)?
-            .into_iter()
-            .map(|(key, value)| {
-                let account = RewardAccountV2(Address::try_from(&key[..])?);
-                let balance: RewardAmount = bincode::deserialize(&value)?;
-                anyhow::Ok((account, balance))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()
-            .context("reading the reward accounts")?;
-        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, accounts)
-            .context("rebuilding the reward tree")?;
-        if Some(tree.commitment()) == root {
-            state.reward_merkle_tree_v2 = tree;
-        } else {
-            tracing::warn!("the stored reward accounts do not match their root");
-        }
+    if let Some(root) = header.reward_merkle_tree_root().right()
+        && let Some(tree) = stored_reward_tree(store, root)?
+    {
+        state.reward_merkle_tree_v2 = tree;
     }
     Ok(state)
 }
 
 /// Writes the decided state of each decided leaf, as [`DecidedState`] for consensus.
 pub struct DecidedStateWriter {
+    /// The store the writes go to, which also holds the reward accounts of [`Self::stored_root`]
+    /// once they are written.
+    store: NodeStore,
+
     /// The height of the latest leaf written for, and the root of its reward tree.
     height: u64,
     leaf_root: Option<RewardMerkleCommitmentV2>,
@@ -111,6 +100,7 @@ impl DecidedStateWriter {
     /// Continues from what `store` holds, with `anchor` the latest decided leaf.
     pub fn new(store: &NodeStore, anchor: &Leaf2) -> anyhow::Result<Self> {
         Ok(Self {
+            store: store.clone(),
             height: anchor.height(),
             leaf_root: anchor.block_header().reward_merkle_tree_root().right(),
             stored_root: get(store, REWARD_ROOT)?,
@@ -127,7 +117,8 @@ impl DecidedState<SeqTypes> for DecidedStateWriter {
     /// leaves them out until a complete tree catches them up.
     ///
     /// The decide log entry gets the leaf's frontier and chain config, and every reward balance
-    /// unless they are the parent's, whenever the leaf's state holds them all.
+    /// unless they are the parent's, whenever the leaf's state holds them all. Balances the
+    /// state lacks come from the stored reward accounts if those make up the leaf's root.
     fn decided(&mut self, leaf: &Leaf2, entry: Option<&StateEntry<SeqTypes>>) -> DecidedWrites {
         let height = leaf.height();
         // A decide that fills a gap trails the anchor this state has moved past.
@@ -145,7 +136,19 @@ impl DecidedState<SeqTypes> for DecidedStateWriter {
             && self.leaf_root == root;
         self.height = height;
         self.leaf_root = root;
-        let state = entry.and_then(|e| state_change(leaf, &e.state, rewards_unchanged));
+        // Consensus validates the children of a leaf decided before its validation finished
+        // against a state rebuilt from that leaf's header, which has the root of the reward tree
+        // only, and so do their states until the next epoch boundary. The root is unchanged since
+        // the last complete tree, whose accounts the store holds.
+        let stored_rewards = || {
+            let root = root.filter(|root| Some(*root) == self.stored_root)?;
+            stored_reward_tree(&self.store, root)
+                .inspect_err(|err| tracing::warn!(%err, height, "reading the reward accounts"))
+                .ok()
+                .flatten()
+        };
+        let state =
+            entry.and_then(|e| state_change(leaf, &e.state, rewards_unchanged, stored_rewards));
         if state.is_some() {
             self.state_sent = Some(height);
         }
@@ -237,12 +240,13 @@ impl DecidedStateWriter {
 }
 
 /// The parts of `state`, the state after `leaf`, for `leaf`'s decide log entry: the frontier, the
-/// chain config, and every reward balance unless `rewards_unchanged`. `None` if the state lacks
-/// any of them, or they do not match the leaf's header.
+/// chain config, and every reward balance unless `rewards_unchanged`, from the state or else from
+/// `stored_rewards`. `None` if neither has any of them, or they do not match the leaf's header.
 fn state_change(
     leaf: &Leaf2,
     state: &ValidatedState,
     rewards_unchanged: bool,
+    stored_rewards: impl FnOnce() -> Option<RewardMerkleTreeV2>,
 ) -> Option<StateChange> {
     let header = leaf.block_header();
     let frontier = match state.block_merkle_tree.num_leaves().checked_sub(1) {
@@ -259,18 +263,9 @@ fn state_change(
     let rewards = match rewards_unchanged {
         true => None,
         false => {
-            let tree = &state.reward_merkle_tree_v2;
             let root = header.reward_merkle_tree_root().right();
-            if root.is_some_and(|root| tree.commitment() != root) {
-                return None;
-            }
-            let balances: Vec<(RewardAccountV2, RewardAmount)> = tree
-                .iter()
-                .map(|(account, amount)| (*account, *amount))
-                .collect();
-            if balances.len() as u64 != tree.num_leaves() {
-                return None;
-            }
+            let balances = balances(&state.reward_merkle_tree_v2, root)
+                .or_else(|| balances(&stored_rewards()?, root))?;
             Some(bincode::serialize(&balances).ok()?)
         },
     };
@@ -279,6 +274,48 @@ fn state_change(
         chain_config: bincode::serialize(&config).ok()?,
         rewards,
     })
+}
+
+/// Every balance of `tree`, if it has them all and makes up `root`.
+fn balances(
+    tree: &RewardMerkleTreeV2,
+    root: Option<RewardMerkleCommitmentV2>,
+) -> Option<Vec<(RewardAccountV2, RewardAmount)>> {
+    if root.is_some_and(|root| tree.commitment() != root) {
+        return None;
+    }
+    let balances: Vec<_> = tree
+        .iter()
+        .map(|(account, amount)| (*account, *amount))
+        .collect();
+    (balances.len() as u64 == tree.num_leaves()).then_some(balances)
+}
+
+/// The reward tree of the stored reward accounts, if they make up `root`.
+fn stored_reward_tree(
+    store: &NodeStore,
+    root: RewardMerkleCommitmentV2,
+) -> anyhow::Result<Option<RewardMerkleTreeV2>> {
+    if get::<RewardMerkleCommitmentV2>(store, REWARD_ROOT)? != Some(root) {
+        return Ok(None);
+    }
+    let accounts = store
+        .app_entries(&REWARD_ACCOUNTS, &[], None)?
+        .into_iter()
+        .map(|(key, value)| {
+            let account = RewardAccountV2(Address::try_from(&key[..])?);
+            let balance: RewardAmount = bincode::deserialize(&value)?;
+            anyhow::Ok((account, balance))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .context("reading the reward accounts")?;
+    let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, accounts)
+        .context("rebuilding the reward tree")?;
+    if tree.commitment() != root {
+        tracing::warn!("the stored reward accounts do not match their root");
+        return Ok(None);
+    }
+    Ok(Some(tree))
 }
 
 /// The value under `key`, or `None` if it is missing or no longer decodes, as after a release that
@@ -482,6 +519,62 @@ mod tests {
         let rewards: Vec<(RewardAccountV2, RewardAmount)> =
             bincode::deserialize(&change.rewards.expect("rewards in full")).unwrap();
         assert_eq!(rewards, balances(&s4));
+    }
+
+    /// A state whose reward tree lacks the balances after a leaf without its state, as one
+    /// validated against a state rebuilt from a header, gets them from the stored accounts while
+    /// the root is theirs, and none once it is not.
+    #[tokio::test]
+    async fn takes_missing_balances_from_the_store() {
+        let (_dir, store) = store().await;
+        let (leaf0, s0) = genesis().await;
+        let mut writer = DecidedStateWriter::new(&store, &leaf0).unwrap();
+        let sparse = |state: &ValidatedState| {
+            let mut state = state.clone();
+            for account in [A, B] {
+                state
+                    .reward_merkle_tree_v2
+                    .forget(account)
+                    .expect_ok()
+                    .unwrap();
+            }
+            state
+        };
+        let rewards = |change: StateChange| -> Vec<(RewardAccountV2, RewardAmount)> {
+            bincode::deserialize(&change.rewards.expect("rewards in full")).unwrap()
+        };
+
+        let s1 = next(&s0, &leaf0, &[(A, 1), (B, 2)]);
+        let leaf1 = child(&leaf0, &s1);
+        let decided = writer.decided(&leaf1, Some(&entry(&leaf1, &s1, Some(&[A, B]))));
+        store.app_write(&decided.writes).await.unwrap();
+
+        let s2 = next(&s1, &leaf1, &[]);
+        let leaf2 = child(&leaf1, &s2);
+        assert_eq!(writer.decided(&leaf2, None).state, None);
+
+        let s3 = sparse(&next(&s2, &leaf2, &[]));
+        let leaf3 = child(&leaf2, &s3);
+        let change = writer
+            .decided(&leaf3, Some(&entry(&leaf3, &s3, Some(&[]))))
+            .state
+            .expect("the stored balances");
+        let full: Vec<_> = s1
+            .reward_merkle_tree_v2
+            .iter()
+            .map(|(account, amount)| (*account, *amount))
+            .collect();
+        assert_eq!(rewards(change), full);
+
+        let s4 = sparse(&next(&next(&s2, &leaf2, &[]), &leaf3, &[(A, 9)]));
+        let leaf4 = child(&leaf3, &s4);
+        assert_eq!(
+            writer
+                .decided(&leaf4, Some(&entry(&leaf4, &s4, Some(&[A]))))
+                .state,
+            None,
+            "the stored balances are no longer the leaf's"
+        );
     }
 
     /// Parts stored for another leaf are left out of the state of an anchor they do not match.
