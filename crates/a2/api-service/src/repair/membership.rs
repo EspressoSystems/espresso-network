@@ -28,16 +28,16 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
 };
 use light_client::consensus::quorum::{Quorum, StakeTable, StakeTableQuorum};
-use membership::{MembershipStore, null_catchup::NullStateCatchup};
+use membership::MembershipStore;
 use url::Url;
 use versions::Upgrade;
 
-use crate::repair::state_cert::validate_state_cert;
+use crate::repair::{state_cert::validate_state_cert, store_catchup::StoreCatchup};
 
 /// The node state of the chain `genesis` starts, as repair keeps it: stake tables in
-/// `store`, read from the L1 at `l1`, and no catchup, since repair follows the chain
-/// itself. A restart finds the stake tables and L1 events in the store, and reads from L1 only what
-/// is newer.
+/// `store`, read from the L1 at `l1`, and catchup of leaves from `store` only, since repair
+/// follows the chain itself. A restart finds the stake tables and L1 events in the store, and
+/// reads from L1 only what is newer.
 pub async fn node_state(
     genesis: &Genesis,
     l1: Vec<Url>,
@@ -48,8 +48,8 @@ pub async fn node_state(
         genesis,
         &network_config,
         l1,
-        MembershipStore::new(store),
-        Arc::new(NullStateCatchup::default()),
+        MembershipStore::new(store.clone()),
+        Arc::new(StoreCatchup::new(store)),
         &NoMetrics,
     )
     .await

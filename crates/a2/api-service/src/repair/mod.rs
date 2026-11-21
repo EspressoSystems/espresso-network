@@ -27,6 +27,7 @@ mod membership;
 mod peers;
 mod state;
 mod state_cert;
+mod store_catchup;
 
 pub use gaps::GapFiller;
 pub use membership::{Membership, node_state};
