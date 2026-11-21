@@ -3790,6 +3790,7 @@ version = "0.0.0"
 dependencies = [
  "arbitrary",
  "bincode",
+ "committable",
  "espresso-types",
  "hotshot-query-service-types",
  "hotshot-types",
@@ -3797,6 +3798,7 @@ dependencies = [
  "libfuzzer-sys",
  "serde",
  "serde_json",
+ "tagged-base64",
  "vid",
 ]
 
