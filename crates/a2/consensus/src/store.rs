@@ -138,6 +138,23 @@ pub struct Decided<T: NodeType> {
 
     /// The state certificate of the epoch whose root this leaf is, if this node has it.
     pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
+
+    /// The parts of the state after the leaf that its header only commits to, if this node
+    /// validated the leaf.
+    pub state: Option<StateChange>,
+}
+
+/// The parts of the state after a decided leaf that its header only commits to, each encoded by
+/// the application, which knows the state's types.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateChange {
+    /// The frontier of the block Merkle tree; empty if the tree is empty.
+    pub frontier: Vec<u8>,
+
+    pub chain_config: Vec<u8>,
+
+    /// Every reward balance, unless they are the parent leaf's.
+    pub rewards: Option<Vec<u8>>,
 }
 
 /// The latest decided leaf with the certificates that decided it.
@@ -688,6 +705,7 @@ pub(crate) fn put_decided<T: NodeType>(
     cert2: Option<&Certificate2<T>>,
     vid_common: &[Option<AvidmGf2Common>],
     state_certs: &[Option<LightClientStateUpdateCertificateV2<T>>],
+    states: &[Option<StateChange>],
 ) -> anyhow::Result<()> {
     for (i, leaf) in leaves.iter().enumerate() {
         let mut leaf = leaf.clone();
@@ -712,6 +730,7 @@ pub(crate) fn put_decided<T: NodeType>(
             cert2: if newest { cert2.cloned() } else { None },
             vid_common: vid_common.get(i).cloned().flatten(),
             state_cert: state_certs.get(i).cloned().flatten(),
+            state: states.get(i).cloned().flatten(),
             leaf,
         };
         batch.put(&DECIDE_LOG, height, encode(&decided)?);

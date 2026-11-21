@@ -1,7 +1,7 @@
-//! The tables the ingester writes into the chain store for the API instances.
+//! The tables of the chain store that the API instances serve besides the chain.
 //!
-//! The ingester alone writes them; API instances only read them, and trust them as they trust the
-//! blocks the ingester copies. Epochs and heights are keys as big-endian `u64`, so they sort in
+//! The ingester writes them, mostly from what consensus sends with the decide log; API instances
+//! only read them, and trust them as they trust the blocks the ingester copies. Epochs and heights are keys as big-endian `u64`, so they sort in
 //! order and older ones are deleted by a key range.
 
 use std::sync::LazyLock;
@@ -37,6 +37,9 @@ static STAKE_TABLES: LazyLock<TableName> = LazyLock::new(|| TableName::of("stake
 
 /// Epoch to the valid discovery records of the epoch, as the consensus node received them.
 static SERVICE_RECORDS: LazyLock<TableName> = LazyLock::new(|| TableName::of("service-records"));
+
+/// How many of the newest heights the state is kept for.
+pub const KEPT_STATES: u64 = 256;
 
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
@@ -131,18 +134,52 @@ impl Tables {
         Ok(Some((EpochNumber::new(u64_of(&key)?), decode(&value)?)))
     }
 
-    /// Stores `row`, of the state after `height`, with the reward balances of the state if they
-    /// changed at `height`, and forgets the rows before `keep_from` and the reward balances
-    /// before `keep_rewards_from`.
+    /// Stores what the state after `height` holds besides its header's roots: `frontier`,
+    /// `chain_config`, and `rewards`, every reward balance, or `None` if they are those of the
+    /// state after `height - 1`. Forgets the rows of heights no longer among the newest
+    /// [`KEPT_STATES`] and the reward balances no kept row refers to.
+    ///
+    /// Returns whether it stored the row: without `rewards` it needs the row of `height - 1`.
     pub async fn put_state(
         &self,
         height: u64,
-        row: &StateRow,
+        frontier: Option<BlocksFrontier>,
+        chain_config: ChainConfig,
         rewards: Option<&RewardSet>,
-        keep_from: u64,
-        keep_rewards_from: u64,
-    ) -> anyhow::Result<()> {
-        let mut writes = vec![put(&STATES, &height.to_be_bytes(), row)?];
+    ) -> anyhow::Result<bool> {
+        let rewards_at = match rewards {
+            Some(_) => height,
+            None => {
+                let parent = match height.checked_sub(1) {
+                    Some(parent) => self.state(parent).await?,
+                    None => None,
+                };
+                let Some(parent) = parent else {
+                    return Ok(false);
+                };
+                parent.rewards_at
+            },
+        };
+        let keep_from = (height + 1).saturating_sub(KEPT_STATES);
+        // Reward balances before those of the oldest kept row are no longer referred to. Without
+        // that row, they are kept until a later write finds it.
+        let keep_rewards_from = match self.state(keep_from).await? {
+            Some(oldest) => oldest.rewards_at.min(rewards_at),
+            None => 0,
+        };
+        let row = StateRow {
+            frontier,
+            chain_config,
+            rewards_at,
+        };
+        let mut writes = vec![
+            put(&STATES, &height.to_be_bytes(), &row)?,
+            put(
+                &CHAIN_CONFIGS,
+                chain_config.commit().to_string().as_bytes(),
+                &chain_config,
+            )?,
+        ];
         if let Some(rewards) = rewards {
             writes.push(put(&REWARDS, &height.to_be_bytes(), rewards)?);
         }
@@ -150,7 +187,8 @@ impl Tables {
             delete_before(&STATES, keep_from),
             delete_before(&REWARDS, keep_rewards_from),
         ]);
-        self.store.app_write(writes).await
+        self.store.app_write(writes).await?;
+        Ok(true)
     }
 
     pub async fn put_chain_config(&self, config: &ChainConfig) -> anyhow::Result<()> {
@@ -234,4 +272,68 @@ fn u64_of(key: &[u8]) -> anyhow::Result<u64> {
     Ok(u64::from_be_bytes(
         key.try_into().context("a key that is not a u64")?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use chain_store::mem::MemBackend;
+    use espresso_types::v0_4::RewardAccountV2;
+
+    use super::*;
+
+    fn rewards(n: u8) -> RewardSet {
+        vec![(RewardAccountV2::default(), RewardAmount::from(u64::from(n)))]
+    }
+
+    /// A row without balances takes its parent's, a row whose parent is missing is not stored,
+    /// and rows and balances no kept row refers to are forgotten.
+    #[tokio::test]
+    async fn keeps_the_newest_states_and_the_balances_they_refer_to() {
+        let tables = Tables::new(ChainStore::new(MemBackend::default()));
+        let config = ChainConfig::default();
+
+        assert!(
+            tables
+                .put_state(0, None, config, Some(&rewards(0)))
+                .await
+                .unwrap()
+        );
+        for height in 1..KEPT_STATES {
+            assert!(tables.put_state(height, None, config, None).await.unwrap());
+        }
+        let row = tables.state(KEPT_STATES - 1).await.unwrap().unwrap();
+        assert_eq!(row.rewards_at, 0, "the balances of height 0");
+        assert!(
+            !tables
+                .put_state(KEPT_STATES + 5, None, config, None)
+                .await
+                .unwrap(),
+            "no parent to take the balances from"
+        );
+
+        // The rewards change, and height 0 leaves the kept window, but rows still refer to its
+        // balances.
+        let at = KEPT_STATES;
+        assert!(
+            tables
+                .put_state(at, None, config, Some(&rewards(1)))
+                .await
+                .unwrap()
+        );
+        assert_eq!(tables.state(0).await.unwrap(), None);
+        assert_eq!(tables.rewards(0).await.unwrap(), Some(rewards(0)));
+
+        // Once no kept row refers to them, they go.
+        for height in at + 1..at + KEPT_STATES {
+            assert!(tables.put_state(height, None, config, None).await.unwrap());
+        }
+        assert_eq!(tables.rewards(0).await.unwrap(), None);
+        assert_eq!(tables.rewards(at).await.unwrap(), Some(rewards(1)));
+        assert_eq!(tables.states().await.unwrap().len() as u64, KEPT_STATES);
+        let commitment = config.commit().to_string();
+        assert_eq!(
+            tables.chain_config(&commitment).await.unwrap(),
+            Some(config)
+        );
+    }
 }

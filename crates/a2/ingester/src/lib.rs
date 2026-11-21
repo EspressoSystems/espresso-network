@@ -1,17 +1,19 @@
-//! The ingester: copies the chain a consensus node decides into its deployment's store, and does
-//! the deployment's derived work once, however many API instances serve the store.
+//! The ingester: copies the chain a consensus node decides into its deployment's store, with what
+//! consensus derived from it, and repairs what the store lacks, once however many API instances
+//! serve the store.
 //!
 //! It reads the decide log over the ingester API (`consensus-api`), writes each block to a
-//! [`Sink`], usually a [`ChainStore`], and acknowledges it, which lets consensus free it: once it
+//! [`Sink`], usually a [`ChainStore`], with the state after it as consensus sends it, and the stake
+//! tables and discovery records the stream carries, and acknowledges each block, which lets consensus free it: once it
 //! has the block's payload, or once the block is final and no payload can come any more. Data from
 //! the node's own consensus is not verified again; the ingester checks only that each leaf fits
 //! its neighbours, so that one pointed at the wrong node or a store restored to the wrong place
 //! does not mix two chains.
 //!
 //! Beside the decide log it runs the [`GapFiller`], which fills final gaps and checks the
-//! certificates of filled heights from other API services, the [`ChainFollower`], which keeps the
-//! recent state that state catchup needs, and the [`Publisher`], which writes the stake tables and
-//! discovery records. Membership, derived from L1, serves all three.
+//! certificates of filled heights from other API services, and the [`ChainFollower`], which
+//! writes the state of the recent heights consensus sent none for. Membership, derived from L1,
+//! serves both.
 
 use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
@@ -21,7 +23,7 @@ use bytes::Bytes;
 use committable::{Commitment, Committable};
 use consensus_api::{
     BODY_FORMAT, DecideLogClient, FINALITY_VIEWS,
-    proto::{AckRequest, Decided, HeightRange, SubscribeRequest, subscribe_response::Event},
+    proto::{AckRequest, Decided, HeightRange, State, SubscribeRequest, subscribe_response::Event},
 };
 use futures::StreamExt;
 use hotshot_types::{
@@ -44,7 +46,6 @@ mod certs;
 mod gaps;
 mod membership;
 mod peers;
-mod publish;
 mod state;
 mod state_cert;
 mod store;
@@ -52,7 +53,6 @@ mod store;
 pub use gaps::GapFiller;
 pub use membership::{Membership, node_state};
 pub use peers::Peers;
-pub use publish::Publisher;
 pub use state::ChainFollower;
 
 /// How long the ingester waits before reconnecting after the connection fails.
@@ -72,10 +72,16 @@ pub trait Sink<Types: NodeType>: Send + Sync {
 
     /// The leaf of the newest block the sink holds, which entries after it must follow.
     async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2<Types>>>;
+
+    /// Makes the encoded stake table of `epoch` durable.
+    async fn put_stake_table(&self, epoch: u64, table: Bytes) -> anyhow::Result<()>;
+
+    /// Makes the encoded discovery records of `epoch` durable.
+    async fn put_service_records(&self, epoch: u64, records: Vec<Bytes>) -> anyhow::Result<()>;
 }
 
 /// A decided block, as the ingester hands it to its sink.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Block<Types: NodeType> {
     pub leaf: Leaf2<Types>,
 
@@ -92,6 +98,10 @@ pub struct Block<Types: NodeType> {
 
     /// The encoded payload; absent if consensus did not have it.
     pub payload: Option<Vec<u8>>,
+
+    /// The state after the block as consensus sends it; absent if consensus did not validate the
+    /// block.
+    pub state: Option<State>,
 }
 
 /// Ingests from the ingester API at `addr` into `sink`, reconnecting whenever the connection
@@ -210,6 +220,11 @@ async fn receive<Types: NodeType>(
         Event::PayloadChunk(_) => {
             return Err(BadEntry(anyhow!("a payload chunk without an entry")).into());
         },
+        Event::StakeTable(table) => sink.put_stake_table(table.epoch, table.table).await?,
+        Event::ServiceRecords(records) => {
+            sink.put_service_records(records.epoch, records.records)
+                .await?
+        },
     }
     Ok(())
 }
@@ -275,6 +290,7 @@ struct Entry<Types: NodeType> {
     cert2: Option<Certificate2<Types>>,
     vid_common: Option<AvidmGf2Common>,
     state_cert: Option<LightClientStateUpdateCertificateV2<Types>>,
+    state: Option<State>,
 }
 
 impl<Types: NodeType> Entry<Types> {
@@ -286,6 +302,7 @@ impl<Types: NodeType> Entry<Types> {
             vid_common: self.vid_common.map(VidCommon::V2),
             state_cert: self.state_cert,
             payload,
+            state: self.state,
         }
     }
 }
@@ -462,6 +479,7 @@ fn decode<Types: NodeType>(entry: Decided) -> anyhow::Result<Entry<Types>> {
         cert2: optional(&body.cert2).context("decoding the cert2")?,
         vid_common: optional(&body.vid_common).context("decoding the VID common data")?,
         state_cert: optional(&body.state_cert).context("decoding the state certificate")?,
+        state: body.state,
     })
 }
 

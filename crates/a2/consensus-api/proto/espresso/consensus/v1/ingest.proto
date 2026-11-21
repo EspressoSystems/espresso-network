@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package espresso.consensus.v1;
 
-// The chain as a consensus node decides it, for its ingester.
+// The chain as a consensus node decides it, for its API service's store.
 //
 // Entries carry the fields an ingester acts on as protobuf fields, and the consensus objects
 // themselves in `Body`, in the encoding consensus nodes exchange.
@@ -19,15 +19,16 @@ service DecideLog {
   //
   // The stream starts with `Start`, naming the earliest entry the node still keeps; entries
   // before it must come from elsewhere too.
+  //
+  // Between entries, the stream sends what the API service serves besides the chain and the
+  // node already has: the stake table of each epoch from the first entry's on, once the node
+  // has built it, and the discovery records of the newest entry's epoch, again whenever the
+  // node holds more of them.
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
 
   // Frees the entries of the heights in the given ranges, and their payloads. The caller has
   // made them durable, or given up on their payloads.
   rpc Ack(AckRequest) returns (AckResponse);
-
-  // The records the validators signed about their API services for an epoch, newest per
-  // validator. Not found if the node holds none for the epoch.
-  rpc GetServiceRecords(ServiceRecordsRequest) returns (ServiceRecordsResponse);
 }
 
 message SubscribeRequest {
@@ -40,7 +41,26 @@ message SubscribeResponse {
     Decided decided = 2;
     PayloadChunk payload_chunk = 3;
     PayloadAdded payload_added = 4;
+    StakeTable stake_table = 5;
+    ServiceRecords service_records = 6;
   }
+}
+
+// The stake table of an epoch.
+message StakeTable {
+  uint64 epoch = 1;
+
+  // The table's entries, bincode-encoded as consensus nodes exchange them.
+  bytes table = 2;
+}
+
+// The records the validators signed about their API services for an epoch, newest per
+// validator, as the node holds them.
+message ServiceRecords {
+  uint64 epoch = 1;
+
+  // Each a signed record, bincode-encoded as consensus nodes exchange it.
+  repeated bytes records = 2;
 }
 
 // The payload of an entry sent earlier without it, followed by its chunks.
@@ -93,6 +113,24 @@ message Body {
   // The light client state update certificate of the epoch this block is the root of; empty if
   // it is no epoch root or this node did not have the certificate.
   bytes state_cert = 6;
+
+  // The state after the block, as far as its header does not commit to it; absent if this node
+  // did not validate the block.
+  State state = 7;
+}
+
+// The parts of the state after a block that state catchup serves and its header only commits
+// to, each bincode-encoded as consensus nodes exchange them.
+message State {
+  // The frontier of the block Merkle tree; empty if the tree is empty.
+  bytes frontier = 1;
+
+  // The chain config.
+  bytes chain_config = 2;
+
+  // Every reward balance, if they may differ from those of the parent block's state; absent if
+  // they are the parent's.
+  optional bytes rewards = 3;
 }
 
 message AckRequest {
@@ -112,13 +150,3 @@ message PayloadChunk {
   bytes data = 1;
 }
 
-message ServiceRecordsRequest {
-  // The latest epoch with records when absent.
-  optional uint64 epoch = 1;
-}
-
-message ServiceRecordsResponse {
-  uint64 epoch = 1;
-  // Each a signed record, bincode-encoded as consensus nodes exchange it.
-  repeated bytes records = 2;
-}

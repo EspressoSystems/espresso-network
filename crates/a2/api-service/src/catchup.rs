@@ -210,17 +210,13 @@ mod tests {
         let store = ChainStore::new(MemBackend::default());
         let tables = Tables::new(store.clone());
         let config = espresso_types::v0_3::ChainConfig::default();
-        let row = StateRow {
-            frontier: None,
-            chain_config: config,
-            rewards_at: 4,
-        };
-        tables
-            .put_state(4, &row, Some(&Vec::new()), 4, 4)
-            .await
-            .unwrap();
-        tables.put_state(5, &row, None, 4, 4).await.unwrap();
-        tables.put_chain_config(&config).await.unwrap();
+        assert!(
+            tables
+                .put_state(4, None, config, Some(&Vec::new()))
+                .await
+                .unwrap()
+        );
+        assert!(tables.put_state(5, None, config, None).await.unwrap());
         tables.put_fee_accounts(&[]).await.unwrap();
         let catchup = Catchup::new(store, 10);
         let height = |height| Request::new(HeightRequest { height });

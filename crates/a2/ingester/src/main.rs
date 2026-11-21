@@ -9,7 +9,7 @@ use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
 use espresso_types::SeqTypes;
-use ingester::{ChainFollower, GapFiller, Membership, Peers, Publisher, node_state};
+use ingester::{ChainFollower, GapFiller, Membership, Peers, node_state};
 use tokio::{task::JoinSet, time::sleep};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
@@ -66,9 +66,8 @@ async fn main() -> anyhow::Result<()> {
         options.bootstrap.clone(),
         options.public_url.clone(),
     );
-    let filler = GapFiller::new(store.clone(), peers, Some(membership.clone()));
+    let filler = GapFiller::new(store.clone(), peers, Some(membership));
     let follower_store = store.clone();
-    let publisher = Publisher::new(store.clone(), membership, options.consensus_api);
     tracing::info!(consensus_api = %options.consensus_api, "ingesting");
 
     // The ingester runs as long as all of its parts do.
@@ -85,8 +84,8 @@ async fn main() -> anyhow::Result<()> {
         anyhow!("the gap filler stopped")
     });
     tasks.spawn(async move {
-        // A failing follower holds up only the state catchup serves, never the decide log, so
-        // it is started again rather than stopping the ingester.
+        // A failing follower holds up only the state of heights consensus sent none for, never
+        // the decide log, so it is started again rather than stopping the ingester.
         loop {
             let peers = Peers::new(
                 Tables::new(follower_store.clone()),
@@ -102,10 +101,6 @@ async fn main() -> anyhow::Result<()> {
             }
             sleep(FOLLOWER_RETRY).await;
         }
-    });
-    tasks.spawn(async move {
-        publisher.run().await;
-        anyhow!("the publisher stopped")
     });
     let stopped = tasks.join_next().await.context("no task to run")?;
     Err(stopped.unwrap_or_else(|err| anyhow!("a task failed: {err}")))

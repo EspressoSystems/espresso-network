@@ -25,8 +25,8 @@ use tokio::time::timeout;
 use super::common::utils::{build_cert1, mock_membership};
 use crate::{
     state::StateEntry,
-    storage::{ActionKind, DecidedState, Storage, StorageOutput},
-    store::{ConsensusStore, Import},
+    storage::{ActionKind, DecidedState, DecidedWrites, Storage, StorageOutput},
+    store::{ConsensusStore, Import, StateChange},
 };
 
 /// A writer over a store that can be made to fail, counting the batches it commits.
@@ -584,7 +584,8 @@ async fn test_decided_state_cert() {
 }
 
 /// The application's decided state is written in the batch of the decide, leaf by leaf from the
-/// oldest, with the state of each leaf.
+/// oldest, with the state of each leaf, and the decide log entry of each leaf carries what the
+/// application made of its state.
 #[tokio::test]
 async fn test_decided_state_written_with_the_decide() {
     struct Order(u64);
@@ -594,9 +595,9 @@ async fn test_decided_state_written_with_the_decide() {
             &mut self,
             leaf: &Leaf2<TestTypes>,
             state: Option<&StateEntry<TestTypes>>,
-        ) -> Vec<AppWrite> {
+        ) -> DecidedWrites {
             self.0 += 1;
-            vec![AppWrite::Put {
+            let writes = vec![AppWrite::Put {
                 table: TableName::new("order").unwrap(),
                 key: self.0.to_be_bytes().to_vec().into(),
                 value: [
@@ -605,7 +606,12 @@ async fn test_decided_state_written_with_the_decide() {
                 ]
                 .concat()
                 .into(),
-            }]
+            }];
+            let state = state.map(|_| StateChange {
+                chain_config: leaf.height().to_be_bytes().to_vec(),
+                ..Default::default()
+            });
+            DecidedWrites { writes, state }
         }
     }
 
@@ -644,6 +650,18 @@ async fn test_decided_state_written_with_the_decide() {
         .concat()
     };
     assert_eq!(order, vec![row(v0, false), row(v1, true)]);
+
+    let states: Vec<_> = store
+        .decided_from(v0.leaf.height(), 2)
+        .unwrap()
+        .into_iter()
+        .map(|(decided, _)| decided.state)
+        .collect();
+    let with_state = StateChange {
+        chain_config: v1.leaf.height().to_be_bytes().to_vec(),
+        ..Default::default()
+    };
+    assert_eq!(states, vec![None, Some(with_state)]);
 }
 
 /// The application's tables keep their writes apart from each other and from consensus, and the

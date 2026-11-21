@@ -193,7 +193,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     });
     let config = &network_config.config;
     let coordinator = Coordinator::maker()
-        .membership_coordinator(membership)
+        .membership_coordinator(membership.clone())
         .network(network)
         .initializer(&initializer)
         .upgrade_lock(upgrade_lock)
@@ -228,6 +228,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     let (addr, server) = crate::api::bind(
         store,
         initializer.epoch_height(),
+        membership,
         coordinator.client_api().clone(),
         consensus_api,
     )

@@ -9,13 +9,21 @@
 //! `proto/espresso/consensus/v1/` for the services.
 
 use std::{
-    collections::BTreeMap, net::SocketAddr, ops::Range, pin::Pin, sync::Arc, time::Duration,
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    ops::Range,
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    time::Instant,
+};
 use tonic::{
     Request, Response, Status,
     transport::{Channel, Endpoint},
@@ -30,9 +38,9 @@ pub mod proto {
 }
 
 use proto::{
-    AckRequest, AckResponse, Decided, PayloadAdded, PayloadChunk, ServiceRecordsRequest,
-    ServiceRecordsResponse, Start, SubmitTransactionRequest, SubmitTransactionResponse,
-    SubscribeRequest, SubscribeResponse,
+    AckRequest, AckResponse, Decided, PayloadAdded, PayloadChunk, ServiceRecords, StakeTable,
+    Start, SubmitTransactionRequest, SubmitTransactionResponse, SubscribeRequest,
+    SubscribeResponse,
     consensus_node_server::{ConsensusNode, ConsensusNodeServer},
     decide_log_server::{DecideLog, DecideLogServer},
     subscribe_response::Event,
@@ -52,6 +60,13 @@ const BATCH: usize = 64;
 /// any more, and its payload no longer joins the decide log. Consensus decides a missing view
 /// only within this many views of the newest decide, and adds a late payload within fewer.
 pub const FINALITY_VIEWS: u64 = 20;
+
+/// How often the stream looks again for more discovery records of the newest epoch, which
+/// validators send as the epoch starts.
+const RECORDS_INTERVAL: Duration = match cfg!(test) {
+    true => Duration::from_millis(100),
+    false => Duration::from_secs(5),
+};
 
 /// How long a request to the consensus node may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -93,10 +108,11 @@ pub trait Source: Send + Sync + 'static {
     /// The payload of the entry at `height`, if this node has it and still keeps the entry.
     async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error>;
 
-    /// The encoded service records of `epoch`, or of the latest epoch with records if `epoch` is
-    /// `None`, with the epoch they are for.
-    async fn service_records(&self, epoch: Option<u64>)
-    -> Result<Option<(u64, Vec<Bytes>)>, Error>;
+    /// The encoded stake table of `epoch`, if this node has built it.
+    async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, Error>;
+
+    /// The encoded service records this node holds for `epoch`.
+    async fn service_records(&self, epoch: u64) -> Result<Vec<Bytes>, Error>;
 }
 
 /// What the [`ConsensusNode`](proto::consensus_node_server::ConsensusNode) service does: hand
@@ -164,19 +180,6 @@ impl<S: Source> DecideLog for Service<S> {
         self.source.ack(ranges).await.map_err(internal)?;
         Ok(Response::new(AckResponse {}))
     }
-
-    async fn get_service_records(
-        &self,
-        request: Request<ServiceRecordsRequest>,
-    ) -> Result<Response<ServiceRecordsResponse>, Status> {
-        let (epoch, records) = self
-            .source
-            .service_records(request.into_inner().epoch)
-            .await
-            .map_err(internal)?
-            .ok_or_else(|| Status::not_found("no service records"))?;
-        Ok(Response::new(ServiceRecordsResponse { epoch, records }))
-    }
 }
 
 /// The [`ConsensusNode`](proto::consensus_node_server::ConsensusNode) gRPC service over `node`.
@@ -221,6 +224,15 @@ struct Feed<S> {
     /// Heights skipped as missing, by first height, with the end and the view of the entry
     /// after them, which bounds theirs.
     missing: BTreeMap<u64, (u64, u64)>,
+
+    /// The epochs of the first and of the newest entry sent.
+    epochs: Option<(u64, u64)>,
+
+    /// The epochs whose stake tables are sent.
+    stake_tables: BTreeSet<u64>,
+
+    /// The epoch whose records were last sent, how many, and when they were last looked for.
+    records: Option<(u64, usize, Instant)>,
 }
 
 /// The subscriber went away, or the source failed and the subscriber was told.
@@ -235,6 +247,9 @@ impl<S: Source> Feed<S> {
             newest_view: 0,
             awaiting: BTreeMap::new(),
             missing: BTreeMap::new(),
+            epochs: None,
+            stake_tables: BTreeSet::new(),
+            records: None,
         }
     }
 
@@ -270,11 +285,14 @@ impl<S: Source> Feed<S> {
         self.send(start).await
     }
 
-    /// Sends the new entries, then the late ones, then forgets what is final.
+    /// Sends the new entries, then the late ones, then what the epochs of the entries need,
+    /// then forgets what is final.
     async fn pass(&mut self) -> Result<(), Stop> {
         self.send_new().await?;
         self.send_late_payloads().await?;
         self.send_late_entries().await?;
+        self.send_stake_tables().await?;
+        self.send_records().await?;
         let newest = self.newest_view;
         let is_final = |view: u64| view + FINALITY_VIEWS <= newest;
         self.awaiting.retain(|_, view| !is_final(*view));
@@ -359,6 +377,51 @@ impl<S: Source> Feed<S> {
         }
     }
 
+    /// Sends the stake tables of the epochs from the first entry's to two after the newest
+    /// entry's, the furthest one the node can know, as the node builds them.
+    async fn send_stake_tables(&mut self) -> Result<(), Stop> {
+        let Some((first, newest)) = self.epochs else {
+            return Ok(());
+        };
+        for epoch in first..=newest + 2 {
+            if self.stake_tables.contains(&epoch) {
+                continue;
+            }
+            let Some(table) = self.ok(self.source.stake_table(epoch).await).await? else {
+                continue;
+            };
+            self.send(Event::StakeTable(StakeTable { epoch, table }))
+                .await?;
+            self.stake_tables.insert(epoch);
+        }
+        Ok(())
+    }
+
+    /// Sends the records of the newest entry's epoch once the node holds any, and again
+    /// whenever it holds more, looking at most every [`RECORDS_INTERVAL`].
+    async fn send_records(&mut self) -> Result<(), Stop> {
+        let Some((_, epoch)) = self.epochs else {
+            return Ok(());
+        };
+        let sent = match self.records {
+            Some((sent_epoch, count, at)) if sent_epoch == epoch => {
+                if at.elapsed() < RECORDS_INTERVAL {
+                    return Ok(());
+                }
+                count
+            },
+            _ => 0,
+        };
+        let records = self.ok(self.source.service_records(epoch).await).await?;
+        let count = records.len();
+        if count > sent {
+            self.send(Event::ServiceRecords(ServiceRecords { epoch, records }))
+                .await?;
+        }
+        self.records = Some((epoch, count.max(sent), Instant::now()));
+        Ok(())
+    }
+
     /// Sends `entry` and then its payload in chunks, reading the payload only now so that at
     /// most one is held at a time. A payload freed since the entry was read leaves the entry
     /// without one.
@@ -369,6 +432,10 @@ impl<S: Source> Feed<S> {
         };
         entry.payload_size = payload.as_ref().map(|p| p.len() as u64);
         self.newest_view = self.newest_view.max(entry.view);
+        self.epochs = Some(match self.epochs {
+            Some((first, newest)) => (first.min(entry.epoch), newest.max(entry.epoch)),
+            None => (entry.epoch, entry.epoch),
+        });
         if payload.is_none() {
             self.awaiting.insert(entry.height, entry.view);
         }

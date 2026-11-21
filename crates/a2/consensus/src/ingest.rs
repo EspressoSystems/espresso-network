@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use committable::Committable;
 use consensus_api::{
     BODY_FORMAT, Error, Source,
-    proto::{Body, Decided as DecidedEntry},
+    proto::{Body, Decided as DecidedEntry, State},
 };
 use consensus_store::{Bytes, Store};
 use hotshot_types::{data::EpochNumber, traits::node_implementation::NodeType};
@@ -18,14 +18,28 @@ use crate::store::{ConsensusStore, Decided};
 pub struct IngestSource<T, S> {
     store: ConsensusStore<T, S>,
     epoch_height: u64,
+    stake_tables: Arc<dyn StakeTables>,
+}
+
+/// The stake tables the node has built, which the application encodes.
+#[async_trait]
+pub trait StakeTables: Send + Sync + 'static {
+    /// The encoded stake table of `epoch`, if the node has built it.
+    async fn stake_table(&self, epoch: EpochNumber) -> anyhow::Result<Option<Bytes>>;
 }
 
 impl<T: NodeType, S: Store> IngestSource<T, S> {
-    /// A source over `store`, whose chain has epochs of `epoch_height` blocks.
-    pub fn new(store: ConsensusStore<T, S>, epoch_height: u64) -> Arc<Self> {
+    /// A source over `store`, whose chain has epochs of `epoch_height` blocks, sending the stake
+    /// tables of `stake_tables`.
+    pub fn new(
+        store: ConsensusStore<T, S>,
+        epoch_height: u64,
+        stake_tables: Arc<dyn StakeTables>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             epoch_height,
+            stake_tables,
         })
     }
 
@@ -66,14 +80,21 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
         self.blocking(move |s| s.decided_payload(height)).await
     }
 
-    async fn service_records(
-        &self,
-        epoch: Option<u64>,
-    ) -> Result<Option<(u64, Vec<Bytes>)>, Error> {
+    async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, Error> {
+        Ok(self
+            .stake_tables
+            .stake_table(EpochNumber::new(epoch))
+            .await?)
+    }
+
+    async fn service_records(&self, epoch: u64) -> Result<Vec<Bytes>, Error> {
         let found = self
-            .blocking(move |s| s.service_records(epoch.map(EpochNumber::new)))
+            .blocking(move |s| s.service_records(Some(EpochNumber::new(epoch))))
             .await?;
-        Ok(found.map(|(epoch, records)| (*epoch, records)))
+        Ok(found
+            .filter(|(found, _)| **found == epoch)
+            .map(|(_, records)| records)
+            .unwrap_or_default())
     }
 }
 
@@ -109,6 +130,11 @@ fn entry<T: NodeType>(
             .transpose()?
             .unwrap_or_default()
             .into(),
+        state: decided.state.map(|state| State {
+            frontier: state.frontier.into(),
+            chain_config: state.chain_config.into(),
+            rewards: state.rewards.map(Into::into),
+        }),
     };
     Ok(DecidedEntry {
         height: leaf.height(),

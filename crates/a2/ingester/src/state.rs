@@ -1,17 +1,19 @@
 //! The state of the chain at recent heights, for consensus nodes catching up through the API
 //! instances.
 //!
-//! The ingester follows its store in height order, as a consensus node follows the chain: it
-//! applies each block's header to the state of its parent and checks the result against the roots
-//! the header commits to, and it hands each epoch root and each DRB result to membership, which
-//! needs both to know the leaders whose rewards the state pays at the end of an epoch.
+//! Consensus sends the state after each block it validated, and the ingester stores it with the
+//! block. The follower writes the state of the heights it did not send: it follows the store in
+//! height order, takes the state of each height that has it, and applies the header of each one
+//! that lacks it to the state of its parent, checking the result against the roots the header
+//! commits to. It hands each epoch root and each DRB result to membership, which needs both to
+//! know the leaders whose rewards the state pays at the end of an epoch.
 //!
-//! For each of the newest [`KEPT_HEIGHTS`] heights it writes what the state holds besides its
-//! header's roots into the store's [`Tables`]: the frontier of the block tree, the chain config,
-//! and the reward balances, these only at the heights where they changed. The fee tree does not
-//! change under the new protocol; it is written once, from genesis, as are the chain configs the
-//! genesis file knows. API instances answer catchup requests from these rows, and a restarted
-//! ingester resumes from the newest one instead of applying the chain from genesis again.
+//! For each of the newest [`KEPT_STATES`](chain_api::KEPT_STATES) heights the store's [`Tables`] hold what the state holds
+//! besides its header's roots: the frontier of the block tree, the chain config, and the reward
+//! balances, these only at the heights where they changed. The fee tree does not change under the
+//! new protocol; it is written once, from genesis, as are the chain configs the genesis file
+//! knows. API instances answer catchup requests from these rows, and a restarted follower resumes
+//! from the newest one instead of applying the chain from genesis again.
 //!
 //! A follower without a row of its own, in a new deployment or one whose store was pruned past it,
 //! takes the state at the newest stored height from the catchup service of another API service,
@@ -19,10 +21,7 @@
 //! the skipped blocks would have given it. Only if no peer has the state and the store starts at
 //! genesis does the follower apply the chain from there.
 
-use std::{
-    collections::{BTreeSet, VecDeque},
-    time::Duration,
-};
+use std::{collections::BTreeSet, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use catchup_api::proto::{
@@ -54,17 +53,12 @@ use crate::{
     peers::{Peer, Peers},
 };
 
-/// How many of the newest heights the state is kept for.
-pub const KEPT_HEIGHTS: usize = 256;
-
 /// How long to wait before applying a block again that could not be applied, for instance because
 /// membership does not have the stake table of its epoch yet.
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// How large an answer of a peer's catchup service may be; reward balances are the largest.
 const MAX_ANSWER_SIZE: usize = 256 << 20;
-
-type RewardRoot = <RewardMerkleTreeV2 as MerkleTreeScheme>::Commitment;
 
 /// Applies the blocks of the store in height order, and stores what the newest states hold.
 pub struct ChainFollower {
@@ -74,14 +68,6 @@ pub struct ChainFollower {
 
     /// The API services to take the state from when the follower has no row of its own.
     peers: Peers,
-
-    /// The heights of the kept rows, oldest first, each with the height its reward balances are
-    /// stored under.
-    kept: VecDeque<(u64, u64)>,
-
-    /// The root of the reward tree of the newest row, and the height its balances are stored
-    /// under.
-    rewards: Option<(RewardRoot, u64)>,
 
     /// The chain configs stored since the follower started.
     configs: BTreeSet<Commitment<ChainConfig>>,
@@ -94,8 +80,6 @@ impl ChainFollower {
             store,
             node,
             peers,
-            kept: VecDeque::new(),
-            rewards: None,
             configs: BTreeSet::new(),
         }
     }
@@ -117,9 +101,9 @@ impl ChainFollower {
             Some((leaf, state)) => {
                 let height = leaf.height();
                 tracing::info!(height, "following the chain after this height");
-                (Some((leaf, state)), height + 1)
+                (Parent::Applied(leaf, Box::new(state)), height + 1)
             },
-            None => (None, 0),
+            None => (Parent::Genesis, 0),
         };
         loop {
             changes.borrow_and_update();
@@ -142,22 +126,9 @@ impl ChainFollower {
                     continue;
                 },
             };
-            let state = match &parent {
-                None => Ok(ValidatedState::genesis(&self.node).0),
-                Some((parent_leaf, parent_state)) => {
-                    apply(&self.node, parent_state, parent_leaf, &item.leaf).await
-                },
-            };
-            let stored = match state {
-                Ok(state) => match track_epoch(&self.node, &item.leaf).await {
-                    Ok(()) => self.store_state(height, &state).await.map(|()| state),
-                    Err(err) => Err(err.context("membership did not take the block")),
-                },
-                Err(err) => Err(err.context("applying the block failed")),
-            };
-            match stored {
-                Ok(state) => {
-                    parent = Some((item.leaf, state));
+            match self.follow(&parent, height, item.leaf).await {
+                Ok(next) => {
+                    parent = next;
                     height += 1;
                 },
                 Err(err) => {
@@ -166,6 +137,54 @@ impl ChainFollower {
                 },
             }
         }
+    }
+
+    /// Takes the block at `height`, whose leaf is `leaf`, after `parent`: hands it to membership,
+    /// and writes the state after it unless the store has it. Returns what the next block
+    /// follows.
+    async fn follow(
+        &mut self,
+        parent: &Parent,
+        height: u64,
+        leaf: Leaf2,
+    ) -> anyhow::Result<Parent> {
+        if self.tables.state(height).await?.is_some() {
+            track_epoch(&self.node, &leaf)
+                .await
+                .context("membership did not take the block")?;
+            return Ok(Parent::Stored(leaf));
+        }
+        let parent = match parent {
+            Parent::Genesis => None,
+            Parent::Applied(leaf, state) => Some((leaf.clone(), (**state).clone())),
+            Parent::Stored(leaf) => Some((leaf.clone(), self.stored_state(leaf).await?)),
+        };
+        let state = match &parent {
+            None => ValidatedState::genesis(&self.node).0,
+            Some((parent_leaf, parent_state)) => {
+                apply(&self.node, parent_state, parent_leaf, &leaf)
+                    .await
+                    .context("applying the block failed")?
+            },
+        };
+        track_epoch(&self.node, &leaf)
+            .await
+            .context("membership did not take the block")?;
+        let parent_state = parent.as_ref().map(|(_, state)| state);
+        self.store_state(height, &state, parent_state).await?;
+        Ok(Parent::Applied(leaf, Box::new(state)))
+    }
+
+    /// The state after `leaf`, from the row the store holds for it.
+    async fn stored_state(&self, leaf: &Leaf2) -> anyhow::Result<ValidatedState> {
+        let height = leaf.height();
+        let row = self
+            .tables
+            .state(height)
+            .await?
+            .with_context(|| format!("no state stored for height {height}"))?;
+        let balances = self.tables.rewards(row.rewards_at).await?;
+        self.rebuild(leaf, &row, balances)
     }
 
     /// Stores what does not change, or changes only by upgrade: the fee accounts and the chain
@@ -220,11 +239,7 @@ impl ChainFollower {
                     Ok((item.leaf, state))
                 });
             match resumed {
-                Ok((leaf, state)) => {
-                    self.kept = rows.iter().map(|(h, row)| (*h, row.rewards_at)).collect();
-                    self.rewards = Some((state.reward_merkle_tree_v2.commitment(), row.rewards_at));
-                    return Ok(Some((leaf, state)));
-                },
+                Ok((leaf, state)) => return Ok(Some((leaf, state))),
                 Err(err) => tracing::warn!("ignoring the stored state: {err:#}"),
             }
         }
@@ -276,7 +291,7 @@ impl ChainFollower {
             return Ok(None);
         };
         self.prepare_membership(height, &membership).await?;
-        self.store_state(height, &state).await?;
+        self.store_state(height, &state, None).await?;
         Ok(Some((leaf, state)))
     }
 
@@ -435,9 +450,14 @@ impl ChainFollower {
         Ok(state)
     }
 
-    /// Stores what `state`, the state after `height`, holds besides its header's roots, and
-    /// forgets the rows of heights no longer among the newest kept.
-    async fn store_state(&mut self, height: u64, state: &ValidatedState) -> anyhow::Result<()> {
+    /// Stores what `state`, the state after `height`, holds besides its header's roots. The
+    /// reward balances are stored only if they differ from those of `parent`, the state before.
+    async fn store_state(
+        &mut self,
+        height: u64,
+        state: &ValidatedState,
+        parent: Option<&ValidatedState>,
+    ) -> anyhow::Result<()> {
         let frontier = match state.block_merkle_tree.num_leaves().checked_sub(1) {
             Some(last) => {
                 let (_, frontier) = state
@@ -456,11 +476,12 @@ impl ChainFollower {
         self.store_chain_config(&chain_config).await?;
 
         let tree = &state.reward_merkle_tree_v2;
-        let root = tree.commitment();
-        let (rewards, rewards_at) = match self.rewards {
-            Some((stored, at)) if stored == root => (None, at),
-            _ => {
-                let balances: Vec<_> = tree
+        let unchanged =
+            parent.is_some_and(|p| p.reward_merkle_tree_v2.commitment() == tree.commitment());
+        let rewards = match unchanged {
+            true => None,
+            false => {
+                let balances: RewardSet = tree
                     .iter()
                     .map(|(account, amount)| (*account, *amount))
                     .collect();
@@ -468,27 +489,28 @@ impl ChainFollower {
                     balances.len() as u64 == tree.num_leaves(),
                     "the reward tree is missing accounts"
                 );
-                (Some(balances), height)
+                Some(balances)
             },
         };
-
-        let mut kept = self.kept.clone();
-        kept.push_back((height, rewards_at));
-        while kept.len() > KEPT_HEIGHTS {
-            kept.pop_front();
-        }
-        let (keep_from, keep_rewards_from) = *kept.front().expect("one was just added");
-        let row = StateRow {
-            frontier,
-            chain_config,
-            rewards_at,
-        };
-        self.tables
-            .put_state(height, &row, rewards.as_ref(), keep_from, keep_rewards_from)
+        let stored = self
+            .tables
+            .put_state(height, frontier, chain_config, rewards.as_ref())
             .await?;
-        (self.kept, self.rewards) = (kept, Some((root, rewards_at)));
+        ensure!(stored, "the state of height {} is not stored", height - 1);
         Ok(())
     }
+}
+
+/// What the next block follows.
+enum Parent {
+    /// Nothing: the next block is genesis.
+    Genesis,
+
+    /// A block whose state the follower holds.
+    Applied(Leaf2, Box<ValidatedState>),
+
+    /// A block whose state the store holds.
+    Stored(Leaf2),
 }
 
 /// The state after `leaf`, its parent's being `parent_state`, checked against the roots its header
@@ -640,7 +662,7 @@ mod tests {
         let mut first = follower(store.clone(), node.clone());
         assert!(first.start().await.unwrap().is_none());
 
-        first.store_state(0, &state).await.unwrap();
+        first.store_state(0, &state, None).await.unwrap();
         let mut restarted = follower(store, node);
         let (leaf, resumed) = restarted.start().await.unwrap().expect("a row");
         assert_eq!(leaf.height(), 0);
@@ -659,22 +681,17 @@ mod tests {
         );
     }
 
-    /// Reward balances are written only where they change, and rows and balances older than the
-    /// newest kept heights are forgotten.
+    /// Reward balances are written only where they change from the parent's.
     #[tokio::test]
-    async fn keeps_the_newest_rows_and_shares_unchanged_rewards() {
+    async fn shares_unchanged_rewards() {
         let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
         let (store, state) = genesis(&node).await;
         let tables = Tables::new(store.clone());
         let mut follower = follower(store, node);
-        let last = KEPT_HEIGHTS as u64 + 1;
-        for height in 0..=last {
-            follower.store_state(height, &state).await.unwrap();
-        }
+        follower.store_state(0, &state, None).await.unwrap();
+        follower.store_state(1, &state, Some(&state)).await.unwrap();
 
         let rows = tables.states().await.unwrap();
-        assert_eq!(rows.len(), KEPT_HEIGHTS);
-        assert_eq!(rows.first().unwrap().0, 2);
         assert!(rows.iter().all(|(_, row)| row.rewards_at == 0));
         assert!(tables.rewards(0).await.unwrap().is_some());
         assert!(tables.rewards(1).await.unwrap().is_none());
@@ -686,6 +703,40 @@ mod tests {
                 .map(|config| config.commit()),
             Some(state.chain_config.commit())
         );
+    }
+
+    /// A height whose state the store has, as consensus sent it, is taken as stored, and the
+    /// next height is applied to the state rebuilt from that row; a height without one is
+    /// applied and its state stored.
+    #[tokio::test]
+    async fn applies_only_heights_without_a_stored_state() {
+        let node = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
+        let (store, state) = genesis(&node).await;
+        let tables = Tables::new(store.clone());
+        let leaf = store.item(0).await.unwrap().unwrap().leaf;
+        let mut follower = follower(store, node);
+
+        let applied = follower
+            .follow(&Parent::Genesis, 0, leaf.clone())
+            .await
+            .unwrap();
+        assert!(matches!(applied, Parent::Applied(..)));
+        let row = tables.state(0).await.unwrap().expect("the applied state");
+
+        let taken = follower
+            .follow(&Parent::Genesis, 0, leaf.clone())
+            .await
+            .unwrap();
+        let Parent::Stored(stored) = taken else {
+            panic!("the stored state is taken as it is");
+        };
+        assert_eq!(tables.state(0).await.unwrap(), Some(row));
+        let rebuilt = follower.stored_state(&stored).await.unwrap();
+        assert_eq!(
+            rebuilt.reward_merkle_tree_v2.commitment(),
+            state.reward_merkle_tree_v2.commitment()
+        );
+        assert_eq!(rebuilt.chain_config.commit(), state.chain_config.commit());
     }
 
     /// Serves the catchup service of an API instance over `store`, returning its URL.
@@ -709,7 +760,7 @@ mod tests {
             .with_epoch_height(10);
         let (peer_store, state) = after_a_block(&node).await;
         follower(peer_store.clone(), node.clone())
-            .store_state(0, &state)
+            .store_state(0, &state, None)
             .await
             .unwrap();
         let url = serve_catchup(&peer_store).await;
@@ -742,7 +793,7 @@ mod tests {
             .with_epoch_height(10);
         let (peer_store, peer_state) = genesis(&node).await;
         follower(peer_store.clone(), node.clone())
-            .store_state(0, &peer_state)
+            .store_state(0, &peer_state, None)
             .await
             .unwrap();
         let url = serve_catchup(&peer_store).await;

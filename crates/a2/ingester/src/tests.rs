@@ -24,6 +24,8 @@ struct FakeLog {
     payloads: Mutex<BTreeMap<u64, Bytes>>,
     changes: watch::Sender<u64>,
     acked: Mutex<Vec<Range<u64>>>,
+    stake_tables: Mutex<BTreeMap<u64, Bytes>>,
+    records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
 }
 
 impl FakeLog {
@@ -33,6 +35,8 @@ impl FakeLog {
             payloads: Mutex::default(),
             changes: watch::channel(0).0,
             acked: Mutex::default(),
+            stake_tables: Mutex::default(),
+            records: Mutex::default(),
         })
     }
 
@@ -117,6 +121,7 @@ fn entry(chain: &MockChain, block: &MockBlock, newest: bool) -> Decided {
                 .unwrap_or_default(),
             vid_common,
             state_cert: Default::default(),
+            state: None,
         }),
     }
 }
@@ -151,11 +156,18 @@ impl Source for FakeLog {
         Ok(self.payloads.lock().unwrap().get(&height).cloned())
     }
 
-    async fn service_records(
-        &self,
-        _epoch: Option<u64>,
-    ) -> Result<Option<(u64, Vec<Bytes>)>, ApiError> {
-        Ok(None)
+    async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, ApiError> {
+        Ok(self.stake_tables.lock().unwrap().get(&epoch).cloned())
+    }
+
+    async fn service_records(&self, epoch: u64) -> Result<Vec<Bytes>, ApiError> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(&epoch)
+            .cloned()
+            .unwrap_or_default())
     }
 }
 
@@ -164,6 +176,8 @@ struct MemSink {
     before: Option<Leaf2<MockTypes>>,
     blocks: Mutex<BTreeMap<u64, Block<MockTypes>>>,
     appended: Mutex<Vec<u64>>,
+    stake_tables: Mutex<BTreeMap<u64, Bytes>>,
+    records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
 }
 
 impl MemSink {
@@ -177,6 +191,8 @@ impl MemSink {
             before,
             blocks: Mutex::default(),
             appended: Mutex::default(),
+            stake_tables: Mutex::default(),
+            records: Mutex::default(),
         })
     }
 
@@ -212,6 +228,16 @@ impl Sink<MockTypes> for MemSink {
             .last_key_value()
             .map(|(_, block)| block.leaf.clone())
             .or_else(|| self.before.clone()))
+    }
+
+    async fn put_stake_table(&self, epoch: u64, table: Bytes) -> anyhow::Result<()> {
+        self.stake_tables.lock().unwrap().insert(epoch, table);
+        Ok(())
+    }
+
+    async fn put_service_records(&self, epoch: u64, records: Vec<Bytes>) -> anyhow::Result<()> {
+        self.records.lock().unwrap().insert(epoch, records);
+        Ok(())
     }
 }
 
@@ -350,6 +376,50 @@ async fn passes_the_state_certificate() {
 
     eventually("the block is stored", || sink.block(1).is_some()).await;
     assert_eq!(sink.block(1).unwrap().state_cert, Some(cert));
+}
+
+/// The state consensus sends with an entry reaches the sink with its block, and the stake tables
+/// and records the stream carries reach it too.
+#[tokio::test]
+async fn passes_the_state_stake_tables_and_records() {
+    let chain = chain(1).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=1);
+    let state = State {
+        frontier: Bytes::from_static(b"frontier"),
+        chain_config: Bytes::from_static(b"config"),
+        rewards: None,
+    };
+    log.entries
+        .lock()
+        .unwrap()
+        .get_mut(&1)
+        .unwrap()
+        .body
+        .as_mut()
+        .unwrap()
+        .state = Some(state.clone());
+    log.stake_tables
+        .lock()
+        .unwrap()
+        .insert(0, Bytes::from_static(b"table"));
+    log.records
+        .lock()
+        .unwrap()
+        .insert(0, vec![Bytes::from_static(b"record")]);
+    let sink = MemSink::new();
+    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+
+    eventually("the records are stored", || {
+        sink.records.lock().unwrap().contains_key(&0)
+    })
+    .await;
+    assert_eq!(sink.block(1).unwrap().state, Some(state));
+    assert_eq!(sink.block(0).unwrap().state, None);
+    assert_eq!(
+        sink.stake_tables.lock().unwrap().get(&0),
+        Some(&Bytes::from_static(b"table"))
+    );
 }
 
 /// A restarted ingester takes again every entry consensus still holds, which it has not

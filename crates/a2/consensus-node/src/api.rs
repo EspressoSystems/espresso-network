@@ -8,20 +8,28 @@ use bytes::Bytes;
 use consensus::{
     block::SubmitError as BlockSubmitError,
     client::{ClientApi, QueryError},
-    ingest::IngestSource,
+    ingest::{IngestSource, StakeTables},
 };
 use consensus_api::{Node, SubmitError};
 use espresso_types::SeqTypes;
+use hotshot_types::{
+    data::EpochNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    stake_table::HSStakeTable,
+    traits::election::{Membership as _, MembershipSnapshot as _},
+};
 
 use crate::store::NodeStore;
 
-/// Binds the consensus node's API to `addr`: the decide log over `store` for the ingester, and
-/// the node service over the coordinator behind `client` for the API service. Returns the address
+/// Binds the consensus node's API to `addr`: the decide log over `store`, with the stake tables
+/// of `membership`, for the API service's store, and the node service over the coordinator behind
+/// `client` for the API service. Returns the address
 /// it is bound to, which differs from `addr` for port 0, with the server, which runs until it is
 /// dropped or fails.
 pub fn bind(
     store: NodeStore,
     epoch_height: u64,
+    membership: EpochMembershipCoordinator<SeqTypes>,
     client: ClientApi<SeqTypes>,
     addr: SocketAddr,
 ) -> std::io::Result<(
@@ -35,10 +43,27 @@ pub fn bind(
         .add_service(consensus_api::server(IngestSource::new(
             store,
             epoch_height,
+            Arc::new(MembershipStakeTables { membership }),
         )))
         .add_service(consensus_api::node_server(Arc::new(NodeService { client })))
         .serve_with_incoming(incoming);
     Ok((bound, server))
+}
+
+/// The stake tables of the node's membership, each as the list of its validators.
+struct MembershipStakeTables {
+    membership: EpochMembershipCoordinator<SeqTypes>,
+}
+
+#[async_trait]
+impl StakeTables for MembershipStakeTables {
+    async fn stake_table(&self, epoch: EpochNumber) -> anyhow::Result<Option<Bytes>> {
+        let Some(snapshot) = self.membership.membership().snapshot(epoch) else {
+            return Ok(None);
+        };
+        let table = HSStakeTable::from_iter(snapshot.stake_table());
+        Ok(Some(bincode::serialize(&table.0)?.into()))
+    }
 }
 
 /// The node service: what only consensus can do for the API service.

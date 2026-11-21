@@ -43,7 +43,7 @@ use crate::{
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
     state::StateEntry,
-    store::{self, Anchor, ConsensusStore, ForeignWrite, Restored},
+    store::{self, Anchor, ConsensusStore, ForeignWrite, Restored, StateChange},
 };
 
 /// The delay before the first retry of a failed batch. It doubles with each further failure, up
@@ -98,16 +98,28 @@ impl<T: NodeType> StorageOutput<T> {
     }
 }
 
-/// What the application keeps of the latest decided state, in its own tables of the store.
+/// What the application keeps of the latest decided state, in its own tables of the store, and
+/// what of each decided leaf's state the decide log carries.
 ///
 /// Its writes join the batch that appends the decide to the decide log, so the tables never
 /// fall behind or run ahead of the anchor.
 pub trait DecidedState<T: NodeType>: Send + Sync {
-    /// The writes that bring the application's tables up to date with the decided `leaf`.
+    /// The writes that bring the application's tables up to date with the decided `leaf`, and
+    /// the parts of its state for the decide log.
     ///
     /// Called for each leaf of a decide, oldest first. `state` is what this node holds for
     /// `leaf`: a state with its delta if this node validated `leaf`, else one without, or none.
-    fn decided(&mut self, leaf: &Leaf2<T>, state: Option<&StateEntry<T>>) -> Vec<AppWrite>;
+    fn decided(&mut self, leaf: &Leaf2<T>, state: Option<&StateEntry<T>>) -> DecidedWrites;
+}
+
+/// What [`DecidedState::decided`] makes of a decided leaf.
+#[derive(Debug, Default)]
+pub struct DecidedWrites {
+    /// The writes to the application's tables.
+    pub writes: Vec<AppWrite>,
+
+    /// The parts of the leaf's state for its decide log entry.
+    pub state: Option<StateChange>,
 }
 
 /// Storage cannot go on.
@@ -554,6 +566,14 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             .iter()
             .map(|leaf| self.state_cert(leaf.view_number()))
             .collect();
+        let mut decided: Vec<DecidedWrites> = Vec::new();
+        if let Some(decided_state) = &mut self.decided_state {
+            decided.resize_with(leaves.len(), DecidedWrites::default);
+            for (i, leaf) in leaves.iter().enumerate().rev() {
+                decided[i] = decided_state.decided(leaf, states.get(i).and_then(Option::as_ref));
+            }
+        }
+        let decided_states: Vec<_> = decided.iter_mut().map(|d| d.state.take()).collect();
         match store::put_decided(
             &mut self.pending.batch,
             leaves,
@@ -561,6 +581,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             cert2,
             &vid_common,
             &state_certs,
+            &decided_states,
         ) {
             Ok(()) => {
                 self.pending.adds_to_decide_log = true;
@@ -574,12 +595,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 return;
             },
         }
-        let Some(decided_state) = &mut self.decided_state else {
-            return;
-        };
-        for (i, leaf) in leaves.iter().enumerate().rev() {
-            let writes = decided_state.decided(leaf, states.get(i).and_then(Option::as_ref));
-            store::put_app(&mut self.pending.batch, &writes);
+        for d in decided.iter().rev() {
+            store::put_app(&mut self.pending.batch, &d.writes);
         }
     }
 

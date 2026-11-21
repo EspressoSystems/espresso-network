@@ -17,6 +17,7 @@ struct MemSource {
     payloads: Mutex<BTreeMap<u64, Bytes>>,
     changes: watch::Sender<u64>,
     acked: Mutex<Vec<Range<u64>>>,
+    stake_tables: Mutex<BTreeMap<u64, Bytes>>,
     records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
 }
 
@@ -27,6 +28,7 @@ impl MemSource {
             payloads: Mutex::default(),
             changes: watch::channel(0).0,
             acked: Mutex::default(),
+            stake_tables: Mutex::default(),
             records: Mutex::default(),
         })
     }
@@ -80,16 +82,18 @@ impl Source for MemSource {
         Ok(self.payloads.lock().unwrap().get(&height).cloned())
     }
 
-    async fn service_records(
-        &self,
-        epoch: Option<u64>,
-    ) -> Result<Option<(u64, Vec<Bytes>)>, Error> {
-        let records = self.records.lock().unwrap();
-        let found = match epoch {
-            Some(epoch) => records.get_key_value(&epoch),
-            None => records.last_key_value(),
-        };
-        Ok(found.map(|(epoch, records)| (*epoch, records.clone())))
+    async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, Error> {
+        Ok(self.stake_tables.lock().unwrap().get(&epoch).cloned())
+    }
+
+    async fn service_records(&self, epoch: u64) -> Result<Vec<Bytes>, Error> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(&epoch)
+            .cloned()
+            .unwrap_or_default())
     }
 }
 
@@ -354,39 +358,74 @@ async fn a_freed_payload_is_not_announced() {
     );
 }
 
-/// Records come back for the epoch asked for, or for the latest one, and an epoch without any is
-/// not found.
+/// After the entries, the stream sends the stake tables of their epochs up to two after the
+/// newest, as the node has them, and the records of the newest epoch, again once there are more.
 #[tokio::test]
-async fn service_records_by_epoch() {
+async fn stake_tables_and_records_follow_the_entries() {
     let source = MemSource::new();
-    source.records.lock().unwrap().extend([
-        (
-            3,
-            vec![Bytes::from_static(b"a3"), Bytes::from_static(b"b3")],
-        ),
-        (4, vec![Bytes::from_static(b"a4")]),
+    source.stake_tables.lock().unwrap().extend([
+        (2, Bytes::from_static(b"t2")),
+        (3, Bytes::from_static(b"t3")),
+        (5, Bytes::from_static(b"t5")),
+        (6, Bytes::from_static(b"t6")),
     ]);
+    source
+        .records
+        .lock()
+        .unwrap()
+        .insert(3, vec![Bytes::from_static(b"a3")]);
+    let mut decided = entry(0);
+    decided.epoch = 3;
+    source.entries.lock().unwrap().insert(0, decided.clone());
     let mut client = serve(source.clone()).await;
 
-    let response = client
-        .get_service_records(ServiceRecordsRequest { epoch: Some(3) })
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(response.epoch, 3);
-    assert_eq!(response.records, vec![b"a3".to_vec(), b"b3".to_vec()]);
+    let mut stream = subscribe(&mut client, 0, 0).await;
+    assert_eq!(next_event(&mut stream).await, Some(Event::Decided(decided)));
+    let stake_table = |epoch, table: &'static [u8]| {
+        Some(Event::StakeTable(StakeTable {
+            epoch,
+            table: Bytes::from_static(table),
+        }))
+    };
+    assert_eq!(next_event(&mut stream).await, stake_table(3, b"t3"));
+    assert_eq!(next_event(&mut stream).await, stake_table(5, b"t5"));
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::ServiceRecords(ServiceRecords {
+            epoch: 3,
+            records: vec![Bytes::from_static(b"a3")],
+        }))
+    );
 
-    let latest = client
-        .get_service_records(ServiceRecordsRequest { epoch: None })
-        .await
+    // A stake table built later, and more records, follow with the next change.
+    source
+        .stake_tables
+        .lock()
         .unwrap()
-        .into_inner();
-    assert_eq!(latest.epoch, 4);
-
-    let missing = client
-        .get_service_records(ServiceRecordsRequest { epoch: Some(5) })
-        .await;
-    assert_eq!(missing.err().map(|s| s.code()), Some(Code::NotFound));
+        .insert(4, Bytes::from_static(b"t4"));
+    source
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&3)
+        .unwrap()
+        .push(Bytes::from_static(b"b3"));
+    tokio::time::sleep(RECORDS_INTERVAL).await;
+    let mut next = entry(1);
+    next.epoch = 3;
+    source.entries.lock().unwrap().insert(1, next);
+    source.changes.send_modify(|n| *n += 1);
+    let Some(Event::Decided(_)) = next_event(&mut stream).await else {
+        panic!("expected the next entry");
+    };
+    assert_eq!(next_event(&mut stream).await, stake_table(4, b"t4"));
+    assert_eq!(
+        next_event(&mut stream).await,
+        Some(Event::ServiceRecords(ServiceRecords {
+            epoch: 3,
+            records: vec![Bytes::from_static(b"a3"), Bytes::from_static(b"b3")],
+        }))
+    );
 }
 
 /// A node that takes no transactions now.

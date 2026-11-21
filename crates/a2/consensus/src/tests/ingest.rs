@@ -25,12 +25,22 @@ use tonic::transport::Server;
 
 use super::common::utils::{TestData, TestView};
 use crate::{
-    ingest::IngestSource,
+    ingest::{IngestSource, StakeTables},
     storage::{ActionKind, Storage, StorageOutput},
     store::{ConsensusStore, MemStore},
 };
 
 const EPOCH_HEIGHT: u64 = 10;
+
+/// A node that has built no stake tables.
+struct NoStakeTables;
+
+#[async_trait::async_trait]
+impl StakeTables for NoStakeTables {
+    async fn stake_table(&self, _: EpochNumber) -> anyhow::Result<Option<consensus_store::Bytes>> {
+        Ok(None)
+    }
+}
 
 #[tokio::test]
 async fn decided_entries_and_payloads_reach_the_ingester() {
@@ -39,7 +49,12 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
     let mut storage = Storage::new(store.clone(), &private_key, &store.load().unwrap());
-    let mut client = serve(IngestSource::new(store.clone(), EPOCH_HEIGHT)).await;
+    let mut client = serve(IngestSource::new(
+        store.clone(),
+        EPOCH_HEIGHT,
+        Arc::new(NoStakeTables),
+    ))
+    .await;
 
     let mut decided = client
         .subscribe(SubscribeRequest { from_height: 0 })
@@ -161,7 +176,12 @@ async fn a_late_payload_reaches_the_ingester() {
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let store = ConsensusStore::<TestTypes, MemStore>::new(Arc::new(MemStore::new()));
     let mut storage = Storage::new(store.clone(), &private_key, &store.load().unwrap());
-    let mut client = serve(IngestSource::new(store.clone(), EPOCH_HEIGHT)).await;
+    let mut client = serve(IngestSource::new(
+        store.clone(),
+        EPOCH_HEIGHT,
+        Arc::new(NoStakeTables),
+    ))
+    .await;
     let mut decided = client
         .subscribe(SubscribeRequest { from_height: 0 })
         .await
