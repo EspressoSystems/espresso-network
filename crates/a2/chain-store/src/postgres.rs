@@ -200,13 +200,19 @@ impl Backend for PostgresBackend {
         Ok(data.map(Bytes::from))
     }
 
-    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
+    async fn record(
+        &self,
+        height: u64,
+        payload: bool,
+    ) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
         let rows = sqlx::query(
             "SELECT i.item, p.part, p.data FROM chain_items i
-             LEFT JOIN chain_parts p ON p.height = i.height
+             LEFT JOIN chain_parts p ON p.height = i.height AND ($2 OR p.part <> $3)
              WHERE i.height = $1 ORDER BY p.part",
         )
         .bind(height as i64)
+        .bind(payload)
+        .bind(Part::Payload.id())
         .fetch_all(&self.pool)
         .await?;
         let Some(first) = rows.first() else {

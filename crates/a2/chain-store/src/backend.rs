@@ -3,6 +3,7 @@ use std::{ops::Range, time::Duration};
 use app_tables::{AppWrite, TableName};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use tokio::sync::watch;
 
 /// Where a [`ChainStore`](crate::ChainStore) keeps its data: bytes by height, with the
@@ -23,8 +24,13 @@ pub trait Backend: Send + Sync + 'static {
 
     async fn part(&self, height: u64, part: Part) -> anyhow::Result<Option<Bytes>>;
 
-    /// The item of `height` with the parts it has, in [`Part`] order, read together.
-    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>>;
+    /// The item of `height` with the parts it has, in [`Part`] order, read together; the payload
+    /// only if `payload`.
+    async fn record(
+        &self,
+        height: u64,
+        payload: bool,
+    ) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>>;
 
     /// The height of the row whose `column` is `value`.
     async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>>;
@@ -65,6 +71,17 @@ pub trait Backend: Send + Sync + 'static {
     /// chain and change nothing readers see.
     async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool>;
 
+    /// The updates of the newest heights from `from` on, as a backend that keeps them itself
+    /// sends them; see [`tip`](crate::tip). `None` from a backend that does not, whose readers
+    /// follow the store by reading it.
+    async fn tip_updates(
+        &self,
+        from: u64,
+    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<TipUpdate>>>> {
+        let _ = from;
+        Ok(None)
+    }
+
     /// A value that changes after each committed write to the chain by any writer: items,
     /// parts and pruning. Writes to the application tables do not change it.
     fn changes(&self) -> watch::Receiver<u64>;
@@ -103,15 +120,20 @@ pub enum Part {
     /// An empty marker: the height's `Certificate2` and state certificate are as complete as
     /// consensus made them, so a height without them has none.
     CertsKnown,
+
+    /// What the payload's readers need to know of it without reading it: its BLAKE3 hash and its
+    /// size, written with the payload.
+    PayloadInfo,
 }
 
 impl Part {
-    pub const ALL: [Part; 5] = [
+    pub const ALL: [Part; 6] = [
         Self::Payload,
         Self::VidCommon,
         Self::Cert2,
         Self::StateCert,
         Self::CertsKnown,
+        Self::PayloadInfo,
     ];
 
     /// The number a backend stores the part under.
@@ -122,12 +144,27 @@ impl Part {
             Self::Cert2 => 2,
             Self::StateCert => 3,
             Self::CertsKnown => 4,
+            Self::PayloadInfo => 5,
         }
     }
 
     pub fn from_id(id: i16) -> Option<Self> {
         Self::ALL.into_iter().find(|part| part.id() == id)
     }
+}
+
+/// An update of the newest heights a store holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TipUpdate {
+    /// A height that is new, or has new parts: its item and its parts but the payload.
+    Height {
+        height: u64,
+        item: Bytes,
+        parts: Vec<(Part, Bytes)>,
+    },
+
+    /// The newest height and the floor, after the heights sent before them.
+    Bounds { newest: Option<u64>, floor: u64 },
 }
 
 /// Which keys of an application table to read: from `from` on, before `until` if set, at most

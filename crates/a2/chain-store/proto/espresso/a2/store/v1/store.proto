@@ -17,8 +17,9 @@ service Store {
 
   rpc GetPart(PartRequest) returns (MaybeBytes);
 
-  // The item of a height with the parts it has, in part order, read together.
-  rpc GetRecord(HeightRequest) returns (RecordResponse);
+  // The item of a height with the parts it has, in part order, read together; the payload only
+  // if asked for.
+  rpc GetRecord(RecordRequest) returns (RecordResponse);
 
   // The height of the item whose commitment in `column` is `value`; the earliest if several share
   // it.
@@ -48,6 +49,11 @@ service Store {
 
   // Applies writes to the application tables, in order, in one commit.
   rpc AppWrite(AppWriteRequest) returns (Done);
+
+  // The newest heights from `from` on, without their payloads: each new height, and each height
+  // that gets new parts, followed by the bounds of the store, whenever the store changes. The
+  // service reads each height once for all of its clients.
+  rpc FollowTip(FollowTipRequest) returns (stream TipEvent);
 
   // Takes or renews a lease for a holder; says whether the holder holds it now.
   rpc Lease(LeaseRequest) returns (LeaseResponse);
@@ -103,6 +109,11 @@ message PutPartsRequest {
 
 message HeightRequest {
   uint64 height = 1;
+}
+
+message RecordRequest {
+  uint64 height = 1;
+  bool payload = 2;
 }
 
 message PartRequest {
@@ -201,6 +212,30 @@ message AppTableWrite {
 
 message AppWriteRequest {
   repeated AppTableWrite writes = 1;
+}
+
+message FollowTipRequest {
+  uint64 from = 1;
+}
+
+message TipEvent {
+  oneof event {
+    TipHeight height = 1;
+    TipBounds bounds = 2;
+  }
+}
+
+// A height that is new, or has new parts: its item and its parts but the payload.
+message TipHeight {
+  uint64 height = 1;
+  bytes item = 2;
+  repeated PartData parts = 3;
+}
+
+// The newest height and the floor, after the heights sent before them.
+message TipBounds {
+  optional uint64 newest = 1;
+  uint64 floor = 2;
 }
 
 message LeaseRequest {

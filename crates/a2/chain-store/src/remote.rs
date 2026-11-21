@@ -4,11 +4,12 @@ use std::{ops::Range, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::{StreamExt, stream::BoxStream};
 use tokio::{sync::watch, task::JoinSet, time::sleep};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
-    AppWrite, Backend, Column, KeyBounds, Part, Row, TableName,
+    AppWrite, Backend, Column, KeyBounds, Part, Row, TableName, TipUpdate,
     wire::{
         MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to,
         proto::{self, store_client::StoreClient},
@@ -143,10 +144,14 @@ impl Backend for RemoteBackend {
         Ok(response.into_inner().data)
     }
 
-    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
+    async fn record(
+        &self,
+        height: u64,
+        payload: bool,
+    ) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
         let response = self
             .client()
-            .get_record(proto::HeightRequest { height })
+            .get_record(proto::RecordRequest { height, payload })
             .await
             .map_err(status)?
             .into_inner();
@@ -280,6 +285,34 @@ impl Backend for RemoteBackend {
         Ok(())
     }
 
+    async fn tip_updates(
+        &self,
+        from: u64,
+    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<TipUpdate>>>> {
+        let events = self
+            .client()
+            .follow_tip(proto::FollowTipRequest { from })
+            .await
+            .map_err(status)?
+            .into_inner();
+        let updates = events.map(|event| {
+            use proto::tip_event::Event;
+            match event.map_err(status)?.event {
+                Some(Event::Height(height)) => Ok(TipUpdate::Height {
+                    height: height.height,
+                    item: height.item,
+                    parts: parts_from(height.parts).map_err(status)?,
+                }),
+                Some(Event::Bounds(bounds)) => Ok(TipUpdate::Bounds {
+                    newest: bounds.newest,
+                    floor: bounds.floor,
+                }),
+                None => Err(anyhow::anyhow!("a tip event without an event")),
+            }
+        });
+        Ok(Some(updates.boxed()))
+    }
+
     async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool> {
         let response = self
             .client()
@@ -313,9 +346,11 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         let backend: Arc<dyn Backend> = Arc::new(MemBackend::default());
+        let (service, follower) = server(backend);
+        tokio::spawn(follower);
         tokio::spawn(
             Server::builder()
-                .add_service(server(backend))
+                .add_service(service)
                 .serve_with_incoming(TcpIncoming::from(listener)),
         );
         format!("http://{addr}")

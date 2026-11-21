@@ -421,8 +421,14 @@ impl AvailabilityService for ApiService {
         Ok(Response::new(self.reader.stream(
             from,
             |reader, height| async move {
-                let block = reader.block(height, Wait::Forever).await?;
-                Ok(espresso_api::block_by_reference(&block))
+                let (item, info, num_transactions) =
+                    reader.described(height, Wait::Forever).await?;
+                Ok(espresso_api::block_by_info(
+                    item.leaf.block_header(),
+                    &info.blake3,
+                    info.size,
+                    num_transactions,
+                ))
             },
         )))
     }
@@ -437,8 +443,12 @@ impl AvailabilityService for ApiService {
         Ok(Response::new(self.reader.stream(
             from,
             |reader, height| async move {
-                let payload = PayloadQueryData::from(reader.block(height, Wait::Forever).await?);
-                Ok(espresso_api::payload_by_reference(&payload))
+                let (item, info, _) = reader.described(height, Wait::Forever).await?;
+                Ok(espresso_api::payload_by_info(
+                    item.leaf.block_header(),
+                    &info.blake3,
+                    info.size,
+                ))
             },
         )))
     }

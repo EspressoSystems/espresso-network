@@ -31,10 +31,16 @@ pub fn url(hash: &str) -> String {
 
 /// The reference to `raw`, the raw bytes of the payload whose VID commitment is `hash`.
 pub fn reference(hash: &str, raw: &[u8]) -> proto::PayloadRef {
+    reference_of(hash, blake3::hash(raw).as_bytes(), raw.len() as u64)
+}
+
+/// The reference to the payload whose VID commitment is `hash`, whose raw bytes have the BLAKE3
+/// hash `blake3` and are `size` long, for a server that knows these without the bytes.
+pub fn reference_of(hash: &str, blake3: &[u8; 32], size: u64) -> proto::PayloadRef {
     proto::PayloadRef {
         url: url(hash),
-        blake3: blake3::hash(raw).to_hex().to_string(),
-        size: raw.len() as u64,
+        blake3: blake3::Hash::from_bytes(*blake3).to_hex().to_string(),
+        size,
     }
 }
 

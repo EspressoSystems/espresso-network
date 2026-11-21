@@ -11,11 +11,12 @@ postgres = ["dep:sqlx"]
 # The client of the store service, a backend over gRPC.
 remote = ["dep:prost", "dep:tonic", "dep:tonic-prost"]
 # The store service, which serves a backend over gRPC.
-service = ["dep:futures", "dep:prost", "dep:tonic", "dep:tonic-prost"]
+service = ["dep:prost", "dep:tonic", "dep:tonic-prost"]
 # The conformance suite every backend runs, and a throwaway Postgres server to run it against.
 testing = ["dep:test-utils"]
 
 [dependencies]
+blake3        = { workspace = true }
 app-tables = { workspace = true }
 anyhow        = { workspace = true }
 async-trait   = { workspace = true }
@@ -23,7 +24,7 @@ bincode       = { workspace = true }
 bytes         = { workspace = true }
 committable   = { workspace = true }
 espresso-types = { workspace = true }
-futures       = { workspace = true, optional = true }
+futures       = { workspace = true }
 hotshot-types = { workspace = true }
 prost         = { workspace = true, optional = true }
 serde         = { workspace = true }
@@ -44,6 +45,7 @@ espresso-types = { workspace = true, features = ["testing"] }
 test-utils     = { workspace = true }
 tokio          = { workspace = true, features = ["full"] }
 versions       = { workspace = true }
+hotshot-query-service-types = { workspace = true }
 
 [lints]
 workspace = true

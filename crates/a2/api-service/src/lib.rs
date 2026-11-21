@@ -44,7 +44,6 @@ mod request;
 mod server;
 mod status;
 mod submit;
-mod tip;
 
 use reader::Reader;
 
@@ -53,7 +52,7 @@ pub struct ApiService {
     reader: Reader,
 
     /// The follower of the store's tip, which `serve` runs.
-    follower: Option<tip::Follower>,
+    follower: Option<chain_store::tip::Follower>,
 
     /// What the store holds besides blocks.
     tables: Tables,
@@ -70,7 +69,7 @@ pub struct ApiService {
 
 impl ApiService {
     pub fn new(store: ChainStore, consensus_api: SocketAddr) -> Self {
-        let (follower, tip) = tip::follower(store.clone());
+        let (follower, tip) = chain_store::tip::follower(store.clone());
         Self {
             tables: Tables::new(store.clone()),
             reader: Reader::new(store, tip),

@@ -1,68 +1,154 @@
-//! The tip of the chain as an API instance sees it.
+//! The tip of the chain as a reader of the store sees it: the newest heights without their
+//! payloads.
 //!
-//! One follower per instance reads each new height from the store once and keeps the newest
+//! One [`Follower`] per process reads each new height from the store once and keeps the newest
 //! [`KEPT`] heights in memory, where every waiting read and stream finds them. However many
 //! clients wait at the tip, the store is read once per height and change. The follower publishes
-//! what it read as an immutable [`Tip`] on a `watch`, so readers take no lock.
+//! what it holds as an immutable [`Tip`] on a `watch`, so readers take no lock.
+//!
+//! A tip holds no payloads, only what describes them ([`Parts::payload_info`]), so it stays small
+//! whatever the size of the blocks. Over a backend that keeps a tip itself, such as the store
+//! service, the follower takes the backend's updates instead of reading the store: the store
+//! service reads each height once for all of its readers.
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use chain_store::{ChainStore, Item, Parts};
+use futures::{StreamExt, stream::BoxStream};
 use tokio::{sync::watch, time::sleep};
 
-/// How many of the newest heights the tip keeps.
-pub(crate) const KEPT: u64 = 128;
+use crate::{ChainStore, Item, Parts, Record, TipUpdate};
+
+/// How many of the newest heights a tip keeps.
+pub const KEPT: u64 = 128;
 
 /// How long the follower waits before reading the store again after a read failed.
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
-/// A stored height: its item and the parts the store held of it when it was read.
+/// A stored height: its item and the parts the store held of it when it was read, but the
+/// payload, as decoded and as stored.
 #[derive(Debug)]
-pub(crate) struct Entry {
-    pub(crate) item: Item,
-    pub(crate) parts: Parts,
+pub struct Entry {
+    pub item: Item,
+    pub parts: Parts,
+    pub record: Record,
 }
 
-/// What the follower last read from the store.
+impl Entry {
+    fn of(record: Record) -> anyhow::Result<Self> {
+        Ok(Self {
+            item: record.item()?,
+            parts: record.parts()?,
+            record,
+        })
+    }
+}
+
+/// What the follower last learned of the store.
 #[derive(Debug, Default)]
-pub(crate) struct Tip {
-    /// Whether the follower has read the store yet.
-    pub(crate) read: bool,
+pub struct Tip {
+    /// Whether the follower has learned of the store yet.
+    pub read: bool,
 
     /// The newest stored height, if any.
-    pub(crate) newest: Option<u64>,
+    pub newest: Option<u64>,
 
     /// Every height before it is pruned.
-    pub(crate) floor: u64,
+    pub floor: u64,
 
     /// The stored heights from [`Tip::start`] on.
-    pub(crate) heights: BTreeMap<u64, Arc<Entry>>,
+    pub heights: BTreeMap<u64, Arc<Entry>>,
 }
 
 impl Tip {
     /// The first height the tip covers: a height from it on that the tip lacks is not stored.
-    pub(crate) fn start(&self) -> Option<u64> {
+    pub fn start(&self) -> Option<u64> {
         self.newest
             .map(|newest| (newest + 1).saturating_sub(KEPT).max(self.floor))
     }
 }
 
+/// Whether `parts` has everything a reader of the tip waits for: what describes the payload,
+/// which is stored with it, and the VID common data.
+pub fn complete(parts: &Parts) -> bool {
+    parts.payload_info.is_some() && parts.vid_common.is_some()
+}
+
 /// The follower of `store`, and the tips it publishes.
-pub(crate) fn follower(store: ChainStore) -> (Follower, watch::Receiver<Arc<Tip>>) {
+pub fn follower(store: ChainStore) -> (Follower, watch::Receiver<Arc<Tip>>) {
     let (tip, tips) = watch::channel(Arc::new(Tip::default()));
     (Follower { store, tip }, tips)
 }
 
-/// Reads the newest heights of the store whenever the chain in it changes.
+/// Keeps the newest heights of a store, and publishes them whenever they change.
 #[derive(Debug)]
-pub(crate) struct Follower {
+pub struct Follower {
     store: ChainStore,
     tip: watch::Sender<Arc<Tip>>,
 }
 
 impl Follower {
-    /// Follows the store until its changes end.
-    pub(crate) async fn run(self) {
+    /// Follows the store until its changes end: by the backend's updates if it sends them, else
+    /// by reading the store whenever the chain in it changes.
+    pub async fn run(self) {
+        loop {
+            let from = self.tip.borrow().start().unwrap_or(0);
+            match self.store.tip_updates(from).await {
+                Ok(Some(updates)) => {
+                    if let Err(err) = self.take(updates).await {
+                        tracing::warn!("following the store's tip failed: {err:#}");
+                    }
+                },
+                Ok(None) => return self.read_on_changes().await,
+                Err(err) => tracing::warn!("asking for the store's tip failed: {err:#}"),
+            }
+            sleep(RETRY_DELAY).await;
+        }
+    }
+
+    /// Takes the backend's updates until they end, and publishes the tip after each update of the
+    /// bounds, which closes the heights sent before it.
+    async fn take(
+        &self,
+        mut updates: BoxStream<'static, anyhow::Result<TipUpdate>>,
+    ) -> anyhow::Result<()> {
+        let mut heights = self.tip.borrow().heights.clone();
+        while let Some(update) = updates.next().await {
+            match update? {
+                TipUpdate::Height {
+                    height,
+                    item,
+                    parts,
+                } => {
+                    let record = Record {
+                        height,
+                        item,
+                        parts,
+                    };
+                    heights.insert(height, Arc::new(Entry::of(record)?));
+                },
+                TipUpdate::Bounds { newest, floor } => {
+                    let mut tip = Tip {
+                        read: true,
+                        newest,
+                        floor,
+                        heights: BTreeMap::new(),
+                    };
+                    if let (Some(start), Some(newest)) = (tip.start(), newest) {
+                        tip.heights = heights
+                            .range(start..=newest)
+                            .map(|(h, e)| (*h, e.clone()))
+                            .collect();
+                    }
+                    heights = tip.heights.clone();
+                    self.tip.send_replace(Arc::new(tip));
+                },
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the newest heights whenever the chain in the store changes.
+    async fn read_on_changes(self) {
         let mut changes = self.store.changes();
         loop {
             // Marked seen before reading, so a write after the read is not missed.
@@ -88,7 +174,7 @@ impl Follower {
         let (newest, floor, next_record) = tokio::try_join!(
             self.store.newest(),
             self.store.floor(),
-            self.store.record(next),
+            self.store.summary(next),
         )?;
         let mut tip = Tip {
             read: true,
@@ -107,14 +193,10 @@ impl Follower {
                 }
                 let record = match height == next {
                     true => next_record.take().flatten(),
-                    false => self.store.record(height).await?,
+                    false => self.store.summary(height).await?,
                 };
                 if let Some(record) = record {
-                    let entry = Entry {
-                        item: record.item()?,
-                        parts: record.parts()?,
-                    };
-                    tip.heights.insert(height, Arc::new(entry));
+                    tip.heights.insert(height, Arc::new(Entry::of(record)?));
                 }
             }
         }
@@ -123,24 +205,42 @@ impl Follower {
     }
 }
 
-/// Whether `parts` has everything a reader waits for: the payload and the VID common data.
-fn complete(parts: &Parts) -> bool {
-    parts.payload.is_some() && parts.vid_common.is_some()
+/// The updates that bring a reader that holds `sent` up to `tip`: each height from `from` on that
+/// is new or has new parts, then the bounds. Notes what it returns in `sent`, and forgets heights
+/// before the tip's start.
+pub fn updates(tip: &Tip, from: u64, sent: &mut BTreeMap<u64, usize>) -> Vec<TipUpdate> {
+    let mut updates = Vec::new();
+    for (height, entry) in tip.heights.range(from..) {
+        let parts = entry.record.parts.len();
+        if sent.get(height) == Some(&parts) {
+            continue;
+        }
+        sent.insert(*height, parts);
+        updates.push(TipUpdate::Height {
+            height: *height,
+            item: entry.record.item.clone(),
+            parts: entry.record.parts.clone(),
+        });
+    }
+    if let Some(start) = tip.start() {
+        sent.retain(|height, _| *height >= start);
+    }
+    updates.push(TipUpdate::Bounds {
+        newest: tip.newest,
+        floor: tip.floor,
+    });
+    updates
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
         ops::Range,
         sync::{Arc, Mutex},
     };
 
     use async_trait::async_trait;
     use bytes::Bytes;
-    use chain_store::{
-        AppWrite, Backend, Column, KeyBounds, Part, Row, TableName, mem::MemBackend,
-    };
     use espresso_types::{Leaf2, NodeState, Payload, SeqTypes, ValidatedState};
     use hotshot_query_service_types::availability::VidCommonQueryData;
     use hotshot_types::{
@@ -151,7 +251,7 @@ mod tests {
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
-    use crate::reader::{Reader, Wait};
+    use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row, TableName, mem::MemBackend};
 
     /// How often the record of each height was read.
     type Reads = Arc<Mutex<BTreeMap<u64, usize>>>;
@@ -185,9 +285,13 @@ mod tests {
             self.inner.part(height, part).await
         }
 
-        async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
+        async fn record(
+            &self,
+            height: u64,
+            payload: bool,
+        ) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
             *self.reads.lock().unwrap().entry(height).or_default() += 1;
-            self.inner.record(height).await
+            self.inner.record(height, payload).await
         }
 
         async fn height_of(&self, column: Column, value: &str) -> anyhow::Result<Option<u64>> {
@@ -280,18 +384,18 @@ mod tests {
     }
 
     /// Waits until the follower has published a tip with `height` complete.
-    async fn until_complete(tips: &mut watch::Receiver<Arc<Tip>>, height: u64) {
-        tips.wait_for(|tip| {
-            tip.heights
-                .get(&height)
-                .is_some_and(|entry| complete(&entry.parts))
-        })
-        .await
-        .unwrap();
+    async fn until_complete(tips: &mut watch::Receiver<Arc<Tip>>, height: u64) -> Arc<Entry> {
+        let tip = tips
+            .wait_for(|tip| tip.heights.get(&height).is_some_and(|e| complete(&e.parts)))
+            .await
+            .unwrap()
+            .clone();
+        tip.heights[&height].clone()
     }
 
     /// Readers waiting at the tip cost one read of the new height, however many there are, and
     /// a height kept complete is not read again; one still incomplete is, until it is complete.
+    /// The tip holds no payloads, only their info.
     #[tokio::test]
     async fn reads_each_height_once_for_every_reader() {
         let counting = Counting::default();
@@ -307,16 +411,17 @@ mod tests {
             .await
             .unwrap();
 
-        let reader = Reader::new(store.clone(), tips.clone());
         let mut readers = JoinSet::new();
         for _ in 0..20 {
-            let reader = reader.clone();
-            readers.spawn(async move { reader.block(1, Wait::Forever).await });
+            let mut tips = tips.clone();
+            readers.spawn(async move { until_complete(&mut tips, 1).await });
         }
         let (item, parts) = block(1, true).await;
         store.put(&item, &parts).await.unwrap();
-        while let Some(read) = readers.join_next().await {
-            read.unwrap().unwrap();
+        while let Some(entry) = readers.join_next().await {
+            let entry = entry.unwrap();
+            assert_eq!(entry.parts.payload, None, "no payload in the tip");
+            assert!(entry.parts.payload_info.is_some());
         }
         assert_eq!(reads(&counts, 1), 1, "one read for every reader");
         let height_0 = reads(&counts, 0);
@@ -330,5 +435,51 @@ mod tests {
         until_complete(&mut tips, 2).await;
         assert_eq!(reads(&counts, 1), 1, "a complete height is kept as it is");
         assert_eq!(reads(&counts, 0), height_0 + 1, "read once more, complete");
+    }
+
+    /// Over the store service, a follower takes the service's updates: new heights, and heights
+    /// that get their parts later, without their payloads.
+    #[tokio::test]
+    async fn follows_the_store_service() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let backend: Arc<dyn Backend> = Arc::new(MemBackend::default());
+        let (service, service_follower) = crate::service::server(backend.clone());
+        let mut tasks = JoinSet::new();
+        tasks.spawn(service_follower);
+        tasks.spawn(async move {
+            let _ = tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener))
+                .await;
+        });
+        let writer = ChainStore::shared(backend);
+        let remote = ChainStore::new(crate::remote::RemoteBackend::connect(&url).await.unwrap());
+        let (follower, mut tips) = follower(remote);
+        tasks.spawn(follower.run());
+
+        let (item, _) = block(0, false).await;
+        writer.put(&item, &Parts::default()).await.unwrap();
+        tips.wait_for(|tip| tip.heights.contains_key(&0))
+            .await
+            .unwrap();
+        let (_, parts) = block(0, true).await;
+        writer.put_parts(0, &parts).await.unwrap();
+        let entry = until_complete(&mut tips, 0).await;
+        assert_eq!(entry.parts.payload, None);
+        let payload = parts.payload.unwrap();
+        assert_eq!(
+            entry.parts.payload_info.map(|info| info.size),
+            Some(payload.len() as u64)
+        );
+        assert!(
+            entry
+                .record
+                .parts
+                .iter()
+                .all(|(part, _)| *part != Part::Payload),
+            "the payload is not sent"
+        );
+        assert_eq!(tips.borrow().newest, Some(0));
     }
 }

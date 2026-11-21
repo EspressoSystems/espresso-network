@@ -4,6 +4,7 @@ use std::{borrow::Borrow, collections::HashMap};
 
 use ark_serialize::CanonicalSerialize;
 use bytes::Bytes;
+use committable::Committable;
 use espresso_types::{
     AccountQueryData, BuilderSignature, FeeAccount, FeeAccountProof, FeeInfo, FeeMerkleProof,
     Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload, PubKey, SeqTypes, Transaction,
@@ -1079,6 +1080,39 @@ impl From<&PayloadQueryData<SeqTypes>> for proto::PayloadResponse {
             data: Some(payload.data().into()),
             ..payload_by_reference(payload)
         }
+    }
+}
+
+/// The block whose header is `header` as a stream sends it, from what describes its payload: the
+/// BLAKE3 hash `blake3` and `size` of its raw bytes, and how many transactions it holds.
+pub fn block_by_info(
+    header: &Header,
+    blake3: &[u8; 32],
+    size: u64,
+    num_transactions: u64,
+) -> proto::BlockResponse {
+    let hash = header.payload_commitment().to_string();
+    proto::BlockResponse {
+        header: Some(header.into()),
+        payload: None,
+        hash: header.commit().to_string(),
+        size,
+        num_transactions,
+        payload_ref: Some(payload_data::reference_of(&hash, blake3, size)),
+    }
+}
+
+/// The payload of the block whose header is `header` as a stream sends it, from the BLAKE3 hash
+/// `blake3` and `size` of its raw bytes.
+pub fn payload_by_info(header: &Header, blake3: &[u8; 32], size: u64) -> proto::PayloadResponse {
+    let hash = header.payload_commitment().to_string();
+    proto::PayloadResponse {
+        height: header.height(),
+        block_hash: header.commit().to_string(),
+        size,
+        data: None,
+        payload_ref: Some(payload_data::reference_of(&hash, blake3, size)),
+        hash,
     }
 }
 

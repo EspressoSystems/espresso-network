@@ -20,10 +20,11 @@ use std::{fmt, ops::Range, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use committable::{Commitment, Committable};
-use espresso_types::{Header, Leaf2, SeqTypes};
+use espresso_types::{Header, Leaf2, Payload, SeqTypes};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
+    traits::{BlockPayload, block_contents::BlockHeader},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::watch;
@@ -38,11 +39,12 @@ pub mod remote;
 pub mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod tip;
 #[cfg(any(feature = "remote", feature = "service"))]
 pub mod wire;
 
 pub use app_tables::{AppTables, AppWrite, TableName};
-pub use backend::{Backend, Column, KeyBounds, Part, Row};
+pub use backend::{Backend, Column, KeyBounds, Part, Row, TipUpdate};
 
 /// The store's record of one block height.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +70,10 @@ pub struct Parts {
     /// The payload, as the block encodes it.
     pub payload: Option<Bytes>,
 
+    /// The BLAKE3 hash and size of the payload, which the store computes when the payload is
+    /// written, so that readers need not read the payload to describe it.
+    pub payload_info: Option<PayloadInfo>,
+
     pub vid_common: Option<VidCommon>,
 
     /// The certificate that decided the block directly, if one did.
@@ -82,11 +88,45 @@ pub struct Parts {
     pub certs_known: bool,
 }
 
+/// What readers need to know of a payload without reading it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadInfo {
+    /// The BLAKE3 hash of the payload's bytes.
+    pub blake3: [u8; 32],
+
+    pub size: u64,
+
+    /// How many transactions the payload holds, which its block's header tells how to count;
+    /// absent if the header was not stored when the payload was.
+    pub num_transactions: Option<u64>,
+}
+
+impl PayloadInfo {
+    /// The info of `payload`, whose block's header is `header`, if known.
+    pub fn of(payload: &[u8], header: Option<&Header>) -> Self {
+        let num_transactions = header.map(|header| {
+            let metadata = header.metadata();
+            Payload::from_bytes(payload, metadata).num_transactions(metadata) as u64
+        });
+        Self {
+            blake3: *blake3::hash(payload).as_bytes(),
+            size: payload.len() as u64,
+            num_transactions,
+        }
+    }
+}
+
 impl Parts {
-    fn encode(&self) -> anyhow::Result<Vec<(Part, Bytes)>> {
+    /// The parts to write, of a block whose header is `header`, if known. The info of a payload
+    /// is computed here, so every writer stores it.
+    fn encode(&self, header: Option<&Header>) -> anyhow::Result<Vec<(Part, Bytes)>> {
         let mut parts = Vec::new();
         if let Some(payload) = &self.payload {
             parts.push((Part::Payload, payload.clone()));
+            let info = self
+                .payload_info
+                .unwrap_or_else(|| PayloadInfo::of(payload, header));
+            parts.push((Part::PayloadInfo, encode(&info)?));
         }
         if let Some(common) = &self.vid_common {
             parts.push((Part::VidCommon, encode(common)?));
@@ -112,6 +152,7 @@ impl Parts {
                 Part::Cert2 => decoded.cert2 = Some(decode(bytes)?),
                 Part::StateCert => decoded.state_cert = Some(decode(bytes)?),
                 Part::CertsKnown => decoded.certs_known = true,
+                Part::PayloadInfo => decoded.payload_info = Some(decode(bytes)?),
             }
         }
         Ok(decoded)
@@ -198,12 +239,19 @@ impl ChainStore {
     /// Stores `item` with `parts`. An item or part already stored is kept, so a write fills only
     /// what is missing. Heights the store has pruned are not written.
     pub async fn put(&self, item: &Item, parts: &Parts) -> anyhow::Result<()> {
-        self.backend.put(row(item)?, parts.encode()?).await
+        let parts = parts.encode(Some(item.leaf.block_header()))?;
+        self.backend.put(row(item)?, parts).await
     }
 
     /// Stores `parts` of `height`, each unless the height has it or is pruned.
     pub async fn put_parts(&self, height: u64, parts: &Parts) -> anyhow::Result<()> {
-        self.backend.put_parts(height, parts.encode()?).await
+        // A payload's info counts its transactions by the header, if the store has it.
+        let item = match parts.payload.is_some() && parts.payload_info.is_none() {
+            true => self.item(height).await?,
+            false => None,
+        };
+        let parts = parts.encode(item.as_ref().map(|item| item.leaf.block_header()))?;
+        self.backend.put_parts(height, parts).await
     }
 
     pub async fn item(&self, height: u64) -> anyhow::Result<Option<Item>> {
@@ -235,7 +283,16 @@ impl ChainStore {
     /// The item and parts of `height` as the store encodes them, for passing on to another store
     /// unchanged.
     pub async fn record(&self, height: u64) -> anyhow::Result<Option<Record>> {
-        let record = self.backend.record(height).await?;
+        self.read_record(height, true).await
+    }
+
+    /// The record of `height` without its payload, which [`Parts::payload_info`] describes.
+    pub async fn summary(&self, height: u64) -> anyhow::Result<Option<Record>> {
+        self.read_record(height, false).await
+    }
+
+    async fn read_record(&self, height: u64, payload: bool) -> anyhow::Result<Option<Record>> {
+        let record = self.backend.record(height, payload).await?;
         Ok(record.map(|(item, parts)| Record {
             height,
             item,
@@ -325,6 +382,15 @@ impl ChainStore {
     /// Deletes everything before `height` and stops accepting writes there.
     pub async fn prune_below(&self, height: u64) -> anyhow::Result<()> {
         self.backend.prune_below(height).await
+    }
+
+    /// The backend's updates of the newest heights from `from` on, if it sends them.
+    pub(crate) async fn tip_updates(
+        &self,
+        from: u64,
+    ) -> anyhow::Result<Option<futures::stream::BoxStream<'static, anyhow::Result<TipUpdate>>>>
+    {
+        self.backend.tip_updates(from).await
     }
 
     /// Takes or renews the lease `name` for `holder` for `ttl`; see [`Backend::lease`].
@@ -451,7 +517,8 @@ mod tests {
         assert_eq!(before.last().unwrap().0[..], 1499u32.to_be_bytes());
     }
 
-    /// A record carries the item and parts as stored, and decodes to them.
+    /// A record carries the item and parts as stored, and decodes to them, with the payload's
+    /// info computed when it was written; a summary leaves out only the payload.
     #[tokio::test]
     async fn a_record_decodes_to_what_was_stored() {
         let store = ChainStore::new(mem::MemBackend::default());
@@ -459,7 +526,23 @@ mod tests {
         store.put(&item, &payload_only(b"payload")).await.unwrap();
         let record = store.record(0).await.unwrap().unwrap();
         assert_eq!(record.item().unwrap(), item);
-        assert_eq!(record.parts().unwrap(), payload_only(b"payload"));
+        let info = PayloadInfo::of(b"payload", Some(item.leaf.block_header()));
+        assert_eq!(info.size, 7);
+        assert_eq!(
+            record.parts().unwrap(),
+            Parts {
+                payload_info: Some(info),
+                ..payload_only(b"payload")
+            }
+        );
+        let summary = store.summary(0).await.unwrap().unwrap();
+        assert_eq!(
+            summary.parts().unwrap(),
+            Parts {
+                payload_info: Some(info),
+                ..Default::default()
+            }
+        );
         assert_eq!(store.record(1).await.unwrap(), None);
     }
 

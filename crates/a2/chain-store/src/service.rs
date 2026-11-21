@@ -3,13 +3,15 @@
 //!
 //! [`RemoteBackend`]: crate::remote::RemoteBackend
 
-use std::{pin::Pin, sync::Arc};
+use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 
 use futures::{Stream, stream};
+use tokio::sync::watch;
 use tonic::{Request, Response, Status};
 
 use crate::{
-    Backend, Column, KeyBounds, Row, TableName,
+    Backend, ChainStore, Column, KeyBounds, Row, TableName, TipUpdate,
+    tip::{self, Tip},
     wire::{
         MAX_MESSAGE_SIZE, app_write_from, part_from, parts_from, parts_to,
         proto::{self, store_server::StoreServer},
@@ -19,22 +21,30 @@ use crate::{
 /// The most application table entries one answer holds.
 const MAX_APP_ENTRIES: usize = 4096;
 
-/// The gRPC service over `backend`.
-pub fn server(backend: Arc<dyn Backend>) -> StoreServer<StoreService> {
-    StoreServer::new(StoreService { backend })
+/// The gRPC service over `backend`, and the follower of the backend's newest heights that the
+/// service's clients share, which must run as long as the service.
+pub fn server(
+    backend: Arc<dyn Backend>,
+) -> (StoreServer<StoreService>, impl Future<Output = ()> + Send) {
+    let (follower, tips) = tip::follower(ChainStore::shared(backend.clone()));
+    let server = StoreServer::new(StoreService { backend, tips })
         .max_decoding_message_size(MAX_MESSAGE_SIZE)
-        .max_encoding_message_size(MAX_MESSAGE_SIZE)
+        .max_encoding_message_size(MAX_MESSAGE_SIZE);
+    (server, follower.run())
 }
 
 pub struct StoreService {
     backend: Arc<dyn Backend>,
+    tips: watch::Receiver<Arc<Tip>>,
 }
 
 type ChangeStream = Pin<Box<dyn Stream<Item = Result<proto::Change, Status>> + Send>>;
+type TipStream = Pin<Box<dyn Stream<Item = Result<proto::TipEvent, Status>> + Send>>;
 
 #[tonic::async_trait]
 impl proto::store_server::Store for StoreService {
     type ChangesStream = ChangeStream;
+    type FollowTipStream = TipStream;
 
     async fn put(
         &self,
@@ -94,11 +104,12 @@ impl proto::store_server::Store for StoreService {
 
     async fn get_record(
         &self,
-        request: Request<proto::HeightRequest>,
+        request: Request<proto::RecordRequest>,
     ) -> Result<Response<proto::RecordResponse>, Status> {
+        let r = request.into_inner();
         let record = self
             .backend
-            .record(request.into_inner().height)
+            .record(r.height, r.payload)
             .await
             .map_err(internal)?;
         Ok(Response::new(match record {
@@ -282,6 +293,49 @@ impl proto::store_server::Store for StoreService {
         });
         Ok(Response::new(Box::pin(stream)))
     }
+
+    /// Sends what the shared follower holds from `from` on, then what changes in it, until the
+    /// client goes away.
+    async fn follow_tip(
+        &self,
+        request: Request<proto::FollowTipRequest>,
+    ) -> Result<Response<Self::FollowTipStream>, Status> {
+        let from = request.into_inner().from;
+        let tips = self.tips.clone();
+        let stream = stream::unfold(
+            (tips, BTreeMap::new(), true),
+            move |(mut tips, mut sent, first)| async move {
+                if !first && tips.changed().await.is_err() {
+                    return None;
+                }
+                let tip = tips.borrow_and_update().clone();
+                let updates = match tip.read {
+                    true => tip::updates(&tip, from, &mut sent),
+                    false => Vec::new(),
+                };
+                let events: Vec<_> = updates.into_iter().map(|u| Ok(tip_event(u))).collect();
+                Some((stream::iter(events), (tips, sent, false)))
+            },
+        );
+        Ok(Response::new(Box::pin(futures::StreamExt::flatten(stream))))
+    }
+}
+
+fn tip_event(update: TipUpdate) -> proto::TipEvent {
+    use proto::tip_event::Event;
+    let event = match update {
+        TipUpdate::Height {
+            height,
+            item,
+            parts,
+        } => Event::Height(proto::TipHeight {
+            height,
+            item,
+            parts: parts_to(parts),
+        }),
+        TipUpdate::Bounds { newest, floor } => Event::Bounds(proto::TipBounds { newest, floor }),
+    };
+    proto::TipEvent { event: Some(event) }
 }
 
 fn internal(err: anyhow::Error) -> Status {

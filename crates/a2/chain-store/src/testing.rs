@@ -78,17 +78,22 @@ pub async fn conformance(backend: &dyn Backend) {
     assert_eq!(backend.part(4, Payload).await.unwrap(), None);
     assert_eq!(backend.newest().await.unwrap(), Some(5));
     assert_eq!(
-        backend.record(1).await.unwrap(),
+        backend.record(1, true).await.unwrap(),
         Some((
             bytes("item-1"),
             vec![(Payload, bytes("p1")), (VidCommon, bytes("v1"))]
         ))
     );
     assert_eq!(
-        backend.record(4).await.unwrap(),
+        backend.record(1, false).await.unwrap(),
+        Some((bytes("item-1"), vec![(VidCommon, bytes("v1"))])),
+        "without the payload"
+    );
+    assert_eq!(
+        backend.record(4, true).await.unwrap(),
         Some((bytes("item-4"), vec![]))
     );
-    assert_eq!(backend.record(2).await.unwrap(), None);
+    assert_eq!(backend.record(2, true).await.unwrap(), None);
 
     // An empty part is kept as present.
     backend

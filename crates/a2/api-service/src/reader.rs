@@ -1,11 +1,15 @@
 //! Reads from the store that wait for heights it does not have yet.
 //!
 //! A read of a height the [`Tip`] covers takes it from there and waits on the tip; only an older
-//! height is read from the store.
+//! height is read from the store. The tip holds no payloads, only what describes them, so a read
+//! that needs a payload reads it from the store once the tip says it is there.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use chain_store::{ChainStore, Item, Lookup, Parts};
+use chain_store::{
+    ChainStore, Item, Lookup, Parts, PayloadInfo,
+    tip::{Entry, Tip},
+};
 use espresso_api::{error::to_status, proto};
 use espresso_types::{NamespaceId, NsPayload, Payload, SeqTypes};
 use futures::stream::{self, BoxStream, StreamExt};
@@ -23,10 +27,7 @@ use tokio::{
 };
 use tonic::Status;
 
-use crate::{
-    request::BlockKey,
-    tip::{Entry, Tip},
-};
+use crate::request::BlockKey;
 
 /// How long a single read waits for a height the store lacks.
 const READ_TIMEOUT: Duration = Duration::from_millis(500);
@@ -88,13 +89,46 @@ impl Reader {
         height: u64,
         wait: Wait,
     ) -> Result<BlockQueryData<SeqTypes>, Status> {
-        let (item, parts) = self
-            .with_parts(height, wait, |p| p.payload.is_some())
+        let entry = self
+            .entry(height, wait, |p| p.payload_info.is_some())
             .await?;
-        Ok(block(
-            &item,
-            parts.payload.as_deref().expect("waited for the payload"),
-        ))
+        let payload = self.payload(height).await?;
+        Ok(block(&entry.item, &payload))
+    }
+
+    /// The item of `height`, with what describes its payload, without reading the payload: its
+    /// BLAKE3 hash, its size, and how many transactions it holds. The count is the payload's
+    /// unless the store had no header to count by when it stored the payload; then the payload
+    /// is read to count them.
+    pub(crate) async fn described(
+        &self,
+        height: u64,
+        wait: Wait,
+    ) -> Result<(Item, PayloadInfo, u64), Status> {
+        let entry = self
+            .entry(height, wait, |p| p.payload_info.is_some())
+            .await?;
+        let info = entry
+            .parts
+            .payload_info
+            .expect("waited for the payload's info");
+        let num_transactions = match info.num_transactions {
+            Some(count) => count,
+            None => {
+                let payload = self.payload(height).await?;
+                block(&entry.item, &payload).num_transactions()
+            },
+        };
+        Ok((entry.item.clone(), info, num_transactions))
+    }
+
+    /// The payload of `height`, which the tip says the store has.
+    async fn payload(&self, height: u64) -> Result<bytes::Bytes, Status> {
+        self.store
+            .payload(height)
+            .await
+            .map_err(to_status)?
+            .ok_or_else(|| Status::not_found(format!("the payload of height {height} is pruned")))
     }
 
     pub(crate) async fn vid_common(
@@ -120,16 +154,8 @@ impl Reader {
         namespace: NamespaceId,
         wait: Wait,
     ) -> Result<proto::NamespaceProofResponse, Status> {
-        let entry = self
-            .entry(height, wait, |p| {
-                p.payload.is_some() && p.vid_common.is_some()
-            })
-            .await?;
-        let payload = entry
-            .parts
-            .payload
-            .as_deref()
-            .expect("waited for the payload");
+        let entry = self.entry(height, wait, chain_store::tip::complete).await?;
+        let payload = self.payload(height).await?;
         let Some(VidCommon::V2(common)) = &entry.parts.vid_common else {
             return Err(Status::internal("the VID common data is not AvidmGf2's"));
         };
@@ -141,7 +167,7 @@ impl Reader {
             return Ok(proto::NamespaceProofResponse::default());
         };
         // The proof holds a copy of the namespace's bytes, and the transactions a second one.
-        let proof = AvidmGf2Scheme::namespace_proof(common, payload, index)
+        let proof = AvidmGf2Scheme::namespace_proof(common, &payload, index)
             .map_err(|err| Status::internal(format!("proving the namespace failed: {err}")))?;
         let transactions = NsPayload::from_bytes_slice(&proof.ns_payload)
             .export_all_txs(&namespace)
@@ -253,7 +279,7 @@ impl Reader {
         height: u64,
         complete: &impl Fn(&Parts) -> bool,
     ) -> Result<Option<Arc<Entry>>, Status> {
-        let Some(record) = self.store.record(height).await.map_err(to_status)? else {
+        let Some(record) = self.store.summary(height).await.map_err(to_status)? else {
             return Ok(None);
         };
         let parts = record.parts().map_err(to_status)?;
@@ -261,7 +287,11 @@ impl Reader {
             return Ok(None);
         }
         let item = record.item().map_err(to_status)?;
-        Ok(Some(Arc::new(Entry { item, parts })))
+        Ok(Some(Arc::new(Entry {
+            item,
+            parts,
+            record,
+        })))
     }
 }
 
@@ -288,7 +318,7 @@ fn block(item: &Item, payload: &[u8]) -> BlockQueryData<SeqTypes> {
 
 #[cfg(test)]
 mod tests {
-    use chain_store::mem::MemBackend;
+    use chain_store::{mem::MemBackend, tip};
     use espresso_types::{
         Leaf2, NamespaceProofQueryData, NodeState, NsProof, Transaction, ValidatedState,
     };
@@ -300,7 +330,6 @@ mod tests {
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
-    use crate::tip;
 
     /// The proof built from the stored bytes is the one the generic `NsProof` gives, for each
     /// namespace of a block with several, and empty for a namespace the block lacks.

@@ -85,10 +85,16 @@ async fn main() -> anyhow::Result<()> {
                 .context("ingesting the decide log")
         });
     }
+    let (store_service, follower) = service::server(backend);
+    tasks.spawn(async move {
+        // Ends only with the store's changes.
+        follower.await;
+        anyhow!("following the store's tip stopped")
+    });
     tasks.spawn(async move {
         // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
         let served = Server::builder()
-            .add_service(service::server(backend))
+            .add_service(store_service)
             .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
             .await;
         match served {

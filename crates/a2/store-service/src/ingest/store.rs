@@ -28,6 +28,8 @@ impl Sink<SeqTypes> for ChainStore {
             cert2: block.cert2,
             state_cert: block.state_cert,
             certs_known: true,
+            // Computed when the payload is written.
+            payload_info: None,
         };
         self.put(&item, &parts).await
     }

@@ -86,11 +86,16 @@ impl Backend for MemBackend {
         Ok(self.read(|state| state.parts.get(&(height, part)).cloned()))
     }
 
-    async fn record(&self, height: u64) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
+    async fn record(
+        &self,
+        height: u64,
+        payload: bool,
+    ) -> anyhow::Result<Option<(Bytes, Vec<(Part, Bytes)>)>> {
         Ok(self.read(|state| {
             let item = state.rows.get(&height)?.item.clone();
             let parts = Part::ALL
                 .into_iter()
+                .filter(|part| payload || *part != Part::Payload)
                 .filter_map(|part| Some((part, state.parts.get(&(height, part))?.clone())))
                 .collect();
             Some((item, parts))
