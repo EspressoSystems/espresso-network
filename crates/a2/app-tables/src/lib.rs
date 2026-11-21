@@ -2,8 +2,8 @@
 //! keeps for the service running over it next to its own data.
 //!
 //! Both stores of a deployment have them: the consensus store, for the membership data and the
-//! decided state of consensus, and the chain store, for the data the ingester derives for the API
-//! instances. Code that keeps its data in either, such as the membership store, is written once
+//! decided state of consensus, and the chain store, for what the API instances serve
+//! besides blocks. Code that keeps its data in either, such as the membership store, is written once
 //! against [`AppTables`].
 
 use std::{fmt, sync::Arc};

@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS chain_app (
     value BYTEA NOT NULL,
     PRIMARY KEY (tbl, key)
 );
+CREATE TABLE IF NOT EXISTS chain_leases (
+    name    TEXT PRIMARY KEY,
+    holder  TEXT NOT NULL,
+    expires TIMESTAMPTZ NOT NULL
+);
 ";
 
 #[derive(Debug)]
@@ -401,6 +406,28 @@ impl Backend for PostgresBackend {
                 .await?;
         }
         self.commit(tx).await
+    }
+
+    async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool> {
+        // Times are the database's, so the holders' clocks do not matter. Leases whose time ran
+        // out long ago go, so leases on passing work do not pile up.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM chain_leases WHERE expires < now() - interval '1 hour'")
+            .execute(&mut *tx)
+            .await?;
+        let held: Option<String> = sqlx::query_scalar(
+            "INSERT INTO chain_leases (name, holder, expires) VALUES ($1, $2, now() + $3 * \
+             interval '1 millisecond') ON CONFLICT (name) DO UPDATE SET holder = EXCLUDED.holder, \
+             expires = EXCLUDED.expires WHERE chain_leases.holder = EXCLUDED.holder OR \
+             chain_leases.expires < now() RETURNING holder",
+        )
+        .bind(name)
+        .bind(holder)
+        .bind(i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(held.is_some())
     }
 
     fn changes(&self) -> watch::Receiver<u64> {

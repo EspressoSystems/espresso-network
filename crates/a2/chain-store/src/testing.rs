@@ -35,6 +35,26 @@ pub async fn conformance(backend: &dyn Backend) {
     assert!(backend.missing_items(0, 10).await.unwrap().is_empty());
     assert_eq!(backend.newest_gap().await.unwrap(), None);
 
+    // A lease goes to the first holder, which renews it, and to another once its time ran out.
+    let long = std::time::Duration::from_secs(60);
+    let short = std::time::Duration::from_millis(50);
+    assert!(backend.lease("work", "a", long).await.unwrap());
+    assert!(backend.lease("work", "a", short).await.unwrap(), "renewed");
+    assert!(
+        !backend.lease("work", "b", long).await.unwrap(),
+        "held by a"
+    );
+    assert!(backend.lease("other", "b", long).await.unwrap());
+    tokio::time::sleep(short * 3).await;
+    assert!(
+        backend.lease("work", "b", long).await.unwrap(),
+        "a's time ran out"
+    );
+    assert!(
+        !backend.lease("work", "a", long).await.unwrap(),
+        "held by b"
+    );
+
     let mut changes = backend.changes();
     changes.borrow_and_update();
     // Heights 1 and 5 share a payload commitment, as blocks with the same payload do. Height 4

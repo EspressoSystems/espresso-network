@@ -2,8 +2,8 @@
 //! signed service records.
 //!
 //! Records change only when the epoch does, so the cache is refreshed once per epoch. It takes the
-//! records the [`Publisher`](crate::publish::Publisher) stored from the deployment's consensus
-//! node, and while there are none, those the bootstrap API services list. A record counts only if
+//! records the store got from the deployment's consensus node, and while there are none, those the
+//! bootstrap API services list. A record counts only if
 //! it is for the epoch, is signed by its signer, and its signer is staked in the epoch, whoever
 //! sent it. Until the cache holds records, the bootstrap URLs are the peers. The deployment's own
 //! URL is never a peer.
@@ -22,7 +22,7 @@ use rand::seq::SliceRandom;
 use tonic::transport::Channel;
 use url::Url;
 
-use crate::{gaps::endpoint, membership::Membership};
+use crate::repair::{gaps::endpoint, membership::Membership};
 
 pub struct Peers {
     /// Where the records of the deployment's consensus node are stored.
@@ -220,7 +220,7 @@ mod tests {
     use consensus_api::discovery::ServiceRecord;
 
     use super::*;
-    use crate::membership::testing::*;
+    use crate::repair::membership::testing::*;
 
     fn url(port: u16) -> Url {
         format!("http://127.0.0.1:{port}").parse().unwrap()

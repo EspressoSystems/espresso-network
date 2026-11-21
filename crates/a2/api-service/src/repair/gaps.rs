@@ -46,7 +46,7 @@ use tokio::{
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use url::Url;
 
-use crate::{
+use crate::repair::{
     membership::Membership,
     peers::{Peer, Peers},
 };
@@ -73,6 +73,10 @@ const MAX_RECORD_SIZE: usize = 64 << 20;
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(600);
+
+/// How long the lease on a gap or an epoch lasts: long enough to fill it, mostly. One that takes
+/// longer may be filled twice, which does no harm.
+const WORK_LEASE: Duration = Duration::from_secs(300);
 
 pub struct GapFiller {
     pub(crate) store: ChainStore,
@@ -109,6 +113,10 @@ pub struct GapFiller {
 
     /// The epochs whose every height has its certificates known, as far as this filler has seen.
     pub(crate) checked_epochs: BTreeSet<EpochNumber>,
+
+    /// Who this filler is among the instances repairing the store, if it shares the work with
+    /// them through leases.
+    holder: Option<String>,
 }
 
 impl GapFiller {
@@ -117,6 +125,7 @@ impl GapFiller {
             store,
             peers,
             membership,
+            holder: None,
             finality: FINALITY_VIEWS,
             newest: None,
             floor: 0,
@@ -204,6 +213,14 @@ impl GapFiller {
         for gap in self.item_gaps(newest, final_until).await? {
             // A filled height can lack its payload, and lies before the parts cursor.
             self.parts_from = self.parts_from.min(gap.start);
+            if !self
+                .may_work(&format!("repair/items/{}", gap.start))
+                .await?
+            {
+                // Another instance fills it; looked at again later.
+                self.item_retries.failed(gap.start, gap.end);
+                continue;
+            }
             match self.fill_items(gap.clone(), &self.peers.shuffled()).await {
                 Ok(()) => self.item_retries.succeeded(gap.start),
                 Err(err) => {
@@ -214,6 +231,15 @@ impl GapFiller {
         }
         let heights = self.part_heights(newest, final_until).await?;
         for run in runs(&heights) {
+            if !self
+                .may_work(&format!("repair/parts/{}", run.start))
+                .await?
+            {
+                for height in run {
+                    self.part_retries.failed(height, height + 1);
+                }
+                continue;
+            }
             self.fill_parts(run.clone(), &self.peers.shuffled()).await;
             let missing = match self.lacking_parts(run.clone()).await {
                 Ok(missing) => missing,
@@ -230,6 +256,22 @@ impl GapFiller {
             }
         }
         Ok(())
+    }
+
+    /// Shares the work with the other instances repairing the store: from now on this filler
+    /// works on a gap or an epoch only while it holds its lease, as `holder`.
+    pub fn with_leases(mut self, holder: String) -> Self {
+        self.holder = Some(holder);
+        self
+    }
+
+    /// Whether this filler may work on what the lease `name` names: always, without leases, and
+    /// otherwise while it holds the lease.
+    pub(crate) async fn may_work(&self, name: &str) -> anyhow::Result<bool> {
+        match &self.holder {
+            None => Ok(true),
+            Some(holder) => self.store.lease(name, holder, WORK_LEASE).await,
+        }
     }
 
     /// The final gaps past the cursor, which it then moves past them, and the gaps due to be
@@ -599,7 +641,6 @@ pub(crate) fn runs(heights: &BTreeSet<u64>) -> Vec<Range<u64>> {
 
 #[cfg(test)]
 mod tests {
-    use api_service::ApiService;
     use bytes::Bytes;
     use chain_store::mem::MemBackend;
     use espresso_types::{BlockMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState};
@@ -613,6 +654,7 @@ mod tests {
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
+    use crate::ApiService;
 
     /// The genesis block with its payload and VID common data, and a block after it.
     async fn chain() -> ((Item, Bytes, VidCommon), Item) {
@@ -688,6 +730,39 @@ mod tests {
             filler.run().await;
         });
         store
+    }
+
+    /// A gap another instance holds the lease on is left to it, and filled once that lease runs
+    /// out without the gap being filled.
+    #[tokio::test]
+    async fn leaves_a_gap_another_instance_holds() {
+        let ((item0, payload, common), item1) = chain().await;
+        let peer = ChainStore::new(MemBackend::default());
+        peer.put(&item0, &parts(&payload, &common)).await.unwrap();
+        peer.put(&item1, &Parts::default()).await.unwrap();
+        let url = serve(peer).await;
+        let store = ChainStore::new(MemBackend::default());
+        store.put(&item1, &Parts::default()).await.unwrap();
+        let held = Duration::from_secs(1);
+        assert!(store.lease("repair/items/0", "other", held).await.unwrap());
+
+        let peers = Peers::new(chain_api::Tables::new(store.clone()), vec![url], None);
+        let mut filler = GapFiller::new(store.clone(), peers, None).with_leases("this".into());
+        filler.finality = 0;
+        tokio::spawn(filler.run());
+        sleep(held / 2).await;
+        assert!(
+            store.item(0).await.unwrap().is_none(),
+            "the other instance's gap"
+        );
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while store.item(0).await.unwrap().is_none() {
+                sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the gap is filled once the lease ran out");
     }
 
     #[tokio::test]

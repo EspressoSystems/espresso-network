@@ -2,7 +2,7 @@
 //!
 //! Consensus keeps the stake tables it builds, the DRB results and epoch roots they follow from,
 //! and the L1 stake-table events it reads in its own store, next to its safety state, so that it
-//! needs no SQL. The ingester of an API service keeps the same in the chain store, where the API
+//! needs no SQL. Repair keeps the same in the chain store, where the API
 //! instances read the stake tables, and a restart does not read L1 again. Per-epoch data is kept for the most recent [`RETAINED_EPOCHS`] epochs; older epochs
 //! come from the API services, which keep history. The events are kept in full, since a stake
 //! table is computed from all events before its epoch.

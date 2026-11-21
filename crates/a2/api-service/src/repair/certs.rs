@@ -4,7 +4,7 @@
 //! Each is checked against the stake table of its block's epoch, so they are filled an epoch at a
 //! time, once membership has that stake table and the store has every block of the epoch. A height
 //! whose certificates are known, [`Parts::certs_known`], has them as consensus made them: the
-//! ingester's heights, from the decide log, and heights checked here. The others are asked of the
+//! heights from the decide log, and heights checked here. The others are asked of the
 //! peers, and only a peer that knows a height's certificates answers for it: a height it knows
 //! without a `Certificate2` was decided by a later block, and keeps none. A peer that filled the
 //! height without its certificates may simply not have them.
@@ -19,7 +19,7 @@ use std::{collections::BTreeSet, ops::Range};
 use chain_store::{Item, Part, Parts};
 use hotshot_types::data::EpochNumber;
 
-use crate::{
+use crate::repair::{
     gaps::{GapFiller, runs},
     membership::Membership,
     peers::Peer,
@@ -83,6 +83,11 @@ impl GapFiller {
                 || self.epoch_retries.waiting(*epoch)
                 || membership.stake_table(epoch).is_none()
             {
+                continue;
+            }
+            if !self.may_work(&format!("repair/certs/{epoch}")).await? {
+                // Another instance checks it; looked at again later.
+                self.epoch_retries.failed(*epoch, *epoch + 1);
                 continue;
             }
             // An epoch no peer can answer for does not hold up the ones before it.
@@ -164,7 +169,7 @@ impl GapFiller {
         peer: &Peer,
         heights: Range<u64>,
     ) -> anyhow::Result<()> {
-        let records = crate::gaps::fetch(peer, heights.clone(), true).await?;
+        let records = crate::repair::gaps::fetch(peer, heights.clone(), true).await?;
         anyhow::ensure!(
             records.len() == count(&heights),
             "{peer} has {} of {} heights",
@@ -217,14 +222,16 @@ async fn checked_certs(
 mod tests {
     use std::time::Duration;
 
-    use api_service::ApiService;
     use chain_store::{ChainStore, mem::MemBackend};
     use hotshot_types::simple_certificate::QuorumCertificate2;
     use tokio::net::TcpListener;
     use url::Url;
 
     use super::*;
-    use crate::{membership::testing::*, peers::Peers};
+    use crate::{
+        ApiService,
+        repair::{membership::testing::*, peers::Peers},
+    };
 
     const EPOCH: u64 = FIRST_EPOCH + 1;
 

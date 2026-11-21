@@ -189,7 +189,7 @@ impl Genesis {
         Some(config)
     }
 
-    /// The network config of a process without stake, such as an ingester or an API instance:
+    /// The network config of a process without stake, such as an API instance:
     /// the genesis stake table and the epochs.
     pub fn unstaked_network_config(&self) -> anyhow::Result<NetworkConfig<SeqTypes>> {
         // Any key outside the stake table reads it.

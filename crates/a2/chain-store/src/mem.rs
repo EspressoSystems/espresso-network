@@ -1,6 +1,11 @@
 //! A backend in memory, for tests and for a single process that keeps nothing across restarts.
 
-use std::{collections::BTreeMap, ops::Range, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    ops::Range,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -20,6 +25,9 @@ struct State {
     parts: BTreeMap<(u64, Part), Bytes>,
     app: BTreeMap<(TableName, Bytes), Bytes>,
     floor: u64,
+
+    /// Lease name to its holder and when its time runs out.
+    leases: BTreeMap<String, (String, Instant)>,
 }
 
 impl Default for MemBackend {
@@ -206,6 +214,22 @@ impl Backend for MemBackend {
             state.parts = state.parts.split_off(&(floor, Part::Payload));
         });
         Ok(())
+    }
+
+    async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool> {
+        let now = Instant::now();
+        let mut state = self.state.lock().unwrap();
+        state.leases.retain(|_, (_, until)| *until > now);
+        let held = state
+            .leases
+            .get(name)
+            .is_none_or(|(current, _)| current == holder);
+        if held {
+            state
+                .leases
+                .insert(name.to_string(), (holder.to_string(), now + ttl));
+        }
+        Ok(held)
     }
 
     fn changes(&self) -> watch::Receiver<u64> {

@@ -6,6 +6,7 @@ authors     = { workspace = true }
 edition     = { workspace = true }
 
 [dependencies]
+alloy                       = { workspace = true }
 anyhow                      = { workspace = true }
 async-trait                 = { workspace = true }
 axum                        = { workspace = true }
@@ -20,12 +21,16 @@ consensus-api               = { workspace = true }
 either                      = { workspace = true }
 espresso-api                = { workspace = true }
 espresso-genesis            = { workspace = true }
-espresso-types              = { workspace = true }
+espresso-types              = { workspace = true, features = ["node"] }
 futures                     = { workspace = true }
+hotshot-contract-adapter    = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types               = { workspace = true }
 http-wire                   = { workspace = true, features = ["server"] }
+jf-merkle-tree-compat       = { workspace = true }
 light-client                = { workspace = true }
+membership                  = { workspace = true }
+rand                        = { workspace = true }
 serde                       = { workspace = true }
 serde_json                  = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
@@ -38,8 +43,11 @@ url                         = { workspace = true }
 versions                    = { workspace = true }
 
 [dev-dependencies]
+async-lock     = { workspace = true }
+bitvec         = { workspace = true }
 blake3         = { workspace = true }
-alloy          = { workspace = true }
+hotshot-query-service = { workspace = true, features = ["testing"] }
+test-utils     = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 http-client    = { workspace = true }
 vbs            = { workspace = true }

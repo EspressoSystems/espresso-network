@@ -503,7 +503,7 @@ async fn test_decide_log() {
     assert_eq!(left, vec![v2.leaf.height()]);
 }
 
-/// The writer reports when the decide log reaches its limit, and again when the ingester frees
+/// The writer reports when the decide log reaches its limit, and again when the store frees
 /// enough of it.
 #[tokio::test]
 async fn test_decide_log_limit() {

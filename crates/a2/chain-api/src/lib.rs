@@ -1,8 +1,8 @@
-//! What a deployment's ingester shares with its API instances and with other API services.
+//! What a deployment's store shares with its API instances and with other API services.
 //!
-//! The ingester fills gaps from other API services through the [chain service](proto), and
-//! learns their URLs from discovery records. It writes what API instances serve besides blocks
-//! into the [`Tables`] of the chain store, which they read and trust, as they trust the blocks.
+//! Repairing API instances fill gaps from other API services through the [chain service](proto),
+//! and learn their URLs from discovery records. What API instances serve besides blocks is in the
+//! [`Tables`] of the chain store, which they read and trust, as they trust the blocks.
 
 pub mod discovery;
 pub mod records;

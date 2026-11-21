@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Runs an a2 network on this machine: anvil as L1 with the Espresso contracts and the demo
 # validators staked, and for each of the five validators of the demo genesis file a deployment of
-# a consensus node, a storage instance on Postgres, which takes the node's decide log, an ingester,
-# which repairs the store, and an API instance. Node 0 runs a second storage instance on the same
-# database, so the two share the decide log. Ingesters find the other deployments' API services
-# through the validators' records, starting from the first. For its first minute node 4's decide
-# log goes to a storage instance on a scratch database, which acknowledges it, so node 4 frees
-# those heights; then a storage instance on node 4's real database takes over, which therefore
-# lacks them, and the ingester fills them, and later their certificates, from the other
-# deployments. Logs go to RUNDIR. Stops everything on exit.
+# a consensus node, a storage instance on Postgres, which takes the node's decide log, and an API
+# instance, which also repairs the store. Node 0 runs a second storage instance on the same
+# database, so the two share the decide log, and node 4 a second API instance that repairs, so the
+# two share the repairs. API instances find the other deployments' API services through the
+# validators' records, starting from the first. For its first minute node 4's decide log goes to a
+# storage instance on a scratch database, which acknowledges it, so node 4 frees those heights;
+# then a storage instance on node 4's real database takes over, which therefore lacks them, and
+# its API instances fill them, and later their certificates, from the other deployments. Logs go to
+# RUNDIR. Stops everything on exit.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -19,7 +20,7 @@ Usage: ${SCRIPT_NAME} RUNDIR
 
 Run an a2 network, keeping its stores and logs in RUNDIR, which must not exist. Needs anvil on the
 PATH or in the repository root, Postgres, and the binaries deploy, consensus-node, store-service,
-ingester, api-service and staking-cli in target/PROFILE or target/debug.
+api-service and staking-cli in target/PROFILE or target/debug.
 
 The API services serve on http://127.0.0.1:24000 to http://127.0.0.1:24004, one per node.
 
@@ -120,11 +121,9 @@ main() {
 
   sleep 5
   for i in 0 1 2 3 4; do
-    api-service --port $((24000 + i)) --store "http://127.0.0.1:$((8070 + i))" \
-      --consensus-api "127.0.0.1:$((9978 + i))" --genesis-file "$genesis" \
-      >"$rundir/api-$i.log" 2>&1 &
-    start_ingester "$rundir" "$i" "$genesis" "$l1" $((8070 + i)) "ingester-$i"
+    start_api "$rundir" "$i" "$genesis" "$l1" $((24000 + i)) "api-$i"
   done
+  start_api "$rundir" 4 "$genesis" "$l1" 24014 "api-4b"
 
   echo "running; logs in $rundir"
   sleep 60
@@ -135,16 +134,17 @@ main() {
   wait
 }
 
-# Starts the ingester of node $2, with genesis file $3 and L1 $4, repairing the store behind the
-# storage instance on port $5, logging to $1/$6.log. All but the first learn the other API services
-# from the first.
-start_ingester() {
+# Starts an API instance of node $2, with genesis file $3 and L1 $4, serving on port $5 and
+# repairing its node's store, logging to $1/$6.log. All but node 0's learn the other API services
+# from node 0's.
+start_api() {
   local bootstrap=()
   if (($2 > 0)); then
     bootstrap=(--bootstrap http://127.0.0.1:24000)
   fi
-  ingester --store "http://127.0.0.1:$5" \
-    --genesis-file "$3" --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
+  api-service --port "$5" --store "http://127.0.0.1:$((8070 + $2))" \
+    --consensus-api "127.0.0.1:$((9978 + $2))" --genesis-file "$3" \
+    --repair --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
     "${bootstrap[@]}" >"$1/$6.log" 2>&1 &
 }
 

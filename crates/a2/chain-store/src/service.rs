@@ -1,5 +1,5 @@
 //! The store service: a [`Backend`] served over gRPC, so that one process alone writes to the
-//! database and the ingester and the API service reach the store through [`RemoteBackend`].
+//! database and the API service reaches the store through [`RemoteBackend`].
 //!
 //! [`RemoteBackend`]: crate::remote::RemoteBackend
 
@@ -248,6 +248,23 @@ impl proto::store_server::Store for StoreService {
             .await
             .map_err(internal)?;
         Ok(Response::new(proto::Done {}))
+    }
+
+    async fn lease(
+        &self,
+        request: Request<proto::LeaseRequest>,
+    ) -> Result<Response<proto::LeaseResponse>, Status> {
+        let r = request.into_inner();
+        let held = self
+            .backend
+            .lease(
+                &r.name,
+                &r.holder,
+                std::time::Duration::from_millis(r.ttl_ms),
+            )
+            .await
+            .map_err(internal)?;
+        Ok(Response::new(proto::LeaseResponse { held }))
     }
 
     /// Sends the counter now, then each value it changes to, until the client goes away.

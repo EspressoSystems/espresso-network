@@ -49,6 +49,9 @@ service Store {
   // Applies writes to the application tables, in order, in one commit.
   rpc AppWrite(AppWriteRequest) returns (Done);
 
+  // Takes or renews a lease for a holder; says whether the holder holds it now.
+  rpc Lease(LeaseRequest) returns (LeaseResponse);
+
   // Deletes everything below `height`, and raises the floor to it.
   rpc PruneBelow(HeightRequest) returns (Done);
 
@@ -198,6 +201,16 @@ message AppTableWrite {
 
 message AppWriteRequest {
   repeated AppTableWrite writes = 1;
+}
+
+message LeaseRequest {
+  string name = 1;
+  string holder = 2;
+  uint64 ttl_ms = 3;
+}
+
+message LeaseResponse {
+  bool held = 1;
 }
 
 message Change {

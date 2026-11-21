@@ -12,7 +12,7 @@ use crate::ApiService;
 
 #[tonic::async_trait]
 impl DiscoveryService for ApiService {
-    /// The records of the epoch, or of the latest epoch with records, as the ingester stored them
+    /// The records of the epoch, or of the latest epoch with records, as the store got them
     /// from its consensus node.
     async fn get_peers(
         &self,

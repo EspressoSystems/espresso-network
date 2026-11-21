@@ -1,7 +1,7 @@
 //! The tables of the chain store that the API instances serve besides the chain.
 //!
-//! The ingester writes them, mostly from what consensus sends with the decide log; API instances
-//! only read them, and trust them as they trust the blocks the ingester copies. Epochs and heights are keys as big-endian `u64`, so they sort in
+//! The storage instances write them from what consensus sends with the decide log, and repair
+//! writes what it fills; API instances only read them, and trust them as they trust the blocks. Epochs and heights are keys as big-endian `u64`, so they sort in
 //! order and older ones are deleted by a key range.
 
 use std::sync::LazyLock;
@@ -19,7 +19,7 @@ use hotshot_types::{PeerConfig, data::EpochNumber};
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-/// Height to the [`StateRow`] of the state after it, for the newest heights the ingester applied.
+/// Height to the [`StateRow`] of the state after it, for the newest heights.
 static STATES: LazyLock<TableName> = LazyLock::new(|| TableName::of("catchup-states"));
 
 /// Height to the reward balances of the state after it, written only where they changed.
@@ -60,7 +60,7 @@ pub struct StateRow {
     pub rewards_at: u64,
 }
 
-/// The tables of a chain store that the ingester writes for the API instances.
+/// The tables of a chain store that the API instances serve besides the chain.
 #[derive(Clone, Debug)]
 pub struct Tables {
     store: ChainStore,

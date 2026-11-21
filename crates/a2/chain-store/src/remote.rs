@@ -280,6 +280,19 @@ impl Backend for RemoteBackend {
         Ok(())
     }
 
+    async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool> {
+        let response = self
+            .client()
+            .lease(proto::LeaseRequest {
+                name: name.to_string(),
+                holder: holder.to_string(),
+                ttl_ms: u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX),
+            })
+            .await
+            .map_err(status)?;
+        Ok(response.into_inner().held)
+    }
+
     fn changes(&self) -> watch::Receiver<u64> {
         self.changes.subscribe()
     }

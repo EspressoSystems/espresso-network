@@ -1,5 +1,5 @@
-//! The catchup service: leaves from the store, and the state of the newest heights as the
-//! ingester stored it, for consensus nodes that are behind. They check every answer themselves.
+//! The catchup service: leaves from the store, and the state of the newest heights as the store
+//! keeps it, for consensus nodes that are behind. They check every answer themselves.
 
 use catchup_api::proto::{
     AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HeightRequest, LeafChainResponse,
@@ -24,7 +24,7 @@ pub struct Catchup {
     epoch_height: u64,
 
     /// The fee tree, which does not change under the new protocol, built on first use from the
-    /// accounts the ingester stored.
+    /// accounts the store holds.
     fees: OnceCell<FeeMerkleTree>,
 }
 
@@ -38,7 +38,7 @@ impl Catchup {
         }
     }
 
-    /// What the state after `height` holds besides its header's roots, which the ingester keeps
+    /// What the state after `height` holds besides its header's roots, which the store keeps
     /// for the newest heights only.
     async fn state(&self, height: u64) -> Result<StateRow, Status> {
         self.tables
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(status.code(), tonic::Code::NotFound);
     }
 
-    /// State is answered from the rows the ingester stored, for the heights kept only.
+    /// State is answered from the rows the store holds, for the heights kept only.
     #[tokio::test]
     async fn answers_from_the_stored_state() {
         let store = ChainStore::new(MemBackend::default());

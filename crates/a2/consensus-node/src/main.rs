@@ -37,7 +37,7 @@ struct Options {
     )]
     bind_address: NetAddr,
 
-    /// Where to serve the consensus API, for the ingester and the API service.
+    /// Where to serve the consensus API, for the storage instances and the API service.
     #[arg(
         long,
         env = "ESPRESSO_CONSENSUS_API_ADDRESS",

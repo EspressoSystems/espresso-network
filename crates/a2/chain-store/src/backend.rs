@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, time::Duration};
 
 use app_tables::{AppWrite, TableName};
 use async_trait::async_trait;
@@ -58,6 +58,12 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Deletes rows and parts before `height`, and raises the floor to it.
     async fn prune_below(&self, height: u64) -> anyhow::Result<()>;
+
+    /// Takes or renews the lease `name` for `holder` for `ttl`, and says whether `holder` holds
+    /// it now: it does unless another holder took it and its time has not run out. Leases tell
+    /// processes sharing the store which of them does a piece of work; they are not part of the
+    /// chain and change nothing readers see.
+    async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool>;
 
     /// A value that changes after each committed write to the chain by any writer: items,
     /// parts and pruning. Writes to the application tables do not change it.

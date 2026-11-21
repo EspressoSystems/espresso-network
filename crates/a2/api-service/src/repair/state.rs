@@ -1,7 +1,7 @@
 //! The state of the chain at recent heights, for consensus nodes catching up through the API
 //! instances.
 //!
-//! Consensus sends the state after each block it validated, and the ingester stores it with the
+//! Consensus sends the state after each block it validated, and the storage instances store it with the
 //! block. The follower writes the state of the heights it did not send: it follows the store in
 //! height order, takes the state of each height that has it, and applies the header of each one
 //! that lacks it to the state of its parent, checking the result against the roots the header
@@ -48,7 +48,7 @@ use membership::null_catchup::NullStateCatchup;
 use serde::de::DeserializeOwned;
 use tokio::time::sleep;
 
-use crate::{
+use crate::repair::{
     membership::Membership,
     peers::{Peer, Peers},
 };
@@ -745,8 +745,8 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap())
             .parse()
             .unwrap();
-        let service = api_service::ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap())
-            .with_catchup(api_service::catchup::Catchup::new(store.clone(), 10));
+        let service = crate::ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap())
+            .with_catchup(crate::catchup::Catchup::new(store.clone(), 10));
         tokio::spawn(service.serve(listener));
         url
     }

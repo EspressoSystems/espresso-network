@@ -7,15 +7,15 @@
 //! they are filled in later, each when it can be checked. The store also finds the height of a
 //! leaf, a block or a payload by its commitment.
 //!
-//! The ingester writes to the store, copying the decide log of its consensus node, and the API
-//! service writes the heights it fills from other API services. Writes are idempotent by height, so
+//! The storage instances write to the store, copying the decide log of their consensus node, and
+//! repairing API instances write the heights they fill from other API services. Writes are idempotent by height, so
 //! writers need not coordinate. Every committed write is announced through
 //! [`ChainStore::changes`], whichever process made it, so readers learn about new heights from the
 //! store alone and need no connection to the writers.
 //!
 //! The store checks nothing it is given; whoever writes has checked it.
 
-use std::{fmt, ops::Range, sync::Arc};
+use std::{fmt, ops::Range, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -145,7 +145,7 @@ pub enum Lookup {
     Payload(VidCommitment),
 }
 
-/// The application tables of the store, which the ingester keeps the data it derives in.
+/// The application tables of the store, which hold what the API instances serve besides blocks.
 #[async_trait]
 impl AppTables for ChainStore {
     async fn get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
@@ -325,6 +325,11 @@ impl ChainStore {
     /// Deletes everything before `height` and stops accepting writes there.
     pub async fn prune_below(&self, height: u64) -> anyhow::Result<()> {
         self.backend.prune_below(height).await
+    }
+
+    /// Takes or renews the lease `name` for `holder` for `ttl`; see [`Backend::lease`].
+    pub async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool> {
+        self.backend.lease(name, holder, ttl).await
     }
 
     /// A value that changes after every committed write to the chain, by any writer: items,

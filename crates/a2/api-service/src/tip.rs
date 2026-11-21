@@ -239,6 +239,10 @@ mod tests {
             self.inner.prune_below(height).await
         }
 
+        async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool> {
+            self.inner.lease(name, holder, ttl).await
+        }
+
         fn changes(&self) -> watch::Receiver<u64> {
             self.inner.changes()
         }

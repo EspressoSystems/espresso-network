@@ -1,9 +1,9 @@
-//! The stake tables of the chain, which the ingester derives as consensus does: the genesis file
+//! The stake tables of the chain, which repair derives as consensus does: the genesis file
 //! gives the stake table of the first epochs, and each later one comes from the stake table
 //! contract's events on L1 up to the root block of the epoch two before. The root blocks come from
 //! the store, so the stake tables follow what the store holds.
 //!
-//! The ingester needs them to check what the chain does not commit to, the `Certificate2` that
+//! Repair needs them to check what the chain does not commit to, the `Certificate2` that
 //! decided a block directly and the state certificate of an epoch root, to apply the rewards an
 //! epoch pays, and to check discovery records. It keeps them, and the L1 events they come from, in
 //! the store, and publishes the stake tables there for the API instances.
@@ -32,10 +32,10 @@ use membership::{MembershipStore, null_catchup::NullStateCatchup};
 use url::Url;
 use versions::Upgrade;
 
-use crate::state_cert::validate_state_cert;
+use crate::repair::state_cert::validate_state_cert;
 
-/// The node state of the chain `genesis` starts, as an ingester keeps it: stake tables in
-/// `store`, read from the L1 at `l1`, and no catchup, since the ingester follows the chain
+/// The node state of the chain `genesis` starts, as repair keeps it: stake tables in
+/// `store`, read from the L1 at `l1`, and no catchup, since repair follows the chain
 /// itself. A restart finds the stake tables and L1 events in the store, and reads from L1 only what
 /// is newer.
 pub async fn node_state(

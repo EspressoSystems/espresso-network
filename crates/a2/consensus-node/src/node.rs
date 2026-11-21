@@ -1,5 +1,5 @@
 //! A consensus node: consensus over its store, on the network of the validators, with the
-//! consensus API for its ingester and API service.
+//! consensus API for its storage instances and API service.
 
 use std::{
     collections::HashSet,

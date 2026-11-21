@@ -1,6 +1,6 @@
 [package]
 name        = "membership"
-description = "Membership data and node state shared by the a2 consensus node and ingester"
+description = "Membership data and node state shared by the a2 consensus node and API service"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }

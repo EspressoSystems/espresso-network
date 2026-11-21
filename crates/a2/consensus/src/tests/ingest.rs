@@ -1,4 +1,4 @@
-//! The decide log served over the ingester API, end to end.
+//! The decide log served over the consensus API, end to end.
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -43,7 +43,7 @@ impl StakeTables for NoStakeTables {
 }
 
 #[tokio::test]
-async fn decided_entries_and_payloads_reach_the_ingester() {
+async fn decided_entries_and_payloads_reach_the_subscriber() {
     let data = TestData::new(3).await;
     let [v0, v1, v2] = [&data.views[0], &data.views[1], &data.views[2]];
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
@@ -167,10 +167,10 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     );
 }
 
-/// A payload stored after its block was decided joins the decide log, and reaches the ingester
+/// A payload stored after its block was decided joins the decide log, and reaches the subscriber
 /// as `PayloadAdded`. Once storage has collected the view's garbage, it no longer does.
 #[tokio::test]
-async fn a_late_payload_reaches_the_ingester() {
+async fn a_late_payload_reaches_the_subscriber() {
     let data = TestData::new(3).await;
     let [v0, v1, v2] = [&data.views[0], &data.views[1], &data.views[2]];
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);

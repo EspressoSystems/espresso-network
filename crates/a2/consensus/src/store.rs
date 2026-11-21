@@ -41,7 +41,7 @@ static PROPOSALS: LazyLock<Table> = LazyLock::new(|| table("proposals"));
 /// `(view, payload commitment)` to the encoded block payload.
 static PAYLOADS: LazyLock<Table> = LazyLock::new(|| table("payloads"));
 
-/// Height to the decided leaf there, until the ingester acknowledges it.
+/// Height to the decided leaf there, until the store acknowledges it.
 static DECIDE_LOG: LazyLock<Table> = LazyLock::new(|| table("decide-log"));
 
 /// Height to the payload of the block decided there, freed with its decide log entry.
@@ -275,7 +275,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     }
 
     /// The bytes the decide log takes up, with the payloads of its entries, as it grows and
-    /// as the ingester frees entries.
+    /// as the store acknowledges entries.
     pub fn decide_log_bytes(&self) -> watch::Receiver<u64> {
         self.changes.decide_log_bytes.subscribe()
     }

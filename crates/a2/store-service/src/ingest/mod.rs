@@ -139,7 +139,7 @@ async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> an
                 let Some(response) = response else {
                     return Ok(());
                 };
-                // An event this ingester does not know decodes to none, and would come again.
+                // An event this instance does not know decodes to none, and would come again.
                 let event = response?
                     .event
                     .ok_or_else(|| BadEntry(anyhow!("a subscribe response without an event")))?;
@@ -429,7 +429,7 @@ fn decode<Types: NodeType>(entry: Decided) -> anyhow::Result<Entry<Types>> {
     let body = entry.body.context("entry without a body")?;
     ensure!(
         body.format == BODY_FORMAT,
-        "entry body has format {}, this ingester reads {BODY_FORMAT}",
+        "entry body has format {}, this instance reads {BODY_FORMAT}",
         body.format
     );
     let leaf: Leaf2<Types> = bincode::deserialize(&body.leaf).context("decoding the leaf")?;

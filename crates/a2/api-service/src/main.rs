@@ -1,14 +1,15 @@
-//! An API instance: serves the v2 API from the chain store.
+//! An API instance: serves the v2 API from the chain store, and repairs the store if asked to.
 
 use std::net::SocketAddr;
 
 use anyhow::{Context, anyhow};
-use api_service::{ApiService, catchup::Catchup, compat::Compat};
+use api_service::{ApiService, catchup::Catchup, compat::Compat, repair::Repair};
 use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
 use tokio::net::TcpListener;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
+use url::Url;
 
 #[derive(Debug, Parser)]
 struct Options {
@@ -28,6 +29,25 @@ struct Options {
     /// table.
     #[arg(long, env = "ESPRESSO_API_SERVICE_GENESIS_FILE")]
     genesis_file: GenesisSource,
+
+    /// Repair the store too: fill what it lacks from other API services, sharing the work with
+    /// the other instances that repair it. Needs `--l1-provider`.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_REPAIR", requires = "l1_provider")]
+    repair: bool,
+
+    /// L1 RPC URLs to read the stake table contract from, comma-separated; for repair.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_L1_PROVIDER", value_delimiter = ',')]
+    l1_provider: Vec<Url>,
+
+    /// API services to learn the validators' API services from, and to repair from until then,
+    /// comma-separated.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_BOOTSTRAP", value_delimiter = ',')]
+    bootstrap: Vec<Url>,
+
+    /// The URL other services reach this deployment's API at, as its validator's record names
+    /// it. It is never asked for repairs.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_PUBLIC_URL")]
+    public_url: Option<Url>,
 }
 
 #[tokio::main]
@@ -48,10 +68,26 @@ async fn main() -> anyhow::Result<()> {
     let epoch_height = config.config.epoch_height;
     let api = ApiService::new(store.clone(), options.consensus_api)
         .with_compat(Compat::new(store.clone(), config))
-        .with_catchup(Catchup::new(store, epoch_height));
-    match api.serve(listener).await {
-        Ok(()) => Err(anyhow!("the server stopped")),
-        Err(err) => Err(err.context("serving the API")),
+        .with_catchup(Catchup::new(store.clone(), epoch_height));
+    let repair = async {
+        match options.repair {
+            true => {
+                let repair = Repair {
+                    l1: options.l1_provider,
+                    bootstrap: options.bootstrap,
+                    public_url: options.public_url,
+                };
+                Err(repair.run(store, &genesis).await)
+            },
+            false => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        served = api.serve(listener) => match served {
+            Ok(()) => Err(anyhow!("the server stopped")),
+            Err(err) => Err(err.context("serving the API")),
+        },
+        repaired = repair => repaired,
     }
 }
 

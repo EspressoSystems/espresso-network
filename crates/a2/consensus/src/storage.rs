@@ -405,7 +405,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// Sets how many bytes the decide log may take up, with the payloads of its entries.
     ///
     /// Once it is full, [`Self::next`] reports [`StorageOutput::DecideLogFull`], and consensus
-    /// holds its vote2 until the ingester frees entries.
+    /// holds its vote2 until the store acknowledges entries.
     pub fn with_decide_log_limit(mut self, limit: u64) -> Self {
         self.decide_log_limit = limit;
         if let Some(m) = &self.metrics {
@@ -856,7 +856,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             warn!(
                 bytes,
                 limit = self.decide_log_limit,
-                "the decide log is full; holding vote2 until the ingester frees entries"
+                "the decide log is full; holding vote2 until the store acknowledges entries"
             );
         } else {
             info!(bytes, "the decide log has room again");

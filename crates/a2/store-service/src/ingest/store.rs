@@ -127,7 +127,7 @@ mod tests {
 
     use super::*;
 
-    /// A block reaches the store as an item and a payload, and the ingester resumes after it.
+    /// A block reaches the store as an item and a payload, and ingesting resumes after it.
     #[tokio::test]
     async fn stores_the_block_and_resumes_after_it() {
         let instance = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);

@@ -18,7 +18,7 @@ use tokio::{sync::watch, time::timeout};
 
 use super::*;
 
-/// A decide log in memory, served over the real ingester API.
+/// A decide log in memory, served over the real consensus API.
 struct FakeLog {
     entries: Mutex<BTreeMap<u64, Decided>>,
     payloads: Mutex<BTreeMap<u64, Bytes>>,
@@ -171,7 +171,7 @@ impl Source for FakeLog {
     }
 }
 
-/// A sink in memory, holding the blocks the ingester appends after `before`.
+/// A sink in memory, holding the blocks the instance appends after `before`.
 struct MemSink {
     before: Option<Leaf2<MockTypes>>,
     blocks: Mutex<BTreeMap<u64, Block<MockTypes>>>,
@@ -275,7 +275,7 @@ async fn serve(log: Arc<FakeLog>) -> SocketAddr {
     panic!("server did not start");
 }
 
-fn spawn_ingester(addr: SocketAddr, sink: Arc<MemSink>) -> tokio::task::JoinHandle<anyhow::Error> {
+fn spawn_instance(addr: SocketAddr, sink: Arc<MemSink>) -> tokio::task::JoinHandle<anyhow::Error> {
     tokio::spawn(async move { run::<MockTypes>(addr, sink.as_ref()).await })
 }
 
@@ -305,7 +305,7 @@ async fn ingests_decided_blocks() {
     log.decide(&chain, 0..=0);
     log.decide(&chain, 1..=2);
     let sink = MemSink::new();
-    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("the first blocks are stored", || sink.appended().len() == 3).await;
     log.decide(&chain, 3..=4);
@@ -335,7 +335,7 @@ async fn ingests_decided_blocks() {
 }
 
 /// Consensus does not disperse the genesis block, so its entry has no VID common data and the
-/// ingester computes it.
+/// instance computes it.
 #[tokio::test]
 async fn computes_the_genesis_vid_common() {
     let chain = chain(1).await;
@@ -354,7 +354,7 @@ async fn computes_the_genesis_vid_common() {
         .vid_common
         .clear();
     let sink = MemSink::new();
-    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+    let _instance = spawn_instance(serve(log).await, sink.clone());
 
     eventually("genesis is stored", || sink.block(0).is_some()).await;
     assert_eq!(
@@ -386,7 +386,7 @@ async fn passes_the_state_certificate() {
         .unwrap()
         .state_cert = bincode::serialize(&cert).unwrap().into();
     let sink = MemSink::new();
-    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+    let _instance = spawn_instance(serve(log).await, sink.clone());
 
     eventually("the block is stored", || sink.block(1).is_some()).await;
     assert_eq!(sink.block(1).unwrap().state_cert, Some(cert));
@@ -422,7 +422,7 @@ async fn passes_the_state_stake_tables_and_records() {
         .unwrap()
         .insert(0, vec![Bytes::from_static(b"record")]);
     let sink = MemSink::new();
-    let _ingester = spawn_ingester(serve(log).await, sink.clone());
+    let _instance = spawn_instance(serve(log).await, sink.clone());
 
     eventually("the records are stored", || {
         sink.records.lock().unwrap().contains_key(&0)
@@ -436,7 +436,7 @@ async fn passes_the_state_stake_tables_and_records() {
     );
 }
 
-/// A restarted ingester takes again every entry consensus still holds, which it has not
+/// A restarted instance takes again every entry consensus still holds, which it has not
 /// acknowledged, and checks them against the newest leaf the sink holds.
 #[tokio::test]
 async fn takes_the_unacknowledged_entries_again() {
@@ -444,7 +444,7 @@ async fn takes_the_unacknowledged_entries_again() {
     let log = FakeLog::new();
     log.decide(&chain, 0..=3);
     let sink = MemSink::after(Some(chain.blocks()[1].leaf.leaf().clone()));
-    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("everything is acknowledged", || {
         log.acked() == vec![0, 1, 2, 3]
@@ -453,20 +453,20 @@ async fn takes_the_unacknowledged_entries_again() {
     assert_eq!(sink.appended(), vec![0, 1, 2, 3]);
 }
 
-/// A restarted ingester whose sink holds a leaf of another chain stops at the entry that
+/// A restarted instance whose sink holds a leaf of another chain stops at the entry that
 /// contradicts it.
 #[tokio::test]
-async fn resuming_on_another_chain_stops_the_ingester() {
+async fn resuming_on_another_chain_stops_ingesting() {
     let chain = chain(3).await;
     let other = other_chain().await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=3);
     let sink = MemSink::after(Some(other.blocks()[1].leaf.leaf().clone()));
-    let ingester = spawn_ingester(serve(log).await, sink.clone());
+    let instance = spawn_instance(serve(log).await, sink.clone());
 
-    let err = timeout(Duration::from_secs(10), ingester)
+    let err = timeout(Duration::from_secs(10), instance)
         .await
-        .expect("the ingester stops")
+        .expect("ingesting stops")
         .unwrap();
     assert!(err.is::<ChainBroken>(), "{err:#}");
     assert_eq!(
@@ -476,9 +476,9 @@ async fn resuming_on_another_chain_stops_the_ingester() {
     );
 }
 
-/// A leaf that does not follow the one before it stops the ingester.
+/// A leaf that does not follow the one before it stops ingesting.
 #[tokio::test]
-async fn a_broken_chain_stops_the_ingester() {
+async fn a_broken_chain_stops_ingesting() {
     let chain = chain(2).await;
     let other = other_chain().await;
     let log = FakeLog::new();
@@ -490,20 +490,20 @@ async fn a_broken_chain_stops_the_ingester() {
     );
     log.insert(entry(&other, block, true));
     let sink = MemSink::new();
-    let ingester = spawn_ingester(serve(log).await, sink.clone());
+    let instance = spawn_instance(serve(log).await, sink.clone());
 
-    let err = timeout(Duration::from_secs(10), ingester)
+    let err = timeout(Duration::from_secs(10), instance)
         .await
-        .expect("the ingester stops")
+        .expect("ingesting stops")
         .unwrap();
     assert!(err.is::<ChainBroken>(), "{err:#}");
     assert_eq!(sink.appended(), vec![0, 1]);
 }
 
-/// An entry the ingester cannot decode would come again after every reconnect, so it stops the
-/// ingester instead.
+/// An entry the instance cannot decode would come again after every reconnect, so it stops the
+/// instance instead.
 #[tokio::test]
-async fn an_undecodable_entry_stops_the_ingester() {
+async fn an_undecodable_entry_stops_ingesting() {
     let chain = chain(1).await;
     let log = FakeLog::new();
     log.decide(&chain, 0..=0);
@@ -511,11 +511,11 @@ async fn an_undecodable_entry_stops_the_ingester() {
     bad.body.as_mut().unwrap().leaf = vec![1, 2, 3].into();
     log.insert(bad);
     let sink = MemSink::new();
-    let ingester = spawn_ingester(serve(log).await, sink.clone());
+    let instance = spawn_instance(serve(log).await, sink.clone());
 
-    let err = timeout(Duration::from_secs(10), ingester)
+    let err = timeout(Duration::from_secs(10), instance)
         .await
-        .expect("the ingester stops")
+        .expect("ingesting stops")
         .unwrap();
     assert!(err.is::<BadEntry>(), "{err:#}");
     assert_eq!(sink.appended(), vec![0]);
@@ -543,7 +543,7 @@ async fn stores_heights_decided_late() {
     log.decide(&chain, 0..=1);
     log.decide(&chain, 4..=5);
     let sink = MemSink::new();
-    let ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("the decided heights are acknowledged", || {
         log.acked() == vec![0, 1, 4, 5]
@@ -564,7 +564,7 @@ async fn stores_heights_decided_late() {
     })
     .await;
     assert_eq!(sink.appended(), vec![0, 1, 4, 5, 2, 3]);
-    assert!(!ingester.is_finished());
+    assert!(!instance.is_finished());
 }
 
 /// A payload added after its entry reaches the sink, and the height is acknowledged only then.
@@ -576,7 +576,7 @@ async fn takes_a_payload_added_later() {
     log.decide_without_payload(&chain, 1);
     log.decide(&chain, 2..=2);
     let sink = MemSink::new();
-    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("the complete heights are acknowledged", || {
         log.acked() == vec![0, 2]
@@ -605,7 +605,7 @@ async fn acknowledges_a_final_height_without_its_payload() {
     log.decide(&chain, 0..=0);
     log.decide_without_payload(&chain, 1);
     let sink = MemSink::new();
-    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("the first height is acknowledged", || {
         log.acked() == vec![0]
@@ -627,7 +627,7 @@ async fn starts_at_the_earliest_entry() {
     log.decide(&chain, 0..=4);
     log.ack(vec![Range { start: 0, end: 3 }]).await.unwrap();
     let sink = MemSink::after(Some(chain.blocks()[0].leaf.leaf().clone()));
-    let _ingester = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("the held heights are stored", || sink.appended().len() == 2).await;
     assert_eq!(sink.appended(), vec![3, 4]);
@@ -640,8 +640,8 @@ async fn instances_share_the_decide_log() {
     let log = FakeLog::new();
     let addr = serve(log.clone()).await;
     let sink = MemSink::new();
-    let _first = spawn_ingester(addr, sink.clone());
-    let _second = spawn_ingester(addr, sink.clone());
+    let _first = spawn_instance(addr, sink.clone());
+    let _second = spawn_instance(addr, sink.clone());
 
     log.decide(&chain, 0..=6);
     eventually("every block is acknowledged", || {
@@ -665,7 +665,7 @@ async fn acknowledges_a_late_payload_whose_entry_went_elsewhere() {
     log.decide(&chain, 0..=0);
     log.decide_without_payload(&chain, 1);
     let sink = MemSink::new();
-    let _other = spawn_ingester(serve(log.clone()).await, sink.clone());
+    let _other = spawn_instance(serve(log.clone()).await, sink.clone());
     eventually("the entry is stored", || sink.block(1).is_some()).await;
 
     // This instance gets only the payload.

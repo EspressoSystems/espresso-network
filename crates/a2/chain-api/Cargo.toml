@@ -1,6 +1,6 @@
 [package]
 name        = "chain-api"
-description = "What a deployment's ingester shares with API instances and other API services: the chain and discovery services, and the tables it writes for API instances"
+description = "What a deployment's store shares with API instances and other API services: the chain and discovery services, and the tables it writes for API instances"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }

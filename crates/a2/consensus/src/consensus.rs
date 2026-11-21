@@ -275,7 +275,7 @@ pub struct Consensus<T: NodeType> {
     /// Highest locked QC confirmed persisted; gates release of phase-2 votes.
     stored_high_qc: Option<LockView>,
 
-    /// Whether the decide log is full. Vote2 waits while it is, so a node whose ingester falls
+    /// Whether the decide log is full. Vote2 waits while it is, so a node whose store falls
     /// behind stops helping to decide blocks it cannot deliver.
     decide_log_full: bool,
 
@@ -3565,7 +3565,7 @@ impl<T: NodeType> Consensus<T> {
     /// re-vote disperses nothing, so it has no share of its own to wait for.
     /// Whether everything a vote2 at `view` depends on is on disk: the vote, and the payload of
     /// the voted block. The payload also stands in for this node's VID share, which it
-    /// determines, and an ingester can pick it up before the block is final.
+    /// determines, and a storage instance can pick it up before the block is final.
     fn vote2_persisted(
         &self,
         view: ViewNumber,

@@ -24,7 +24,7 @@ use serde_json::json;
 pub struct Compat {
     store: ChainStore,
 
-    /// The stake tables, which the ingester writes.
+    /// The stake tables, which the store gets from consensus.
     tables: Tables,
 
     /// The chain's configuration from its genesis file: its epochs and genesis stake table.

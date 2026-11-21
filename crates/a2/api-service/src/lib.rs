@@ -1,14 +1,15 @@
 //! An API instance: serves the v2 API, over HTTP and gRPC on one port, from the chain store.
 //!
-//! It holds no state and runs no background work. It reads only the store, which the ingester of
-//! its deployment fills: with the blocks from consensus and from other API services, and with the
-//! stake tables, discovery records and recent state it derives (`chain_api::Tables`). Consensus
-//! is reached only to submit transactions. A read of a height the store lacks waits a moment for
+//! It holds no state but the newest heights. It reads only the store, which the storage instances
+//! of its deployment fill from consensus: with the blocks, and with the stake tables, discovery
+//! records and recent state consensus derives (`chain_api::Tables`). Consensus is reached only to
+//! submit transactions. An instance asked to [`repair`] also fills what the store lacks from other
+//! API services. A read of a height the store lacks waits a moment for
 //! it, and a stream waits at a missing height until the store has it, so a client following the
 //! chain sees every height in order.
 //!
 //! Besides the v2 services of `espresso-api`, it serves services of its own over gRPC only: the
-//! chain service, which other ingesters fill their gaps from, and the discovery service.
+//! chain service, which other API services repair their stores from, and the discovery service.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -38,6 +39,7 @@ pub mod compat;
 mod discovery;
 mod node;
 mod reader;
+pub mod repair;
 mod request;
 mod server;
 mod status;
@@ -53,7 +55,7 @@ pub struct ApiService {
     /// The follower of the store's tip, which `serve` runs.
     follower: Option<tip::Follower>,
 
-    /// What the ingester writes besides blocks.
+    /// What the store holds besides blocks.
     tables: Tables,
 
     /// The channel to the consensus node's API, for submissions.
