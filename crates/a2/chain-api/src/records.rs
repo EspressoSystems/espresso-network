@@ -25,8 +25,8 @@ pub fn to_proto(record: Record, skip_payloads: bool) -> proto::ChainRecord {
             Part::Cert2 => sent.cert2 = data,
             Part::StateCert => sent.state_cert = data,
             Part::CertsKnown => sent.certs_known = true,
-            // The receiver's store computes it when it writes the payload.
-            Part::PayloadInfo => {},
+            // The receiver's store computes these when it writes the payload.
+            Part::PayloadInfo | Part::PayloadStored => {},
         }
     }
     sent

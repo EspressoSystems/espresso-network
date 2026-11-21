@@ -17,6 +17,8 @@ testing = ["dep:test-utils"]
 
 [dependencies]
 blake3        = { workspace = true }
+object_store  = { workspace = true }
+url           = { workspace = true }
 app-tables = { workspace = true }
 anyhow        = { workspace = true }
 async-trait   = { workspace = true }

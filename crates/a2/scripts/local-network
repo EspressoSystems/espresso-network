@@ -97,6 +97,7 @@ main() {
       ingest=()
     fi
     store-service --address "127.0.0.1:$((8070 + i))" "${ingest[@]}" \
+      $(payloads "$rundir" "chain$i" "$i") \
       --database "postgres://root@127.0.0.1:${pg_port}/chain$i" >"$rundir/store-$i.log" 2>&1 &
     ESPRESSO_NODE_PRIVATE_STAKING_KEY=${!staking} \
       ESPRESSO_NODE_PRIVATE_STATE_KEY=${!state} \
@@ -113,9 +114,11 @@ main() {
   done
 
   store-service --address "127.0.0.1:8080" --consensus-api "127.0.0.1:9978" \
+    $(payloads "$rundir" chain0 0b) \
     --database "postgres://root@127.0.0.1:${pg_port}/chain0" >"$rundir/store-0b.log" 2>&1 &
   psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE scratch4" >/dev/null
   store-service --address "127.0.0.1:8079" --consensus-api "127.0.0.1:9982" \
+    $(payloads "$rundir" scratch4 scratch-4) \
     --database "postgres://root@127.0.0.1:${pg_port}/scratch4" >"$rundir/store-scratch-4.log" 2>&1 &
   local scratch_store=$!
 
@@ -129,6 +132,7 @@ main() {
   sleep 60
   kill "$scratch_store"
   store-service --address "127.0.0.1:8084" --consensus-api "127.0.0.1:9982" \
+    $(payloads "$rundir" chain4 4b) \
     --database "postgres://root@127.0.0.1:${pg_port}/chain4" >"$rundir/store-4b.log" 2>&1 &
   echo "node 4's decide log moved to its real store"
   wait
@@ -145,7 +149,16 @@ start_api() {
   api-service --port "$5" --store "http://127.0.0.1:$((8070 + $2))" \
     --consensus-api "127.0.0.1:$((9978 + $2))" --genesis-file "$3" \
     --repair --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
+    --payload-store "file://$1/objects-chain$2" \
     "${bootstrap[@]}" >"$1/$6.log" 2>&1 &
+}
+
+# The options of a storage instance named $3 whose database is $2 that keep its deployment's
+# payloads in a directory of RUNDIR $1, as the deployment's object store, and stage them in a
+# directory of its own.
+payloads() {
+  mkdir -p "$1/objects-$2"
+  echo "--payload-store file://$1/objects-$2 --payload-dir $1/staging-$3"
 }
 
 # Stops every process and removes the Postgres data, which lives outside RUNDIR.

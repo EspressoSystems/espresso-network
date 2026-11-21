@@ -36,6 +36,7 @@ serde_json                  = { workspace = true }
 tokio                       = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tonic                       = { workspace = true, features = ["tls-ring", "tls-webpki-roots"] }
 tonic-reflection            = { workspace = true }
+tonic-rest                  = { workspace = true }
 tower                       = { workspace = true, features = ["util"] }
 tracing                     = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
@@ -43,6 +44,7 @@ url                         = { workspace = true }
 versions                    = { workspace = true }
 
 [dev-dependencies]
+object_store   = { workspace = true }
 async-lock     = { workspace = true }
 bitvec         = { workspace = true }
 blake3         = { workspace = true }

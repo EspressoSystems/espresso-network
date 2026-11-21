@@ -124,16 +124,21 @@ pub enum Part {
     /// What the payload's readers need to know of it without reading it: its BLAKE3 hash and its
     /// size, written with the payload.
     PayloadInfo,
+
+    /// An empty marker: the payload is in the store's object store, for a store that keeps its
+    /// payloads there; see [`payloads`](crate::payloads).
+    PayloadStored,
 }
 
 impl Part {
-    pub const ALL: [Part; 6] = [
+    pub const ALL: [Part; 7] = [
         Self::Payload,
         Self::VidCommon,
         Self::Cert2,
         Self::StateCert,
         Self::CertsKnown,
         Self::PayloadInfo,
+        Self::PayloadStored,
     ];
 
     /// The number a backend stores the part under.
@@ -145,6 +150,7 @@ impl Part {
             Self::StateCert => 3,
             Self::CertsKnown => 4,
             Self::PayloadInfo => 5,
+            Self::PayloadStored => 6,
         }
     }
 

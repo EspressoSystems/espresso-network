@@ -70,6 +70,15 @@ where
         return RestError::from(tonic::Status::invalid_argument("hash is required"))
             .into_response();
     };
+    serve(state.as_ref(), hash).await
+}
+
+/// The answer to a request for the payload whose VID commitment is `hash`: its raw bytes, from
+/// `state`'s `GetPayload`, for a server that serves the route itself.
+pub async fn serve<S>(state: &S, hash: String) -> Response
+where
+    S: AvailabilityService + Send + Sync + 'static,
+{
     let request = proto::GetPayloadRequest {
         hash: Some(hash),
         ..Default::default()

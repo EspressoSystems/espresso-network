@@ -128,7 +128,11 @@ impl Reader {
             .payload(height)
             .await
             .map_err(to_status)?
-            .ok_or_else(|| Status::not_found(format!("the payload of height {height} is pruned")))
+            .ok_or_else(|| {
+                Status::not_found(format!(
+                    "the payload of height {height} is not available yet, or pruned"
+                ))
+            })
     }
 
     pub(crate) async fn vid_common(

@@ -6,7 +6,9 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, anyhow, ensure};
-use chain_store::{Backend, ChainStore, postgres::PostgresBackend, service};
+use chain_store::{
+    Backend, ChainStore, payloads::PayloadStore, postgres::PostgresBackend, service,
+};
 use clap::Parser;
 use espresso_types::SeqTypes;
 use tokio::{net::TcpListener, task::JoinSet, time::sleep};
@@ -44,6 +46,21 @@ struct Options {
     /// it the instance only serves the store.
     #[arg(long, env = "ESPRESSO_STORE_SERVICE_CONSENSUS_API")]
     consensus_api: Option<SocketAddr>,
+
+    /// The object store payloads live in, as a URL such as `file:///var/payloads` or
+    /// `s3://bucket/prefix`, one object per payload under its VID commitment. Without it,
+    /// payloads stay in the database.
+    #[arg(
+        long,
+        env = "ESPRESSO_STORE_SERVICE_PAYLOAD_STORE",
+        requires = "payload_dir"
+    )]
+    payload_store: Option<String>,
+
+    /// Where payloads wait, durable, until they are uploaded to the object store. Private to this
+    /// instance.
+    #[arg(long, env = "ESPRESSO_STORE_SERVICE_PAYLOAD_DIR")]
+    payload_dir: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -76,7 +93,20 @@ async fn main() -> anyhow::Result<()> {
         });
     }
     if let Some(consensus_api) = options.consensus_api {
-        let store = ChainStore::shared(backend.clone());
+        let mut store = ChainStore::shared(backend.clone());
+        if let (Some(url), Some(dir)) = (&options.payload_store, &options.payload_dir) {
+            let payloads =
+                PayloadStore::from_url(url, None).context("opening the payload store")?;
+            let (staged, uploader) = store
+                .with_staged_payloads(payloads, dir.clone())
+                .await
+                .context("staging payloads")?;
+            store = staged;
+            tasks.spawn(async move {
+                uploader.run().await;
+                anyhow!("the payload uploader stopped")
+            });
+        }
         tracing::info!(%consensus_api, "taking a share of the decide log");
         tasks.spawn(async move {
             // Returns only when the decide log does not continue the chain in the store.

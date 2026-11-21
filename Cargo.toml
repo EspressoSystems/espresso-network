@@ -309,6 +309,7 @@ mnemonic = "1"
 moka = { version = "0.12.12", features = ["future"] }
 num-bigint = "0.4"
 num-traits = "0.2"
+object_store = { version = "0.12", features = ["aws"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opentelemetry = "0.32"
 opentelemetry-appender-tracing = "0.32"

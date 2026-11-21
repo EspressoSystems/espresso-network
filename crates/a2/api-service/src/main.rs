@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, anyhow};
 use api_service::{ApiService, catchup::Catchup, compat::Compat, repair::Repair};
-use chain_store::{ChainStore, remote::RemoteBackend};
+use chain_store::{ChainStore, payloads::PayloadStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
 use tokio::net::TcpListener;
@@ -48,6 +48,20 @@ struct Options {
     /// it. It is never asked for repairs.
     #[arg(long, env = "ESPRESSO_API_SERVICE_PUBLIC_URL")]
     public_url: Option<Url>,
+
+    /// The object store the deployment's payloads live in, as its storage instances have it; see
+    /// their `--payload-store`. Without it, payloads are in the store's database.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_PAYLOAD_STORE")]
+    payload_store: Option<String>,
+
+    /// The URL clients fetch the payload store's objects from, if they can reach it; the payload
+    /// route then redirects there. Without it, the API instance serves payloads itself.
+    #[arg(
+        long,
+        env = "ESPRESSO_API_SERVICE_PAYLOAD_URL",
+        requires = "payload_store"
+    )]
+    payload_url: Option<String>,
 }
 
 #[tokio::main]
@@ -60,7 +74,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    let store = ChainStore::new(backend);
+    let mut store = ChainStore::new(backend);
+    if let Some(url) = &options.payload_store {
+        let payloads = PayloadStore::from_url(url, options.payload_url.clone())
+            .context("opening the payload store")?;
+        store = store.with_payloads(payloads);
+    }
     let genesis = Genesis::load(&options.genesis_file)
         .await
         .context("loading the genesis file")?;

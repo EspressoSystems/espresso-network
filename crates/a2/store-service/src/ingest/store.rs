@@ -28,8 +28,9 @@ impl Sink<SeqTypes> for ChainStore {
             cert2: block.cert2,
             state_cert: block.state_cert,
             certs_known: true,
-            // Computed when the payload is written.
+            // Computed, and the payload uploaded, when it is written.
             payload_info: None,
+            payload_stored: false,
         };
         self.put(&item, &parts).await
     }
@@ -54,7 +55,11 @@ impl Sink<SeqTypes> for ChainStore {
     }
 
     async fn has_payload(&self, height: u64) -> anyhow::Result<bool> {
-        Ok(self.payload(height).await?.is_some())
+        // The info is written with the payload, so this need not read the payload.
+        let Some(summary) = self.summary(height).await? else {
+            return Ok(false);
+        };
+        Ok(summary.parts()?.payload_info.is_some())
     }
 
     async fn put_stake_table(&self, epoch: u64, table: Bytes) -> anyhow::Result<()> {

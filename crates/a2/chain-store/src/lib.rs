@@ -31,6 +31,7 @@ use tokio::sync::watch;
 
 mod backend;
 pub mod mem;
+pub mod payloads;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "remote")]
@@ -82,6 +83,10 @@ pub struct Parts {
     /// The light client state certificate of the epoch the block is the root of.
     pub state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
 
+    /// Whether the payload is in the store's object store, for a store that keeps its payloads
+    /// there.
+    pub payload_stored: bool,
+
     /// Whether `cert2` and `state_cert` are as complete as consensus made them: true for a height
     /// from the decide log, or one whose certificates were checked from a peer that knew them. A
     /// height without it may lack certificates it has.
@@ -123,9 +128,13 @@ impl Parts {
         let mut parts = Vec::new();
         if let Some(payload) = &self.payload {
             parts.push((Part::Payload, payload.clone()));
-            let info = self
-                .payload_info
-                .unwrap_or_else(|| PayloadInfo::of(payload, header));
+        }
+        let info = match (&self.payload, self.payload_info) {
+            (_, Some(info)) => Some(info),
+            (Some(payload), None) => Some(PayloadInfo::of(payload, header)),
+            (None, None) => None,
+        };
+        if let Some(info) = info {
             parts.push((Part::PayloadInfo, encode(&info)?));
         }
         if let Some(common) = &self.vid_common {
@@ -140,6 +149,9 @@ impl Parts {
         if self.certs_known {
             parts.push((Part::CertsKnown, Bytes::new()));
         }
+        if self.payload_stored {
+            parts.push((Part::PayloadStored, Bytes::new()));
+        }
         Ok(parts)
     }
 
@@ -153,6 +165,7 @@ impl Parts {
                 Part::StateCert => decoded.state_cert = Some(decode(bytes)?),
                 Part::CertsKnown => decoded.certs_known = true,
                 Part::PayloadInfo => decoded.payload_info = Some(decode(bytes)?),
+                Part::PayloadStored => decoded.payload_stored = true,
             }
         }
         Ok(decoded)
@@ -218,6 +231,11 @@ const APP_PAGE: usize = 1024;
 #[derive(Clone)]
 pub struct ChainStore {
     backend: Arc<dyn Backend>,
+
+    /// Where the payloads live, if not in the backend: an object store, which a writer may stage
+    /// payloads for.
+    payloads: Option<payloads::PayloadStore>,
+    staging: Option<payloads::Staging>,
 }
 
 impl fmt::Debug for ChainStore {
@@ -233,25 +251,99 @@ impl ChainStore {
 
     /// A store over `backend`, which others use too.
     pub fn shared(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            payloads: None,
+            staging: None,
+        }
+    }
+
+    /// The store, keeping its payloads in `payloads` instead of the backend, uploading each one
+    /// as it is written.
+    pub fn with_payloads(mut self, payloads: payloads::PayloadStore) -> Self {
+        self.payloads = Some(payloads);
+        self
+    }
+
+    /// The store, keeping its payloads in `payloads` instead of the backend, staging each one in
+    /// `dir` as it is written, so that a write is durable before the upload, with the uploader
+    /// that uploads them, which must run as long as the store is written to.
+    pub async fn with_staged_payloads(
+        mut self,
+        payloads: payloads::PayloadStore,
+        dir: std::path::PathBuf,
+    ) -> anyhow::Result<(Self, payloads::Uploader)> {
+        let (staging, uploader) =
+            payloads::staging(dir, payloads.clone(), self.backend.clone()).await?;
+        self.payloads = Some(payloads);
+        self.staging = Some(staging);
+        Ok((self, uploader))
+    }
+
+    /// The object store the payloads live in, if not in the backend.
+    pub fn payload_store(&self) -> Option<&payloads::PayloadStore> {
+        self.payloads.as_ref()
+    }
+
+    /// `parts` of the block at `height`, whose header is `header`, as the backend keeps them: a
+    /// payload that goes to the object store is staged or uploaded here, and the backend keeps
+    /// what describes it.
+    async fn externalize(
+        &self,
+        height: u64,
+        header: &Header,
+        parts: &Parts,
+    ) -> anyhow::Result<Parts> {
+        let (Some(payloads), Some(payload)) = (&self.payloads, &parts.payload) else {
+            return Ok(parts.clone());
+        };
+        let commitment = header.payload_commitment().to_string();
+        let mut kept = Parts {
+            payload: None,
+            payload_info: Some(
+                parts
+                    .payload_info
+                    .unwrap_or_else(|| PayloadInfo::of(payload, Some(header))),
+            ),
+            ..parts.clone()
+        };
+        match &self.staging {
+            Some(staging) => staging.stage(height, commitment, payload).await?,
+            None => {
+                payloads.put(&commitment, payload.clone()).await?;
+                kept.payload_stored = true;
+            },
+        }
+        Ok(kept)
     }
 
     /// Stores `item` with `parts`. An item or part already stored is kept, so a write fills only
     /// what is missing. Heights the store has pruned are not written.
     pub async fn put(&self, item: &Item, parts: &Parts) -> anyhow::Result<()> {
-        let parts = parts.encode(Some(item.leaf.block_header()))?;
-        self.backend.put(row(item)?, parts).await
+        let header = item.leaf.block_header();
+        let parts = self.externalize(item.height(), header, parts).await?;
+        self.backend
+            .put(row(item)?, parts.encode(Some(header))?)
+            .await
     }
 
     /// Stores `parts` of `height`, each unless the height has it or is pruned.
     pub async fn put_parts(&self, height: u64, parts: &Parts) -> anyhow::Result<()> {
         // A payload's info counts its transactions by the header, if the store has it.
-        let item = match parts.payload.is_some() && parts.payload_info.is_none() {
+        let item = match parts.payload.is_some()
+            && (parts.payload_info.is_none() || self.payloads.is_some())
+        {
             true => self.item(height).await?,
             false => None,
         };
-        let parts = parts.encode(item.as_ref().map(|item| item.leaf.block_header()))?;
-        self.backend.put_parts(height, parts).await
+        let header = item.as_ref().map(|item| item.leaf.block_header());
+        let parts = match (header, self.payloads.is_some() && parts.payload.is_some()) {
+            (Some(header), true) => self.externalize(height, header, parts).await?,
+            // The object's key is the payload commitment, which the item names.
+            (None, true) => anyhow::bail!("the payload of height {height} came before its block"),
+            (_, false) => parts.clone(),
+        };
+        self.backend.put_parts(height, parts.encode(header)?).await
     }
 
     pub async fn item(&self, height: u64) -> anyhow::Result<Option<Item>> {
@@ -261,8 +353,17 @@ impl ChainStore {
         }
     }
 
+    /// The payload of `height`, from the object store for a store that keeps its payloads there,
+    /// once it is uploaded.
     pub async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
-        self.backend.part(height, Part::Payload).await
+        let Some(payloads) = &self.payloads else {
+            return self.backend.part(height, Part::Payload).await;
+        };
+        let Some(item) = self.item(height).await? else {
+            return Ok(None);
+        };
+        let commitment = item.leaf.block_header().payload_commitment().to_string();
+        payloads.get(&commitment).await
     }
 
     pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {
@@ -292,8 +393,17 @@ impl ChainStore {
     }
 
     async fn read_record(&self, height: u64, payload: bool) -> anyhow::Result<Option<Record>> {
-        let record = self.backend.record(height, payload).await?;
-        Ok(record.map(|(item, parts)| Record {
+        let Some((item, mut parts)) = self.backend.record(height, payload).await? else {
+            return Ok(None);
+        };
+        // A payload in the object store joins the record from there, once uploaded.
+        if payload
+            && self.payloads.is_some()
+            && let Some(bytes) = self.payload(height).await?
+        {
+            parts.insert(0, (Part::Payload, bytes));
+        }
+        Ok(Some(Record {
             height,
             item,
             parts,
@@ -338,6 +448,11 @@ impl ChainStore {
         from: u64,
         limit: usize,
     ) -> anyhow::Result<Vec<u64>> {
+        // A store whose payloads live in the object store has them once they are uploaded.
+        let part = match (part, &self.payloads) {
+            (Part::Payload, Some(_)) => Part::PayloadStored,
+            (part, _) => part,
+        };
         self.backend.missing_parts(part, from, limit).await
     }
 

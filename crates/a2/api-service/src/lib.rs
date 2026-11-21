@@ -38,6 +38,7 @@ mod chain;
 pub mod compat;
 mod discovery;
 mod node;
+mod payload_route;
 mod reader;
 pub mod repair;
 mod request;
@@ -103,7 +104,7 @@ impl ApiService {
         let compat = self.compat.clone();
         let service = Arc::new(self);
         let mut rest = rest::availability_service_rest_router(service.clone())
-            .merge(espresso_api::payload_data::router(service.clone()))
+            .merge(payload_route::router(service.clone()))
             .merge(rest::status_service_rest_router(service.clone()))
             .merge(rest::node_service_rest_router(service.clone()))
             .merge(rest::submit_service_rest_router(service.clone()));
@@ -160,7 +161,11 @@ mod tests {
 
     /// Serves an API over an empty store, returning the store and the base URL.
     async fn serve() -> (ChainStore, String) {
-        let store = ChainStore::new(MemBackend::default());
+        serve_store(ChainStore::new(MemBackend::default())).await
+    }
+
+    /// Serves an API over `store`, returning the store and the base URL.
+    async fn serve_store(store: ChainStore) -> (ChainStore, String) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         // Nothing here reaches consensus.
@@ -281,6 +286,60 @@ mod tests {
             blake3::hash(&bytes).to_hex().as_str()
         );
         assert_eq!(reference["size"], Value::from(bytes.len().to_string()));
+    }
+
+    /// With payloads in an object store that clients reach, the payload route redirects to the
+    /// payload's object, whose URL follows from its commitment; without a URL for clients, the
+    /// API instance serves the payload from the object store itself.
+    #[tokio::test]
+    async fn the_payload_route_redirects_to_the_object_store() {
+        use chain_store::payloads::PayloadStore;
+
+        let objects = std::sync::Arc::new(object_store::memory::InMemory::new());
+        let reachable = PayloadStore::new(objects.clone(), "p", Some("http://objects.test".into()));
+        let (store, url) =
+            serve_store(ChainStore::new(MemBackend::default()).with_payloads(reachable)).await;
+        let (item, _) = genesis().await;
+        let payload = vec![9u8; 100];
+        store
+            .put(
+                &item,
+                &Parts {
+                    payload: Some(payload.clone().into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let commitment = item.leaf.block_header().payload_commitment().to_string();
+        let route = format!("{url}/v2/availability/payload-data?hash={commitment}");
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let response = client.get(&route).send().await.unwrap();
+        assert_eq!(response.status(), 307);
+        assert_eq!(
+            response.headers()["location"],
+            format!("http://objects.test/p/{}", commitment.replace('~', ".")).as_str()
+        );
+
+        let hidden = PayloadStore::new(objects, "p", None);
+        let (store, url) =
+            serve_store(ChainStore::new(MemBackend::default()).with_payloads(hidden)).await;
+        let with_payload = Parts {
+            payload: Some(payload.clone().into()),
+            ..Default::default()
+        };
+        store.put(&item, &with_payload).await.unwrap();
+        let served = reqwest::get(format!(
+            "{url}/v2/availability/payload-data?hash={commitment}"
+        ))
+        .await
+        .unwrap();
+        assert_eq!(served.status(), 200);
+        assert_eq!(&served.bytes().await.unwrap()[..], &payload[..]);
     }
 
     #[tokio::test]
