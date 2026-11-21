@@ -1,14 +1,12 @@
-//! The ingester of a deployment: copies the decide log of its consensus node into the store, and
-//! does the deployment's derived work.
+//! The ingester of a deployment: repairs what the store lacks.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use chain_api::Tables;
 use chain_store::{ChainStore, remote::RemoteBackend};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
-use espresso_types::SeqTypes;
 use ingester::{ChainFollower, GapFiller, Membership, Peers, node_state};
 use tokio::{task::JoinSet, time::sleep};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
@@ -19,10 +17,6 @@ const FOLLOWER_RETRY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Parser)]
 struct Options {
-    /// The address of the consensus node's API.
-    #[arg(long, env = "ESPRESSO_INGESTER_CONSENSUS_API")]
-    consensus_api: SocketAddr,
-
     /// The store service to write to, as a URL.
     #[arg(long, env = "ESPRESSO_INGESTER_STORE")]
     store: String,
@@ -68,17 +62,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let filler = GapFiller::new(store.clone(), peers, Some(membership));
     let follower_store = store.clone();
-    tracing::info!(consensus_api = %options.consensus_api, "ingesting");
+    tracing::info!("repairing the store");
 
     // The ingester runs as long as all of its parts do.
     let mut tasks = JoinSet::new();
-    let consensus_api = options.consensus_api;
-    tasks.spawn(async move {
-        // Returns only when the decide log does not continue the chain in the store.
-        ingester::run::<SeqTypes>(consensus_api, &store)
-            .await
-            .context("ingesting the decide log")
-    });
     tasks.spawn(async move {
         filler.run().await;
         anyhow!("the gap filler stopped")

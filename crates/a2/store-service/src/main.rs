@@ -1,11 +1,14 @@
-//! Serves the chain store over gRPC. It is the only process that writes to the store's database;
-//! the ingester and the API service reach the store through it.
+//! A storage instance: serves the chain store over gRPC, and takes its share of the decide log of
+//! the deployment's consensus node into the store. Storage instances are the only processes that
+//! write to the store's database; the API service reaches the store through them. Any number of
+//! them can share one database.
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, anyhow, ensure};
-use chain_store::{Backend, postgres::PostgresBackend, service};
+use chain_store::{Backend, ChainStore, postgres::PostgresBackend, service};
 use clap::Parser;
+use espresso_types::SeqTypes;
 use tokio::{net::TcpListener, task::JoinSet, time::sleep};
 use tonic::transport::{Server, server::TcpIncoming};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
@@ -36,6 +39,11 @@ struct Options {
     /// At least [`MIN_KEEP_HEIGHTS`].
     #[arg(long, env = "ESPRESSO_STORE_SERVICE_KEEP_HEIGHTS")]
     keep_heights: Option<u64>,
+
+    /// The address of the consensus node's API, to take a share of its decide log from. Without
+    /// it the instance only serves the store.
+    #[arg(long, env = "ESPRESSO_STORE_SERVICE_CONSENSUS_API")]
+    consensus_api: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -65,6 +73,16 @@ async fn main() -> anyhow::Result<()> {
         tasks.spawn(async move {
             prune(backend, keep).await;
             anyhow!("pruning stopped")
+        });
+    }
+    if let Some(consensus_api) = options.consensus_api {
+        let store = ChainStore::shared(backend.clone());
+        tracing::info!(%consensus_api, "taking a share of the decide log");
+        tasks.spawn(async move {
+            // Returns only when the decide log does not continue the chain in the store.
+            store_service::ingest::run::<SeqTypes>(consensus_api, &store)
+                .await
+                .context("ingesting the decide log")
         });
     }
     tasks.spawn(async move {

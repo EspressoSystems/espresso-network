@@ -6,6 +6,7 @@ authors     = { workspace = true }
 edition     = { workspace = true }
 
 [dependencies]
+async-channel = { workspace = true }
 async-trait = { workspace = true }
 bincode     = { workspace = true }
 bytes       = { workspace = true }
@@ -15,6 +16,7 @@ prost       = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true }
+tracing     = { workspace = true }
 tonic       = { workspace = true }
 tonic-prost = { workspace = true }
 

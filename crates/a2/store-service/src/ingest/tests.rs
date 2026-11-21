@@ -230,6 +230,18 @@ impl Sink<MockTypes> for MemSink {
             .or_else(|| self.before.clone()))
     }
 
+    async fn leaf(&self, height: u64) -> anyhow::Result<Option<Leaf2<MockTypes>>> {
+        let stored = self.block(height).map(|block| block.leaf);
+        let before = self.before.clone().filter(|leaf| leaf.height() == height);
+        Ok(stored.or(before))
+    }
+
+    async fn has_payload(&self, height: u64) -> anyhow::Result<bool> {
+        Ok(self
+            .block(height)
+            .is_some_and(|block| block.payload.is_some()))
+    }
+
     async fn put_stake_table(&self, epoch: u64, table: Bytes) -> anyhow::Result<()> {
         self.stake_tables.lock().unwrap().insert(epoch, table);
         Ok(())
@@ -244,9 +256,11 @@ impl Sink<MockTypes> for MemSink {
 async fn serve(log: Arc<FakeLog>) -> SocketAddr {
     let port = test_utils::reserve_tcp_port().unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let (service, dispatcher) = consensus_api::server(log);
+    tokio::spawn(dispatcher);
     tokio::spawn(
         tonic::transport::Server::builder()
-            .add_service(consensus_api::server(log))
+            .add_service(service)
             .serve(addr),
     );
     for _ in 0..100 {
@@ -617,4 +631,59 @@ async fn starts_at_the_earliest_entry() {
 
     eventually("the held heights are stored", || sink.appended().len() == 2).await;
     assert_eq!(sink.appended(), vec![3, 4]);
+}
+
+/// Two instances over one store share the decide log: every block is stored and acknowledged.
+#[tokio::test]
+async fn instances_share_the_decide_log() {
+    let chain = chain(6).await;
+    let log = FakeLog::new();
+    let addr = serve(log.clone()).await;
+    let sink = MemSink::new();
+    let _first = spawn_ingester(addr, sink.clone());
+    let _second = spawn_ingester(addr, sink.clone());
+
+    log.decide(&chain, 0..=6);
+    eventually("every block is acknowledged", || {
+        let mut acked = log.acked();
+        acked.dedup();
+        acked == (0..=6).collect::<Vec<_>>()
+    })
+    .await;
+    for block in chain.blocks() {
+        let stored = sink.block(block.height()).expect("the block is stored");
+        assert_eq!(stored.payload, Some(payload_of(block).to_vec()));
+    }
+}
+
+/// A payload that joins an entry another instance stored without it is acknowledged by the
+/// instance that stores the payload.
+#[tokio::test]
+async fn acknowledges_a_late_payload_whose_entry_went_elsewhere() {
+    let chain = chain(1).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=0);
+    log.decide_without_payload(&chain, 1);
+    let sink = MemSink::new();
+    let _other = spawn_ingester(serve(log.clone()).await, sink.clone());
+    eventually("the entry is stored", || sink.block(1).is_some()).await;
+
+    // This instance gets only the payload.
+    let payload = payload_of(&chain.blocks()[1]);
+    let mut state = Chain::default();
+    let mut receiving = None;
+    let added = Event::PayloadAdded(consensus_api::proto::PayloadAdded {
+        height: 1,
+        payload_size: payload.len() as u64,
+    });
+    receive(sink.as_ref(), &mut state, &mut receiving, added)
+        .await
+        .unwrap();
+    if !payload.is_empty() {
+        let chunk = Event::PayloadChunk(consensus_api::proto::PayloadChunk { data: payload });
+        receive(sink.as_ref(), &mut state, &mut receiving, chunk)
+            .await
+            .unwrap();
+    }
+    assert_eq!(state.take_ackable(), vec![HeightRange { start: 1, end: 2 }]);
 }

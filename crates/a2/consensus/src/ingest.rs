@@ -1,4 +1,4 @@
-//! The decide log as the ingester API serves it.
+//! The decide log as the consensus API serves it to the storage instances.
 
 use std::{ops::Range, sync::Arc};
 

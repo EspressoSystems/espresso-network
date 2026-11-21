@@ -1,18 +1,38 @@
 [package]
 name        = "store-service"
-description = "Serves the chain store; the only process that writes to its database"
+description = "A storage instance: serves the chain store and takes its share of the decide log into it"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }
 
 [dependencies]
 anyhow             = { workspace = true }
+async-trait        = { workspace = true }
+bincode            = { workspace = true }
+bytes              = { workspace = true }
+chain-api          = { workspace = true }
 chain-store        = { workspace = true, features = ["postgres", "service"] }
 clap               = { workspace = true }
+committable        = { workspace = true }
+serde              = { workspace = true }
+consensus-api      = { workspace = true }
+espresso-types     = { workspace = true }
+futures            = { workspace = true }
+hotshot-types      = { workspace = true }
+jf-advz            = { workspace = true }
+membership         = { workspace = true }
+thiserror          = { workspace = true }
 tokio              = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
 tonic              = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+[dev-dependencies]
+chain-store           = { workspace = true, features = ["testing"] }
+espresso-types        = { workspace = true, features = ["testing"] }
+hotshot-query-service = { workspace = true, features = ["testing"] }
+test-utils            = { workspace = true }
+versions              = { workspace = true }
 
 [lints]
 workspace = true

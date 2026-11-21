@@ -1,5 +1,5 @@
-//! The consensus node's API, for its API service: the decide log for the ingester, and the node
-//! service for submissions. It listens only on the private subnet.
+//! The consensus node's API, for its API service: the decide log for the storage instances, and
+//! the node service for submissions. It listens only on the private subnet.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -39,14 +39,22 @@ pub fn bind(
     // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
     let incoming = tonic::transport::server::TcpIncoming::bind(addr)?.with_nodelay(Some(true));
     let bound = incoming.local_addr()?;
+    let (decide_log, dispatcher) = consensus_api::server(IngestSource::new(
+        store,
+        epoch_height,
+        Arc::new(MembershipStakeTables { membership }),
+    ));
     let server = tonic::transport::Server::builder()
-        .add_service(consensus_api::server(IngestSource::new(
-            store,
-            epoch_height,
-            Arc::new(MembershipStakeTables { membership }),
-        )))
+        .add_service(decide_log)
         .add_service(consensus_api::node_server(Arc::new(NodeService { client })))
         .serve_with_incoming(incoming);
+    // The decide log's dispatcher runs as long as the server; it ends only with the store.
+    let server = async move {
+        tokio::select! {
+            served = server => served,
+            () = dispatcher => Ok(()),
+        }
+    };
     Ok((bound, server))
 }
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Runs an a2 network on this machine: anvil as L1 with the Espresso contracts and the demo
 # validators staked, and for each of the five validators of the demo genesis file a deployment of
-# a consensus node, an ingester, a store service on Postgres and an API instance. Ingesters find
-# the other deployments' API services through the validators' records, starting from the first.
-# For its first minute node 4's ingester writes into a scratch store and acknowledges, so node 4
-# frees those heights; then a new ingester starts on node 4's real store, which therefore lacks
-# them and fills them, and later their certificates, from the other deployments. Logs go to
-# RUNDIR. Stops everything on exit.
+# a consensus node, a storage instance on Postgres, which takes the node's decide log, an ingester,
+# which repairs the store, and an API instance. Node 0 runs a second storage instance on the same
+# database, so the two share the decide log. Ingesters find the other deployments' API services
+# through the validators' records, starting from the first. For its first minute node 4's decide
+# log goes to a storage instance on a scratch database, which acknowledges it, so node 4 frees
+# those heights; then a storage instance on node 4's real database takes over, which therefore
+# lacks them, and the ingester fills them, and later their certificates, from the other
+# deployments. Logs go to RUNDIR. Stops everything on exit.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -89,7 +91,11 @@ main() {
     local x25519="ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_$i"
     local port="ESPRESSO_DEMO_NODE_CLIQUENET_PORT_$i"
     psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE chain$i" >/dev/null
-    store-service --address "127.0.0.1:$((8070 + i))" \
+    local ingest=(--consensus-api "127.0.0.1:$((9978 + i))")
+    if ((i == 4)); then
+      ingest=()
+    fi
+    store-service --address "127.0.0.1:$((8070 + i))" "${ingest[@]}" \
       --database "postgres://root@127.0.0.1:${pg_port}/chain$i" >"$rundir/store-$i.log" 2>&1 &
     ESPRESSO_NODE_PRIVATE_STAKING_KEY=${!staking} \
       ESPRESSO_NODE_PRIVATE_STATE_KEY=${!state} \
@@ -105,8 +111,10 @@ main() {
       >"$rundir/consensus-$i.log" 2>&1 &
   done
 
+  store-service --address "127.0.0.1:8080" --consensus-api "127.0.0.1:9978" \
+    --database "postgres://root@127.0.0.1:${pg_port}/chain0" >"$rundir/store-0b.log" 2>&1 &
   psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE scratch4" >/dev/null
-  store-service --address "127.0.0.1:8079" \
+  store-service --address "127.0.0.1:8079" --consensus-api "127.0.0.1:9982" \
     --database "postgres://root@127.0.0.1:${pg_port}/scratch4" >"$rundir/store-scratch-4.log" 2>&1 &
   local scratch_store=$!
 
@@ -115,30 +123,27 @@ main() {
     api-service --port $((24000 + i)) --store "http://127.0.0.1:$((8070 + i))" \
       --consensus-api "127.0.0.1:$((9978 + i))" --genesis-file "$genesis" \
       >"$rundir/api-$i.log" 2>&1 &
-    if ((i < 4)); then
-      start_ingester "$rundir" "$i" "$genesis" "$l1" $((8070 + i)) "ingester-$i"
-    fi
+    start_ingester "$rundir" "$i" "$genesis" "$l1" $((8070 + i)) "ingester-$i"
   done
-  start_ingester "$rundir" 4 "$genesis" "$l1" 8079 "ingester-scratch-4"
-  local scratch_ingester=$!
 
   echo "running; logs in $rundir"
   sleep 60
-  kill "$scratch_ingester" "$scratch_store"
-  start_ingester "$rundir" 4 "$genesis" "$l1" 8074 "ingester-4"
-  echo "ingester 4 moved to its real store"
+  kill "$scratch_store"
+  store-service --address "127.0.0.1:8084" --consensus-api "127.0.0.1:9982" \
+    --database "postgres://root@127.0.0.1:${pg_port}/chain4" >"$rundir/store-4b.log" 2>&1 &
+  echo "node 4's decide log moved to its real store"
   wait
 }
 
-# Starts the ingester of node $2, with genesis file $3 and L1 $4, from its consensus node into the
-# store service on port $5, logging to $1/$6.log. All but the first learn the other API services
+# Starts the ingester of node $2, with genesis file $3 and L1 $4, repairing the store behind the
+# storage instance on port $5, logging to $1/$6.log. All but the first learn the other API services
 # from the first.
 start_ingester() {
   local bootstrap=()
   if (($2 > 0)); then
     bootstrap=(--bootstrap http://127.0.0.1:24000)
   fi
-  ingester --consensus-api "127.0.0.1:$((9978 + $2))" --store "http://127.0.0.1:$5" \
+  ingester --store "http://127.0.0.1:$5" \
     --genesis-file "$3" --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
     "${bootstrap[@]}" >"$1/$6.log" 2>&1 &
 }

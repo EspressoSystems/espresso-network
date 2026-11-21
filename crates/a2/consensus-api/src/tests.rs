@@ -108,7 +108,9 @@ fn entry(height: u64) -> Decided {
 async fn serve(source: Arc<MemSource>) -> DecideLogClient<tonic::transport::Channel> {
     let port = test_utils::reserve_tcp_port().unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    tokio::spawn(Server::builder().add_service(server(source)).serve(addr));
+    let (service, dispatcher) = server(source);
+    tokio::spawn(dispatcher);
+    tokio::spawn(Server::builder().add_service(service).serve(addr));
     for _ in 0..100 {
         if let Ok(client) = DecideLogClient::connect(format!("http://{addr}")).await {
             return client;
@@ -118,14 +120,13 @@ async fn serve(source: Arc<MemSource>) -> DecideLogClient<tonic::transport::Chan
     panic!("server did not start");
 }
 
-/// A subscription from `from`, past its `Start`, which names `earliest`.
+/// A subscription, past its `Start`, which names `earliest`.
 async fn subscribe(
     client: &mut DecideLogClient<tonic::transport::Channel>,
-    from: u64,
-    earliest: u64,
+    earliest: Option<u64>,
 ) -> tonic::Streaming<SubscribeResponse> {
     let mut stream = client
-        .subscribe(SubscribeRequest { from_height: from })
+        .subscribe(SubscribeRequest {})
         .await
         .unwrap()
         .into_inner();
@@ -138,18 +139,31 @@ async fn subscribe(
     stream
 }
 
-/// Whether the stream stays quiet for a moment.
+/// Whether the stream sends nothing but progress for a moment.
 async fn quiet(stream: &mut tonic::Streaming<SubscribeResponse>) -> bool {
-    timeout(Duration::from_millis(200), stream.next())
-        .await
-        .is_err()
+    loop {
+        match timeout(Duration::from_millis(200), any_event(stream)).await {
+            Err(_) => return true,
+            Ok(Some(Event::Progress(_))) => continue,
+            Ok(_) => return false,
+        }
+    }
 }
 
+/// The next event other than progress.
 async fn next_event(stream: &mut tonic::Streaming<SubscribeResponse>) -> Option<Event> {
-    timeout(Duration::from_secs(5), stream.next())
-        .await
-        .expect("an event")
-        .map(|r| r.unwrap().event.unwrap())
+    loop {
+        let event = timeout(Duration::from_secs(5), any_event(stream))
+            .await
+            .expect("an event");
+        if !matches!(event, Some(Event::Progress(_))) {
+            return event;
+        }
+    }
+}
+
+async fn any_event(stream: &mut tonic::Streaming<SubscribeResponse>) -> Option<Event> {
+    stream.next().await.map(|r| r.unwrap().event.unwrap())
 }
 
 #[tokio::test]
@@ -159,11 +173,13 @@ async fn subscribe_delivers_stored_then_new_entries() {
     source.decide(1, None);
     let mut client = serve(source.clone()).await;
 
-    let mut stream = subscribe(&mut client, 1, 1).await;
-    assert_eq!(
-        next_event(&mut stream).await,
-        Some(Event::Decided(entry(1)))
-    );
+    let mut stream = subscribe(&mut client, Some(0)).await;
+    for height in [0, 1] {
+        assert_eq!(
+            next_event(&mut stream).await,
+            Some(Event::Decided(entry(height)))
+        );
+    }
 
     source.decide(2, None);
     assert_eq!(
@@ -173,12 +189,12 @@ async fn subscribe_delivers_stored_then_new_entries() {
 }
 
 #[tokio::test]
-async fn subscribe_below_the_earliest_entry_starts_with_it() {
+async fn starts_with_the_earliest_entry() {
     let source = MemSource::new();
     source.decide(5, None);
     let mut client = serve(source).await;
 
-    let mut stream = subscribe(&mut client, 2, 5).await;
+    let mut stream = subscribe(&mut client, Some(5)).await;
     assert_eq!(
         next_event(&mut stream).await,
         Some(Event::Decided(entry(5)))
@@ -215,7 +231,7 @@ async fn a_late_payload_follows_its_entry() {
     let source = MemSource::new();
     source.decide(3, None);
     let mut client = serve(source.clone()).await;
-    let mut stream = subscribe(&mut client, 0, 3).await;
+    let mut stream = subscribe(&mut client, Some(3)).await;
     assert_eq!(
         next_event(&mut stream).await,
         Some(Event::Decided(entry(3)))
@@ -244,7 +260,7 @@ async fn a_late_entry_fills_its_height() {
     source.decide(3, Some(Bytes::new()));
     source.decide(5, Some(Bytes::new()));
     let mut client = serve(source.clone()).await;
-    let mut stream = subscribe(&mut client, 0, 3).await;
+    let mut stream = subscribe(&mut client, Some(3)).await;
     for height in [3, 5] {
         let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
             panic!("expected the entry at {height}");
@@ -265,7 +281,7 @@ async fn a_late_entry_before_the_earliest_is_sent() {
     let source = MemSource::new();
     source.decide(11, None);
     let mut client = serve(source.clone()).await;
-    let mut stream = subscribe(&mut client, 0, 11).await;
+    let mut stream = subscribe(&mut client, Some(11)).await;
     assert_eq!(
         next_event(&mut stream).await,
         Some(Event::Decided(entry(11)))
@@ -285,7 +301,7 @@ async fn final_heights_get_nothing_late() {
     source.decide(3, None);
     source.decide(5, Some(Bytes::new()));
     let mut client = serve(source.clone()).await;
-    let mut stream = subscribe(&mut client, 0, 3).await;
+    let mut stream = subscribe(&mut client, Some(3)).await;
     for _ in 0..2 {
         next_event(&mut stream).await.expect("an entry");
     }
@@ -311,7 +327,7 @@ async fn payloads_follow_their_entries_in_chunks() {
     source.decide(4, Some(Bytes::new()));
     source.decide(5, None);
     let mut client = serve(source).await;
-    let mut stream = subscribe(&mut client, 3, 3).await;
+    let mut stream = subscribe(&mut client, Some(3)).await;
 
     let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
         panic!("expected the entry at 3");
@@ -346,7 +362,7 @@ async fn a_freed_payload_is_not_announced() {
     source.payloads.lock().unwrap().clear();
     source.decide(4, None);
     let mut client = serve(source).await;
-    let mut stream = subscribe(&mut client, 3, 3).await;
+    let mut stream = subscribe(&mut client, Some(3)).await;
 
     let Some(Event::Decided(decided)) = next_event(&mut stream).await else {
         panic!("expected the entry at 3");
@@ -379,7 +395,7 @@ async fn stake_tables_and_records_follow_the_entries() {
     source.entries.lock().unwrap().insert(0, decided.clone());
     let mut client = serve(source.clone()).await;
 
-    let mut stream = subscribe(&mut client, 0, 0).await;
+    let mut stream = subscribe(&mut client, Some(0)).await;
     assert_eq!(next_event(&mut stream).await, Some(Event::Decided(decided)));
     let stake_table = |epoch, table: &'static [u8]| {
         Some(Event::StakeTable(StakeTable {
@@ -415,17 +431,80 @@ async fn stake_tables_and_records_follow_the_entries() {
     next.epoch = 3;
     source.entries.lock().unwrap().insert(1, next);
     source.changes.send_modify(|n| *n += 1);
-    let Some(Event::Decided(_)) = next_event(&mut stream).await else {
-        panic!("expected the next entry");
-    };
-    assert_eq!(next_event(&mut stream).await, stake_table(4, b"t4"));
-    assert_eq!(
-        next_event(&mut stream).await,
-        Some(Event::ServiceRecords(ServiceRecords {
-            epoch: 3,
-            records: vec![Bytes::from_static(b"a3"), Bytes::from_static(b"b3")],
-        }))
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.push(next_event(&mut stream).await);
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Some(Event::Decided(d)) if d.height == 1))
     );
+    assert!(events.contains(&stake_table(4, b"t4")));
+    assert!(events.contains(&Some(Event::ServiceRecords(ServiceRecords {
+        epoch: 3,
+        records: vec![Bytes::from_static(b"a3"), Bytes::from_static(b"b3")],
+    }))));
+}
+
+/// Each entry goes to one of the subscriptions, and what a subscription was sent goes to another
+/// when it ends before the entries are freed.
+#[tokio::test]
+async fn subscriptions_share_the_entries() {
+    let source = MemSource::new();
+    let mut client = serve(source.clone()).await;
+    let mut first = subscribe(&mut client, None).await;
+    for height in 0..4 {
+        source.decide(height, None);
+    }
+    for height in 0..4 {
+        assert_eq!(
+            next_event(&mut first).await,
+            Some(Event::Decided(entry(height)))
+        );
+    }
+    let mut second = subscribe(&mut client, Some(0)).await;
+    assert!(quiet(&mut second).await, "the entries went to the first");
+
+    // Entries 0 and 1 are freed; the others go to the second once the first ends.
+    source.ack(std::iter::once(0..2).collect()).await.unwrap();
+    drop(first);
+    for height in 2..4 {
+        assert_eq!(
+            next_event(&mut second).await,
+            Some(Event::Decided(entry(height)))
+        );
+    }
+
+    // New entries go to whichever subscription asks; with one left, all go to it.
+    source.decide(4, None);
+    assert_eq!(
+        next_event(&mut second).await,
+        Some(Event::Decided(entry(4)))
+    );
+}
+
+/// Every subscription learns the view of the newest decide.
+#[tokio::test]
+async fn progress_reaches_every_subscription() {
+    let source = MemSource::new();
+    let mut client = serve(source.clone()).await;
+    let mut streams = [
+        subscribe(&mut client, None).await,
+        subscribe(&mut client, None).await,
+    ];
+    source.decide(7, None);
+    for stream in &mut streams {
+        loop {
+            let event = timeout(Duration::from_secs(5), any_event(stream))
+                .await
+                .expect("an event");
+            if let Some(Event::Progress(progress)) = event {
+                assert_eq!(progress.newest_view, entry(7).view);
+                break;
+            }
+        }
+    }
 }
 
 /// A node that takes no transactions now.

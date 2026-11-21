@@ -57,14 +57,14 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
     .await;
 
     let mut decided = client
-        .subscribe(SubscribeRequest { from_height: 0 })
+        .subscribe(SubscribeRequest {})
         .await
         .unwrap()
         .into_inner();
     assert_eq!(
         next_event(&mut decided).await,
         Some(Event::Start(consensus_api::proto::Start {
-            earliest_height: 0
+            earliest_height: None
         }))
     );
 
@@ -155,14 +155,14 @@ async fn decided_entries_and_payloads_reach_the_ingester() {
         }
     }
     let mut late = client
-        .subscribe(SubscribeRequest { from_height: 0 })
+        .subscribe(SubscribeRequest {})
         .await
         .unwrap()
         .into_inner();
     assert_eq!(
         next_event(&mut late).await,
         Some(Event::Start(consensus_api::proto::Start {
-            earliest_height: v2.leaf.height()
+            earliest_height: Some(v2.leaf.height())
         }))
     );
 }
@@ -183,7 +183,7 @@ async fn a_late_payload_reaches_the_ingester() {
     ))
     .await;
     let mut decided = client
-        .subscribe(SubscribeRequest { from_height: 0 })
+        .subscribe(SubscribeRequest {})
         .await
         .unwrap()
         .into_inner();
@@ -241,13 +241,19 @@ async fn a_late_payload_reaches_the_ingester() {
     assert_eq!(store.decided_payload(v2.leaf.height()).unwrap(), None);
 }
 
+/// The next event other than progress.
 async fn next_event(stream: &mut tonic::Streaming<SubscribeResponse>) -> Option<Event> {
-    timeout(Duration::from_secs(5), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap()
-        .event
+    loop {
+        let event = timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .event;
+        if !matches!(event, Some(Event::Progress(_))) {
+            return event;
+        }
+    }
 }
 
 fn store_payload(storage: &mut Storage<TestTypes, MemStore>, v: &TestView) {
@@ -277,7 +283,9 @@ async fn serve(
 ) -> DecideLogClient<tonic::transport::Channel> {
     let port = test_utils::reserve_tcp_port().unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    tokio::spawn(Server::builder().add_service(server(source)).serve(addr));
+    let (service, dispatcher) = server(source);
+    tokio::spawn(dispatcher);
+    tokio::spawn(Server::builder().add_service(service).serve(addr));
     for _ in 0..100 {
         if let Ok(client) = DecideLogClient::connect(format!("http://{addr}")).await {
             return client;

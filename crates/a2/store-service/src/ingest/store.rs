@@ -1,4 +1,4 @@
-//! The [`ChainStore`] as the ingester's sink.
+//! The [`ChainStore`] as the sink of the decide log.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -9,7 +9,7 @@ use espresso_types::{ChainConfig, Leaf2, SeqTypes};
 use hotshot_types::{PeerConfig, data::EpochNumber};
 use membership::RETAINED_EPOCHS;
 
-use crate::{Block, Sink};
+use super::{Block, Sink};
 
 #[async_trait]
 impl Sink<SeqTypes> for ChainStore {
@@ -45,6 +45,14 @@ impl Sink<SeqTypes> for ChainStore {
             return Ok(None);
         };
         Ok(self.item(height).await?.map(|item| item.leaf))
+    }
+
+    async fn leaf(&self, height: u64) -> anyhow::Result<Option<Leaf2>> {
+        Ok(self.item(height).await?.map(|item| item.leaf))
+    }
+
+    async fn has_payload(&self, height: u64) -> anyhow::Result<bool> {
+        Ok(self.payload(height).await?.is_some())
     }
 
     async fn put_stake_table(&self, epoch: u64, table: Bytes) -> anyhow::Result<()> {

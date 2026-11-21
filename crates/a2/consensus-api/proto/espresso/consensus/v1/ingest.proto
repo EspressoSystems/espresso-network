@@ -4,18 +4,21 @@ package espresso.consensus.v1;
 
 // The chain as a consensus node decides it, for its API service's store.
 //
-// Entries carry the fields an ingester acts on as protobuf fields, and the consensus objects
+// Entries carry the fields a storage instance acts on as protobuf fields, and the consensus objects
 // themselves in `Body`, in the encoding consensus nodes exchange.
 service DecideLog {
-  // The decided entries from `from_height` on. The stream stays open and delivers each entry once it is decided, mostly in
-  // height order. An entry whose `payload_size` is set is followed by its payload, in chunks
-  // that add up to that size.
+  // The decided entries the node keeps, and those it decides from now on, shared out among the
+  // open subscriptions: each entry, and each payload that joins an entry later, goes to one of
+  // them, whichever asks for the next. An entry or payload sent to a subscription that ends
+  // before the entry is acknowledged goes to another one. An entry whose `payload_size` is set is
+  // followed by its payload, in chunks that add up to that size.
   //
-  // The order is weak in two ways, both within `FINALITY_VIEWS` views of the newest decide: a
-  // height that was missing can be decided later and arrive after higher ones, and an entry sent
-  // without its payload can get it later, as `PayloadAdded` followed by its chunks. An entry
-  // whose view is `FINALITY_VIEWS` or more behind the newest entry's view gets neither; heights
-  // still missing then, and payloads still missing, must come from elsewhere.
+  // Entries come mostly in height order, but within `FINALITY_VIEWS` views of the newest decide
+  // a height that was missing can be decided later, and an entry sent without its payload can
+  // get it later, as `PayloadAdded` followed by its chunks. An entry whose view is
+  // `FINALITY_VIEWS` or more behind the newest decide's view gets neither; heights still missing
+  // then, and payloads still missing, must come from elsewhere. Every subscription gets
+  // `Progress`, the newest decide's view, whenever it advances, to tell when an entry is final.
   //
   // The stream starts with `Start`, naming the earliest entry the node still keeps; entries
   // before it must come from elsewhere too.
@@ -31,9 +34,7 @@ service DecideLog {
   rpc Ack(AckRequest) returns (AckResponse);
 }
 
-message SubscribeRequest {
-  uint64 from_height = 1;
-}
+message SubscribeRequest {}
 
 message SubscribeResponse {
   oneof event {
@@ -43,7 +44,13 @@ message SubscribeResponse {
     PayloadAdded payload_added = 4;
     StakeTable stake_table = 5;
     ServiceRecords service_records = 6;
+    Progress progress = 7;
   }
+}
+
+// The view of the newest decide.
+message Progress {
+  uint64 newest_view = 1;
 }
 
 // The stake table of an epoch.
@@ -70,9 +77,8 @@ message PayloadAdded {
 }
 
 message Start {
-  // The earliest entry the node keeps at or after `from_height`; `from_height` if it keeps
-  // none.
-  uint64 earliest_height = 1;
+  // The earliest entry the node keeps; absent if it keeps none.
+  optional uint64 earliest_height = 1;
 }
 
 message Decided {

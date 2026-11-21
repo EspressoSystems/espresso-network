@@ -187,9 +187,12 @@ impl fmt::Debug for ChainStore {
 
 impl ChainStore {
     pub fn new(backend: impl Backend) -> Self {
-        Self {
-            backend: Arc::new(backend),
-        }
+        Self::shared(Arc::new(backend))
+    }
+
+    /// A store over `backend`, which others use too.
+    pub fn shared(backend: Arc<dyn Backend>) -> Self {
+        Self { backend }
     }
 
     /// Stores `item` with `parts`. An item or part already stored is kept, so a write fills only

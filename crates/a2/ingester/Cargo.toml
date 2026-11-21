@@ -1,6 +1,6 @@
 [package]
 name        = "ingester"
-description = "Copies the chain a consensus node decides into its deployment's store, and does the deployment's derived work"
+description = "Repairs what the store of a deployment lacks"
 version     = { workspace = true }
 authors     = { workspace = true }
 edition     = { workspace = true }

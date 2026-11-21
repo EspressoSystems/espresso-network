@@ -2786,6 +2786,7 @@ dependencies = [
 name = "consensus-api"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "async-trait",
  "bincode",
  "bytes",
@@ -2799,6 +2800,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tracing",
 ]
 
 [[package]]
@@ -10008,12 +10010,28 @@ name = "store-service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "chain-api",
  "chain-store",
  "clap",
+ "committable",
+ "consensus-api",
+ "espresso-types",
+ "futures",
+ "hotshot-query-service",
+ "hotshot-types",
+ "jf-advz",
+ "membership",
+ "serde",
+ "test-utils",
+ "thiserror 2.0.18",
  "tokio",
  "tonic",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "versions",
 ]
 
 [[package]]
