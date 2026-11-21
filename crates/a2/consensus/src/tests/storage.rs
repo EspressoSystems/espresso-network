@@ -198,6 +198,35 @@ async fn test_payload_sink_reports_acknowledged_payloads() {
     );
 }
 
+/// The caller drops `next` whenever something else wins its select; a payload sink survives
+/// that, so later payloads still go to the storage instances instead of the store.
+#[tokio::test]
+async fn test_payload_sink_survives_a_cancelled_next() {
+    let (storage, store) = test_storage();
+    let (queue, acks) = consensus_api::payloads::PayloadQueue::new();
+    let mut storage = storage.with_payload_sink(queue.clone(), acks);
+    for _ in 0..3 {
+        let waited = tokio::time::timeout(Duration::from_millis(10), storage.next()).await;
+        assert!(waited.is_err(), "nothing to report, so next is cancelled");
+    }
+    let view = ViewNumber::new(4);
+    let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::empty();
+    let commitment = VidCommitment2::default();
+    storage.append_da(
+        view,
+        EpochNumber::genesis(),
+        payload,
+        metadata,
+        VidCommitment::V2(commitment),
+    );
+    queue.ack((*view, VidCommitment::V2(commitment).to_string()));
+    assert_eq!(
+        storage.next().await.expect("completion"),
+        StorageOutput::Payload(view, commitment)
+    );
+    assert!(store.load().unwrap().payloads.is_empty(), "not stored");
+}
+
 /// The lock only moves forward, and garbage collection never removes it or the boundary
 /// certificate: nothing else carries the boundary certificate once its view has passed.
 #[tokio::test]

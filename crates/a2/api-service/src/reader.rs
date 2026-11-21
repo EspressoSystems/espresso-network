@@ -92,7 +92,7 @@ impl Reader {
         let entry = self
             .entry(height, wait, |p| p.payload_info.is_some())
             .await?;
-        let payload = self.payload(height).await?;
+        let payload = self.payload(height, wait).await?;
         Ok(block(&entry.item, &payload))
     }
 
@@ -115,7 +115,7 @@ impl Reader {
         let num_transactions = match info.num_transactions {
             Some(count) => count,
             None => {
-                let payload = self.payload(height).await?;
+                let payload = self.payload(height, wait).await?;
                 block(&entry.item, &payload).num_transactions()
             },
         };
@@ -123,16 +123,41 @@ impl Reader {
     }
 
     /// The payload of `height`, which the tip says the store has.
-    async fn payload(&self, height: u64) -> Result<bytes::Bytes, Status> {
-        self.store
-            .payload(height)
+    async fn payload(&self, height: u64, wait: Wait) -> Result<bytes::Bytes, Status> {
+        self.until_uploaded(height, wait, || self.store.payload(height))
             .await
-            .map_err(to_status)?
-            .ok_or_else(|| {
-                Status::not_found(format!(
+    }
+
+    /// What `read` gives, once it gives something: a payload the store describes can still be on
+    /// its way to the object store. Tries again, waiting longer each time, for as long as `wait`
+    /// says.
+    async fn until_uploaded<F, Fut>(
+        &self,
+        height: u64,
+        wait: Wait,
+        read: F,
+    ) -> Result<bytes::Bytes, Status>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = anyhow::Result<Option<bytes::Bytes>>>,
+    {
+        let deadline = match wait {
+            Wait::Briefly => Some(Instant::now() + READ_TIMEOUT),
+            Wait::Forever => None,
+        };
+        let mut delay = Duration::from_millis(20);
+        loop {
+            if let Some(bytes) = read().await.map_err(to_status)? {
+                return Ok(bytes);
+            }
+            if deadline.is_some_and(|deadline| Instant::now() + delay > deadline) {
+                return Err(Status::not_found(format!(
                     "the payload of height {height} is not available yet, or pruned"
-                ))
-            })
+                )));
+            }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(Duration::from_secs(1));
+        }
     }
 
     pub(crate) async fn vid_common(
@@ -159,7 +184,6 @@ impl Reader {
         wait: Wait,
     ) -> Result<proto::NamespaceProofResponse, Status> {
         let entry = self.entry(height, wait, chain_store::tip::complete).await?;
-        let payload = self.payload(height).await?;
         let Some(VidCommon::V2(common)) = &entry.parts.vid_common else {
             return Err(Status::internal("the VID common data is not AvidmGf2's"));
         };
@@ -170,9 +194,19 @@ impl Reader {
         let Some(index) = index.filter(|&index| common.ns_lens.get(index) > Some(&0)) else {
             return Ok(proto::NamespaceProofResponse::default());
         };
+        // Only the namespace's bytes are read; the proof needs the rest of the payload only
+        // through the namespace commitments in the VID common data.
+        let proving = |err| Status::internal(format!("proving the namespace failed: {err}"));
+        let range = AvidmGf2Scheme::namespace_range(common, index).map_err(proving)?;
+        let range = range.start as u64..range.end as u64;
+        let ns_payload = self
+            .until_uploaded(height, wait, || {
+                self.store.payload_range(height, range.clone())
+            })
+            .await?;
         // The proof holds a copy of the namespace's bytes, and the transactions a second one.
-        let proof = AvidmGf2Scheme::namespace_proof(common, &payload, index)
-            .map_err(|err| Status::internal(format!("proving the namespace failed: {err}")))?;
+        let proof = AvidmGf2Scheme::namespace_proof_of(common, ns_payload.to_vec(), index)
+            .map_err(proving)?;
         let transactions = NsPayload::from_bytes_slice(&proof.ns_payload)
             .export_all_txs(&namespace)
             .into_iter()
@@ -365,22 +399,41 @@ mod tests {
             QuorumCertificate2::genesis(&state, &instance, Upgrade::trivial(NEW_PROTOCOL_VERSION))
                 .await;
 
-        let store = ChainStore::new(MemBackend::default());
+        // Once with the payload in the database, once in an object store, which is read by range.
+        let objects = chain_store::payloads::PayloadStore::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            "p",
+            None,
+        );
+        let stores = [
+            ChainStore::new(MemBackend::default()),
+            ChainStore::new(MemBackend::default()).with_payloads(objects),
+        ];
+        let item = Item { leaf, cert1 };
         let parts = Parts {
             payload: Some(bytes.into()),
             vid_common: Some(common.clone()),
             ..Default::default()
         };
-        store.put(&Item { leaf, cert1 }, &parts).await.unwrap();
-        let (follower, tips) = tip::follower(store.clone());
         let mut tasks = JoinSet::new();
-        tasks.spawn(follower.run());
-        let reader = Reader::new(store, tips);
+        for store in stores {
+            store.put(&item, &parts).await.unwrap();
+            let (follower, tips) = tip::follower(store.clone());
+            tasks.spawn(follower.run());
+            check_proofs(&Reader::new(store, tips), &payload, &ns_table, &common).await;
+        }
+    }
 
+    async fn check_proofs(
+        reader: &Reader,
+        payload: &Payload,
+        ns_table: &espresso_types::NsTable,
+        common: &VidCommon,
+    ) {
         for namespace in [7u32, 9, 11, 13].map(NamespaceId::from) {
             let expected = match ns_table.find_ns_id(&namespace) {
                 Some(index) => {
-                    let proof = NsProof::new(&payload, &index, &common).unwrap();
+                    let proof = NsProof::new(payload, &index, common).unwrap();
                     let data = NamespaceProofQueryData {
                         transactions: proof.export_all_txs(&namespace),
                         proof: Some(proof),

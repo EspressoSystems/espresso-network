@@ -127,6 +127,23 @@ impl PayloadStore {
         }
     }
 
+    /// The bytes in `range` of the payload whose VID commitment is `commitment`, if it is
+    /// uploaded, read without the rest of the payload.
+    pub async fn get_range(
+        &self,
+        commitment: &str,
+        range: std::ops::Range<u64>,
+    ) -> anyhow::Result<Option<Bytes>> {
+        if range.is_empty() {
+            return Ok(Some(Bytes::new()));
+        }
+        match self.objects.get_range(&self.key(commitment), range).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// Uploads `payload`, whose VID commitment is `commitment`. Uploading it again does no harm.
     pub async fn put(&self, commitment: &str, payload: Bytes) -> anyhow::Result<()> {
         self.objects
@@ -439,6 +456,30 @@ mod tests {
             Some(&b"early"[..])
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A block stored before its payload gets the payload's info once the payload is stored.
+    #[tokio::test]
+    async fn a_block_stored_before_its_payload_gets_its_info() {
+        let store = ChainStore::new(MemBackend::default()).with_payloads(objects());
+        let item = genesis().await;
+        store.put(&item, &Parts::default()).await.unwrap();
+        let parts = store.summary(0).await.unwrap().unwrap().parts().unwrap();
+        assert_eq!(parts.payload_info, None);
+
+        let header = item.leaf.block_header();
+        let commitment = header.payload_commitment().to_string();
+        let info = store
+            .put_payload(
+                &commitment,
+                Bytes::from_static(b"late"),
+                Some(header.metadata()),
+            )
+            .await
+            .unwrap();
+        let parts = store.summary(0).await.unwrap().unwrap().parts().unwrap();
+        assert_eq!(parts.payload_info, Some(info));
+        assert!(parts.payload_stored, "uploaded at once");
     }
 
     /// The object's key is the payload commitment, which only the block names, so a payload

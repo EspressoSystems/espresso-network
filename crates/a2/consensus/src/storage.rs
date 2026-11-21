@@ -749,35 +749,31 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             }
             // A clone, since `finish` borrows `self`. It has seen what the original has.
             let mut decide_log_bytes = self.decide_log_bytes.clone();
-            let mut sink = self.payload_sink.take();
-            let acked = async {
-                match &mut sink {
-                    Some(sink) => sink.acks.recv().await,
-                    None => std::future::pending().await,
-                }
-            };
+            // This future is dropped whenever the caller's other branches win, so every await
+            // below only borrows fields, and nothing is moved out of the writer meanwhile.
+            // Acknowledgements that arrive while a batch is applied are taken at the top of the
+            // next round.
             if self.applying.is_some() {
                 tokio::select! {
-                    applied = self.finish() => {
-                        self.payload_sink = sink;
-                        applied?
-                    },
-                    _ = decide_log_bytes.changed() => self.payload_sink = sink,
-                    Some(acked) = acked => {
-                        self.payload_sink = sink;
-                        self.payload_acked(acked);
-                    },
+                    applied = self.finish() => applied?,
+                    _ = decide_log_bytes.changed() => {},
                 }
             } else {
                 let retry_at = self.failed.as_ref().map(|_| self.retry_at);
+                let acks = self.payload_sink.as_mut().map(|sink| &mut sink.acks);
+                let acked = async {
+                    match acks {
+                        Some(acks) => acks.recv().await,
+                        None => std::future::pending().await,
+                    }
+                };
                 tokio::select! {
                     // The sender lives as long as the store, which this writer holds.
                     _ = decide_log_bytes.changed() => {},
                     Some(write) = self.foreign.recv() => self.take_foreign(write),
-                    Some(acked) = acked => self.durable.extend(acked_output(&mut sink, acked)),
+                    Some(acked) = acked => self.payload_acked(acked),
                     _ = sleep_until(retry_at.unwrap_or_else(Instant::now)), if retry_at.is_some() => {},
                 }
-                self.payload_sink = sink;
             }
         }
     }

@@ -318,6 +318,10 @@ impl ChainStore {
             &payloads::PayloadRecord { info, uploaded },
         )
         .await?;
+        // A block with the payload may be stored already, without its info; see `put`.
+        if let Some(height) = self.backend.height_of(Column::Payload, commitment).await? {
+            self.describe_payload(height, commitment).await?;
+        }
         Ok(info)
     }
 
@@ -352,10 +356,31 @@ impl ChainStore {
     /// what is missing. Heights the store has pruned are not written.
     pub async fn put(&self, item: &Item, parts: &Parts) -> anyhow::Result<()> {
         let header = item.leaf.block_header();
-        let parts = self.externalize(header, parts).await?;
+        let kept = self.externalize(header, parts).await?;
         self.backend
-            .put(row(item)?, parts.encode(Some(header))?)
-            .await
+            .put(row(item)?, kept.encode(Some(header))?)
+            .await?;
+        // A payload whose record was written after this item read it, but before the item was
+        // stored, would leave the item without its payload's info for good: the writer of the
+        // record looked for the item too early. Looking again after the write closes that gap.
+        if self.payloads.is_some() && kept.payload_info.is_none() {
+            let commitment = header.payload_commitment().to_string();
+            self.describe_payload(item.height(), &commitment).await?;
+        }
+        Ok(())
+    }
+
+    /// Gives the stored height `height` its payload's info, and whether it is uploaded, from the
+    /// record under `commitment`, if both are there.
+    async fn describe_payload(&self, height: u64, commitment: &str) -> anyhow::Result<()> {
+        let Some(record) = payloads::record(self.backend.as_ref(), commitment).await? else {
+            return Ok(());
+        };
+        let mut parts = vec![(Part::PayloadInfo, encode(&record.info)?)];
+        if record.uploaded {
+            parts.push((Part::PayloadStored, Bytes::new()));
+        }
+        self.backend.put_parts(height, parts).await
     }
 
     /// Stores `parts` of `height`, each unless the height has it or is pruned.
@@ -382,6 +407,29 @@ impl ChainStore {
             Some(bytes) => Ok(Some(decode(&bytes)?)),
             None => Ok(None),
         }
+    }
+
+    /// The bytes in `range` of the payload of `height`: read from the object store alone for a
+    /// store that keeps its payloads there, once uploaded, and cut from the whole payload
+    /// otherwise.
+    pub async fn payload_range(
+        &self,
+        height: u64,
+        range: Range<u64>,
+    ) -> anyhow::Result<Option<Bytes>> {
+        let Some(payloads) = &self.payloads else {
+            let Some(payload) = self.backend.part(height, Part::Payload).await? else {
+                return Ok(None);
+            };
+            let (start, end) = (usize::try_from(range.start)?, usize::try_from(range.end)?);
+            anyhow::ensure!(end <= payload.len(), "a range past the end of the payload");
+            return Ok(Some(payload.slice(start..end)));
+        };
+        let Some(item) = self.item(height).await? else {
+            return Ok(None);
+        };
+        let commitment = item.leaf.block_header().payload_commitment().to_string();
+        payloads.get_range(&commitment, range).await
     }
 
     /// The payload of `height`, from the object store for a store that keeps its payloads there,

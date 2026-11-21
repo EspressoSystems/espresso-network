@@ -32,6 +32,20 @@ impl NsAvidmGf2Scheme {
         payload: &[u8],
         ns_index: usize,
     ) -> VidResult<NsProof> {
+        let range = Self::namespace_range(common, ns_index)?;
+        if range.end > payload.len() {
+            return Err(VidError::Internal(anyhow::anyhow!(
+                "Payload length is inconsistent with namespace lengths"
+            )));
+        }
+        Self::namespace_proof_of(common, payload[range].to_vec(), ns_index)
+    }
+
+    /// The byte range of the payload that the namespace at `ns_index` takes up.
+    pub fn namespace_range(
+        common: &NsAvidmGf2Common,
+        ns_index: usize,
+    ) -> VidResult<std::ops::Range<usize>> {
         if common.ns_commits.len() != common.ns_lens.len() {
             return Err(VidError::Internal(anyhow::anyhow!(
                 "Inconsistent common data"
@@ -40,18 +54,24 @@ impl NsAvidmGf2Scheme {
         if ns_index >= common.ns_lens.len() {
             return Err(VidError::IndexOutOfBound);
         }
-        let ns_payload_range_start = common.ns_lens[..ns_index].iter().sum::<usize>();
-        let ns_payload_range_end = ns_payload_range_start + common.ns_lens[ns_index];
-        if ns_payload_range_end > payload.len() {
-            return Err(VidError::Internal(anyhow::anyhow!(
-                "Payload length is inconsistent with namespace lengths"
-            )));
-        }
+        let start = common.ns_lens[..ns_index].iter().sum::<usize>();
+        Ok(start..start + common.ns_lens[ns_index])
+    }
 
+    /// The proof of inclusion of `ns_payload`, the bytes of the namespace at `ns_index`, for a
+    /// prover that read only those bytes of the payload.
+    pub fn namespace_proof_of(
+        common: &NsAvidmGf2Common,
+        ns_payload: Vec<u8>,
+        ns_index: usize,
+    ) -> VidResult<NsProof> {
+        if ns_index >= common.ns_commits.len() {
+            return Err(VidError::IndexOutOfBound);
+        }
         let mt = MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))?;
         Ok(NsProof {
             ns_index,
-            ns_payload: payload[ns_payload_range_start..ns_payload_range_end].to_vec(),
+            ns_payload,
             ns_proof: mt
                 .lookup(ns_index as u64)
                 .expect_ok()

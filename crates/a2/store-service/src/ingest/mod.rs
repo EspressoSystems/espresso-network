@@ -412,7 +412,7 @@ impl Chain {
                 .expect("ackable heights are unacked")
                 .1
             {
-                tracing::warn!(height, "consensus does not have the payload");
+                tracing::warn!(height, "the payload of a final height is not stored yet");
             }
             match ranges.last_mut() {
                 Some(range) if range.end == height => range.end += 1,
@@ -474,9 +474,6 @@ fn finish<Types: NodeType>(mut block: Block<Types>) -> anyhow::Result<Block<Type
         block.cert1.data.leaf_commit == block.leaf.commit(),
         "the certificate of height {height} does not certify its leaf"
     );
-    if block.payload.is_none() {
-        tracing::warn!(height, "consensus does not have the payload");
-    }
     if block.vid_common.is_none() && block.leaf.view_number() == ViewNumber::genesis() {
         match genesis_vid_common(&block.leaf) {
             Ok(common) => block.vid_common = Some(common),
