@@ -15,6 +15,7 @@ use std::{
 
 use app_tables::AppWrite;
 use committable::Commitment;
+use consensus_api::payloads::{Acked, Acks, Offer, PayloadQueue};
 use consensus_store::{Batch, Store};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
@@ -226,6 +227,10 @@ pub struct Storage<T: NodeType, S> {
     /// the next batch.
     foreign: mpsc::UnboundedReceiver<ForeignWrite>,
 
+    /// Where payloads go instead of the store, if anywhere: the deployment's storage instances,
+    /// whose acknowledgements report them durable.
+    payload_sink: Option<PayloadSink>,
+
     /// Payloads written since this writer started, until garbage collection.
     written_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
 
@@ -383,6 +388,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             state_certs: BTreeMap::new(),
             decided_state: None,
             foreign,
+            payload_sink: None,
             written_payloads: BTreeSet::new(),
             awaited_payloads: BTreeMap::new(),
             collected_before: ViewNumber::genesis(),
@@ -421,13 +427,25 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self
     }
 
+    /// Hands payloads to the storage instances that take them from `queue`, instead of storing
+    /// them: a payload is durable once a storage instance acknowledges it on `acks`. Consensus
+    /// then keeps payloads only in memory, and the decide log carries none.
+    pub fn with_payload_sink(mut self, queue: PayloadQueue, acks: Acks) -> Self {
+        self.payload_sink = Some(PayloadSink {
+            queue,
+            acks,
+            offered: BTreeMap::new(),
+        });
+        self
+    }
+
     /// Persists the payload of a block. Vote2 on the block waits for it.
     pub fn append_da(
         &mut self,
         view: ViewNumber,
         _epoch: EpochNumber,
         block_payload: T::BlockPayload,
-        _metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
         vid_commit: VidCommitment,
     ) {
         let VidCommitment::V2(commitment) = vid_commit else {
@@ -435,6 +453,18 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             return;
         };
         let encoded = block_payload.encode();
+        if let Some(sink) = &mut self.payload_sink {
+            let name = vid_commit.to_string();
+            sink.offered
+                .insert((*view, name.clone()), (view, commitment));
+            sink.queue.offer(Offer {
+                view: *view,
+                commitment: name,
+                ns_table: metadata.encode().to_vec().into(),
+                payload: encoded.to_vec().into(),
+            });
+            return;
+        }
         self.written_payloads.insert((view, commitment));
         let mut written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
         if let Some(height) = self.awaited_payloads.remove(&(view, commitment)) {
@@ -606,6 +636,9 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self.collected_before = self.collected_before.max(view);
         self.written_payloads.retain(|(v, _)| *v >= view);
         self.awaited_payloads.retain(|(v, _), _| *v >= view);
+        if let Some(sink) = &mut self.payload_sink {
+            sink.offered.retain(|_, (v, _)| *v >= view);
+        }
     }
 
     /// Marks the state certificates of views up to `view` as decided.
@@ -649,6 +682,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// Remembers the decided `leaves` whose payloads are not stored, so that a payload stored
     /// before garbage collection joins the decide log.
     fn await_payloads(&mut self, leaves: &[Leaf2<T>]) {
+        // Payloads that go to the storage instances never join the decide log.
+        if self.payload_sink.is_some() {
+            return;
+        }
         for leaf in leaves {
             let VidCommitment::V2(commitment) = leaf.payload_commitment() else {
                 continue;
@@ -698,16 +735,38 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             while let Ok(write) = self.foreign.try_recv() {
                 self.take_foreign(write);
             }
+            if let Some(acked) = self
+                .payload_sink
+                .as_mut()
+                .and_then(|s| s.acks.try_recv().ok())
+            {
+                self.payload_acked(acked);
+                continue;
+            }
             self.start();
             if !self.durable.is_empty() {
                 continue;
             }
             // A clone, since `finish` borrows `self`. It has seen what the original has.
             let mut decide_log_bytes = self.decide_log_bytes.clone();
+            let mut sink = self.payload_sink.take();
+            let acked = async {
+                match &mut sink {
+                    Some(sink) => sink.acks.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
             if self.applying.is_some() {
                 tokio::select! {
-                    applied = self.finish() => applied?,
-                    _ = decide_log_bytes.changed() => {},
+                    applied = self.finish() => {
+                        self.payload_sink = sink;
+                        applied?
+                    },
+                    _ = decide_log_bytes.changed() => self.payload_sink = sink,
+                    Some(acked) = acked => {
+                        self.payload_sink = sink;
+                        self.payload_acked(acked);
+                    },
                 }
             } else {
                 let retry_at = self.failed.as_ref().map(|_| self.retry_at);
@@ -715,10 +774,19 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                     // The sender lives as long as the store, which this writer holds.
                     _ = decide_log_bytes.changed() => {},
                     Some(write) = self.foreign.recv() => self.take_foreign(write),
+                    Some(acked) = acked => self.durable.extend(acked_output(&mut sink, acked)),
                     _ = sleep_until(retry_at.unwrap_or_else(Instant::now)), if retry_at.is_some() => {},
                 }
+                self.payload_sink = sink;
             }
         }
+    }
+
+    /// Reports the payload a storage instance acknowledged durable, if it was offered and not yet
+    /// collected.
+    fn payload_acked(&mut self, acked: Acked) {
+        let output = acked_output(&mut self.payload_sink, acked);
+        self.durable.extend(output);
     }
 
     /// Adds a write from outside the writer to the next batch, so that it shares its commit.
@@ -898,4 +966,22 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             Applied { pending, result }
         })
     }
+}
+
+/// Where payloads go instead of the store.
+struct PayloadSink {
+    queue: PayloadQueue,
+    acks: Acks,
+
+    /// Payloads offered and not yet acknowledged, by view and commitment as offered.
+    offered: BTreeMap<Acked, (ViewNumber, VidCommitment2)>,
+}
+
+/// The output that reports the payload `acked` durable, if it was offered.
+fn acked_output<T: NodeType>(
+    sink: &mut Option<PayloadSink>,
+    acked: Acked,
+) -> Option<StorageOutput<T>> {
+    let (view, commitment) = sink.as_mut()?.offered.remove(&acked)?;
+    Some(StorageOutput::Payload(view, commitment))
 }

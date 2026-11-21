@@ -192,6 +192,8 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         anyhow!("consensus stopped sending external messages")
     });
     let config = &network_config.config;
+    // Payloads go to the deployment's storage instances, which report them durable.
+    let (payloads, payload_acks) = consensus_api::payloads::PayloadQueue::new();
     let coordinator = Coordinator::maker()
         .membership_coordinator(membership.clone())
         .network(network)
@@ -208,6 +210,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         .restored(restored)
         .decide_log_limit(decide_log_limit)
         .decided_state(Box::new(decided_state))
+        .payload_sink((payloads.clone(), payload_acks))
         .metrics(&*metrics)
         .consensus_metrics(ConsensusMetricsValue::new(&*metrics))
         .maybe_anchor_cert2(anchor_cert2)
@@ -229,6 +232,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         store,
         initializer.epoch_height(),
         membership,
+        payloads,
         coordinator.client_api().clone(),
         consensus_api,
     )

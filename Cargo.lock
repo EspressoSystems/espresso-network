@@ -10044,6 +10044,7 @@ dependencies = [
  "hotshot-types",
  "jf-advz",
  "membership",
+ "object_store",
  "serde",
  "test-utils",
  "thiserror 2.0.18",

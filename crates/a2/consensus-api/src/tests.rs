@@ -108,7 +108,7 @@ fn entry(height: u64) -> Decided {
 async fn serve(source: Arc<MemSource>) -> DecideLogClient<tonic::transport::Channel> {
     let port = test_utils::reserve_tcp_port().unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let (service, dispatcher) = server(source);
+    let (service, dispatcher) = server(source, crate::payloads::PayloadQueue::new().0);
     tokio::spawn(dispatcher);
     tokio::spawn(Server::builder().add_service(service).serve(addr));
     for _ in 0..100 {
@@ -505,6 +505,87 @@ async fn progress_reaches_every_subscription() {
             }
         }
     }
+}
+
+/// Payloads go to one subscription each, a subscriber's acknowledgement reaches consensus, and a
+/// payload not acknowledged before its subscription ends goes to another.
+#[tokio::test]
+async fn payloads_are_taken_and_acknowledged() {
+    use proto::payload_offer::Event as OfferEvent;
+
+    use crate::payloads::{Offer, PayloadQueue};
+
+    let (payloads, mut acks) = PayloadQueue::new();
+    let port = test_utils::reserve_tcp_port().unwrap();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let (service, dispatcher) = server(MemSource::new(), payloads.clone());
+    tokio::spawn(dispatcher);
+    tokio::spawn(Server::builder().add_service(service).serve(addr));
+    let mut client = loop {
+        if let Ok(client) = DecideLogClient::connect(format!("http://{addr}")).await {
+            break client;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let offer = |view: u64| Offer {
+        view,
+        commitment: format!("C~{view}"),
+        ns_table: Bytes::from_static(b"ns"),
+        payload: Bytes::from(vec![view as u8; 10]),
+    };
+    async fn next_offer(stream: &mut tonic::Streaming<PayloadOffer>) -> OfferEvent {
+        timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("an offer")
+            .unwrap()
+            .unwrap()
+            .event
+            .unwrap()
+    }
+    async fn take(stream: &mut tonic::Streaming<PayloadOffer>) -> (PayloadHead, Vec<u8>) {
+        let OfferEvent::Head(head) = next_offer(stream).await else {
+            panic!("expected a head");
+        };
+        let mut data = Vec::new();
+        while (data.len() as u64) < head.size {
+            let OfferEvent::Chunk(chunk) = next_offer(stream).await else {
+                panic!("expected a chunk");
+            };
+            data.extend_from_slice(&chunk.data);
+        }
+        (head, data)
+    }
+
+    let mut first = client
+        .take_payloads(TakePayloadsRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    payloads.offer(offer(1));
+    let (head, data) = take(&mut first).await;
+    assert_eq!((head.view, head.commitment.as_str()), (1, "C~1"));
+    assert_eq!(data, vec![1; 10]);
+    client
+        .ack_payload(AckPayloadRequest {
+            view: 1,
+            commitment: "C~1".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(acks.recv().await, Some((1, "C~1".to_string())));
+
+    // The first subscription takes the next one and ends without acknowledging it.
+    payloads.offer(offer(2));
+    let (head, _) = take(&mut first).await;
+    assert_eq!(head.view, 2);
+    let mut second = client
+        .take_payloads(TakePayloadsRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    drop(first);
+    let (head, data) = take(&mut second).await;
+    assert_eq!((head.view, data), (2, vec![2; 10]));
 }
 
 /// A node that takes no transactions now.

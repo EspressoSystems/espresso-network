@@ -256,7 +256,8 @@ impl Sink<MockTypes> for MemSink {
 async fn serve(log: Arc<FakeLog>) -> SocketAddr {
     let port = test_utils::reserve_tcp_port().unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let (service, dispatcher) = consensus_api::server(log);
+    let (service, dispatcher) =
+        consensus_api::server(log, consensus_api::payloads::PayloadQueue::new().0);
     tokio::spawn(dispatcher);
     tokio::spawn(
         tonic::transport::Server::builder()
@@ -686,4 +687,42 @@ async fn acknowledges_a_late_payload_whose_entry_went_elsewhere() {
             .unwrap();
     }
     assert_eq!(state.take_ackable(), vec![HeightRange { start: 1, end: 2 }]);
+}
+
+/// An offered payload is stored by its commitment and acknowledged.
+#[tokio::test]
+async fn takes_and_acknowledges_offered_payloads() {
+    use chain_store::{ChainStore, payloads::PayloadStore};
+    use consensus_api::payloads::{Offer, PayloadQueue};
+
+    let (payloads, mut acks) = PayloadQueue::new();
+    let port = test_utils::reserve_tcp_port().unwrap();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let (service, dispatcher) = consensus_api::server(FakeLog::new(), payloads.clone());
+    tokio::spawn(dispatcher);
+    tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(service)
+            .serve(addr),
+    );
+    let objects = PayloadStore::new(Arc::new(object_store::memory::InMemory::new()), "p", None);
+    let store =
+        ChainStore::new(chain_store::mem::MemBackend::default()).with_payloads(objects.clone());
+    let taker = store.clone();
+    tokio::spawn(async move { super::payloads::run(addr, &taker).await });
+
+    payloads.offer(Offer {
+        view: 3,
+        commitment: "C~3".into(),
+        ns_table: Bytes::new(),
+        payload: Bytes::from_static(b"offered"),
+    });
+    let acked = timeout(Duration::from_secs(10), acks.recv())
+        .await
+        .expect("an acknowledgement");
+    assert_eq!(acked, Some((3, "C~3".to_string())));
+    assert_eq!(
+        objects.get("C~3").await.unwrap().as_deref(),
+        Some(&b"offered"[..])
+    );
 }

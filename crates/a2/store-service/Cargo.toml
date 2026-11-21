@@ -28,6 +28,7 @@ tracing            = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
+object_store          = { workspace = true }
 chain-store           = { workspace = true, features = ["testing"] }
 espresso-types        = { workspace = true, features = ["testing"] }
 hotshot-query-service = { workspace = true, features = ["testing"] }

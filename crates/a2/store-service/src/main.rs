@@ -42,9 +42,14 @@ struct Options {
     #[arg(long, env = "ESPRESSO_STORE_SERVICE_KEEP_HEIGHTS")]
     keep_heights: Option<u64>,
 
-    /// The address of the consensus node's API, to take a share of its decide log from. Without
-    /// it the instance only serves the store.
-    #[arg(long, env = "ESPRESSO_STORE_SERVICE_CONSENSUS_API")]
+    /// The address of the consensus node's API, to take a share of its decide log and of its
+    /// payloads from. Without it the instance only serves the store. Needs `--payload-store`:
+    /// the node votes on a block only once a storage instance has its payload.
+    #[arg(
+        long,
+        env = "ESPRESSO_STORE_SERVICE_CONSENSUS_API",
+        requires = "payload_store"
+    )]
     consensus_api: Option<SocketAddr>,
 
     /// The object store payloads live in, as a URL such as `file:///var/payloads` or
@@ -105,6 +110,10 @@ async fn main() -> anyhow::Result<()> {
             tasks.spawn(async move {
                 uploader.run().await;
                 anyhow!("the payload uploader stopped")
+            });
+            let payload_store = store.clone();
+            tasks.spawn(async move {
+                store_service::ingest::payloads::run(consensus_api, &payload_store).await
             });
         }
         tracing::info!(%consensus_api, "taking a share of the decide log");

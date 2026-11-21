@@ -2,20 +2,72 @@
 //! commitment, so that anyone who has a block's header knows where its payload is, before the
 //! payload is there.
 //!
+//! Each payload has a record in the store, under its commitment: what describes it, and whether
+//! it is uploaded. A height whose block has the payload takes both from the record when its item
+//! is written ([`Part::PayloadStored`]), or later, when repair looks for missing payloads.
+//!
 //! A writer that must report a payload durable before it is uploaded, as a storage instance must,
 //! stages it in a local directory first; an [`Uploader`] copies staged payloads to the object
-//! store, marks each height's payload as stored ([`Part::PayloadStored`]), and deletes the staged
-//! copy. A restarted uploader uploads what is still staged. A writer without a staging directory
-//! uploads at once.
+//! store, records them as uploaded, and deletes the staged copies. A restarted uploader uploads
+//! what is still staged. A writer without a staging directory uploads at once.
 
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
+use app_tables::{AppWrite, TableName};
 use bytes::Bytes;
 use object_store::{ObjectStore, PutPayload, path::Path};
+use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt, sync::mpsc};
 
-use crate::{Backend, Part};
+use crate::{Backend, PayloadInfo};
+
+/// The table of payload records, by VID commitment.
+static RECORDS: std::sync::LazyLock<TableName> =
+    std::sync::LazyLock::new(|| TableName::of("payload-records"));
+
+/// What the store knows of a payload it keeps by commitment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadRecord {
+    pub info: PayloadInfo,
+
+    /// Whether the payload is in the object store; until then it is staged.
+    pub uploaded: bool,
+}
+
+/// The record of the payload whose VID commitment is `commitment`.
+pub(crate) async fn record(
+    backend: &dyn Backend,
+    commitment: &str,
+) -> anyhow::Result<Option<PayloadRecord>> {
+    let Some(bytes) = backend.app_get(&RECORDS, commitment.as_bytes()).await? else {
+        return Ok(None);
+    };
+    Ok(Some(bincode::deserialize(&bytes)?))
+}
+
+pub(crate) async fn put_record(
+    backend: &dyn Backend,
+    commitment: &str,
+    record: &PayloadRecord,
+) -> anyhow::Result<()> {
+    // An upload is not undone by a later write of the same payload.
+    let uploaded = record.uploaded
+        || self::record(backend, commitment)
+            .await?
+            .is_some_and(|stored| stored.uploaded);
+    let record = PayloadRecord {
+        uploaded,
+        ..*record
+    };
+    backend
+        .app_write(vec![AppWrite::Put {
+            table: RECORDS.clone(),
+            key: Bytes::copy_from_slice(commitment.as_bytes()),
+            value: bincode::serialize(&record)?.into(),
+        }])
+        .await
+}
 
 /// The object store payloads live in.
 #[derive(Clone, Debug)]
@@ -88,48 +140,21 @@ impl PayloadStore {
 #[derive(Clone, Debug)]
 pub(crate) struct Staging {
     dir: PathBuf,
-    uploads: mpsc::UnboundedSender<Staged>,
-}
-
-/// A staged payload: the height it is the payload of, and its VID commitment.
-#[derive(Clone, Debug)]
-struct Staged {
-    height: u64,
-    commitment: String,
-}
-
-impl Staged {
-    fn file_name(&self) -> String {
-        format!("{}-{}", self.height, self.commitment)
-    }
-
-    fn from_file_name(name: &str) -> Option<Self> {
-        let (height, commitment) = name.split_once('-')?;
-        Some(Self {
-            height: height.parse().ok()?,
-            commitment: commitment.to_string(),
-        })
-    }
+    uploads: mpsc::UnboundedSender<String>,
 }
 
 impl Staging {
-    /// Writes `payload`, of `height`, whose VID commitment is `commitment`, to the staging
-    /// directory, durably, and queues it for upload.
-    pub(crate) async fn stage(
-        &self,
-        height: u64,
-        commitment: String,
-        payload: &[u8],
-    ) -> anyhow::Result<()> {
-        let staged = Staged { height, commitment };
-        let path = self.dir.join(staged.file_name());
-        let partial = self.dir.join(format!(".{}", staged.file_name()));
+    /// Writes `payload`, whose VID commitment is `commitment`, to the staging directory, durably,
+    /// and queues it for upload.
+    pub(crate) async fn stage(&self, commitment: &str, payload: &[u8]) -> anyhow::Result<()> {
+        let path = self.dir.join(commitment);
+        let partial = self.dir.join(format!(".{commitment}"));
         let mut file = fs::File::create(&partial).await?;
         file.write_all(payload).await?;
         file.sync_all().await?;
         fs::rename(&partial, &path).await?;
         fs::File::open(&self.dir).await?.sync_all().await?;
-        let _ = self.uploads.send(staged);
+        let _ = self.uploads.send(commitment.to_string());
         Ok(())
     }
 }
@@ -139,7 +164,7 @@ pub struct Uploader {
     dir: PathBuf,
     payloads: PayloadStore,
     backend: Arc<dyn Backend>,
-    queue: mpsc::UnboundedReceiver<Staged>,
+    queue: mpsc::UnboundedReceiver<String>,
 }
 
 impl Uploader {
@@ -147,48 +172,43 @@ impl Uploader {
     pub async fn run(mut self) {
         match self.leftovers().await {
             Ok(leftovers) => {
-                for staged in leftovers {
-                    self.upload(&staged).await;
+                for commitment in leftovers {
+                    self.upload(&commitment).await;
                 }
             },
             Err(err) => tracing::error!("reading the staged payloads failed: {err:#}"),
         }
-        while let Some(staged) = self.queue.recv().await {
-            self.upload(&staged).await;
+        while let Some(commitment) = self.queue.recv().await {
+            self.upload(&commitment).await;
         }
     }
 
-    async fn leftovers(&self) -> anyhow::Result<Vec<Staged>> {
+    async fn leftovers(&self) -> anyhow::Result<Vec<String>> {
         let mut staged = Vec::new();
         let mut entries = fs::read_dir(&self.dir).await?;
         while let Some(entry) = entries.next_entry().await? {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
+            let name = entry.file_name().to_string_lossy().into_owned();
             match name.starts_with('.') {
                 // A write that did not finish was never reported durable.
                 true => {
                     let _ = fs::remove_file(entry.path()).await;
                 },
-                false => staged.extend(Staged::from_file_name(&name)),
+                false => staged.push(name),
             }
         }
-        staged.sort_by_key(|staged| staged.height);
         Ok(staged)
     }
 
-    /// Uploads `staged`, trying again until it succeeds, then marks it stored and deletes the
-    /// staged copy.
-    async fn upload(&self, staged: &Staged) {
-        let path = self.dir.join(staged.file_name());
+    /// Uploads the payload staged under `commitment`, trying again until it succeeds, then records
+    /// it as uploaded and deletes the staged copy. One no longer staged was uploaded already.
+    async fn upload(&self, commitment: &str) {
+        let path = self.dir.join(commitment);
         let mut delay = std::time::Duration::from_millis(100);
         loop {
-            match self.try_upload(staged, &path).await {
+            match self.try_upload(commitment, &path).await {
                 Ok(()) => return,
                 Err(err) => {
-                    tracing::warn!(
-                        height = staged.height,
-                        "uploading a payload failed: {err:#}"
-                    );
+                    tracing::warn!(%commitment, "uploading a payload failed: {err:#}");
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(std::time::Duration::from_secs(30));
                 },
@@ -196,12 +216,26 @@ impl Uploader {
         }
     }
 
-    async fn try_upload(&self, staged: &Staged, path: &std::path::Path) -> anyhow::Result<()> {
-        let payload = Bytes::from(fs::read(path).await?);
-        self.payloads.put(&staged.commitment, payload).await?;
-        self.backend
-            .put_parts(staged.height, vec![(Part::PayloadStored, Bytes::new())])
-            .await?;
+    async fn try_upload(&self, commitment: &str, path: &std::path::Path) -> anyhow::Result<()> {
+        let payload = match fs::read(path).await {
+            Ok(payload) => Bytes::from(payload),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+        self.payloads.put(commitment, payload.clone()).await?;
+        let info = match record(self.backend.as_ref(), commitment).await? {
+            Some(record) => record.info,
+            None => PayloadInfo::of(&payload, None),
+        };
+        put_record(
+            self.backend.as_ref(),
+            commitment,
+            &PayloadRecord {
+                info,
+                uploaded: true,
+            },
+        )
+        .await?;
         fs::remove_file(path).await?;
         Ok(())
     }
@@ -234,12 +268,14 @@ pub(crate) async fn staging(
 #[cfg(test)]
 mod tests {
     use espresso_types::{Leaf2, NodeState, ValidatedState};
-    use hotshot_types::simple_certificate::QuorumCertificate2;
+    use hotshot_types::{
+        simple_certificate::QuorumCertificate2, traits::block_contents::BlockHeader,
+    };
     use object_store::memory::InMemory;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
-    use crate::{ChainStore, Item, Parts, mem::MemBackend};
+    use crate::{ChainStore, Item, Part, Parts, mem::MemBackend};
 
     async fn genesis() -> Item {
         let instance = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
@@ -351,8 +387,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A payload stored by its commitment before any block has it gives a block that has it its
+    /// info when the block's item is written; staged, the block counts as missing it until it is
+    /// uploaded, and is marked once repair looks again after the upload.
+    #[tokio::test]
+    async fn a_payload_stored_before_its_block_reaches_the_block() {
+        let dir = std::env::temp_dir().join(format!("staging-{:016x}", rand_suffix()));
+        let (store, uploader) = ChainStore::new(MemBackend::default())
+            .with_staged_payloads(objects(), dir.clone())
+            .await
+            .unwrap();
+        let item = genesis().await;
+        let header = item.leaf.block_header();
+        let commitment = header.payload_commitment().to_string();
+        let info = store
+            .put_payload(
+                &commitment,
+                Bytes::from_static(b"early"),
+                Some(header.metadata()),
+            )
+            .await
+            .unwrap();
+
+        store.put(&item, &Parts::default()).await.unwrap();
+        let parts = store.summary(0).await.unwrap().unwrap().parts().unwrap();
+        assert_eq!(parts.payload_info, Some(info));
+        assert!(!parts.payload_stored, "not uploaded yet");
+        assert_eq!(
+            store.missing_parts(Part::Payload, 0, 10).await.unwrap(),
+            vec![0]
+        );
+
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(uploader.run());
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !store
+                .missing_parts(Part::Payload, 0, 10)
+                .await
+                .unwrap()
+                .is_empty()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("marked once uploaded");
+        let parts = store.summary(0).await.unwrap().unwrap().parts().unwrap();
+        assert!(parts.payload_stored);
+        assert_eq!(
+            store.payload(0).await.unwrap().as_deref(),
+            Some(&b"early"[..])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The object's key is the payload commitment, which only the block names, so a payload
-    /// cannot be stored before its block.
+    /// cannot be stored by height before its block.
     #[tokio::test]
     async fn refuses_a_payload_before_its_block() {
         let store = ChainStore::new(MemBackend::default()).with_payloads(objects());

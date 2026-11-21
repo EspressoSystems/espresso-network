@@ -10,6 +10,7 @@ use std::{
 
 use bon::{Builder, bon};
 use committable::{Commitment, Committable};
+use consensus_api::payloads::{Acks, PayloadQueue};
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
@@ -221,6 +222,9 @@ where
         decide_log_limit: u64,
         /// What the application keeps of the latest decided state.
         decided_state: Option<Box<dyn DecidedState<T>>>,
+        /// Where payloads go instead of the store, and the acknowledgements that report them
+        /// durable: the deployment's storage instances.
+        payload_sink: Option<(PayloadQueue, Acks)>,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
         /// What this node's records say about its API service; the epoch is set per record.
@@ -456,8 +460,12 @@ where
                 let storage = storage
                     .with_metrics(metrics)
                     .with_decide_log_limit(decide_log_limit);
-                match decided_state {
+                let storage = match decided_state {
                     Some(decided_state) => storage.with_decided_state(decided_state),
+                    None => storage,
+                };
+                match payload_sink {
+                    Some((queue, acks)) => storage.with_payload_sink(queue, acks),
                     None => storage,
                 }
             })

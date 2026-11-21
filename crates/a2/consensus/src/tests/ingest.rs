@@ -283,7 +283,7 @@ async fn serve(
 ) -> DecideLogClient<tonic::transport::Channel> {
     let port = test_utils::reserve_tcp_port().unwrap();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let (service, dispatcher) = server(source);
+    let (service, dispatcher) = server(source, consensus_api::payloads::PayloadQueue::new().0);
     tokio::spawn(dispatcher);
     tokio::spawn(Server::builder().add_service(service).serve(addr));
     for _ in 0..100 {

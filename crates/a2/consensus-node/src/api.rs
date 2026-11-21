@@ -10,7 +10,7 @@ use consensus::{
     client::{ClientApi, QueryError},
     ingest::{IngestSource, StakeTables},
 };
-use consensus_api::{Node, SubmitError};
+use consensus_api::{Node, SubmitError, payloads::PayloadQueue};
 use espresso_types::SeqTypes;
 use hotshot_types::{
     data::EpochNumber,
@@ -22,7 +22,7 @@ use hotshot_types::{
 use crate::store::NodeStore;
 
 /// Binds the consensus node's API to `addr`: the decide log over `store`, with the stake tables
-/// of `membership`, for the API service's store, and the node service over the coordinator behind
+/// of `membership` and the undecided payloads of `payloads`, for the API service's store, and the node service over the coordinator behind
 /// `client` for the API service. Returns the address
 /// it is bound to, which differs from `addr` for port 0, with the server, which runs until it is
 /// dropped or fails.
@@ -30,6 +30,7 @@ pub fn bind(
     store: NodeStore,
     epoch_height: u64,
     membership: EpochMembershipCoordinator<SeqTypes>,
+    payloads: PayloadQueue,
     client: ClientApi<SeqTypes>,
     addr: SocketAddr,
 ) -> std::io::Result<(
@@ -39,11 +40,14 @@ pub fn bind(
     // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
     let incoming = tonic::transport::server::TcpIncoming::bind(addr)?.with_nodelay(Some(true));
     let bound = incoming.local_addr()?;
-    let (decide_log, dispatcher) = consensus_api::server(IngestSource::new(
-        store,
-        epoch_height,
-        Arc::new(MembershipStakeTables { membership }),
-    ));
+    let (decide_log, dispatcher) = consensus_api::server(
+        IngestSource::new(
+            store,
+            epoch_height,
+            Arc::new(MembershipStakeTables { membership }),
+        ),
+        payloads,
+    );
     let server = tonic::transport::Server::builder()
         .add_service(decide_log)
         .add_service(consensus_api::node_server(Arc::new(NodeService { client })))

@@ -38,10 +38,11 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use tokio::time::interval;
 
+pub mod payloads;
 mod store;
 
 /// How long to wait before reconnecting after the connection fails.
-const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 /// How often to acknowledge what was stored, in one call for all of it.
 const ACK_INTERVAL: Duration = Duration::from_millis(50);

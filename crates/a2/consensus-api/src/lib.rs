@@ -30,6 +30,7 @@ use tonic::{
 };
 
 pub mod discovery;
+pub mod payloads;
 
 /// Code generated from the proto definition.
 #[allow(clippy::large_enum_variant)]
@@ -37,10 +38,11 @@ pub mod proto {
     tonic::include_proto!("espresso.consensus.v1");
 }
 
+use payloads::PayloadQueue;
 use proto::{
-    AckRequest, AckResponse, Decided, PayloadAdded, PayloadChunk, Progress, ServiceRecords,
-    StakeTable, Start, SubmitTransactionRequest, SubmitTransactionResponse, SubscribeRequest,
-    SubscribeResponse,
+    AckPayloadRequest, AckRequest, AckResponse, Decided, PayloadAdded, PayloadChunk, PayloadHead,
+    PayloadOffer, Progress, ServiceRecords, StakeTable, Start, SubmitTransactionRequest,
+    SubmitTransactionResponse, SubscribeRequest, SubscribeResponse, TakePayloadsRequest,
     consensus_node_server::{ConsensusNode, ConsensusNodeServer},
     decide_log_server::{DecideLog, DecideLogServer},
     subscribe_response::Event,
@@ -143,10 +145,11 @@ pub enum SubmitError {
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
-/// The gRPC service over `source`, and the dispatcher that finds the entries and payloads its
-/// subscriptions share out, which must run as long as the service.
+/// The gRPC service over `source` and `payloads`, and the dispatcher that finds the entries and
+/// payloads its subscriptions share out, which must run as long as the service.
 pub fn server<S: Source>(
     source: Arc<S>,
+    payloads: PayloadQueue,
 ) -> (DecideLogServer<Service<S>>, impl Future<Output = ()> + Send) {
     let (queue, work) = async_channel::unbounded();
     let (progress, progress_rx) = watch::channel(0);
@@ -156,6 +159,7 @@ pub fn server<S: Source>(
         work,
         requeue: queue,
         progress: progress_rx,
+        payloads,
     };
     (DecideLogServer::new(service), dispatcher.run())
 }
@@ -171,6 +175,9 @@ pub struct Service<S> {
 
     /// The view of the newest entry the dispatcher found.
     progress: watch::Receiver<u64>,
+
+    /// The payloads consensus offers before their blocks are decided.
+    payloads: PayloadQueue,
 }
 
 /// An entry, or a payload that joined an entry later, for one subscription to send.
@@ -185,6 +192,37 @@ type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 #[async_trait]
 impl<S: Source> DecideLog for Service<S> {
     type SubscribeStream = BoxStream<SubscribeResponse>;
+    type TakePayloadsStream = BoxStream<PayloadOffer>;
+
+    async fn take_payloads(
+        &self,
+        _: Request<TakePayloadsRequest>,
+    ) -> Result<Response<Self::TakePayloadsStream>, Status> {
+        let (tx, rx) = mpsc::channel(BATCH);
+        let mut taker = self.payloads.taker();
+        // Runs as part of the stream, and stops with it, giving back what was not acknowledged.
+        let feed = async move {
+            while let Some(offer) = taker.next().await {
+                if send_offer(&tx, &offer).await.is_err() {
+                    return;
+                }
+            }
+        };
+        let feed = stream::once(feed).filter_map(|()| async { None });
+        Ok(Response::new(Box::pin(stream::select(
+            receiver_stream(rx),
+            feed,
+        ))))
+    }
+
+    async fn ack_payload(
+        &self,
+        request: Request<AckPayloadRequest>,
+    ) -> Result<Response<AckResponse>, Status> {
+        let r = request.into_inner();
+        self.payloads.ack((r.view, r.commitment));
+        Ok(Response::new(AckResponse {}))
+    }
 
     async fn subscribe(
         &self,
@@ -617,6 +655,36 @@ impl<S: Source> Feed<S> {
             },
         }
     }
+}
+
+/// Sends `offer` as its head and then its chunks.
+async fn send_offer(
+    tx: &mpsc::Sender<Result<PayloadOffer, Status>>,
+    offer: &payloads::Offer,
+) -> Result<(), Stop> {
+    use proto::payload_offer::Event as OfferEvent;
+    let send = |event| async {
+        tx.send(Ok(PayloadOffer { event: Some(event) }))
+            .await
+            .map_err(|_| Stop)
+    };
+    send(OfferEvent::Head(PayloadHead {
+        view: offer.view,
+        commitment: offer.commitment.clone(),
+        ns_table: offer.ns_table.clone(),
+        size: offer.payload.len() as u64,
+    }))
+    .await?;
+    let mut start = 0;
+    while start < offer.payload.len() {
+        let end = (start + CHUNK_SIZE).min(offer.payload.len());
+        send(OfferEvent::Chunk(PayloadChunk {
+            data: offer.payload.slice(start..end),
+        }))
+        .await?;
+        start = end;
+    }
+    Ok(())
 }
 
 fn receiver_stream<T: Send + 'static>(rx: mpsc::Receiver<Result<T, Status>>) -> BoxStream<T> {

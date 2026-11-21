@@ -17,10 +17,11 @@
 
 use std::{fmt, ops::Range, sync::Arc, time::Duration};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
 use committable::{Commitment, Committable};
-use espresso_types::{Header, Leaf2, Payload, SeqTypes};
+use espresso_types::{Header, Leaf2, NsTable, Payload, SeqTypes};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
@@ -107,11 +108,11 @@ pub struct PayloadInfo {
 }
 
 impl PayloadInfo {
-    /// The info of `payload`, whose block's header is `header`, if known.
-    pub fn of(payload: &[u8], header: Option<&Header>) -> Self {
-        let num_transactions = header.map(|header| {
-            let metadata = header.metadata();
-            Payload::from_bytes(payload, metadata).num_transactions(metadata) as u64
+    /// The info of `payload`, whose namespace table, which its block's header holds, is
+    /// `ns_table`, if known.
+    pub fn of(payload: &[u8], ns_table: Option<&NsTable>) -> Self {
+        let num_transactions = ns_table.map(|ns_table| {
+            Payload::from_bytes(payload, ns_table).num_transactions(ns_table) as u64
         });
         Self {
             blake3: *blake3::hash(payload).as_bytes(),
@@ -131,7 +132,7 @@ impl Parts {
         }
         let info = match (&self.payload, self.payload_info) {
             (_, Some(info)) => Some(info),
-            (Some(payload), None) => Some(PayloadInfo::of(payload, header)),
+            (Some(payload), None) => Some(PayloadInfo::of(payload, header.map(|h| h.metadata()))),
             (None, None) => None,
         };
         if let Some(info) = info {
@@ -285,34 +286,64 @@ impl ChainStore {
         self.payloads.as_ref()
     }
 
-    /// `parts` of the block at `height`, whose header is `header`, as the backend keeps them: a
-    /// payload that goes to the object store is staged or uploaded here, and the backend keeps
-    /// what describes it.
-    async fn externalize(
+    /// Makes `payload`, whose VID commitment is `commitment` and whose namespace table is
+    /// `ns_table`, if known, durable in the object store: staged, or uploaded if this store does
+    /// not stage. Records what describes it under its commitment, so that every height whose
+    /// block has it learns its info, and whether it is uploaded, when its item is written. A
+    /// payload can be stored before any block that has it is decided.
+    pub async fn put_payload(
         &self,
-        height: u64,
-        header: &Header,
-        parts: &Parts,
-    ) -> anyhow::Result<Parts> {
-        let (Some(payloads), Some(payload)) = (&self.payloads, &parts.payload) else {
-            return Ok(parts.clone());
+        commitment: &str,
+        payload: Bytes,
+        ns_table: Option<&NsTable>,
+    ) -> anyhow::Result<PayloadInfo> {
+        let payloads = self
+            .payloads
+            .as_ref()
+            .context("this store keeps no payloads by commitment")?;
+        let info = PayloadInfo::of(&payload, ns_table);
+        let uploaded = match &self.staging {
+            Some(staging) => {
+                staging.stage(commitment, &payload).await?;
+                false
+            },
+            None => {
+                payloads.put(commitment, payload).await?;
+                true
+            },
         };
+        payloads::put_record(
+            self.backend.as_ref(),
+            commitment,
+            &payloads::PayloadRecord { info, uploaded },
+        )
+        .await?;
+        Ok(info)
+    }
+
+    /// `parts` of the block at `height`, whose header is `header`, as the backend keeps them: for a
+    /// store whose payloads live in the object store, a payload goes there, and the parts carry
+    /// what the payload's record says of it.
+    async fn externalize(&self, header: &Header, parts: &Parts) -> anyhow::Result<Parts> {
+        if self.payloads.is_none() {
+            return Ok(parts.clone());
+        }
         let commitment = header.payload_commitment().to_string();
+        let record = match &parts.payload {
+            Some(payload) => {
+                self.put_payload(&commitment, payload.clone(), Some(header.metadata()))
+                    .await?;
+                payloads::record(self.backend.as_ref(), &commitment).await?
+            },
+            None => payloads::record(self.backend.as_ref(), &commitment).await?,
+        };
         let mut kept = Parts {
             payload: None,
-            payload_info: Some(
-                parts
-                    .payload_info
-                    .unwrap_or_else(|| PayloadInfo::of(payload, Some(header))),
-            ),
             ..parts.clone()
         };
-        match &self.staging {
-            Some(staging) => staging.stage(height, commitment, payload).await?,
-            None => {
-                payloads.put(&commitment, payload.clone()).await?;
-                kept.payload_stored = true;
-            },
+        if let Some(record) = record {
+            kept.payload_info = kept.payload_info.or(Some(record.info));
+            kept.payload_stored |= record.uploaded;
         }
         Ok(kept)
     }
@@ -321,7 +352,7 @@ impl ChainStore {
     /// what is missing. Heights the store has pruned are not written.
     pub async fn put(&self, item: &Item, parts: &Parts) -> anyhow::Result<()> {
         let header = item.leaf.block_header();
-        let parts = self.externalize(item.height(), header, parts).await?;
+        let parts = self.externalize(header, parts).await?;
         self.backend
             .put(row(item)?, parts.encode(Some(header))?)
             .await
@@ -338,7 +369,7 @@ impl ChainStore {
         };
         let header = item.as_ref().map(|item| item.leaf.block_header());
         let parts = match (header, self.payloads.is_some() && parts.payload.is_some()) {
-            (Some(header), true) => self.externalize(height, header, parts).await?,
+            (Some(header), true) => self.externalize(header, parts).await?,
             // The object's key is the payload commitment, which the item names.
             (None, true) => anyhow::bail!("the payload of height {height} came before its block"),
             (_, false) => parts.clone(),
@@ -448,12 +479,37 @@ impl ChainStore {
         from: u64,
         limit: usize,
     ) -> anyhow::Result<Vec<u64>> {
-        // A store whose payloads live in the object store has them once they are uploaded.
-        let part = match (part, &self.payloads) {
-            (Part::Payload, Some(_)) => Part::PayloadStored,
-            (part, _) => part,
-        };
-        self.backend.missing_parts(part, from, limit).await
+        if part != Part::Payload || self.payloads.is_none() {
+            return self.backend.missing_parts(part, from, limit).await;
+        }
+        // A store whose payloads live in the object store has them once they are uploaded. A
+        // height is marked when its item is written after the upload; one written before is
+        // marked here, when its payload's record says the upload has happened since.
+        let unmarked = self
+            .backend
+            .missing_parts(Part::PayloadStored, from, limit)
+            .await?;
+        let mut missing = Vec::new();
+        for height in unmarked {
+            let uploaded = match self.item(height).await? {
+                Some(item) => {
+                    let commitment = item.leaf.block_header().payload_commitment().to_string();
+                    payloads::record(self.backend.as_ref(), &commitment)
+                        .await?
+                        .is_some_and(|record| record.uploaded)
+                },
+                None => false,
+            };
+            match uploaded {
+                true => {
+                    self.backend
+                        .put_parts(height, vec![(Part::PayloadStored, Bytes::new())])
+                        .await?
+                },
+                false => missing.push(height),
+            }
+        }
+        Ok(missing)
     }
 
     /// The value of `key` in the application table `table`.
@@ -641,7 +697,7 @@ mod tests {
         store.put(&item, &payload_only(b"payload")).await.unwrap();
         let record = store.record(0).await.unwrap().unwrap();
         assert_eq!(record.item().unwrap(), item);
-        let info = PayloadInfo::of(b"payload", Some(item.leaf.block_header()));
+        let info = PayloadInfo::of(b"payload", Some(item.leaf.block_header().metadata()));
         assert_eq!(info.size, 7);
         assert_eq!(
             record.parts().unwrap(),

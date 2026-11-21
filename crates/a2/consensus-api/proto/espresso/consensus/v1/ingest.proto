@@ -32,6 +32,45 @@ service DecideLog {
   // Frees the entries of the heights in the given ranges, and their payloads. The caller has
   // made them durable, or given up on their payloads.
   rpc Ack(AckRequest) returns (AckResponse);
+
+  // The payloads of blocks the node has, before they are decided, shared out among the open
+  // subscriptions as entries are: each goes to one of them, as a `PayloadHead` followed by its
+  // chunks. The node votes on a block only once a subscriber has acknowledged its payload, with
+  // `AckPayload`, as durable. A payload sent to a subscription that ends before it is
+  // acknowledged goes to another one.
+  rpc TakePayloads(TakePayloadsRequest) returns (stream PayloadOffer);
+
+  // Reports a payload durable.
+  rpc AckPayload(AckPayloadRequest) returns (AckResponse);
+}
+
+message TakePayloadsRequest {}
+
+message PayloadOffer {
+  oneof event {
+    PayloadHead head = 1;
+    PayloadChunk chunk = 2;
+  }
+}
+
+// A payload, followed by its chunks.
+message PayloadHead {
+  // The view the block was proposed in.
+  uint64 view = 1;
+
+  // The block's VID commitment, as tagged base64.
+  string commitment = 2;
+
+  // The block's namespace table, as the header encodes it, to count the payload's transactions.
+  bytes ns_table = 3;
+
+  // The payload's size, which its chunks add up to.
+  uint64 size = 4;
+}
+
+message AckPayloadRequest {
+  uint64 view = 1;
+  string commitment = 2;
 }
 
 message SubscribeRequest {}

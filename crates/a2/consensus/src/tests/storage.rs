@@ -163,6 +163,41 @@ async fn test_payload_completion_and_gc() {
     assert!(store.load().unwrap().payloads.is_empty());
 }
 
+/// With a payload sink, a payload is offered to the storage instances instead of stored, and is
+/// reported durable only once one of them acknowledges it; an acknowledgement of a payload not
+/// offered is ignored.
+#[tokio::test]
+async fn test_payload_sink_reports_acknowledged_payloads() {
+    let (storage, store) = test_storage();
+    let (queue, acks) = consensus_api::payloads::PayloadQueue::new();
+    let mut storage = storage.with_payload_sink(queue.clone(), acks);
+    let view = ViewNumber::new(4);
+    let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::empty();
+    let commitment = VidCommitment2::default();
+
+    storage.append_da(
+        view,
+        EpochNumber::genesis(),
+        payload,
+        metadata,
+        VidCommitment::V2(commitment),
+    );
+    storage.record_action(view, ActionKind::Vote);
+    assert_eq!(
+        storage.next().await.expect("completion"),
+        StorageOutput::Action(view, ActionKind::Vote),
+        "not durable before an acknowledgement"
+    );
+    assert!(store.load().unwrap().payloads.is_empty(), "not stored");
+
+    queue.ack((99, "another".into()));
+    queue.ack((*view, VidCommitment::V2(commitment).to_string()));
+    assert_eq!(
+        storage.next().await.expect("completion"),
+        StorageOutput::Payload(view, commitment)
+    );
+}
+
 /// The lock only moves forward, and garbage collection never removes it or the boundary
 /// certificate: nothing else carries the boundary certificate once its view has passed.
 #[tokio::test]
