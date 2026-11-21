@@ -600,12 +600,36 @@ async fn track_epoch(node: &NodeState, leaf: &Leaf2) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::{num::NonZeroU64, sync::Arc};
+
+    use alloy::primitives::{Address, U256};
+    use async_lock::Mutex as AsyncMutex;
     use chain_store::{Item, Parts, mem::MemBackend};
-    use hotshot_types::simple_certificate::QuorumCertificate2;
+    use espresso_types::{
+        AuthenticatedValidatorMap, EpochCommittees, FeeAccount, Header, L1ClientOptions, Payload,
+        SeqTypes,
+        traits::MembershipPersistence,
+        v0_3::{AuthenticatedValidator, Fetcher, RegisteredValidator, RewardAmount},
+    };
+    use hotshot_types::{
+        data::{QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+        epoch_membership::EpochMembershipCoordinator,
+        simple_certificate::QuorumCertificate2,
+        traits::{
+            block_contents::{BlockHeader, BlockPayload, BuilderFee},
+            signature_key::BuilderSignatureKey,
+        },
+        utils::BuilderCommitment,
+    };
     use jf_merkle_tree_compat::AppendableMerkleTreeScheme;
+    use membership::MembershipStore;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
+    use crate::repair::{
+        membership::testing::{EPOCH_HEIGHT, FIRST_EPOCH, STAKE, committee},
+        store_catchup::StoreCatchup,
+    };
 
     /// A follower of `store` without peers to take the state from.
     fn follower(store: ChainStore, node: NodeState) -> ChainFollower {
@@ -841,5 +865,181 @@ mod tests {
         store.prune_below(1).await.unwrap();
         let mut pruned = follower(store, node);
         pruned.start().await.expect_err("nothing to start from");
+    }
+
+    /// The last block of an epoch whose previous boundary the follower took as stored carries
+    /// the rewards of the epoch before, which the follower computes from the leaf at that
+    /// boundary. Only the store has it.
+    #[tokio::test]
+    async fn applies_a_boundary_after_a_stored_one() {
+        let built = epoch_node(&ChainStore::new(MemBackend::default())).await;
+        let stored_boundary = 3 * EPOCH_HEIGHT;
+        let chain = epoch_chain(&built, stored_boundary + EPOCH_HEIGHT).await;
+
+        let store = ChainStore::new(MemBackend::default());
+        let node = epoch_node(&store).await;
+        let upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        for (leaf, state) in &chain {
+            let item = Item {
+                leaf: leaf.clone(),
+                cert1: QuorumCertificate2::genesis(state, &node, upgrade).await,
+            };
+            store.put(&item, &Parts::default()).await.unwrap();
+        }
+        let mut follower = follower(store, node);
+        for (height, (_, state)) in chain.iter().enumerate().take(stored_boundary as usize + 1) {
+            let parent = height.checked_sub(1).map(|parent| &chain[parent].1);
+            follower
+                .store_state(height as u64, state, parent)
+                .await
+                .unwrap();
+        }
+
+        let mut parent = Parent::Stored(chain[stored_boundary as usize].0.clone());
+        for (leaf, _) in &chain[stored_boundary as usize + 1..] {
+            let height = leaf.height();
+            parent = follower
+                .follow(&parent, height, leaf.clone())
+                .await
+                .unwrap_or_else(|err| panic!("applying height {height}: {err:#}"));
+        }
+        let Parent::Applied(_, state) = parent else {
+            panic!("the boundary has no stored state");
+        };
+        assert_ne!(
+            state.reward_merkle_tree_v2.commitment(),
+            chain[stored_boundary as usize]
+                .1
+                .reward_merkle_tree_v2
+                .commitment(),
+            "the boundary pays rewards"
+        );
+    }
+
+    /// A node of a chain whose epochs after the genesis committee's have the validators of
+    /// [`committee`](crate::repair::membership::testing::committee), as `store` keeps them, and
+    /// that takes leaves from `store`.
+    async fn epoch_node(store: &ChainStore) -> NodeState {
+        let validators: AuthenticatedValidatorMap = committee()
+            .into_iter()
+            .enumerate()
+            .map(|(i, peer)| {
+                let account = Address::with_last_byte(i as u8 + 1);
+                let validator = RegisteredValidator {
+                    account,
+                    stake_table_key: Some(peer.stake_table_entry.stake_key),
+                    state_ver_key: Some(peer.state_ver_key),
+                    stake: U256::from(STAKE),
+                    commission: 1000,
+                    delegators: [(account, U256::from(STAKE))].into(),
+                    authenticated: true,
+                    x25519_key: None,
+                    p2p_addr: None,
+                };
+                (
+                    account,
+                    AuthenticatedValidator::try_from(validator).unwrap(),
+                )
+            })
+            .collect();
+        let block_reward = RewardAmount(U256::from(1_000_000_000u64));
+        let membership_store = MembershipStore::new(store.clone());
+        for epoch in FIRST_EPOCH + 2..FIRST_EPOCH + 8 {
+            let epoch = EpochNumber::new(epoch);
+            membership_store
+                .store_stake(
+                    epoch,
+                    validators.clone(),
+                    Some(block_reward),
+                    Some(Commitment::from_raw([*epoch as u8; 32])),
+                )
+                .await
+                .unwrap();
+        }
+
+        let catchup = Arc::new(StoreCatchup::new(store.clone()));
+        // Never reached: every stake table is stored.
+        let l1 = L1ClientOptions::default()
+            .connect(vec!["http://127.0.0.1:1".parse().unwrap()])
+            .unwrap();
+        let fetcher = Fetcher::new(
+            catchup.clone(),
+            Arc::new(AsyncMutex::new(membership_store.clone())),
+            l1,
+            ChainConfig::default(),
+        );
+        let mut committees = EpochCommittees::new(
+            committee(),
+            committee(),
+            Some(block_reward),
+            fetcher,
+            EPOCH_HEIGHT,
+            EpochNumber::new(FIRST_EPOCH),
+        )
+        .unwrap();
+        committees.reload_stake(16).await;
+        // The proposer reads the randomized committees without loading them.
+        for epoch in FIRST_EPOCH + 2..FIRST_EPOCH + 8 {
+            committees.add_drb_result(EpochNumber::new(epoch), [epoch as u8; 32]);
+        }
+        let mut node = NodeState::mock()
+            .with_current_version(NEW_PROTOCOL_VERSION)
+            .with_epoch_height(EPOCH_HEIGHT);
+        node.coordinator = EpochMembershipCoordinator::new(
+            committees,
+            NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
+            &membership_store,
+        );
+        node.state_catchup = catchup;
+        node
+    }
+
+    /// The blocks from genesis through `through`, each with the state after it, as `node`
+    /// proposes them, one per view.
+    async fn epoch_chain(node: &NodeState, through: u64) -> Vec<(Leaf2, ValidatedState)> {
+        let mut state = ValidatedState::genesis(node).0;
+        let mut leaf = Leaf2::genesis(&state, node, NEW_PROTOCOL_VERSION).await;
+        let mut chain = vec![(leaf.clone(), state.clone())];
+        let (builder_key, builder_private_key) =
+            FeeAccount::generated_from_seed_indexed([0; 32], 0);
+        for view in 1..=through {
+            let (_, metadata) = <Payload as BlockPayload<SeqTypes>>::empty();
+            let builder_fee = BuilderFee {
+                fee_amount: 0,
+                fee_account: builder_key,
+                fee_signature: FeeAccount::sign_fee(&builder_private_key, 0, &metadata).unwrap(),
+            };
+            let header = Header::new(
+                &state,
+                node,
+                &leaf,
+                leaf.payload_commitment(),
+                BuilderCommitment::empty(),
+                metadata,
+                builder_fee,
+                NEW_PROTOCOL_VERSION,
+                view,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("proposing view {view}: {err}"));
+            let proposal = QuorumProposal2 {
+                block_header: header,
+                view_number: ViewNumber::new(view),
+                epoch: None,
+                justify_qc: leaf.justify_qc().clone(),
+                next_epoch_justify_qc: None,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                state_cert: None,
+            };
+            let next = Leaf2::from_quorum_proposal(&QuorumProposalWrapper { proposal });
+            state = apply(node, &state, &leaf, &next)
+                .await
+                .unwrap_or_else(|err| panic!("applying view {view}: {err:#}"));
+            leaf = next;
+            chain.push((leaf.clone(), state.clone()));
+        }
+        chain
     }
 }
