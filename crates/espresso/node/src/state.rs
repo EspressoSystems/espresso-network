@@ -19,7 +19,7 @@ use hotshot_query_service::{
     status::StatusDataSource,
     types::HeightIndexed,
 };
-use hotshot_types::{traits::ValidatedState as HotShotState, utils::is_last_block};
+use hotshot_types::traits::ValidatedState as HotShotState;
 use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
@@ -244,12 +244,11 @@ where
     // fetch_reward_merkle_tree_v2(height=12000) to catch up missing accounts and
     // fails because no tree exists in storage at that height.
     let is_epoch_boundary = version >= EPOCH_REWARD_VERSION
-        && is_last_block(
-            block_number,
-            instance
-                .epoch_height
-                .expect("epoch_height should be set for version > V3"),
-        );
+        && instance
+            .epoch_length
+            .expect("epoch_height should be set for version > V3")
+            .position(block_number)
+            .is_last();
 
     if has_changed_accounts || is_epoch_boundary {
         storage
@@ -572,7 +571,7 @@ where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
-    let epoch_height = instance.epoch_height.filter(|height| *height > 0)?;
+    let epoch_height = instance.epoch_length?.get();
     let pruned = retry_until_ok("loading the data pruned height", || {
         storage.load_pruned_height()
     })

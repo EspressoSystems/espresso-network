@@ -14,10 +14,10 @@ use espresso_utils::{
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     signature_key::BLSPubKey,
     traits::election::{Membership, MembershipSnapshot},
-    utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -841,10 +841,10 @@ pub async fn distribute_block_reward(
 ) -> anyhow::Result<Option<RewardDistributor>> {
     let height = parent_leaf.height() + 1;
 
-    let epoch_height = instance_state
-        .epoch_height
+    let epoch_length = instance_state
+        .epoch_length
         .context("epoch height not found")?;
-    let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+    let epoch = epoch_length.epoch_of(height);
     let coordinator = instance_state.coordinator.clone();
     let first_epoch = coordinator.membership().first_epoch();
 
@@ -897,7 +897,7 @@ pub async fn distribute_block_reward(
         // Example:
         //   epoch_height = 10, first_epoch = 1
         // first_reward_block = 21
-        let first_reward_block = (*first_epoch + 1) * epoch_height + 1;
+        let first_reward_block = *epoch_length.first_block(first_epoch + 2)?;
         // We only compute fixed reward distribured so far
         // once the current block
         // is beyond the first rewardable block.
@@ -943,13 +943,10 @@ pub async fn get_leader_and_fetch_missing_rewards(
     let parent_view = parent_leaf.view_number();
     let new_height = parent_height + 1;
 
-    let epoch_height = instance_state
-        .epoch_height
+    let epoch_length = instance_state
+        .epoch_length
         .context("epoch height not found")?;
-    if epoch_height == 0 {
-        bail!("epoch height is 0. can not catchup reward accounts");
-    }
-    let epoch = EpochNumber::new(epoch_from_block_number(new_height, epoch_height));
+    let epoch = epoch_length.epoch_of(new_height);
 
     let coordinator = instance_state.coordinator.clone();
 
@@ -1159,7 +1156,7 @@ impl EpochRewardsCalculator {
     pub fn spawn_background_task(
         &mut self,
         epoch: EpochNumber,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         reward_tree: RewardMerkleTreeV2,
         instance_state: NodeState,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -1185,7 +1182,7 @@ impl EpochRewardsCalculator {
         let handle = tokio::spawn(async move {
             Self::fetch_and_calculate(
                 epoch,
-                epoch_height,
+                epoch_length,
                 reward_tree,
                 instance_state,
                 coordinator,
@@ -1216,13 +1213,13 @@ impl EpochRewardsCalculator {
 
     async fn fetch_and_calculate(
         epoch: EpochNumber,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         mut reward_tree: RewardMerkleTreeV2,
         instance_state: NodeState,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         leader_counts: Option<LeaderCounts>,
     ) -> anyhow::Result<EpochRewardsResult> {
-        let epoch_last_block_height = (*epoch) * epoch_height;
+        let epoch_last_block_height = *epoch_length.last_block(epoch)?;
 
         tracing::info!(
             %epoch,

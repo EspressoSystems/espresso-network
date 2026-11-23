@@ -746,7 +746,7 @@ pub trait SequencerPersistence:
         };
         let config = self.load_config().await.context("loading config")?;
         // Use epoch height from node state. Node state gets the epoch height from the genesis file.
-        let epoch_height = state.epoch_height.unwrap_or_else(|| {
+        let epoch_height = state.epoch_length.map(EpochLength::get).unwrap_or_else(|| {
             config
                 .as_ref()
                 .map(|c| c.config.epoch_height)

@@ -65,6 +65,7 @@ use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
     data::ViewNumber,
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
@@ -665,13 +666,14 @@ where
 
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
-    let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let epoch_length = EpochLength::try_from(genesis.epoch_height.unwrap_or_default())
+        .context("genesis needs a positive epoch_height")?;
     let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
-        epoch_height,
+        epoch_length,
         first_epoch,
     )?;
     info!("Membership created. Reloading stake");
@@ -679,8 +681,6 @@ where
     info!("Stake reloaded");
 
     let persistence = Arc::new(persistence);
-    let epoch_length =
-        std::num::NonZeroU64::new(epoch_height).context("genesis needs a positive epoch_height")?;
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_length, &persistence);
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
@@ -695,7 +695,7 @@ where
         node_id: network_config.node_index,
         upgrades: genesis.upgrades.clone(),
         current_version: genesis.base_version,
-        epoch_height: Some(epoch_height),
+        epoch_length: Some(epoch_length),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator,
         genesis_version: genesis.genesis_version,
@@ -868,7 +868,6 @@ pub mod testing {
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
             signature_key::BuilderSignatureKey,
         },
-        utils::epoch_from_block_number,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -1606,27 +1605,23 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
+            let epoch_length = EpochLength::try_from(config.epoch_height)
+                .expect("the test network needs a positive epoch height");
             let mut membership = EpochCommittees::new(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
-                config.epoch_height,
-                EpochNumber::new(epoch_from_block_number(
-                    config.epoch_start_block,
-                    config.epoch_height,
-                )),
+                epoch_length,
+                epoch_length.epoch_of(config.epoch_start_block),
             )?;
             membership.reload_stake(50).await;
 
             let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
-            let coordinator = EpochMembershipCoordinator::new(
-                membership,
-                std::num::NonZeroU64::new(config.epoch_height).unwrap(),
-                &persistence.clone(),
-            );
+            let coordinator =
+                EpochMembershipCoordinator::new(membership, epoch_length, &persistence.clone());
 
             let max_block_size = *chain_config.max_block_size;
             let mut node_state = NodeState::new(
@@ -1640,7 +1635,7 @@ pub mod testing {
             )
             .with_current_version(upgrade.base)
             .with_genesis(state)
-            .with_epoch_height(config.epoch_height)
+            .with_epoch_length(epoch_length)
             .with_upgrades(upgrades)
             .with_epoch_start_block(config.epoch_start_block);
             // Only the genesis header: `chain_config` stays what this node resolves from its

@@ -9,10 +9,9 @@ use either::Either;
 use hotshot_query_service_types::{
     HeightIndexed, availability::QueryableHeader, explorer::traits::ExplorerHeader,
 };
-#[cfg(feature = "node")]
-use hotshot_types::utils::is_ge_epoch_root;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
+    epoch::EpochLength,
     light_client::LightClientState,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
@@ -20,7 +19,7 @@ use hotshot_types::{
         election::{Membership, MembershipSnapshot},
         node_implementation::NodeType,
     },
-    utils::{BuilderCommitment, epoch_from_block_number, is_last_block},
+    utils::BuilderCommitment,
 };
 use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
@@ -719,7 +718,7 @@ impl Header {
         parent_header: &Header,
         height: u64,
         leader_index: usize,
-        epoch_height: u64,
+        epoch_length: EpochLength,
     ) -> LeaderCounts {
         let mut leader_counts = [0u16; MAX_VALIDATORS];
 
@@ -727,7 +726,7 @@ impl Header {
         let parent_counts = parent_header.leader_counts();
 
         // If parent was the last block of an epoch, current block is epoch start
-        let is_epoch_start = is_last_block(height.saturating_sub(1), epoch_height);
+        let is_epoch_start = epoch_length.position(height.saturating_sub(1)).is_last();
 
         if is_epoch_start || parent_counts.is_none() {
             leader_counts[leader_index] = 1;
@@ -757,10 +756,10 @@ impl Header {
             return Ok(None);
         }
 
-        let epoch_height = instance_state
-            .epoch_height
-            .context("epoch height not in instance state for V6")?;
-        let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let epoch = instance_state
+            .epoch_length
+            .context("epoch height not in instance state for V6")?
+            .epoch_of(height);
 
         let coordinator = instance_state.coordinator.clone();
         coordinator
@@ -817,11 +816,11 @@ impl Header {
         validated_state: &mut ValidatedState,
         header_root: Option<RewardMerkleCommitmentV2>,
     ) -> anyhow::Result<(RewardAmount, HashSet<RewardAccountV2>)> {
-        let epoch_height = instance_state
-            .epoch_height
+        let epoch_length = instance_state
+            .epoch_length
             .context("epoch_height not configured")?;
-        ensure!(epoch_height > 0, "epoch_height must be > 0");
-        let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let position = epoch_length.position(height);
+        let epoch = position.epoch();
         let prev_epoch = EpochNumber::new(*epoch - 1);
         let coordinator = instance_state.coordinator.clone();
         let first_epoch = coordinator.membership().first_epoch();
@@ -839,7 +838,7 @@ impl Header {
             tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
             reward_calculator.spawn_background_task(
                 prev_epoch,
-                epoch_height,
+                epoch_length,
                 validated_state.reward_merkle_tree_v2.clone(),
                 instance_state.clone(),
                 coordinator.clone(),
@@ -847,7 +846,7 @@ impl Header {
             );
         }
 
-        if !is_last_block(height, epoch_height) {
+        if !position.is_last() {
             return Ok((RewardAmount::default(), HashSet::new()));
         }
 
@@ -879,7 +878,7 @@ impl Header {
 
             reward_calculator.spawn_background_task(
                 prev_epoch,
-                epoch_height,
+                epoch_length,
                 validated_state.reward_merkle_tree_v2.clone(),
                 instance_state.clone(),
                 coordinator.clone(),
@@ -923,7 +922,7 @@ impl Header {
         // ready on the next epoch boundary.
         reward_calculator.spawn_background_task(
             epoch,
-            epoch_height,
+            epoch_length,
             validated_state.reward_merkle_tree_v2.clone(),
             instance_state.clone(),
             coordinator,
@@ -1334,8 +1333,8 @@ impl BlockHeader<SeqTypes> for Header {
                     .context("remembering block proof")?;
             }
 
-            let epoch_height = instance_state
-                .epoch_height
+            let epoch_length = instance_state
+                .epoch_length
                 .context("epoch_height not configured for V6")?;
             // Use the new block's height (parent + 1), not the parent's height
             let new_height = height + 1;
@@ -1348,7 +1347,7 @@ impl BlockHeader<SeqTypes> for Header {
                 parent_leaf.block_header(),
                 new_height,
                 leader_index,
-                epoch_height,
+                epoch_length,
             );
 
             let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
@@ -1372,11 +1371,12 @@ impl BlockHeader<SeqTypes> for Header {
 
             let mut next_stake_table_hash = None;
 
-            if is_ge_epoch_root(height + 1, epoch_height) {
+            let next_position = epoch_length.position(height + 1);
+            if next_position.is_at_or_after_root() {
                 let coordinator = instance_state.coordinator.clone();
                 let first_epoch = coordinator.membership().first_epoch();
 
-                let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
+                let epoch = next_position.epoch();
 
                 // first 2 epochs don't have a stake table hash because they are configured.
                 if epoch > first_epoch {
@@ -1963,7 +1963,7 @@ mod test_headers {
         let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
             .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
-            .with_epoch_height(100);
+            .with_epoch_length(std::num::NonZeroU64::new(100).unwrap().into());
         let peer = ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
             [42; 32],
             0,
@@ -1976,7 +1976,7 @@ mod test_headers {
             vec![peer],
             None,
             Fetcher::mock(),
-            100,
+            std::num::NonZeroU64::new(100).unwrap(),
             EpochNumber::genesis(),
         )
         .expect("genesis without duplicate keys");
