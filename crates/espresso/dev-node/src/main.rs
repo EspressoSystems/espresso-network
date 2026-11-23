@@ -52,8 +52,8 @@ use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
 use hotshot_types::{
+    epoch::EpochLength,
     stake_table::{HSStakeTable, one_honest_threshold},
-    utils::epoch_from_block_number,
 };
 use http_wire::{cors_layer, healthcheck_response};
 use itertools::izip;
@@ -348,7 +348,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         .l1_url(l1_url.clone())
         .l1_opt(l1_opt.clone())
         .build();
-    let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+    let blocks_per_epoch = EpochLength::try_from(network_config.hotshot_config().epoch_height)
+        .context("the dev node needs a positive epoch height")?;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
     let initial_stake_table: HSStakeTable<SeqTypes> = network_config
@@ -473,7 +474,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             &provider,
             contracts,
             true, // use mock
-            blocks_per_epoch,
+            blocks_per_epoch.get(),
             epoch_start_block,
         )
         .await?;
@@ -699,7 +700,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
         // during `init_genesis()`, since this dev-node didn't expose those APIs.
-        let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
+        let first_epoch = *blocks_per_epoch.epoch_of(epoch_start_block);
         let mut thresholds = HashMap::new();
         thresholds.insert(first_epoch, one_honest_threshold(initial_total_stakes));
 
