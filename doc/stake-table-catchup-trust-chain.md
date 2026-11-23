@@ -55,8 +55,6 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
   - the stake table contract admin (`DEFAULT_ADMIN_ROLE`), who can upgrade it and so change the `lightClient()` address
     it returns
   - the LC contract circuit, whose proof `newFinalizedState` verifies
-- Not trusted: the permissioned prover, when one is set (`LightClient.permissionedProver`). It only limits who may
-  submit a proof, so it affects how recent `F` is, not its correctness.
 
 ```mermaid
 flowchart TD
