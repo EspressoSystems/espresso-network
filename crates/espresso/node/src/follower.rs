@@ -38,6 +38,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     ValidatorConfig,
     data::{EpochNumber, VidShare, ViewNumber},
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -47,10 +48,7 @@ use hotshot_types::{
         metrics::Metrics,
         storage::Storage,
     },
-    utils::{
-        StateAndDelta, epoch_from_block_number, is_epoch_root, is_transition_block,
-        root_block_in_epoch,
-    },
+    utils::StateAndDelta,
 };
 use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
@@ -249,11 +247,9 @@ where
     }
     // From genesis rather than the network config, as `init_node_state` reads it: the light
     // client verifies epochs, so a follower cannot run without them.
-    let epoch_height = genesis.epoch_height.unwrap_or_default();
-    ensure!(
-        epoch_height > 0,
-        "a follower needs a positive epoch_height in genesis"
-    );
+    let epoch_length = genesis
+        .epoch_length()
+        .context("a follower cannot run without epochs")?;
     let upgrade = versions::Upgrade::new(genesis.base_version, genesis.upgrade_version);
 
     let NodeStateParts {
@@ -311,7 +307,7 @@ where
         coordinator: coordinator.clone(),
         upgrade_lock: upgrade_lock.clone(),
         upstreams: params.upstreams,
-        epoch_height,
+        epoch_length,
     };
 
     let next = sink
@@ -327,7 +323,7 @@ where
         decided,
         chain_config,
         upgrade_lock,
-        epoch_height,
+        epoch_length,
         options: params.options,
         bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
         next,
@@ -472,7 +468,7 @@ struct FollowerConsensus {
     coordinator: EpochMembershipCoordinator<SeqTypes>,
     upgrade_lock: UpgradeLock<SeqTypes>,
     upstreams: Vec<Url>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 #[async_trait]
@@ -512,7 +508,7 @@ impl ConsensusSource for FollowerConsensus {
         let decided = self.decided.borrow();
         decided
             .as_ref()
-            .and_then(|leaf| leaf.leaf().epoch(self.epoch_height))
+            .and_then(|leaf| leaf.leaf().epoch(self.epoch_length.get()))
     }
 
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
@@ -591,7 +587,7 @@ struct Follower<P> {
     decided: watch::Sender<Option<LeafQueryData<SeqTypes>>>,
     chain_config: Arc<RwLock<ChainConfig>>,
     upgrade_lock: UpgradeLock<SeqTypes>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
     options: FollowerOptions,
     bootstrap_epoch_catchup_timeout: Duration,
     next: u64,
@@ -733,16 +729,17 @@ impl<P: SequencerPersistence> Follower<P> {
     /// membership already knows the result, as after a restart or a catchup walk.
     async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
         let height = leaf.height();
-        let Some(epoch) = leaf.epoch(self.epoch_height) else {
+        let Some(epoch) = leaf.epoch(self.epoch_length.get()) else {
             return Ok(());
         };
-        if is_epoch_root(height, self.epoch_height) && !self.has_stake_table(epoch + 2) {
+        let position = self.epoch_length.position(height);
+        if position.is_root() && !self.has_stake_table(epoch + 2) {
             self.coordinator
                 .add_epoch_root(leaf.block_header().clone())
                 .await
                 .map_err(|err| anyhow!("deriving the stake table of epoch {}: {err}", epoch + 2))?;
         }
-        if is_transition_block(height, self.epoch_height)
+        if position.is_transition_block()
             && let Some(drb) = leaf.next_drb_result
             && !self.has_drb(epoch + 1)
         {
@@ -764,10 +761,8 @@ impl<P: SequencerPersistence> Follower<P> {
             tracing::warn!(from, "startup stake table catchup failed: {err:#}");
         }
         // Background, so endpoints that need this epoch's DRB find it soon.
-        let epoch = epoch_from_block_number(from, self.epoch_height);
-        let _ = self
-            .coordinator
-            .membership_for_epoch(EpochNumber::new(epoch));
+        let epoch = self.epoch_length.epoch_of(from);
+        let _ = self.coordinator.membership_for_epoch(epoch);
     }
 
     /// The height the first poll ingests from: the upstreams' when they answer by `deadline`, else
@@ -786,7 +781,7 @@ impl<P: SequencerPersistence> Follower<P> {
     /// held: the DRB step after the install can fail or run long, and a follower supplies DRB
     /// results itself from the next transition block on.
     async fn require_stake_table(&self, height: u64, deadline: Instant) -> anyhow::Result<()> {
-        let needed = needed_stake_table_epoch(height, self.epoch_height);
+        let needed = needed_stake_table_epoch(height, self.epoch_length);
         if needed <= self.coordinator.membership().first_epoch() + 1 {
             return Ok(());
         }
@@ -840,10 +835,12 @@ impl<P: SequencerPersistence> Follower<P> {
 
 /// The newest stake table following from `height` needs: the next epoch's and, once the epoch's
 /// root block lies below `height`, the one after.
-fn needed_stake_table_epoch(height: u64, epoch_height: u64) -> EpochNumber {
-    let epoch = epoch_from_block_number(height, epoch_height);
-    let root_skipped = root_block_in_epoch(epoch, epoch_height) < height;
-    EpochNumber::new(epoch + 1 + u64::from(root_skipped))
+fn needed_stake_table_epoch(height: u64, epoch_length: EpochLength) -> EpochNumber {
+    let epoch = epoch_length.epoch_of(height);
+    let root_skipped = epoch_length
+        .root_inside(epoch)
+        .is_ok_and(|root| *root < height);
+    epoch + 1 + u64::from(root_skipped)
 }
 
 #[async_trait]
@@ -946,7 +943,7 @@ mod tests {
     #[case::first_block_of_next_epoch(201, 4)]
     fn needed_epoch_at_height(#[case] height: u64, #[case] expected: u64) {
         assert_eq!(
-            needed_stake_table_epoch(height, EPOCH_HEIGHT),
+            needed_stake_table_epoch(height, light_client::testing::epoch_length(EPOCH_HEIGHT)),
             EpochNumber::new(expected)
         );
     }

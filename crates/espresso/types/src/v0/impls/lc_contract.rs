@@ -5,9 +5,9 @@ use std::ops::RangeInclusive;
 use anyhow::ensure;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch::{EpochArithmeticError, EpochLength},
     light_client::CircuitField,
     traits::block_contents::BlockHeader,
-    utils::{epoch_from_block_number, root_block_in_epoch},
 };
 
 use crate::{BlockMerkleCommitment, Header};
@@ -36,9 +36,16 @@ pub struct SeedWindow {
 
 impl SeedWindow {
     /// Heights of the epoch roots that define the window's tables, ascending.
-    pub fn root_heights(&self, epoch_height: u64) -> impl Iterator<Item = u64> {
+    pub fn root_heights(
+        &self,
+        epoch_length: EpochLength,
+    ) -> Result<Vec<u64>, EpochArithmeticError> {
         (self.epochs.start().u64()..=self.epochs.end().u64())
-            .map(move |epoch| root_block_in_epoch(epoch - 2, epoch_height))
+            .map(|epoch| {
+                let root = epoch_length.root_inside(EpochNumber::new(epoch).checked_rewind(2)?)?;
+                Ok(*root)
+            })
+            .collect()
     }
 }
 
@@ -47,41 +54,45 @@ impl SeedWindow {
 pub fn preceding_root_height(
     epoch: EpochNumber,
     first_epoch: EpochNumber,
-    epoch_height: u64,
-) -> Option<u64> {
-    (epoch > first_epoch + 4).then(|| root_block_in_epoch(*epoch - 3, epoch_height))
+    epoch_length: EpochLength,
+) -> Result<Option<u64>, EpochArithmeticError> {
+    if epoch <= first_epoch + 4 {
+        return Ok(None);
+    }
+    let root = epoch_length.root_inside(epoch.checked_rewind(3)?)?;
+    Ok(Some(*root))
 }
 
 impl LcContractFinalizedState {
     /// The epoch of `F`.
-    pub fn seed_epoch(&self, epoch_height: u64) -> EpochNumber {
-        EpochNumber::new(epoch_from_block_number(self.height, epoch_height))
+    pub fn seed_epoch(&self, epoch_length: EpochLength) -> EpochNumber {
+        epoch_length.epoch_of(self.height)
     }
 
     /// The window a seed installs, or `None` when the walk needs no seed.
     pub fn seed_window(
         &self,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         first_epoch: EpochNumber,
         // The highest epoch whose stake table and the one below it are held; the walk starts here.
         start: EpochNumber,
         target: EpochNumber,
-    ) -> Option<SeedWindow> {
-        let contract_epoch = self.seed_epoch(epoch_height);
+    ) -> Result<Option<SeedWindow>, EpochArithmeticError> {
+        let contract_epoch = self.seed_epoch(epoch_length);
         // The walk reaches the target, or the contract epoch, on its own from `start`.
         if target <= start + 1 || contract_epoch <= start + 1 {
-            return None;
+            return Ok(None);
         }
         // Only epoch roots below the finalized height can be proven.
         let last = target.min(contract_epoch + 1);
         // Five tables cover the DRB and block rewards of the target; held tables are not
         // installed again; epoch 3 is the first table an epoch root defines.
         let first = EpochNumber::new(last.saturating_sub(4).max(*start + 1).max(3));
-        let preceding_root = preceding_root_height(first, first_epoch, epoch_height);
-        Some(SeedWindow {
+        let preceding_root = preceding_root_height(first, first_epoch, epoch_length)?;
+        Ok(Some(SeedWindow {
             epochs: first..=last,
             preceding_root,
-        })
+        }))
     }
 
     /// Accepts `header` iff it is at `F` and `Header::get_light_client_state(..).block_comm_root`
@@ -118,6 +129,10 @@ mod tests {
     use crate::{BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, NodeState, Payload};
 
     const EPOCH_HEIGHT: u64 = 100;
+
+    fn epoch_length(blocks: u64) -> EpochLength {
+        EpochLength::try_from(blocks).unwrap()
+    }
 
     /// A V4 genesis header moved to `height`.
     async fn header_at(height: u64) -> Header {
@@ -176,11 +191,11 @@ mod tests {
     const FIRST_EPOCH: u64 = 1;
 
     /// The epochs and root heights of a window, for comparison with a table row.
-    fn window_parts(window: SeedWindow, epoch_height: u64) -> (u64, u64, Vec<u64>, Option<u64>) {
+    fn window_parts(window: SeedWindow) -> (u64, u64, Vec<u64>, Option<u64>) {
         (
             window.epochs.start().u64(),
             window.epochs.end().u64(),
-            window.root_heights(epoch_height).collect(),
+            window.root_heights(epoch_length(EPOCH_HEIGHT)).unwrap(),
             window.preceding_root,
         )
     }
@@ -241,14 +256,16 @@ mod tests {
         #[case] target: u64,
         #[case] expected: Option<(u64, u64, Vec<u64>, Option<u64>)>,
     ) {
-        let window = finalized_state(height).seed_window(
-            EPOCH_HEIGHT,
-            EpochNumber::new(first_epoch),
-            EpochNumber::new(start),
-            EpochNumber::new(target),
-        );
+        let window = finalized_state(height)
+            .seed_window(
+                epoch_length(EPOCH_HEIGHT),
+                EpochNumber::new(first_epoch),
+                EpochNumber::new(start),
+                EpochNumber::new(target),
+            )
+            .unwrap();
 
-        assert_eq!(window.map(|w| window_parts(w, EPOCH_HEIGHT)), expected);
+        assert_eq!(window.map(window_parts), expected);
     }
 
     /// A seed from the genesis pair top covers the whole window; from top 8 it covers the window
@@ -259,10 +276,16 @@ mod tests {
         let first_epoch = EpochNumber::new(1);
         let target = EpochNumber::new(11);
         let roots = |start: u64| -> Vec<u64> {
-            lc.seed_window(10, first_epoch, EpochNumber::new(start), target)
-                .expect("seed needed")
-                .root_heights(10)
-                .collect()
+            lc.seed_window(
+                epoch_length(10),
+                first_epoch,
+                EpochNumber::new(start),
+                target,
+            )
+            .unwrap()
+            .expect("seed needed")
+            .root_heights(epoch_length(10))
+            .unwrap()
         };
         let window = roots(2);
         assert_eq!(window, vec![45, 55, 65, 75, 85]);
@@ -280,14 +303,15 @@ mod tests {
             target in 0u64..500,
         ) {
             let lc = finalized_state(height);
-            let contract_epoch = *lc.seed_epoch(epoch_height);
+            let epoch_length = epoch_length(epoch_height);
+            let contract_epoch = *lc.seed_epoch(epoch_length);
             let start = first_epoch + start_above_first;
             let window = lc.seed_window(
-                epoch_height,
+                epoch_length,
                 EpochNumber::new(first_epoch),
                 EpochNumber::new(start),
                 EpochNumber::new(target),
-            );
+            ).unwrap();
 
             prop_assert_eq!(
                 window.is_some(),
@@ -295,13 +319,13 @@ mod tests {
             );
             let Some(window) = window else { return Ok(()) };
             let (first, last) = (window.epochs.start().u64(), window.epochs.end().u64());
-            let heights: Vec<u64> = window.root_heights(epoch_height).collect();
+            let heights = window.root_heights(epoch_length).unwrap();
 
             prop_assert!(first >= first_epoch + 2 && first > start);
             prop_assert!(last <= target && last <= contract_epoch + 1);
             prop_assert_eq!(heights.len() as u64, last + 1 - first);
             for (epoch, root) in (first..=last).zip(&heights) {
-                prop_assert_eq!(*root, root_block_in_epoch(epoch - 2, epoch_height));
+                prop_assert_eq!(*root, (epoch - 2) * epoch_height - 5);
                 prop_assert!(*root > 0 && *root < height);
             }
             // The DRB of the target needs the two tables below it, installed or held.
@@ -310,7 +334,7 @@ mod tests {
             }
             // The reward of the lowest table reads the root one epoch below its own root unless
             // the epoch before that root's is within the first two.
-            let previous_epoch = epoch_from_block_number(heights[0], epoch_height) - 1;
+            let previous_epoch = *epoch_length.epoch_of(heights[0]) - 1;
             prop_assert_eq!(
                 window.preceding_root,
                 (previous_epoch > first_epoch + 1).then(|| heights[0] - epoch_height)

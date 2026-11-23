@@ -18,7 +18,8 @@ use hotshot_new_protocol::{
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
-    data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     event::LeafInfo,
     initializer::HotShotInitializer,
@@ -40,7 +41,8 @@ use tracing::{error, warn};
 /// The node's handle on consensus: the [`Coordinator`], run on its own task from
 /// [`start_consensus`](Self::start_consensus) on, and what the rest of the node reads from it.
 pub struct ConsensusHandle<T: NodeType, S> {
-    epoch_height: BlockNumber,
+    /// `None` when the node was started without epochs.
+    epoch_length: Option<EpochLength>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
     membership_coordinator: EpochMembershipCoordinator<T>,
@@ -107,7 +109,7 @@ where
         });
 
         Self {
-            epoch_height: initializer.epoch_height().into(),
+            epoch_length: EpochLength::try_from(initializer.epoch_height()).ok(),
             event_rx: event_rx.deactivate(),
             upgrade_lock,
             membership_coordinator,
@@ -261,7 +263,8 @@ where
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
         let Some(client_api) = self.client_api().await else {
-            return self.resting.read().leaf.epoch(*self.epoch_height);
+            let epoch_length = self.epoch_length?;
+            return self.resting.read().leaf.epoch(epoch_length.get());
         };
         match client_api.current_epoch().await {
             Ok(epoch) => Some(epoch),
@@ -272,8 +275,8 @@ where
         }
     }
 
-    pub fn epoch_height(&self) -> BlockNumber {
-        self.epoch_height
+    pub fn epoch_length(&self) -> Option<EpochLength> {
+        self.epoch_length
     }
 
     pub fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {

@@ -12,9 +12,7 @@ use espresso_types::{
     FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes, Timestamp, Upgrade,
     v0_3::ChainConfig,
 };
-use hotshot_types::{
-    VersionedDaCommittee, data::EpochNumber, utils::epoch_from_block_number, version_ser,
-};
+use hotshot_types::{VersionedDaCommittee, data::EpochNumber, epoch::EpochLength, version_ser};
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
 use vbs::version::Version;
@@ -149,15 +147,14 @@ impl Genesis {
     ///
     /// Fails when `epoch_height` is missing or zero.
     pub fn first_epoch(&self) -> anyhow::Result<EpochNumber> {
-        let epoch_height = self
-            .epoch_height
-            .filter(|&height| height > 0)
-            .context("genesis needs a positive epoch_height")?;
         let start = self.epoch_start_block.unwrap_or_default();
-        Ok(EpochNumber::new(epoch_from_block_number(
-            start,
-            epoch_height,
-        )))
+        Ok(self.epoch_length()?.epoch_of(start))
+    }
+
+    /// Fails when `epoch_height` is missing or zero.
+    pub fn epoch_length(&self) -> anyhow::Result<EpochLength> {
+        EpochLength::try_from(self.epoch_height.unwrap_or_default())
+            .context("genesis needs a positive epoch_height")
     }
 }
 

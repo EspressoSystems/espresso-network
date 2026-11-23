@@ -65,7 +65,6 @@ use hotshot_types::{
     ValidatorConfig,
     addr::NetAddr,
     data::ViewNumber,
-    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
@@ -666,8 +665,7 @@ where
 
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
-    let epoch_length = EpochLength::try_from(genesis.epoch_height.unwrap_or_default())
-        .context("genesis needs a positive epoch_height")?;
+    let epoch_length = genesis.epoch_length()?;
     let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
@@ -861,6 +859,7 @@ pub mod testing {
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
+        epoch::EpochLength,
         event::LeafInfo,
         light_client::StateKeyPair,
         new_protocol::CoordinatorEvent,
