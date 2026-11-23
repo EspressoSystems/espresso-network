@@ -275,6 +275,12 @@ pub struct Consensus<T: NodeType> {
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
     /// Highest locked QC confirmed persisted; gates release of phase-2 votes.
     stored_high_qc: Option<LockView>,
+    /// The newest lock taken on a block whose payload the store has not acknowledged yet, with
+    /// that block's view and payload commitment. It is persisted once the store acknowledges the
+    /// payload, so that a persisted lock is always on a block whose payload is in this node's
+    /// store: after every node restarts, leaders must build on the newest lock, and the votes on
+    /// its children need its payload.
+    lock_awaiting_payload: Option<(Certificate1<T>, ViewNumber, VidCommitment2)>,
 
     /// Messages constructed and accounted for in `voted_*_views` /
     /// `proposed_views`, awaiting their storage confirmations. A pending vote2
@@ -470,6 +476,7 @@ impl<T: NodeType> Consensus<T> {
             stored_actions: BTreeSet::new(),
             requested_actions: BTreeSet::new(),
             stored_high_qc: None,
+            lock_awaiting_payload: None,
             pending_vote1: BTreeMap::new(),
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
@@ -2801,12 +2808,15 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::ProposalCertified(proposal.clone()));
 
         // Locked on without the payload, which the commit shows a quorum had,
-        // so that a node new to the incoming committee can lock.
+        // so that a node new to the incoming committee can lock. The lock is
+        // persisted at once: the quorum's stores acknowledged the payload before
+        // their vote2s, so it can be fetched after any restart.
         if self
             .lock_view()
             .is_none_or(|lock| lock < LockView::of(&cert1))
         {
             self.locked_cert = Some(cert1.clone());
+            self.lock_awaiting_payload = None;
             outbox.push_back(ConsensusOutput::LockUpdated(block_view));
             outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
@@ -3452,6 +3462,14 @@ impl<T: NodeType> Consensus<T> {
             },
             StorageOutput::Payload(view, commitment) => {
                 self.stored_payloads.insert((view, commitment));
+                if self
+                    .lock_awaiting_payload
+                    .as_ref()
+                    .is_some_and(|(_, v, c)| (*v, *c) == (view, commitment))
+                {
+                    let (lock, ..) = self.lock_awaiting_payload.take().expect("checked above");
+                    outbox.push_back(ConsensusOutput::PersistHighQc(lock));
+                }
                 // A vote1 on a child, or a re-vote at a later view, can wait on this payload;
                 // re-check all.
                 let pending: Vec<ViewEpoch> = self.pending_vote1.keys().copied().collect();
@@ -3569,24 +3587,22 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::SendVote2(pending.vote));
     }
 
-    /// Whether the view's Vote action and VID share are persisted, gating the
-    /// phase-2 vote. A restart-barred view persisted both before the crash:
-    /// its vote is re-cast, but its Vote action is never re-recorded. A
-    /// re-vote disperses nothing, so it has no share of its own to wait for.
-    /// Whether everything a vote2 at `view` depends on is durable: the vote on disk, and the
-    /// payload of the voted block in the store. The payload also stands in for this node's VID share, which it
-    /// determines, and a storage instance can pick it up before the block is final.
+    /// Whether everything a vote2 at `view` depends on is durable: the Vote action on disk, and
+    /// the payload of the voted block in the store.
+    ///
+    /// The payload is what a `Certificate2` counts this node among the holders of, so every vote2
+    /// waits for it, a re-vote and one re-cast after a restart included. A restart-barred view
+    /// recorded its Vote action before the crash, and the action is never recorded again.
     fn vote2_persisted(
         &self,
         view: ViewNumber,
         block_view: ViewNumber,
         block_commitment: VidCommitment2,
     ) -> bool {
-        view <= self.restart_barred_view
-            || (self.stored_actions.contains(&(view, ActionKind::Vote))
-                && self
-                    .stored_payloads
-                    .contains(&(block_view, block_commitment)))
+        self.stored_payloads
+            .contains(&(block_view, block_commitment))
+            && (view <= self.restart_barred_view
+                || self.stored_actions.contains(&(view, ActionKind::Vote)))
     }
 
     /// Whether the payload `payload` names, if any, is durable in the store.
@@ -4006,8 +4022,17 @@ impl<T: NodeType> Consensus<T> {
                 ));
             }
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
-            // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
-            outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
+            // Persist the new lock, once its block's payload is in the store; `release_vote2`
+            // gates the phase-2 vote on it.
+            if self
+                .stored_payloads
+                .contains(&(block_view, proposal_block_commitment))
+            {
+                self.lock_awaiting_payload = None;
+                outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
+            } else {
+                self.lock_awaiting_payload = Some((cert1, block_view, proposal_block_commitment));
+            }
         }
         // The block's own certificate, which opens the next epoch, also when the
         // lock is already a re-vote's later certificate over the block.

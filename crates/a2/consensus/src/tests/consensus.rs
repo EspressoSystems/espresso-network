@@ -3514,6 +3514,9 @@ async fn test_no_revote2_for_restart_barred_views() {
 /// If Cert1 formed before a crash but no Cert2 did, the restarted node must
 /// re-cast its (identical) phase-2 vote — without the barred quorum's re-votes
 /// the Cert2 can never form — while not re-recording the Vote action.
+///
+/// The re-cast vote waits, like any vote2, until the store acknowledges the
+/// block's payload: the `Certificate2` counts this node among its holders.
 #[tokio::test]
 async fn test_revote2_after_restart_without_cert2() {
     // Tests behaviour before 0.7.
@@ -3534,7 +3537,18 @@ async fn test_revote2_after_restart_without_cert2() {
 
     // A peer re-broadcasts Cert1 for the voted view; no Cert2 exists anywhere.
     harness.apply(voted.cert1_input()).await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_vote2),
+        0,
+        "the payload held in memory is not yet durable in the store"
+    );
 
+    harness
+        .apply(ConsensusInput::Stored(StorageOutput::Payload(
+            voted.view_number,
+            voted.vid_commitment(),
+        )))
+        .await;
     assert_eq!(
         count_matching(harness.outputs(), is_vote2),
         1,
@@ -3545,6 +3559,56 @@ async fn test_revote2_after_restart_without_cert2() {
         0,
         "re-casting the vote must not re-record the view's Vote action"
     );
+}
+
+/// A lock is persisted only once the store acknowledges its block's payload: after every node
+/// restarts, leaders build on the newest persisted lock, and the votes on its children need that
+/// payload.
+#[tokio::test]
+async fn a_lock_is_persisted_once_its_payload_is_stored() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let locked = &test_data.views[2];
+
+    // The block's payload is held in memory, not yet acknowledged by the store.
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        [locked.proposal.data.clone()],
+    )
+    .await;
+    harness.resume_from_restart(
+        anchor.view_number,
+        anchor.view_number + 1,
+        anchor.view_number,
+    );
+    let persisted = |harness: &ConsensusHarness| {
+        harness
+            .outputs()
+            .iter()
+            .filter(|output| {
+                matches!(output, ConsensusOutput::PersistHighQc(cert)
+                    if cert.view_number() == locked.view_number)
+            })
+            .count()
+    };
+
+    harness.apply(locked.cert1_input()).await;
+    assert_eq!(
+        harness.consensus.lock_view().map(|lock| lock.view),
+        Some(locked.view_number),
+        "the node locks on the block"
+    );
+    assert_eq!(persisted(&harness), 0, "the lock waits for the payload");
+
+    harness
+        .apply(ConsensusInput::Stored(StorageOutput::Payload(
+            locked.view_number,
+            locked.vid_commitment(),
+        )))
+        .await;
+    assert_eq!(persisted(&harness), 1);
 }
 
 /// A replayed Cert1+Cert2 pair for a view below the restart anchor (decided
