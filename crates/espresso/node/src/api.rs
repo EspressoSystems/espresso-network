@@ -6210,15 +6210,7 @@ mod test {
             genesis_state.chain_config.commit(),
         )
         .await?;
-        let rewarded: Vec<RewardAccountV2> = network
-            .server
-            .decided_state()
-            .await
-            .unwrap()
-            .reward_merkle_tree_v2
-            .iter()
-            .map(|(account, _)| *account)
-            .collect();
+        let rewarded = claimable_accounts(&api_client, tip, EPOCH_HEIGHT).await?;
         assert!(
             !rewarded.is_empty(),
             "no rewards distributed after {EPOCHS_TO_FOLLOW} epochs"
@@ -6484,6 +6476,36 @@ mod test {
             assert_same_response(api_client, follower_client, &path).await?;
         }
         Ok(())
+    }
+
+    /// The accounts with a balance in the reward tree that claims at `tip` read: the tree at the
+    /// epoch boundary below `tip`. The chain moves on while a test runs, so a later decided state
+    /// can hold accounts that this tree lacks, whose claims at `tip` are 404.
+    async fn claimable_accounts(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        tip: u64,
+        epoch_height: u64,
+    ) -> anyhow::Result<Vec<RewardAccountV2>> {
+        let boundary = reward_proof_boundary(tip, epoch_height)
+            .with_context(|| format!("no reward claims before the first boundary, tip {tip}"))?;
+        timeout(
+            FOLLOW_TIMEOUT,
+            wait_until_block_height(client, "reward-state-v2/block-height", boundary + 1),
+        )
+        .await
+        .context("reward state did not reach the claim boundary")?;
+        let tree: Vec<(RewardAccountV2, RewardAmount)> = client
+            .get(&format!(
+                "reward-state-v2/reward-amounts/{boundary}/0/10000"
+            ))
+            .send()
+            .await
+            .with_context(|| format!("reward tree at {boundary}"))?;
+        Ok(tree
+            .into_iter()
+            .filter(|(_, amount)| !amount.0.is_zero())
+            .map(|(account, _)| account)
+            .collect())
     }
 
     async fn assert_same_rewards(
