@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["MetricsError"],"struct":["Counter","CounterFamily","Gauge","GaugeFamily","Histogram","HistogramFamily","NoSuchMetricSnafu","NoSuchSubgroupSnafu","PrometheusMetrics","PrometheusSnafu","TextFamily"]};
+window.SIDEBAR_ITEMS = {"enum":["MetricsError"],"struct":["Counter","CounterFamily","Gauge","GaugeFamily","Histogram","HistogramFamily","PrometheusMetrics","TextFamily"]};

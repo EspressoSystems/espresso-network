@@ -13,7 +13,7 @@
     urls: <a class="struct" href="https://doc.rust-lang.org/1.100.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="https://docs.rs/url/2.5.7/url/struct.Url.html" title="struct url::Url">Url</a>&gt;,
     backoff: <a class="struct" href="../../espresso_types/v0/utils/struct.BackoffParams.html" title="struct espresso_types::v0::utils::BackoffParams">BackoffParams</a>,
     base_timeout: <a class="struct" href="https://doc.rust-lang.org/1.100.0/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
-    metrics: &amp;(impl <a class="trait" href="../../hotshot_types/traits/metrics/trait.Metrics.html" title="trait hotshot_types::traits::metrics::Metrics">Metrics</a> + ?<a class="trait" href="https://doc.rust-lang.org/1.100.0/core/marker/trait.Sized.html" title="trait core::marker::Sized">Sized</a>),
+    metrics: &amp;(impl <a class="trait" href="../../hotshot_metrics/trait.Metrics.html" title="trait hotshot_metrics::Metrics">Metrics</a> + ?<a class="trait" href="https://doc.rust-lang.org/1.100.0/core/marker/trait.Sized.html" title="trait core::marker::Sized">Sized</a>),
 ) -&gt; Self</h4></section><section id="method.fetch_config" class="method"><a class="src rightside" href="../../src/espresso_node/catchup.rs.html#256-279">Source</a><h4 class="code-header">pub async fn <a href="#method.fetch_config" class="fn">fetch_config</a>(
     &amp;self,
     my_own_validator_config: <a class="struct" href="../../hotshot_types/struct.ValidatorConfig.html" title="struct hotshot_types::ValidatorConfig">ValidatorConfig</a>&lt;<a class="struct" href="../../espresso_types/v0/struct.SeqTypes.html" title="struct espresso_types::v0::SeqTypes">SeqTypes</a>&gt;,

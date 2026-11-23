@@ -28,7 +28,7 @@ registered there.</p>
     persistence: <a class="struct" href="https://doc.rust-lang.org/1.100.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;P&gt;,
     coordinator_network: F,
     state_relay_server: <a class="enum" href="https://doc.rust-lang.org/1.100.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://docs.rs/url/2.5.7/url/struct.Url.html" title="struct url::Url">Url</a>&gt;,
-    metrics: &amp;dyn <a class="trait" href="../../hotshot_types/traits/metrics/trait.Metrics.html" title="trait hotshot_types::traits::metrics::Metrics">Metrics</a>,
+    metrics: &amp;dyn <a class="trait" href="../../hotshot_metrics/trait.Metrics.html" title="trait hotshot_metrics::Metrics">Metrics</a>,
     stake_table_capacity: <a class="primitive" href="https://doc.rust-lang.org/1.100.0/std/primitive.usize.html">usize</a>,
     event_consumer: impl <a class="trait" href="../../espresso_types/v0/traits/trait.EventConsumer.html" title="trait espresso_types::v0::traits::EventConsumer">PersistenceEventConsumer</a> + 'static,
     proposal_fetcher_cfg: <a class="struct" href="../proposal_fetcher/struct.ProposalFetcherConfig.html" title="struct espresso_node::proposal_fetcher::ProposalFetcherConfig">ProposalFetcherConfig</a>,
@@ -48,7 +48,7 @@ registered there.</p>
     event_consumer: impl <a class="trait" href="../../espresso_types/v0/traits/trait.EventConsumer.html" title="trait espresso_types::v0::traits::EventConsumer">PersistenceEventConsumer</a> + 'static,
     anchor_view: <a class="enum" href="https://doc.rust-lang.org/1.100.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="../../hotshot_types/data/struct.ViewNumber.html" title="struct hotshot_types::data::ViewNumber">ViewNumber</a>&gt;,
     proposal_fetcher_cfg: <a class="struct" href="../proposal_fetcher/struct.ProposalFetcherConfig.html" title="struct espresso_node::proposal_fetcher::ProposalFetcherConfig">ProposalFetcherConfig</a>,
-    metrics: &amp;dyn <a class="trait" href="../../hotshot_types/traits/metrics/trait.Metrics.html" title="trait hotshot_types::traits::metrics::Metrics">Metrics</a>,
+    metrics: &amp;dyn <a class="trait" href="../../hotshot_metrics/trait.Metrics.html" title="trait hotshot_metrics::Metrics">Metrics</a>,
 ) -&gt; Self</h4></section></summary><div class="docblock"><p>Constructor</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.wait_for_orchestrator" class="method"><a class="src rightside" href="../../src/espresso_node/context.rs.html#453-460">Source</a><h4 class="code-header">pub fn <a href="#method.wait_for_orchestrator" class="fn">wait_for_orchestrator</a>(
     self,

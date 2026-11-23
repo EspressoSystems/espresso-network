@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block_contents","election","leaf_fetcher_network","metrics","network","node_implementation","qc","signature_key","states","storage"]};
+window.SIDEBAR_ITEMS = {"mod":["block_contents","election","leaf_fetcher_network","network","node_implementation","qc","signature_key","states","storage"]};

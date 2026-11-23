@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["prometheus"],"struct":["NoMetrics"],"trait":["Counter","CounterFamily","Gauge","GaugeFamily","Histogram","HistogramFamily","Metrics","MetricsFamily","TextFamily"]};
