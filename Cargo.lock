@@ -2872,7 +2872,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "consensus-store",
- "crc32fast",
  "parking_lot",
  "redb",
  "tempfile",

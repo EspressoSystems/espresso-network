@@ -316,22 +316,25 @@ impl ChainStore {
             .context("this store keeps no payloads by commitment")?;
         let info = PayloadInfo::of(&payload, ns_table);
         let kept = payload.clone();
-        let uploaded = match &self.staging {
-            Some(staging) => {
-                staging.stage(commitment, &payload).await?;
-                false
-            },
+        let staged = match &self.staging {
+            Some(staging) => Some(staging.stage(commitment, &payload).await?),
             None => {
                 payloads.put(commitment, payload).await?;
-                true
+                None
             },
         };
         payloads::put_record(
             self.backend.as_ref(),
             commitment,
-            &payloads::PayloadRecord { info, uploaded },
+            &payloads::PayloadRecord {
+                info,
+                uploaded: staged.is_none(),
+            },
         )
         .await?;
+        if let (Some(staging), Some(staged)) = (&self.staging, staged) {
+            staging.queue(staged);
+        }
         if let Some(recent) = &self.recent {
             recent.insert(commitment, kept);
         }
@@ -471,6 +474,19 @@ impl ChainStore {
             return Ok(Some(payload));
         }
         payloads.get(&commitment).await
+    }
+
+    /// The payload with VID commitment `commitment`, decided or not: from the newest payloads
+    /// kept in memory, else from the object store once it is uploaded. `None` for a store that
+    /// keeps its payloads in the backend, which knows them by height only.
+    pub async fn payload_by_commitment(&self, commitment: &str) -> anyhow::Result<Option<Bytes>> {
+        if let Some(payload) = self.recent.as_ref().and_then(|r| r.get(commitment)) {
+            return Ok(Some(payload));
+        }
+        match &self.payloads {
+            Some(payloads) => payloads.get(commitment).await,
+            None => Ok(None),
+        }
     }
 
     pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {

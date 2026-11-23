@@ -160,31 +160,47 @@ impl PayloadStore {
 }
 
 /// Payloads a writer has made durable locally and not yet uploaded.
+///
+/// Each write stages its own file, `{commitment}.{write}`, which only its own upload deletes: one
+/// payload can be written twice, as identical empty blocks are, and by repair and a storage
+/// instance at once in one process.
 #[derive(Clone, Debug)]
 pub(crate) struct Staging {
     dir: PathBuf,
     uploads: mpsc::UnboundedSender<String>,
 
-    /// Numbers the writes, so that two writes of one payload, as repair and a storage instance
-    /// in one process can make, do not share a partial file.
+    /// The number of the next write. It starts from the time the staging area was opened, so
+    /// that it does not reuse the name of a file a previous run left staged.
     writes: Arc<AtomicU64>,
 }
 
 impl Staging {
-    /// Writes `payload`, whose VID commitment is `commitment`, to the staging directory, durably,
-    /// and queues it for upload.
-    pub(crate) async fn stage(&self, commitment: &str, payload: &[u8]) -> anyhow::Result<()> {
-        let path = self.dir.join(commitment);
+    /// Writes `payload`, whose VID commitment is `commitment`, to the staging directory, durably.
+    /// Returns the name of the staged file, for [`Self::queue`].
+    pub(crate) async fn stage(&self, commitment: &str, payload: &[u8]) -> anyhow::Result<String> {
         let write = self.writes.fetch_add(1, Ordering::Relaxed);
-        let partial = self.dir.join(format!(".{commitment}.{write}"));
+        let name = format!("{commitment}.{write}");
+        let partial = self.dir.join(format!(".{name}"));
         let mut file = fs::File::create(&partial).await?;
         file.write_all(payload).await?;
         file.sync_all().await?;
-        fs::rename(&partial, &path).await?;
+        fs::rename(&partial, self.dir.join(&name)).await?;
         fs::File::open(&self.dir).await?.sync_all().await?;
-        let _ = self.uploads.send(commitment.to_string());
-        Ok(())
+        Ok(name)
     }
+
+    /// Queues the staged file `name` for upload. After the payload's record says it is not
+    /// uploaded yet, so that the uploader's record of the upload comes after it.
+    pub(crate) fn queue(&self, name: String) {
+        let _ = self.uploads.send(name);
+    }
+}
+
+/// The commitment of the payload staged as `name`. A file a run before files were numbered left
+/// staged is named after the commitment alone, which has no dot.
+fn staged_commitment(name: &str) -> &str {
+    name.split_once('.')
+        .map_or(name, |(commitment, _)| commitment)
 }
 
 /// Uploads staged payloads, oldest first, for as long as the store it stages for exists.
@@ -201,18 +217,19 @@ pub struct Uploader {
 impl Uploader {
     /// Uploads what a previous run left staged, then each payload as it is staged.
     pub async fn run(mut self) {
-        for commitment in std::mem::take(&mut self.leftovers) {
-            self.upload(&commitment).await;
+        for name in std::mem::take(&mut self.leftovers) {
+            self.upload(&name).await;
         }
-        while let Some(commitment) = self.queue.recv().await {
-            self.upload(&commitment).await;
+        while let Some(name) = self.queue.recv().await {
+            self.upload(&name).await;
         }
     }
 
-    /// Uploads the payload staged under `commitment`, trying again until it succeeds, then records
-    /// it as uploaded and deletes the staged copy. One no longer staged was uploaded already.
-    async fn upload(&self, commitment: &str) {
-        let path = self.dir.join(commitment);
+    /// Uploads the payload staged as `name`, trying again until it succeeds, then records it as
+    /// uploaded and deletes the staged copy. One no longer staged was uploaded already.
+    async fn upload(&self, name: &str) {
+        let commitment = staged_commitment(name);
+        let path = self.dir.join(name);
         let mut delay = std::time::Duration::from_millis(100);
         loop {
             match self.try_upload(commitment, &path).await {
@@ -266,10 +283,13 @@ pub(crate) async fn staging(
         .await
         .with_context(|| format!("reading the staged payloads in {}", dir.display()))?;
     let (uploads, queue) = mpsc::unbounded_channel();
+    let opened = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos() as u64);
     let staging = Staging {
         dir: dir.clone(),
         uploads,
-        writes: Arc::default(),
+        writes: Arc::new(AtomicU64::new(opened)),
     };
     let uploader = Uploader {
         dir,
@@ -510,6 +530,94 @@ mod tests {
         let range = reader.payload_range(0, 2..4).await.unwrap().unwrap();
         assert_eq!(&range[..], b"ce");
         assert_eq!(range.as_ptr(), written[2..].as_ptr());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two writes of one payload stage two files, and uploading one does not take the other's;
+    /// a payload a previous run staged under its commitment alone is uploaded too.
+    #[tokio::test]
+    async fn each_write_stages_its_own_file() {
+        let dir = std::env::temp_dir().join(format!("staging-{:016x}", rand_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("C~old"), b"old").unwrap();
+        let payloads = objects();
+        let (store, uploader) = ChainStore::new(MemBackend::default())
+            .with_staged_payloads(payloads.clone(), dir.clone())
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            store
+                .put_payload("C~same", Bytes::from_static(b"same"), None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+
+        tokio::spawn(uploader.run());
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while std::fs::read_dir(&dir).unwrap().count() > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("everything staged is uploaded");
+        let record = record(store.backend.as_ref(), "C~same")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(record.uploaded);
+        assert_eq!(
+            payloads.get("C~same").await.unwrap().as_deref(),
+            Some(&b"same"[..])
+        );
+        assert_eq!(
+            payloads.get("C~old").await.unwrap().as_deref(),
+            Some(&b"old"[..])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A payload stored, once or twice at the same time, while the uploader runs, ends up
+    /// recorded as uploaded, and no staged copy is left behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn every_staged_payload_ends_up_uploaded() {
+        let dir = std::env::temp_dir().join(format!("staging-{:016x}", rand_suffix()));
+        let (store, uploader) = ChainStore::new(MemBackend::default())
+            .with_staged_payloads(objects(), dir.clone())
+            .await
+            .unwrap();
+        tokio::spawn(uploader.run());
+        let commitments: Vec<String> = (0..200).map(|i| format!("C~{i}")).collect();
+        let mut writes = tokio::task::JoinSet::new();
+        for (i, commitment) in commitments.iter().enumerate() {
+            for _ in 0..1 + i % 2 {
+                let (store, commitment) = (store.clone(), commitment.clone());
+                writes.spawn(async move {
+                    store
+                        .put_payload(&commitment, Bytes::from_static(b"same"), None)
+                        .await
+                        .unwrap();
+                });
+            }
+        }
+        writes.join_all().await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let mut uploaded = 0;
+                for commitment in &commitments {
+                    let record = record(store.backend.as_ref(), commitment).await.unwrap();
+                    uploaded += usize::from(record.is_some_and(|r| r.uploaded));
+                }
+                let staged = std::fs::read_dir(&dir).unwrap().count();
+                if uploaded == commitments.len() && staged == 0 {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("every payload recorded as uploaded, and nothing left staged");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -268,7 +268,8 @@ pub struct Consensus<T: NodeType> {
 
     /// Storage confirmations; sends are gated on these facts.
     stored_proposals: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
-    /// Blocks whose payload is on disk, by the view they were proposed in.
+    /// Blocks whose payload a storage instance has acknowledged as durable, by the view they
+    /// were proposed in.
     stored_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
     stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
@@ -368,8 +369,8 @@ enum RevoteFetch {
 pub(crate) struct PendingVote1<T: NodeType> {
     pub(crate) vote: Vote1<T>,
 
-    /// The view and payload commitment of the parent block, whose payload must be on disk
-    /// first, unless the vote does not depend on it.
+    /// The view and payload commitment of the parent block, whose payload must be durable in the
+    /// store first, unless the vote does not depend on it.
     pub(crate) parent_payload: Option<(ViewNumber, VidCommitment2)>,
 }
 
@@ -380,7 +381,8 @@ struct PendingVote2<T: NodeType> {
     lock: LockView,
     /// The view the voted block was proposed at; a re-vote's is earlier.
     block_view: ViewNumber,
-    /// The payload commitment of the voted block, whose payload must be on disk first.
+    /// The payload commitment of the voted block, whose payload must be durable in the store
+    /// first.
     block_commitment: VidCommitment2,
 }
 
@@ -547,8 +549,31 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed the blocks whose payload storage holds on restart, so vote2 on them does not wait
-    /// for a write that already happened.
+    /// Asks for the payload of each block this node holds without it, from the last decided one
+    /// on: a vote on it, or a proposal or vote1 on a child of it, waits for its payload, which a
+    /// storage instance must acknowledge again. A restarted node holds no payloads, and asks for
+    /// these when it starts.
+    pub fn request_restored_payloads(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        for proposal in self.proposals.range(self.last_decided_view..) {
+            let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
+            else {
+                continue;
+            };
+            let view = proposal.view_number;
+            if !self
+                .blocks_reconstructed
+                .contains(&(view, payload_commitment))
+            {
+                outbox.push_back(ConsensusOutput::RequestMissingPayload {
+                    view,
+                    payload_commitment,
+                });
+            }
+        }
+    }
+
+    /// Seed the blocks whose payloads the storage instances are known to hold, so vote2 on them
+    /// does not wait for an acknowledgement that already came.
     pub fn seed_stored_payloads(&mut self, payloads: BTreeSet<(ViewNumber, VidCommitment2)>) {
         self.stored_payloads.extend(payloads);
     }
@@ -766,7 +791,7 @@ impl<T: NodeType> Consensus<T> {
     ///
     /// The lock alone counts here, as for a node restarted with its lock but
     /// without the block. A vote1 on a child still waits until the parent's
-    /// payload is on disk (`PendingVote1::parent_payload`), which keeps the
+    /// payload is durable in the store (`PendingVote1::parent_payload`), which keeps the
     /// node within the rule that a vote1 needs the parent's payload
     /// (`ParentReady`); a restarted node that lost the payload holds its
     /// vote1 until it has the payload again.
@@ -1162,7 +1187,7 @@ impl<T: NodeType> Consensus<T> {
     /// On restart, bar voting and proposing in every view this node may have
     /// acted in by raising `timeout_view` (vote1, propose) and
     /// `restart_barred_view` (vote-action re-recording), pin the decide floor
-    /// at the anchor, and place the view cursor just past the high QC.
+    /// at the anchor, and enter the view after the high QC.
     /// Forward-only: never regresses any view.
     pub fn resume_from_restart(
         &mut self,
@@ -1198,11 +1223,10 @@ impl<T: NodeType> Consensus<T> {
                 .and_modify(|recorded| *recorded = (*recorded).min(parent_view))
                 .or_insert(parent_view);
         }
-        // `Coordinator::start` enters `current_view + 1`, so parking the cursor
-        // at the high QC makes the node re-enter at `high_qc + 1`.
-        let resume_view = self
-            .stored_high_qc
-            .map_or(anchor_view + 1, |lock| lock.view);
+        // The node re-enters the view after its high QC, as a running node does on
+        // the high QC's `Cert1`. `Coordinator::start` starts the view timer there,
+        // and a timeout is accepted only for a view the node is in.
+        let resume_view = self.stored_high_qc.map_or(anchor_view, |lock| lock.view) + 1;
         self.set_current_view_max(resume_view);
     }
 
@@ -1968,7 +1992,7 @@ impl<T: NodeType> Consensus<T> {
     /// Views earlier than the lock cannot be what blocks us: safety pins the
     /// justify_qc of any proposal we may still vote for at or later than the
     /// lock. The lock's own view can: a vote1 on a child of the locked block
-    /// waits for the block's payload on disk, which a node restarted without
+    /// waits for the block's payload to be durable in the store, which a node restarted without
     /// it has to fetch. Later than `current_view - GC_MARGIN_VIEWS` a missing
     /// share broadcast may still arrive on its own, and fetching would race it
     /// for a whole payload.
@@ -3549,8 +3573,8 @@ impl<T: NodeType> Consensus<T> {
     /// phase-2 vote. A restart-barred view persisted both before the crash:
     /// its vote is re-cast, but its Vote action is never re-recorded. A
     /// re-vote disperses nothing, so it has no share of its own to wait for.
-    /// Whether everything a vote2 at `view` depends on is on disk: the vote, and the payload of
-    /// the voted block. The payload also stands in for this node's VID share, which it
+    /// Whether everything a vote2 at `view` depends on is durable: the vote on disk, and the
+    /// payload of the voted block in the store. The payload also stands in for this node's VID share, which it
     /// determines, and a storage instance can pick it up before the block is final.
     fn vote2_persisted(
         &self,
@@ -3565,7 +3589,7 @@ impl<T: NodeType> Consensus<T> {
                     .contains(&(block_view, block_commitment)))
     }
 
-    /// Whether the payload `payload` names, if any, is on disk.
+    /// Whether the payload `payload` names, if any, is durable in the store.
     fn payload_stored(&self, payload: Option<(ViewNumber, VidCommitment2)>) -> bool {
         payload.is_none_or(|key| self.stored_payloads.contains(&key))
     }
@@ -3814,7 +3838,7 @@ impl<T: NodeType> Consensus<T> {
                 return;
             }
             // The vote counts this node among the holders of the parent's payload, so the
-            // payload must be on disk before the vote is sent, as a vote2 waits for its own
+            // payload must be durable in the store before the vote is sent, as a vote2 waits for its own
             // block's.
             parent_payload = Some((parent_view, prev_block_commitment));
         }

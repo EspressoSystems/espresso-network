@@ -40,8 +40,8 @@ pub mod proto {
 
 use payloads::PayloadQueue;
 use proto::{
-    AckPayloadRequest, AckRequest, AckResponse, Decided, PayloadAdded, PayloadChunk, PayloadHead,
-    PayloadOffer, Progress, ServiceRecords, StakeTable, Start, SubmitTransactionRequest,
+    AckPayloadRequest, AckRequest, AckResponse, Decided, PayloadChunk, PayloadHead, PayloadOffer,
+    Progress, ServiceRecords, StakeTable, Start, SubmitTransactionRequest,
     SubmitTransactionResponse, SubscribeRequest, SubscribeResponse, TakePayloadsRequest,
     consensus_node_server::{ConsensusNode, ConsensusNodeServer},
     decide_log_server::{DecideLog, DecideLogServer},
@@ -52,15 +52,14 @@ pub use proto::{consensus_node_client::ConsensusNodeClient, decide_log_client::D
 /// The version of [`proto::Body`] this crate produces.
 pub const BODY_FORMAT: u32 = 1;
 
-/// The largest payload chunk [`server`] sends.
+/// The largest payload chunk [`server`] sends of an offered payload.
 const CHUNK_SIZE: usize = 1 << 20;
 
 /// How many entries the server reads from its source at a time.
 const BATCH: usize = 64;
 
 /// How many views behind the newest decide an entry is final: no height before it is decided
-/// any more, and its payload no longer joins the decide log. Consensus decides a missing view
-/// only within this many views of the newest decide, and adds a late payload within fewer.
+/// any more. Consensus decides a missing view only within this many views of the newest decide.
 pub const FINALITY_VIEWS: u64 = 20;
 
 /// How often the stream looks again for more discovery records of the newest epoch, which
@@ -104,14 +103,11 @@ pub trait Source: Send + Sync + 'static {
     async fn earliest(&self) -> Result<Option<u64>, Error>;
 
     /// Changes after each durable write to the decide log, including entries of heights decided
-    /// late and payloads added to entries.
+    /// late.
     fn changes(&self) -> watch::Receiver<u64>;
 
-    /// Frees the entries of the heights in `ranges`, and their payloads.
+    /// Frees the entries of the heights in `ranges`.
     async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), Error>;
-
-    /// The payload of the entry at `height`, if this node has it and still keeps the entry.
-    async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error>;
 
     /// The encoded stake table of `epoch`, if this node has built it.
     async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, Error>;
@@ -177,24 +173,17 @@ pub fn service<S: Source>(
 pub struct Service<S> {
     source: Arc<S>,
 
-    /// What the subscriptions take, each one item at a time.
-    work: async_channel::Receiver<Work>,
+    /// The heights of the entries the subscriptions take, each one at a time.
+    work: async_channel::Receiver<u64>,
 
     /// Where a subscription that ends puts back what it was sent and is not freed yet.
-    requeue: async_channel::Sender<Work>,
+    requeue: async_channel::Sender<u64>,
 
     /// The view of the newest entry the dispatcher found.
     progress: watch::Receiver<u64>,
 
     /// The payloads consensus offers before their blocks are decided.
     payloads: PayloadQueue,
-}
-
-/// An entry, or a payload that joined an entry later, for one subscription to send.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Work {
-    Entry(u64),
-    Payload(u64),
 }
 
 type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
@@ -297,11 +286,11 @@ impl<N: Node> ConsensusNode for NodeService<N> {
     }
 }
 
-/// Finds the entries of the decide log, the heights decided late and the payloads that join
-/// entries later, and queues each once for the subscriptions to share out.
+/// Finds the entries of the decide log and the heights decided late, and queues each once for
+/// the subscriptions to share out.
 struct Dispatcher<S> {
     source: Arc<S>,
-    queue: async_channel::Sender<Work>,
+    queue: async_channel::Sender<u64>,
     progress: watch::Sender<u64>,
 
     /// The next height to read in order.
@@ -309,9 +298,6 @@ struct Dispatcher<S> {
 
     /// The view of the newest entry found.
     newest_view: u64,
-
-    /// Entries found without their payload, by height, with their view.
-    awaiting: BTreeMap<u64, u64>,
 
     /// Heights skipped as missing, by first height, with the end and the view of the entry
     /// after them, which bounds theirs.
@@ -321,7 +307,7 @@ struct Dispatcher<S> {
 impl<S: Source> Dispatcher<S> {
     fn new(
         source: Arc<S>,
-        queue: async_channel::Sender<Work>,
+        queue: async_channel::Sender<u64>,
         progress: watch::Sender<u64>,
     ) -> Self {
         Self {
@@ -330,7 +316,6 @@ impl<S: Source> Dispatcher<S> {
             progress,
             cursor: 0,
             newest_view: 0,
-            awaiting: BTreeMap::new(),
             missing: BTreeMap::new(),
         }
     }
@@ -356,11 +341,9 @@ impl<S: Source> Dispatcher<S> {
     /// Queues the new entries, then the late ones, then forgets what is final.
     async fn pass(&mut self) -> Result<(), Error> {
         self.find_new().await?;
-        self.find_late_payloads().await?;
         self.find_late_entries().await?;
         let newest = self.newest_view;
         let is_final = |view: u64| view + FINALITY_VIEWS <= newest;
-        self.awaiting.retain(|_, view| !is_final(*view));
         self.missing.retain(|_, (_, view)| !is_final(*view));
         self.progress.send_if_modified(|view| {
             let advanced = *view < newest;
@@ -386,18 +369,6 @@ impl<S: Source> Dispatcher<S> {
                 return Ok(());
             }
         }
-    }
-
-    /// Queues the payloads that joined entries found without them.
-    async fn find_late_payloads(&mut self) -> Result<(), Error> {
-        let heights: Vec<u64> = self.awaiting.keys().copied().collect();
-        for height in heights {
-            if self.source.payload(height).await?.is_some() {
-                self.awaiting.remove(&height);
-                self.queue(Work::Payload(height));
-            }
-        }
-        Ok(())
     }
 
     /// Queues the entries of heights skipped as missing that have been decided since.
@@ -441,15 +412,8 @@ impl<S: Source> Dispatcher<S> {
 
     fn found(&mut self, entry: &Decided) {
         self.newest_view = self.newest_view.max(entry.view);
-        if entry.payload_size.is_none() {
-            self.awaiting.insert(entry.height, entry.view);
-        }
-        self.queue(Work::Entry(entry.height));
-    }
-
-    fn queue(&self, work: Work) {
         // The queue is unbounded, and the service holds a receiver as long as it runs.
-        let _ = self.queue.try_send(work);
+        let _ = self.queue.try_send(entry.height);
     }
 }
 
@@ -458,7 +422,7 @@ impl<S: Source> Dispatcher<S> {
 struct Feed<S> {
     source: Arc<S>,
     tx: mpsc::Sender<Result<SubscribeResponse, Status>>,
-    work: async_channel::Receiver<Work>,
+    work: async_channel::Receiver<u64>,
     progress: watch::Receiver<u64>,
 
     /// What was sent and may not be freed yet.
@@ -480,8 +444,8 @@ struct Stop;
 /// What a subscription sent, which goes back into the queue when the subscription ends, as
 /// whatever of it is freed by then is skipped when it is taken again.
 struct Sent {
-    work: BTreeSet<Work>,
-    requeue: async_channel::Sender<Work>,
+    work: BTreeSet<u64>,
+    requeue: async_channel::Sender<u64>,
 }
 
 impl Drop for Sent {
@@ -529,31 +493,15 @@ impl<S: Source> Feed<S> {
         }
     }
 
-    /// Sends `work`, reading the entry or payload only now, so that at most one is held at a
-    /// time. Work freed since it was queued is skipped.
-    async fn deliver(&mut self, work: Work) -> Result<(), Stop> {
-        match work {
-            Work::Entry(height) => {
-                let entry = self.ok(self.source.decided(height, 1).await).await?;
-                match entry.into_iter().next() {
-                    Some(entry) if entry.height == height => self.send_entry(entry).await,
-                    _ => {
-                        self.sent.work.remove(&work);
-                        Ok(())
-                    },
-                }
-            },
-            Work::Payload(height) => {
-                let Some(payload) = self.ok(self.source.payload(height).await).await? else {
-                    self.sent.work.remove(&work);
-                    return Ok(());
-                };
-                let added = Event::PayloadAdded(PayloadAdded {
-                    height,
-                    payload_size: payload.len() as u64,
-                });
-                self.send(added).await?;
-                self.send_chunks(&payload).await
+    /// Sends the entry at `height`, reading it only now, so that at most one is held at a time.
+    /// An entry freed since it was queued is skipped.
+    async fn deliver(&mut self, height: u64) -> Result<(), Stop> {
+        let entry = self.ok(self.source.decided(height, 1).await).await?;
+        match entry.into_iter().next() {
+            Some(entry) if entry.height == height => self.send_entry(entry).await,
+            _ => {
+                self.sent.work.remove(&height);
+                Ok(())
             },
         }
     }
@@ -562,12 +510,9 @@ impl<S: Source> Feed<S> {
     /// freed.
     async fn forget_freed(&mut self) -> Result<(), Stop> {
         let earliest = self.ok(self.source.earliest().await).await?;
-        let height = |work: &Work| match work {
-            Work::Entry(height) | Work::Payload(height) => *height,
-        };
         self.sent
             .work
-            .retain(|work| earliest.is_some_and(|earliest| height(work) >= earliest));
+            .retain(|height| earliest.is_some_and(|earliest| *height >= earliest));
         Ok(())
     }
 
@@ -616,36 +561,12 @@ impl<S: Source> Feed<S> {
         Ok(())
     }
 
-    /// Sends `entry` and then its payload in chunks. A payload freed since the entry was read
-    /// leaves the entry without one.
-    async fn send_entry(&mut self, mut entry: Decided) -> Result<(), Stop> {
-        let payload = match entry.payload_size {
-            Some(_) => self.ok(self.source.payload(entry.height).await).await?,
-            None => None,
-        };
-        entry.payload_size = payload.as_ref().map(|p| p.len() as u64);
+    async fn send_entry(&mut self, entry: Decided) -> Result<(), Stop> {
         self.epochs = Some(match self.epochs {
             Some((first, newest)) => (first.min(entry.epoch), newest.max(entry.epoch)),
             None => (entry.epoch, entry.epoch),
         });
-        self.send(Event::Decided(entry)).await?;
-        match payload {
-            Some(payload) => self.send_chunks(&payload).await,
-            None => Ok(()),
-        }
-    }
-
-    async fn send_chunks(&self, payload: &Bytes) -> Result<(), Stop> {
-        let mut start = 0;
-        while start < payload.len() {
-            let end = (start + CHUNK_SIZE).min(payload.len());
-            let chunk = PayloadChunk {
-                data: payload.slice(start..end),
-            };
-            self.send(Event::PayloadChunk(chunk)).await?;
-            start = end;
-        }
-        Ok(())
+        self.send(Event::Decided(entry)).await
     }
 
     async fn send(&self, event: Event) -> Result<(), Stop> {

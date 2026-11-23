@@ -20,7 +20,7 @@ use hotshot_types::{
 };
 use tokio::sync::mpsc;
 
-use super::utils::{epoch_length, reconstructed_blocks};
+use super::utils::{TestPayloadSource, TestPayloadStore, epoch_length};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -69,8 +69,11 @@ pub async fn build_test_coordinator(
     view_timeout: Duration,
     upgrade: UpgradeSetup,
     external_tx: mpsc::UnboundedSender<OpaqueMessage<BLSPubKey>>,
+    payloads: (TestPayloadStore, TestPayloadSource),
 ) -> Coordinator<TestTypes, MemStore> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+    let (payload_store, payload_source) = payloads;
+    let fetcher = crate::fetch::Fetcher::new(public_key).with_source(Arc::new(payload_source));
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());
@@ -147,10 +150,9 @@ pub async fn build_test_coordinator(
     let anchor_view = if let Some((anchor_leaf, anchor_cert)) = restart_anchor {
         // Seed the persisted anchor as the parent, exactly as production's
         // `Coordinator::maker` does from the initializer: rebuild the parent
-        // proposal from the anchor leaf, seed a sparse state for it, and
-        // treat the anchor plus persisted proposals as already-reconstructed
-        // blocks so the first leader after restart is not stalled by the
-        // `parent_block_reconstructed` check.
+        // proposal from the anchor leaf and seed a sparse state for it. No
+        // block counts as reconstructed: consensus keeps no payloads across a
+        // restart, and fetches those it needs, from the payload source first.
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
             .epoch(epoch_height)
@@ -176,18 +178,10 @@ pub async fn build_test_coordinator(
             TestTypes,
         >>::from_header(anchor_leaf.block_header());
         state_manager.seed_state(anchor_view, Arc::new(anchor_state), anchor_leaf.clone());
-        let reconstructed = reconstructed_blocks(
-            std::iter::once((anchor_view, anchor_leaf.block_header().clone())).chain(
-                restored
-                    .proposals
-                    .iter()
-                    .map(|(view, p)| (*view, p.data.block_header.clone())),
-            ),
-        );
         // Seed persisted proposals before `seed_parent` so its authoritative
         // anchor wins (mirrors `Coordinator::maker`).
         consensus.seed_signed_proposals(restored.proposals.values().cloned());
-        consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
+        consensus.seed_parent(anchor_cert, anchor_proposal, Vec::new());
         if let Some(cert2) = restored.anchor.as_ref().and_then(|a| a.cert2.clone()) {
             consensus.seed_anchor_cert2(cert2);
         }
@@ -211,14 +205,13 @@ pub async fn build_test_coordinator(
     };
 
     // As in `Coordinator::maker`: restore the lock, the boundary certificate
-    // and the stored payloads, and never act again in a view acted in before.
+    // and never act again in a view acted in before.
     if let Some(locked_qc) = restored.locked_qc {
         consensus.seed_locked_cert(locked_qc);
     }
     if let Some(boundary_qc) = restored.boundary_qc {
         consensus.seed_boundary_cert(boundary_qc);
     }
-    consensus.seed_stored_payloads(restored.payloads);
     let restart_view = restored
         .restart_view
         .map_or(anchor_view, |view| view.max(anchor_view));
@@ -301,8 +294,10 @@ pub async fn build_test_coordinator(
         .share_validator(share_validator)
         .storage({
             let restored = store.load().expect("a new store loads");
-            crate::storage::Storage::new(store, &private_key, &restored)
+            let (queue, acks) = payload_store.sink();
+            crate::storage::Storage::new(store, &private_key, &restored, queue, acks)
         })
+        .fetcher(fetcher)
         .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())

@@ -25,6 +25,10 @@ service CatchupService {
 
   // The light client state certificate of an epoch.
   rpc GetStateCert(EpochRequest) returns (Encoded);
+
+  // The payload with a VID commitment, decided or not, as consensus encodes payloads rather than
+  // bincode-encoded: what a restarted consensus node needs of blocks it voted on.
+  rpc GetPayload(PayloadRequest) returns (Encoded);
 }
 
 message HeightRequest {
@@ -39,6 +43,11 @@ message AccountsRequest {
 }
 
 message ChainConfigRequest {
+  string commitment = 1;
+}
+
+message PayloadRequest {
+  // The VID commitment, as tagged base64.
   string commitment = 1;
 }
 

@@ -47,24 +47,6 @@ impl Batch {
         })
     }
 
-    /// Sets the value of `to_key` in `to` to the value of `from_key` in `from`.
-    ///
-    /// An extern value is shared, not written again. If `from_key` is absent, nothing happens.
-    pub fn copy(
-        &mut self,
-        from: &Table,
-        from_key: impl Into<Bytes>,
-        to: &Table,
-        to_key: impl Into<Bytes>,
-    ) -> &mut Self {
-        self.push(Op::Copy {
-            from: from.clone(),
-            from_key: from_key.into(),
-            to: to.clone(),
-            to_key: to_key.into(),
-        })
-    }
-
     /// Removes every key of `table`.
     pub fn drop_table(&mut self, table: &Table) -> &mut Self {
         self.push(Op::DropTable {
@@ -108,12 +90,6 @@ pub enum Op {
         table: Table,
         keys: KeyRange,
     },
-    Copy {
-        from: Table,
-        from_key: Bytes,
-        to: Table,
-        to_key: Bytes,
-    },
     DropTable {
         table: Table,
     },
@@ -137,18 +113,6 @@ impl fmt::Debug for Op {
                 .debug_struct("DeleteRange")
                 .field("table", table)
                 .field("keys", keys)
-                .finish(),
-            Self::Copy {
-                from,
-                from_key,
-                to,
-                to_key,
-            } => f
-                .debug_struct("Copy")
-                .field("from", from)
-                .field("from_key", from_key)
-                .field("to", to)
-                .field("to_key", to_key)
                 .finish(),
             Self::DropTable { table } => f.debug_struct("DropTable").field("table", table).finish(),
         }

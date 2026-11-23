@@ -48,7 +48,7 @@ use crate::{
     },
     discovery::{RETAINED_EPOCHS, ServiceBook, ServiceRecord},
     epoch::{EpochManager, EpochRootResult},
-    fetch::{Fetcher, Retry},
+    fetch::{Fetched, Fetcher, PayloadSource, Retry},
     helpers::{ViewEpoch, proposal_commitment, validated_state_cert},
     leader_trace::LeaderTracerHandle,
     logging::KeyPrefix,
@@ -222,9 +222,12 @@ where
         decide_log_limit: u64,
         /// What the application keeps of the latest decided state.
         decided_state: Option<Box<dyn DecidedState<T>>>,
-        /// Where payloads go instead of the store, and the acknowledgements that report them
-        /// durable: the deployment's storage instances.
-        payload_sink: Option<(PayloadQueue, Acks)>,
+        /// Where payloads go, and the acknowledgements that report them durable: the
+        /// deployment's storage instances.
+        payload_sink: (PayloadQueue, Acks),
+        /// Where payloads missing from memory are asked for before peers: the deployment's
+        /// store, through its API services.
+        payload_source: Option<Arc<dyn PayloadSource>>,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
         /// What this node's records say about its API service; the epoch is set per record.
@@ -286,7 +289,8 @@ where
                 .map(|m| m.consensus.update_leaf_duration.clone().into()),
         );
         // Before `restored` is taken apart: the writer starts from what the store holds.
-        let storage = Storage::new(store, &private_key, &restored);
+        let (payload_queue, payload_acks) = payload_sink;
+        let storage = Storage::new(store, &private_key, &restored, payload_queue, payload_acks);
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
         for p in restored.proposals.values() {
@@ -297,10 +301,6 @@ where
             initializer.anchor_state().clone(),
             anchor_leaf.clone(),
         );
-        // The blocks whose payload is on disk count as reconstructed. A proposal stored
-        // without its payload does not: a vote1 on its child needs the payload, which a
-        // fetch brings, and a fetched payload of a block marked reconstructed is dropped.
-        let reconstructed_blocks = restored.payloads.iter().copied().collect::<Vec<_>>();
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         // They are kept signed, so this node can serve them to a peer fetching
         // them, as one fetching an epoch's boundary block for a re-vote.
@@ -310,7 +310,9 @@ where
         // `resume_from_restart` positions the view so the node never
         // re-enters a view it may have voted or proposed in before it went
         // down.
-        consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
+        // No block counts as reconstructed: consensus keeps no payloads across a restart, and a
+        // vote1 on a child needs its parent's, which a fetch brings.
+        consensus.seed_parent(cert1, parent_proposal, Vec::new());
         // Restore the persisted lock; it can be newer than the anchor QC, so
         // this must run after `seed_parent`.
         if let Some(locked_qc) = restored.locked_qc {
@@ -319,7 +321,6 @@ where
         if let Some(boundary_qc) = restored.boundary_qc {
             consensus.seed_boundary_cert(boundary_qc);
         }
-        consensus.seed_stored_payloads(restored.payloads);
         if let Some(anchor_cert2) = anchor_cert2 {
             consensus.seed_anchor_cert2(anchor_cert2);
         }
@@ -456,16 +457,16 @@ where
                 membership_coordinator.epoch_length(),
                 upgrade_lock,
             ))
+            .fetcher(match payload_source {
+                Some(source) => Fetcher::new(public_key.clone()).with_source(source),
+                None => Fetcher::new(public_key.clone()),
+            })
             .storage({
                 let storage = storage
                     .with_metrics(metrics)
                     .with_decide_log_limit(decide_log_limit);
-                let storage = match decided_state {
+                match decided_state {
                     Some(decided_state) => storage.with_decided_state(decided_state),
-                    None => storage,
-                };
-                match payload_sink {
-                    Some((queue, acks)) => storage.with_payload_sink(queue, acks),
                     None => storage,
                 }
             })
@@ -479,14 +480,14 @@ where
             .build()
     }
 
-    /// Emit `ViewChanged(current_view + 1)` and, if leader, a
-    /// `RequestBlockAndHeader`.
+    /// Enters consensus's current view: emits `ViewChanged`, which starts the view timer, and, if
+    /// leader, a `RequestBlockAndHeader` on the proposal of the view before.
     pub fn start(&mut self) {
-        let cur_view = self.consensus.current_view();
-        let next_view = cur_view + 1;
+        let view = self.consensus.current_view();
+        let parent_view = ViewNumber::new(view.saturating_sub(1));
         // Client requests are served before the outbox reaches the builder, so it must know the
         // view before that first `ViewChanged`.
-        self.block_builder.start_at(next_view);
+        self.block_builder.start_at(view);
         let epoch = self.consensus.current_epoch();
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
@@ -515,18 +516,19 @@ where
         }
 
         self.outbox
-            .push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+            .push_back(ConsensusOutput::ViewChanged(view, epoch));
+        self.consensus.request_restored_payloads(&mut self.outbox);
 
-        if let Some(leader) = self.leader(next_view, epoch)
+        if let Some(leader) = self.leader(view, epoch)
             && leader == self.public_key
         {
             // No parent proposal when restarting past the anchor view: the
             // node cannot propose off the anchor for a later view; the
             // timeout path takes over instead.
-            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
+            if let Some(parent_proposal) = self.consensus.proposal_at(parent_view).cloned() {
                 self.consensus.push_block_request(
                     BlockAndHeaderRequest {
-                        view: next_view,
+                        view,
                         epoch,
                         parent_proposal,
                     },
@@ -768,12 +770,23 @@ where
                         return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
                 },
-                Some(out) = self.fetcher.next() => {
-                    if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
+                Some(fetched) = self.fetcher.next() => match fetched {
+                    Fetched::Payload(out) => {
+                        self.fetcher.source_answered(out.view, out.payload_commitment);
+                        if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
+                            continue
+                        }
+                        self.vid_reconstructor.retire_view(out.view);
+                        return Ok(self.on_payload_obtained(out))
+                    },
+                    Fetched::NotInSource(view, commitment) => {
+                        self.fetcher.source_answered(view, commitment);
+                        if !self.consensus.is_reconstructed(view, commitment) {
+                            self.request_payload_from_peers(view, commitment);
+                        }
                         continue
-                    }
-                    self.vid_reconstructor.retire_view(out.view);
-                    return Ok(self.on_payload_obtained(out))
+                    },
+                    Fetched::Rejected => continue,
                 },
                 stored = self.storage.next() => {
                     let stored = stored.map_err(|e| {
@@ -2011,6 +2024,28 @@ where
             .sender()
             .broadcast(slot, &message)
             .map_err(|e| CoordinatorError::from(e).context(ctx))
+    }
+
+    /// Asks a peer for the payload with commitment `commitment` of the block proposed in `view`,
+    /// which the payload source does not have.
+    fn request_payload_from_peers(&mut self, view: ViewNumber, commitment: VidCommitment2) {
+        let Some((peer, message)) = self.fetcher.request(
+            view,
+            commitment,
+            Retry::AfterSource,
+            &self.consensus,
+            &self.membership_coordinator,
+        ) else {
+            return;
+        };
+        if let Err(err) = self.unicast_in(
+            self.slot_for(view),
+            &peer,
+            message.message_type,
+            "payload request",
+        ) {
+            warn!(%view, %err, "failed to send payload request");
+        }
     }
 
     fn unicast_in(

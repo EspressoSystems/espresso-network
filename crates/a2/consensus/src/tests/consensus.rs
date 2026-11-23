@@ -3573,6 +3573,28 @@ async fn test_no_redecide_below_restart_anchor() {
     );
 }
 
+/// A restarted node is in the view after its high QC, the view its timer runs for.
+///
+/// Its timeout for that view is answered with a timeout vote. After all nodes restart, these
+/// votes are the only way past a leader that does not propose.
+#[tokio::test]
+async fn restarted_node_times_out_the_view_after_its_high_qc() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let anchor_view = anchor.view_number;
+
+    let mut harness =
+        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
+            .await;
+    harness.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+    assert_eq!(harness.consensus.current_view(), anchor_view + 1);
+
+    harness
+        .apply(ConsensusInput::Timeout(anchor_view + 1))
+        .await;
+    assert_eq!(count_matching(harness.outputs(), is_send_timeout_vote), 1);
+}
+
 /// A timeout for a view below `current_view` is ignored entirely: no
 /// timeout vote is signed or broadcast. Regression test for restarted
 /// nodes being dragged back to long-past views (e.g. the protocol-upgrade
@@ -3685,7 +3707,7 @@ async fn test_vote1_gated_on_storage() {
 }
 
 /// A vote1 on a child counts this node among the holders of the parent's payload, so it is held
-/// until that payload is on disk, not only reconstructed.
+/// until that payload is durable in the store, not only reconstructed.
 #[tokio::test]
 async fn test_vote1_gated_on_parent_payload_storage() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -4680,4 +4702,34 @@ async fn test_block_request_queued_stamped_for_every_request() {
         tracer.count(*next_view, LeaderEvent::RequestBlockHeaderQueued),
         requests
     );
+}
+
+/// A starting node asks for the payload of each block it holds without it, but not for one it
+/// has, since votes on the blocks and on their children wait for their payloads.
+#[tokio::test]
+async fn requests_the_payloads_of_held_blocks() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    for view in &test_data.views {
+        harness.force_set_proposal(view.view_number, view.proposal.data.clone());
+    }
+    let mut outbox = Outbox::new();
+    harness
+        .consensus
+        .apply(test_data.views[0].block_reconstructed_input(), &mut outbox);
+
+    let mut outbox = Outbox::new();
+    harness.consensus.request_restored_payloads(&mut outbox);
+    let requested: Vec<_> = outbox
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::RequestMissingPayload { view, .. } => Some(*view),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<_> = test_data.views[1..]
+        .iter()
+        .map(|view| view.view_number)
+        .collect();
+    assert_eq!(requested, expected);
 }

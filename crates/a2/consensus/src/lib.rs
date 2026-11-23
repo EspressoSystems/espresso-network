@@ -27,5 +27,7 @@ pub(crate) mod proposal;
 #[cfg(any(test, feature = "trace"))]
 pub mod trace;
 
+pub use fetch::PayloadSource;
+
 #[cfg(test)]
 mod tests;

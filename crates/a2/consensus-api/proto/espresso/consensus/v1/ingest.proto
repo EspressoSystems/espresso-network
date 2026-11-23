@@ -8,17 +8,15 @@ package espresso.consensus.v1;
 // themselves in `Body`, in the encoding consensus nodes exchange.
 service DecideLog {
   // The decided entries the node keeps, and those it decides from now on, shared out among the
-  // open subscriptions: each entry, and each payload that joins an entry later, goes to one of
-  // them, whichever asks for the next. An entry or payload sent to a subscription that ends
-  // before the entry is acknowledged goes to another one. An entry whose `payload_size` is set is
-  // followed by its payload, in chunks that add up to that size.
+  // open subscriptions: each entry goes to one of them, whichever asks for the next. An entry
+  // sent to a subscription that ends before the entry is acknowledged goes to another one. The
+  // entries carry no payloads; those come through `TakePayloads`.
   //
   // Entries come mostly in height order, but within `FINALITY_VIEWS` views of the newest decide
-  // a height that was missing can be decided later, and an entry sent without its payload can
-  // get it later, as `PayloadAdded` followed by its chunks. An entry whose view is
-  // `FINALITY_VIEWS` or more behind the newest decide's view gets neither; heights still missing
-  // then, and payloads still missing, must come from elsewhere. Every subscription gets
-  // `Progress`, the newest decide's view, whenever it advances, to tell when an entry is final.
+  // a height that was missing can be decided later. Heights still missing once
+  // `FINALITY_VIEWS` views behind the newest decide's view must come from elsewhere. Every
+  // subscription gets `Progress`, the newest decide's view, whenever it advances, to tell when
+  // an entry is final.
   //
   // The stream starts with `Start`, naming the earliest entry the node still keeps; entries
   // before it must come from elsewhere too.
@@ -29,8 +27,7 @@ service DecideLog {
   // node holds more of them.
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
 
-  // Frees the entries of the heights in the given ranges, and their payloads. The caller has
-  // made them durable, or given up on their payloads.
+  // Frees the entries of the heights in the given ranges. The caller has made them durable.
   rpc Ack(AckRequest) returns (AckResponse);
 
   // The payloads of blocks the node has, before they are decided, shared out among the open
@@ -76,11 +73,12 @@ message AckPayloadRequest {
 message SubscribeRequest {}
 
 message SubscribeResponse {
+  // Payload chunks and added payloads, which entries no longer carry.
+  reserved 3, 4;
+
   oneof event {
     Start start = 1;
     Decided decided = 2;
-    PayloadChunk payload_chunk = 3;
-    PayloadAdded payload_added = 4;
     StakeTable stake_table = 5;
     ServiceRecords service_records = 6;
     Progress progress = 7;
@@ -109,12 +107,6 @@ message ServiceRecords {
   repeated bytes records = 2;
 }
 
-// The payload of an entry sent earlier without it, followed by its chunks.
-message PayloadAdded {
-  uint64 height = 1;
-  uint64 payload_size = 2;
-}
-
 message Start {
   // The earliest entry the node keeps; absent if it keeps none.
   optional uint64 earliest_height = 1;
@@ -132,8 +124,8 @@ message Decided {
   // The block's payload commitment, as tagged base64.
   string payload_commitment = 6;
 
-  // The payload's size in bytes; absent if this node does not have the payload.
-  optional uint64 payload_size = 7;
+  // The payload's size, which entries no longer carry.
+  reserved 7;
 
   Body body = 8;
 }
@@ -189,7 +181,7 @@ message HeightRange {
 
 message AckResponse {}
 
-// A part of the payload announced by the `Decided` or `PayloadAdded` before it.
+// A part of the payload announced by the `PayloadHead` before it.
 message PayloadChunk {
   bytes data = 1;
 }

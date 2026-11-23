@@ -20,7 +20,7 @@ use espresso_keyset::{KeySet, KeySetOptions};
 use espresso_types::SeqTypes;
 use hotshot_types::{addr::NetAddr, traits::metrics::NoMetrics};
 use store_service::{MIN_KEEP_HEIGHTS, ingest};
-use tokio::{net::TcpListener, task::JoinSet};
+use tokio::{net::TcpListener, runtime::Handle, task::JoinSet};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
 
@@ -139,21 +139,42 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("loading the genesis file")?;
 
-    let backend: Arc<dyn Backend> = Arc::new(
-        PostgresBackend::connect(&options.database)
-            .await
-            .context("connecting to the database")?,
+    // The storage instance and the API instance run apart from consensus, which they would
+    // otherwise hold up whenever they keep every worker busy. Their connections and sockets are
+    // opened on their own runtime, whose driver then serves them.
+    let parts = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("deployment-store")
+        .enable_all()
+        .build()
+        .context("starting the runtime of the storage and API instances")?;
+    let handle = parts.handle().clone();
+    let (database, payload_store, payload_url, payload_dir, recent, api_port) = (
+        options.database,
+        options.payload_store,
+        options.payload_url,
+        options.payload_dir,
+        options.recent_payloads,
+        options.api_port,
     );
-    let payloads = PayloadStore::from_url(&options.payload_store, options.payload_url)
-        .context("opening the payload store")?;
-    let (store, uploader) = ChainStore::shared(backend.clone())
-        .with_recent_payloads(options.recent_payloads)
-        .with_staged_payloads(payloads, options.payload_dir)
-        .await
-        .context("staging payloads")?;
-    let listener = TcpListener::bind(("0.0.0.0", options.api_port))
-        .await
-        .with_context(|| format!("binding port {}", options.api_port))?;
+    let opened = handle.spawn(async move {
+        let backend: Arc<dyn Backend> = Arc::new(
+            PostgresBackend::connect(&database)
+                .await
+                .context("connecting to the database")?,
+        );
+        let payloads = PayloadStore::from_url(&payload_store, payload_url)
+            .context("opening the payload store")?;
+        let (store, uploader) = ChainStore::shared(backend.clone())
+            .with_recent_payloads(recent)
+            .with_staged_payloads(payloads, payload_dir)
+            .await
+            .context("staging payloads")?;
+        let listener = TcpListener::bind(("0.0.0.0", api_port))
+            .await
+            .with_context(|| format!("binding port {api_port}"))?;
+        anyhow::Ok((backend, store, uploader, listener))
+    });
+    let (backend, store, uploader, listener) = opened.await??;
 
     let repair = Repair {
         l1: options.l1_provider.clone(),
@@ -177,30 +198,45 @@ async fn main() -> anyhow::Result<()> {
         empty_block_delay: options.empty_block_delay,
     };
     let keep_heights = options.keep_heights;
-    run_with(config, Box::new(NoMetrics), move |local, tasks| {
-        tasks.spawn(async move {
+    let ran = run_with(config, Box::new(NoMetrics), move |local, tasks| {
+        tasks.spawn(on(handle.clone(), async move {
             uploader.run().await;
             anyhow!("the payload uploader stopped")
-        });
+        }));
         if let Some(keep) = keep_heights {
-            tasks.spawn(async move {
+            tasks.spawn(on(handle.clone(), async move {
                 store_service::prune(backend, keep).await;
                 anyhow!("pruning stopped")
-            });
+            }));
         }
-        run_store(local, store, listener, genesis, repair, tasks);
+        run_store(local, store, listener, genesis, repair, &handle, tasks);
     })
-    .await
+    .await;
+    parts.shutdown_background();
+    ran
+}
+
+/// Runs `task` on the runtime of `handle`, and ends when it does.
+async fn on(
+    handle: Handle,
+    task: impl Future<Output = anyhow::Error> + Send + 'static,
+) -> anyhow::Error {
+    match handle.spawn(task).await {
+        Ok(stopped) => stopped,
+        Err(err) => anyhow!("a task failed: {err}"),
+    }
 }
 
 /// Adds to `tasks` the storage instance, which takes what `local` offers into `store`, and the
-/// API instance over `store`, served on `listener` and repairing the store with `repair`.
+/// API instance over `store`, served on `listener` and repairing the store with `repair`, both on
+/// the runtime of `handle`.
 fn run_store(
     local: Local,
     store: ChainStore,
     listener: TcpListener,
     genesis: Genesis,
     repair: Repair,
+    handle: &Handle,
     tasks: &mut JoinSet<anyhow::Error>,
 ) {
     let Local {
@@ -209,14 +245,18 @@ fn run_store(
         consensus_api,
     } = local;
     let taker = store.clone();
-    tasks.spawn(async move { ingest::payloads::run_local(payloads, &taker).await });
+    tasks.spawn(on(handle.clone(), async move {
+        ingest::payloads::run_local(payloads, &taker).await
+    }));
     let ingester = store.clone();
-    tasks.spawn(async move {
+    tasks.spawn(on(handle.clone(), async move {
         ingest::run_local::<SeqTypes, _>(decide_log, &ingester)
             .await
             .context("ingesting the decide log")
-    });
-    tasks.spawn(async move { serve_api(store, consensus_api, listener, genesis, repair).await });
+    }));
+    tasks.spawn(on(handle.clone(), async move {
+        serve_api(store, consensus_api, listener, genesis, repair).await
+    }));
 }
 
 /// Serves the API over `store` on `listener`, submitting transactions to the consensus API at

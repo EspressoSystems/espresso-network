@@ -1088,6 +1088,7 @@ async fn coordinator_maker_wires_the_tracer_to_the_block_builder() {
             consensus_store::mem::MemStore::new(),
         )))
         .restored(Default::default())
+        .payload_sink(super::common::utils::acking_payload_sink())
         .metrics(&NoMetrics)
         .consensus_metrics(ConsensusMetricsValue::new(&NoMetrics))
         .leader_tracer(tracer.handle())

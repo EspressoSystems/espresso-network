@@ -62,16 +62,6 @@ impl State {
             Op::DeleteRange { table, keys } => {
                 self.table_mut(table).retain(|k, _| !keys.contains(k));
             },
-            Op::Copy {
-                from,
-                from_key,
-                to,
-                to_key,
-            } => {
-                if let Some(value) = self.get(from, from_key) {
-                    self.table_mut(to).insert(to_key.clone(), value);
-                }
-            },
             Op::DropTable { table } => {
                 self.tables.remove(table);
             },
@@ -106,10 +96,6 @@ impl Snapshot for MemSnapshot {
             .flat_map(|(t, bounds)| t.range::<[u8], _>(bounds))
             .map(|(k, v)| Ok((k.clone(), v.clone())));
         Ok(entries)
-    }
-
-    fn value_len(&self, table: &Table, key: &[u8]) -> Result<Option<u64>, Error> {
-        Ok(self.0.get(table, key).map(|v| v.len() as u64))
     }
 
     fn usage(&self, table: &Table) -> Result<Usage, Error> {

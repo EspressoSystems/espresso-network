@@ -51,7 +51,7 @@ use crate::{
     tests::common::{
         coordinator_builder::{UpgradeSetup, build_test_coordinator},
         utils::{
-            StakeTableSchedule, mock_membership_with_client,
+            StakeTableSchedule, TestPayloadSource, TestPayloadStore, mock_membership_with_client,
             mock_membership_with_client_and_schedule,
         },
     },
@@ -141,6 +141,10 @@ pub struct TestRunner {
     /// Per-node consensus store, created and kept like `node_storages`.
     #[builder(skip)]
     node_stores: Vec<ConsensusStore<TestTypes, MemStore>>,
+
+    /// The payloads each node's storage instance acknowledged, kept like `node_storages`.
+    #[builder(skip)]
+    node_payloads: Vec<TestPayloadStore>,
 
     /// Node indices that are offline for the entire test.  Down nodes do
     /// not run a coordinator.  Views where a down node is leader are
@@ -479,6 +483,9 @@ impl TestRunner {
             .map(|_| TestStorage::default())
             .collect();
         self.node_stores = (0..self.num_nodes).map(|_| new_store()).collect();
+        self.node_payloads = (0..self.num_nodes)
+            .map(|_| TestPayloadStore::default())
+            .collect();
         self.node_locks = vec![None; self.num_nodes];
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
@@ -563,6 +570,7 @@ impl TestRunner {
                     config: self.upgrade_config.clone(),
                 },
                 external_tx,
+                self.payloads_of(i),
             )
             .await;
 
@@ -668,6 +676,7 @@ impl TestRunner {
                                 } else {
                                     self.node_storages[change.idx] = TestStorage::default();
                                     self.node_stores[change.idx] = new_store();
+                                    self.node_payloads[change.idx] = TestPayloadStore::default();
                                 }
                                 let upgrade_lock = self.make_upgrade_lock(change.idx).await;
                                 let net = create_network(
@@ -704,6 +713,7 @@ impl TestRunner {
                                         config: self.upgrade_config.clone(),
                                     },
                                     external_tx,
+                                    self.payloads_of(change.idx),
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -1088,6 +1098,22 @@ async fn run_node(
                 return;
             }
         }
+    }
+}
+
+impl TestRunner {
+    /// Node `idx`'s payload store, and its payload source: its own store first, then the
+    /// other nodes'.
+    fn payloads_of(&self, idx: usize) -> (TestPayloadStore, TestPayloadSource) {
+        let own = self.node_payloads[idx].clone();
+        let others = self
+            .node_payloads
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != idx)
+            .map(|(_, store)| store.clone());
+        let source = TestPayloadSource(std::iter::once(own.clone()).chain(others).collect());
+        (own, source)
     }
 }
 

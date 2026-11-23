@@ -756,6 +756,62 @@ impl TestData {
 /// The stake table capacity a harness's consensus commits to stake tables with.
 pub const STAKE_TABLE_CAPACITY: usize = 10;
 
+/// A payload sink whose payloads a task acknowledges as soon as they are offered, as a storage
+/// instance that stores at once would.
+pub fn acking_payload_sink() -> (
+    consensus_api::payloads::PayloadQueue,
+    consensus_api::payloads::Acks,
+) {
+    TestPayloadStore::default().sink()
+}
+
+/// The payloads a node's storage instance acknowledged, by commitment, which a node keeps across
+/// its restarts as a deployment's store does.
+#[derive(Clone, Default)]
+pub struct TestPayloadStore(Arc<Mutex<HashMap<String, consensus_store::Bytes>>>);
+
+impl TestPayloadStore {
+    /// A payload sink whose payloads a task stores here and acknowledges as soon as they are
+    /// offered.
+    pub fn sink(
+        &self,
+    ) -> (
+        consensus_api::payloads::PayloadQueue,
+        consensus_api::payloads::Acks,
+    ) {
+        let (queue, acks) = consensus_api::payloads::PayloadQueue::new();
+        let (storing, payloads) = (queue.clone(), self.0.clone());
+        tokio::spawn(async move {
+            let mut subscription = storing.subscribe();
+            while let Some(offer) = subscription.next().await {
+                payloads
+                    .lock()
+                    .insert(offer.commitment.clone(), offer.payload.clone());
+                storing.ack((offer.view, offer.commitment.clone()));
+            }
+        });
+        (queue, acks)
+    }
+}
+
+/// The payload source of a node: its own store first, then the other nodes', as a node asks its
+/// own API service before the others.
+pub struct TestPayloadSource(pub Vec<TestPayloadStore>);
+
+#[async_trait::async_trait]
+impl crate::PayloadSource for TestPayloadSource {
+    async fn payload(
+        &self,
+        commitment: VidCommitment2,
+    ) -> anyhow::Result<Option<consensus_store::Bytes>> {
+        let key = VidCommitment::V2(commitment).to_string();
+        Ok(self
+            .0
+            .iter()
+            .find_map(|store| store.0.lock().get(&key).cloned()))
+    }
+}
+
 /// An [`EpochLength`] from a height the test knows is positive.
 pub fn epoch_length(epoch_height: u64) -> EpochLength {
     NonZeroU64::new(epoch_height)

@@ -60,7 +60,7 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
         let entries = self.blocking(move |s| s.decided_from(from, limit)).await?;
         entries
             .into_iter()
-            .map(|(decided, size)| entry(decided, size, epoch_height))
+            .map(|decided| entry(decided, epoch_height))
             .collect()
     }
 
@@ -74,10 +74,6 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
 
     async fn ack(&self, ranges: Vec<Range<u64>>) -> Result<(), Error> {
         Ok(self.store.ack(&ranges).await?)
-    }
-
-    async fn payload(&self, height: u64) -> Result<Option<Bytes>, Error> {
-        self.blocking(move |s| s.decided_payload(height)).await
     }
 
     async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, Error> {
@@ -99,11 +95,7 @@ impl<T: NodeType, S: Store> Source for IngestSource<T, S> {
 }
 
 /// A decide log entry in the API's form.
-fn entry<T: NodeType>(
-    decided: Decided<T>,
-    payload_size: Option<u64>,
-    epoch_height: u64,
-) -> Result<DecidedEntry, Error> {
+fn entry<T: NodeType>(decided: Decided<T>, epoch_height: u64) -> Result<DecidedEntry, Error> {
     let leaf = &decided.leaf;
     let body = Body {
         format: BODY_FORMAT,
@@ -143,7 +135,6 @@ fn entry<T: NodeType>(
         leaf_commitment: leaf.commit().to_string(),
         parent_commitment: leaf.parent_commitment().to_string(),
         payload_commitment: leaf.payload_commitment().to_string(),
-        payload_size,
         body: Some(body),
     })
 }

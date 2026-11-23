@@ -217,7 +217,8 @@ impl TestHarness {
             .storage({
                 let store = crate::store::ConsensusStore::new(Arc::new(MemStore::new()));
                 let restored = store.load().expect("a new store loads");
-                crate::storage::Storage::new(store, &private_key, &restored)
+                let (queue, acks) = super::utils::acking_payload_sink();
+                crate::storage::Storage::new(store, &private_key, &restored, queue, acks)
             })
             .client(client)
             .membership_coordinator(membership)

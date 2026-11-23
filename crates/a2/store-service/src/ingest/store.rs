@@ -23,7 +23,8 @@ impl Sink<SeqTypes> for ChainStore {
             cert1: block.cert1,
         };
         let parts = Parts {
-            payload: block.payload.map(Into::into),
+            // The payload comes through the payload offers.
+            payload: None,
             vid_common: block.vid_common,
             cert2: block.cert2,
             state_cert: block.state_cert,
@@ -33,14 +34,6 @@ impl Sink<SeqTypes> for ChainStore {
             payload_stored: false,
         };
         self.put(&item, &parts).await
-    }
-
-    async fn add_payload(&self, height: u64, payload: Vec<u8>) -> anyhow::Result<()> {
-        let parts = Parts {
-            payload: Some(payload.into()),
-            ..Default::default()
-        };
-        self.put_parts(height, &parts).await
     }
 
     async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2>> {
@@ -130,7 +123,7 @@ mod tests {
 
     use super::*;
 
-    /// A block reaches the store as an item and a payload, and ingesting resumes after it.
+    /// A block reaches the store as an item, and ingesting resumes after it.
     #[tokio::test]
     async fn stores_the_block_and_resumes_after_it() {
         let instance = NodeState::mock().with_current_version(NEW_PROTOCOL_VERSION);
@@ -145,7 +138,6 @@ mod tests {
             cert2: None,
             vid_common: None,
             state_cert: None,
-            payload: Some(b"payload".to_vec()),
             state: None,
         };
         let store = ChainStore::new(MemBackend::default());
@@ -156,10 +148,6 @@ mod tests {
         let item = store.item(0).await.unwrap().unwrap();
         assert_eq!(item.leaf, block.leaf);
         assert_eq!(item.cert1, block.cert1);
-        assert_eq!(
-            store.payload(0).await.unwrap().as_deref(),
-            Some(&b"payload"[..])
-        );
     }
 
     /// The state consensus sent with a block, and the stake tables and records of the stream,
@@ -179,7 +167,6 @@ mod tests {
             cert2: None,
             vid_common: None,
             state_cert: None,
-            payload: None,
             state: Some(State {
                 frontier: Bytes::new(),
                 chain_config: bincode::serialize(&instance.chain_config).unwrap().into(),

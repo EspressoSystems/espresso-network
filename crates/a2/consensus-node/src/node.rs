@@ -144,6 +144,8 @@ pub async fn run_with(
     let (store, restored) = crate::store::open(store).await?;
     let membership_store = MembershipStore::new(store.clone());
     let catchup = Arc::new(ApiCatchup::new(api_url.clone(), bootstrap, store.clone()));
+    // A payload missing after a restart comes from the deployment's store first, as state does.
+    let payload_source: Arc<dyn consensus::PayloadSource> = catchup.clone();
     let state = node_state(
         &genesis,
         &network_config,
@@ -235,6 +237,7 @@ pub async fn run_with(
         .decide_log_limit(decide_log_limit)
         .decided_state(Box::new(decided_state))
         .payload_sink((payloads.clone(), payload_acks))
+        .payload_source(payload_source)
         .metrics(&*metrics)
         .consensus_metrics(ConsensusMetricsValue::new(&*metrics))
         .maybe_anchor_cert2(anchor_cert2)

@@ -13,7 +13,7 @@ use hotshot_query_service::testing::{
     chain::{MockBlock, MockChain},
     mocks::MockTypes,
 };
-use hotshot_types::{data::VidCommon, traits::block_contents::EncodeBytes};
+use hotshot_types::data::VidCommon;
 use tokio::{sync::watch, time::timeout};
 
 use super::*;
@@ -21,7 +21,6 @@ use super::*;
 /// A decide log in memory, served over the real consensus API.
 struct FakeLog {
     entries: Mutex<BTreeMap<u64, Decided>>,
-    payloads: Mutex<BTreeMap<u64, Bytes>>,
     changes: watch::Sender<u64>,
     acked: Mutex<Vec<Range<u64>>>,
     stake_tables: Mutex<BTreeMap<u64, Bytes>>,
@@ -32,7 +31,6 @@ impl FakeLog {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             entries: Mutex::default(),
-            payloads: Mutex::default(),
             changes: watch::channel(0).0,
             acked: Mutex::default(),
             stake_tables: Mutex::default(),
@@ -40,38 +38,14 @@ impl FakeLog {
         })
     }
 
-    /// Decides the blocks of `chain` at `heights`, with their payloads; the newest carries the
-    /// `Certificate2`.
+    /// Decides the blocks of `chain` at `heights`; the newest carries the `Certificate2`.
     fn decide(&self, chain: &MockChain, heights: std::ops::RangeInclusive<usize>) {
         let blocks = &chain.blocks()[heights];
         let newest = blocks.last().unwrap().height();
         for block in blocks {
-            let mut entry = entry(chain, block, block.height() == newest);
-            entry.payload_size = Some(payload_of(block).len() as u64);
-            self.payloads
-                .lock()
-                .unwrap()
-                .insert(block.height(), payload_of(block));
+            let entry = entry(chain, block, block.height() == newest);
             self.entries.lock().unwrap().insert(block.height(), entry);
         }
-        self.changed();
-    }
-
-    /// Decides the block of `chain` at `height` without its payload.
-    fn decide_without_payload(&self, chain: &MockChain, height: usize) {
-        let block = &chain.blocks()[height];
-        let entry = entry(chain, block, true);
-        self.entries.lock().unwrap().insert(block.height(), entry);
-        self.changed();
-    }
-
-    /// Adds the payload of the block of `chain` at `height`, decided without it.
-    fn add_payload(&self, chain: &MockChain, height: usize) {
-        let block = &chain.blocks()[height];
-        self.payloads
-            .lock()
-            .unwrap()
-            .insert(block.height(), payload_of(block));
         self.changed();
     }
 
@@ -92,10 +66,6 @@ impl FakeLog {
     }
 }
 
-fn payload_of(block: &MockBlock) -> Bytes {
-    block.block.payload().encode().to_vec().into()
-}
-
 fn entry(chain: &MockChain, block: &MockBlock, newest: bool) -> Decided {
     let leaf = block.leaf.leaf();
     let vid_common = match block.vid_common.common() {
@@ -109,7 +79,6 @@ fn entry(chain: &MockChain, block: &MockBlock, newest: bool) -> Decided {
         leaf_commitment: leaf.commit().to_string(),
         parent_commitment: leaf.parent_commitment().to_string(),
         payload_commitment: leaf.payload_commitment().to_string(),
-        payload_size: None,
         body: Some(Body {
             format: BODY_FORMAT,
             leaf: bincode::serialize(leaf).unwrap().into(),
@@ -152,10 +121,6 @@ impl Source for FakeLog {
         Ok(())
     }
 
-    async fn payload(&self, height: u64) -> Result<Option<Bytes>, ApiError> {
-        Ok(self.payloads.lock().unwrap().get(&height).cloned())
-    }
-
     async fn stake_table(&self, epoch: u64) -> Result<Option<Bytes>, ApiError> {
         Ok(self.stake_tables.lock().unwrap().get(&epoch).cloned())
     }
@@ -171,10 +136,12 @@ impl Source for FakeLog {
     }
 }
 
-/// A sink in memory, holding the blocks the instance appends after `before`.
+/// A sink in memory, holding the blocks the instance appends after `before`, and the payloads of
+/// all of them but those it is told it lacks.
 struct MemSink {
     before: Option<Leaf2<MockTypes>>,
     blocks: Mutex<BTreeMap<u64, Block<MockTypes>>>,
+    lacking_payloads: Mutex<std::collections::BTreeSet<u64>>,
     appended: Mutex<Vec<u64>>,
     stake_tables: Mutex<BTreeMap<u64, Bytes>>,
     records: Mutex<BTreeMap<u64, Vec<Bytes>>>,
@@ -190,6 +157,7 @@ impl MemSink {
         Arc::new(Self {
             before,
             blocks: Mutex::default(),
+            lacking_payloads: Mutex::default(),
             appended: Mutex::default(),
             stake_tables: Mutex::default(),
             records: Mutex::default(),
@@ -204,6 +172,11 @@ impl MemSink {
     fn block(&self, height: u64) -> Option<Block<MockTypes>> {
         self.blocks.lock().unwrap().get(&height).cloned()
     }
+
+    /// Makes the sink lack the payload of `height`, which no storage instance stored yet.
+    fn lack_payload(&self, height: u64) {
+        self.lacking_payloads.lock().unwrap().insert(height);
+    }
 }
 
 #[async_trait]
@@ -212,13 +185,6 @@ impl Sink<MockTypes> for MemSink {
         let height = block.leaf.height();
         self.blocks.lock().unwrap().insert(height, block);
         self.appended.lock().unwrap().push(height);
-        Ok(())
-    }
-
-    async fn add_payload(&self, height: u64, payload: Vec<u8>) -> anyhow::Result<()> {
-        let mut blocks = self.blocks.lock().unwrap();
-        let block = blocks.get_mut(&height).context("no block at the height")?;
-        block.payload = Some(payload);
         Ok(())
     }
 
@@ -237,9 +203,10 @@ impl Sink<MockTypes> for MemSink {
     }
 
     async fn has_payload(&self, height: u64) -> anyhow::Result<bool> {
-        Ok(self
-            .block(height)
-            .is_some_and(|block| block.payload.is_some()))
+        Ok(
+            self.block(height).is_some()
+                && !self.lacking_payloads.lock().unwrap().contains(&height),
+        )
     }
 
     async fn put_stake_table(&self, epoch: u64, table: Bytes) -> anyhow::Result<()> {
@@ -297,8 +264,8 @@ async fn chain(blocks: usize) -> MockChain {
     chain
 }
 
-/// Blocks reach the sink with their payload, VID common and certificates, and each one is
-/// acknowledged once stored.
+/// Blocks reach the sink with their VID common and certificates, and each one is acknowledged
+/// once stored, the store holding its payload.
 #[tokio::test]
 async fn ingests_decided_blocks() {
     let chain = chain(4).await;
@@ -320,10 +287,6 @@ async fn ingests_decided_blocks() {
         let stored = sink.block(expected.height()).unwrap();
         assert_eq!(stored.leaf.commit(), expected.leaf.leaf().commit());
         assert_eq!(&stored.cert1, expected.leaf.qc());
-        assert_eq!(
-            stored.payload.as_deref(),
-            Some(&*expected.block.payload().encode())
-        );
     }
     assert!(
         sink.block(1).unwrap().cert2.is_none(),
@@ -568,34 +531,6 @@ async fn stores_heights_decided_late() {
     assert!(!instance.is_finished());
 }
 
-/// A payload added after its entry reaches the sink, and the height is acknowledged only then.
-#[tokio::test]
-async fn takes_a_payload_added_later() {
-    let chain = chain(2).await;
-    let log = FakeLog::new();
-    log.decide(&chain, 0..=0);
-    log.decide_without_payload(&chain, 1);
-    log.decide(&chain, 2..=2);
-    let sink = MemSink::new();
-    let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
-
-    eventually("the complete heights are acknowledged", || {
-        log.acked() == vec![0, 2]
-    })
-    .await;
-    assert_eq!(sink.block(1).unwrap().payload, None);
-
-    log.add_payload(&chain, 1);
-    eventually("the late payload is acknowledged", || {
-        log.acked() == vec![0, 1, 2]
-    })
-    .await;
-    assert_eq!(
-        sink.block(1).unwrap().payload.as_deref(),
-        Some(&*chain.blocks()[1].block.payload().encode())
-    );
-}
-
 /// A height without its payload is acknowledged once it is final, and the payload is left to
 /// the API service.
 #[tokio::test]
@@ -603,9 +538,9 @@ async fn acknowledges_a_final_height_without_its_payload() {
     let blocks = FINALITY_VIEWS as usize + 2;
     let chain = chain(blocks).await;
     let log = FakeLog::new();
-    log.decide(&chain, 0..=0);
-    log.decide_without_payload(&chain, 1);
+    log.decide(&chain, 0..=1);
     let sink = MemSink::new();
+    sink.lack_payload(1);
     let _instance = spawn_instance(serve(log.clone()).await, sink.clone());
 
     eventually("the first height is acknowledged", || {
@@ -617,7 +552,6 @@ async fn acknowledges_a_final_height_without_its_payload() {
         log.acked().contains(&1)
     })
     .await;
-    assert_eq!(sink.block(1).unwrap().payload, None);
 }
 
 /// Heights consensus no longer holds are not waited for.
@@ -652,41 +586,8 @@ async fn instances_share_the_decide_log() {
     })
     .await;
     for block in chain.blocks() {
-        let stored = sink.block(block.height()).expect("the block is stored");
-        assert_eq!(stored.payload, Some(payload_of(block).to_vec()));
+        assert!(sink.block(block.height()).is_some(), "the block is stored");
     }
-}
-
-/// A payload that joins an entry another instance stored without it is acknowledged by the
-/// instance that stores the payload.
-#[tokio::test]
-async fn acknowledges_a_late_payload_whose_entry_went_elsewhere() {
-    let chain = chain(1).await;
-    let log = FakeLog::new();
-    log.decide(&chain, 0..=0);
-    log.decide_without_payload(&chain, 1);
-    let sink = MemSink::new();
-    let _other = spawn_instance(serve(log.clone()).await, sink.clone());
-    eventually("the entry is stored", || sink.block(1).is_some()).await;
-
-    // This instance gets only the payload.
-    let payload = payload_of(&chain.blocks()[1]);
-    let mut state = Chain::default();
-    let mut receiving = None;
-    let added = Event::PayloadAdded(consensus_api::proto::PayloadAdded {
-        height: 1,
-        payload_size: payload.len() as u64,
-    });
-    receive(sink.as_ref(), &mut state, &mut receiving, added)
-        .await
-        .unwrap();
-    if !payload.is_empty() {
-        let chunk = Event::PayloadChunk(consensus_api::proto::PayloadChunk { data: payload });
-        receive(sink.as_ref(), &mut state, &mut receiving, chunk)
-            .await
-            .unwrap();
-    }
-    assert_eq!(state.take_ackable(), vec![HeightRange { start: 1, end: 2 }]);
 }
 
 /// An offered payload is stored by its commitment and acknowledged.

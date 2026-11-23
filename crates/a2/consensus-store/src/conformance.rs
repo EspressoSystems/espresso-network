@@ -6,7 +6,7 @@ use std::ops::Bound;
 
 use bytes::Bytes;
 
-use crate::{Batch, EXTERN_THRESHOLD, KeyRange, Snapshot, Store, Table, Usage, key};
+use crate::{Batch, KeyRange, Snapshot, Store, Table, Usage, key};
 
 /// Runs every check, each on a fresh store from `fresh`. Panics on the first failure.
 pub fn run<S: Store>(mut fresh: impl FnMut() -> S) {
@@ -15,7 +15,6 @@ pub fn run<S: Store>(mut fresh: impl FnMut() -> S) {
         ops_apply_in_order,
         range_bounds,
         delete_range,
-        copy,
         drop_table,
         usage,
         large_values,
@@ -119,7 +118,7 @@ fn delete_range<S: Store>(store: &S) {
             batch.put(
                 &t,
                 key::u64(i).to_vec(),
-                big(i as usize % 2 * EXTERN_THRESHOLD + 1, i),
+                big(i as usize % 2 * (1 << 20) + 1, i),
             );
         }
         apply(store, &batch);
@@ -139,51 +138,6 @@ fn delete_range<S: Store>(store: &S) {
     }
 }
 
-fn copy<S: Store>(store: &S) {
-    let from = table("from");
-    let to = table("to");
-    let large = big(3 * EXTERN_THRESHOLD, 2);
-    let other_large = big(2 * EXTERN_THRESHOLD, 3);
-    apply(
-        store,
-        Batch::new()
-            .put(&from, "small", "s")
-            .put(&from, "large", large.clone())
-            .put(&to, "kept", "x")
-            .put(&to, "overwritten", other_large),
-    );
-    apply(
-        store,
-        Batch::new()
-            .copy(&from, "small", &to, "small")
-            .copy(&from, "large", &to, "large")
-            .copy(&from, "large", &to, "overwritten")
-            .copy(&from, "absent", &to, "kept")
-            .copy(&from, "large", &from, "large"),
-    );
-    let snap = store.snapshot().unwrap();
-    assert_eq!(get(&snap, &to, "small"), Some(bytes("s")));
-    assert_eq!(get(&snap, &to, "large"), Some(large.clone()));
-    assert_eq!(get(&snap, &to, "overwritten"), Some(large.clone()));
-    assert_eq!(get(&snap, &to, "kept"), Some(bytes("x")));
-    assert_eq!(get(&snap, &from, "large"), Some(large.clone()));
-    assert_usage_matches_rows(&snap, &[&from, &to]);
-
-    // Copies outlive their source, and changing one changes no other.
-    apply(
-        store,
-        Batch::new()
-            .drop_table(&from)
-            .put(&to, "small", "changed")
-            .delete(&to, "overwritten"),
-    );
-    let snap = store.snapshot().unwrap();
-    assert_eq!(get(&snap, &to, "large"), Some(large));
-    assert_eq!(get(&snap, &to, "small"), Some(bytes("changed")));
-    assert_eq!(get(&snap, &from, "small"), None);
-    assert_usage_matches_rows(&snap, &[&from, &to]);
-}
-
 fn drop_table<S: Store>(store: &S) {
     let dropped = table("dropped");
     let kept = table("kept");
@@ -191,8 +145,8 @@ fn drop_table<S: Store>(store: &S) {
         store,
         Batch::new()
             .put(&dropped, "a", "1")
-            .put(&dropped, "b", big(EXTERN_THRESHOLD + 1, 4))
-            .put(&kept, "a", big(EXTERN_THRESHOLD + 1, 5)),
+            .put(&dropped, "b", big(1 << 20, 4))
+            .put(&kept, "a", big(1 << 20, 5)),
     );
     apply(
         store,
@@ -204,7 +158,7 @@ fn drop_table<S: Store>(store: &S) {
     let snap = store.snapshot().unwrap();
     assert!(entries(&snap, &dropped, &KeyRange::all()).is_empty());
     assert_eq!(snap.usage(&dropped).unwrap(), Usage::default());
-    assert_eq!(get(&snap, &kept, "a"), Some(big(EXTERN_THRESHOLD + 1, 5)));
+    assert_eq!(get(&snap, &kept, "a"), Some(big(1 << 20, 5)));
 
     apply(store, Batch::new().put(&dropped, "c", "3"));
     let snap = store.snapshot().unwrap();
@@ -220,41 +174,29 @@ fn usage<S: Store>(store: &S) {
     apply(
         store,
         Batch::new()
-            .put(&t, "inline", big(EXTERN_THRESHOLD, 6))
-            .put(&t, "extern", big(EXTERN_THRESHOLD + 1, 7)),
+            .put(&t, "small", "1")
+            .put(&t, "large", big(1 << 20, 7)),
     );
     let snap = store.snapshot().unwrap();
     assert_eq!(
         snap.usage(&t).unwrap(),
         Usage {
             rows: 2,
-            inline_bytes: ("inline".len() + EXTERN_THRESHOLD + "extern".len()) as u64,
-            extern_bytes: EXTERN_THRESHOLD as u64 + 1,
+            bytes: ("small".len() + 1 + "large".len() + (1 << 20)) as u64,
         }
     );
 
-    apply(
-        store,
-        Batch::new().put(&t, "extern", "now inline").put(
-            &t,
-            "inline",
-            big(EXTERN_THRESHOLD + 2, 8),
-        ),
-    );
+    apply(store, Batch::new().put(&t, "large", "now small"));
     let snap = store.snapshot().unwrap();
     assert_eq!(
         snap.usage(&t).unwrap(),
         Usage {
             rows: 2,
-            inline_bytes: ("inline".len() + "extern".len() + "now inline".len()) as u64,
-            extern_bytes: EXTERN_THRESHOLD as u64 + 2,
+            bytes: ("small".len() + 1 + "large".len() + "now small".len()) as u64,
         }
     );
 
-    apply(
-        store,
-        Batch::new().delete(&t, "inline").delete(&t, "extern"),
-    );
+    apply(store, Batch::new().delete(&t, "small").delete(&t, "large"));
     assert_eq!(
         store.snapshot().unwrap().usage(&t).unwrap(),
         Usage::default()
@@ -263,15 +205,7 @@ fn usage<S: Store>(store: &S) {
 
 fn large_values<S: Store>(store: &S) {
     let t = table("t");
-    let lens = [
-        0,
-        1,
-        EXTERN_THRESHOLD - 1,
-        EXTERN_THRESHOLD,
-        EXTERN_THRESHOLD + 1,
-        3 * EXTERN_THRESHOLD,
-        4 << 20,
-    ];
+    let lens = [0, 1, 64 << 10, 1 << 20, 4 << 20];
     let mut batch = Batch::new();
     for (i, len) in lens.iter().enumerate() {
         batch.put(&t, key::u64(i as u64).to_vec(), big(*len, i as u64));
@@ -285,13 +219,7 @@ fn large_values<S: Store>(store: &S) {
             Some(big(*len, i as u64)),
             "length {len}"
         );
-        assert_eq!(
-            snap.value_len(&t, &key::u64(i as u64)).unwrap(),
-            Some(*len as u64)
-        );
     }
-    assert_eq!(snap.value_len(&t, b"absent").unwrap(), None);
-    assert_eq!(snap.value_len(&table("never"), b"k").unwrap(), None);
     let all = entries(&snap, &t, &KeyRange::all());
     assert_eq!(all.len(), lens.len());
     for ((_, v), len) in all.iter().zip(lens) {
@@ -302,7 +230,7 @@ fn large_values<S: Store>(store: &S) {
 
 fn snapshot_isolation<S: Store>(store: &S) {
     let t = table("t");
-    let large = big(2 * EXTERN_THRESHOLD, 9);
+    let large = big(1 << 20, 9);
     apply(
         store,
         Batch::new()
@@ -313,11 +241,10 @@ fn snapshot_isolation<S: Store>(store: &S) {
 
     apply(
         store,
-        Batch::new().put(&t, "a", "2").delete(&t, "large").put(
-            &t,
-            "c",
-            big(2 * EXTERN_THRESHOLD, 10),
-        ),
+        Batch::new()
+            .put(&t, "a", "2")
+            .delete(&t, "large")
+            .put(&t, "c", big(1 << 20, 10)),
     );
     apply(store, Batch::new().drop_table(&t));
     let after = store.snapshot().unwrap();

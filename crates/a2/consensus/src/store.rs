@@ -7,7 +7,7 @@
 //! sort first and garbage collection is a range delete. Values are bincode.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     marker::PhantomData,
     ops::Range,
     sync::{Arc, LazyLock},
@@ -18,7 +18,7 @@ use app_tables::{AppTables, AppWrite, TableName};
 use async_trait::async_trait;
 use consensus_store::{Batch, Bytes, KeyRange, Snapshot, Store, Table, key};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
     simple_certificate::{
@@ -38,14 +38,8 @@ static SAFETY: LazyLock<Table> = LazyLock::new(|| table("safety"));
 /// View to the proposal this node voted for or made.
 static PROPOSALS: LazyLock<Table> = LazyLock::new(|| table("proposals"));
 
-/// `(view, payload commitment)` to the encoded block payload.
-static PAYLOADS: LazyLock<Table> = LazyLock::new(|| table("payloads"));
-
 /// Height to the decided leaf there, until the store acknowledges it.
 static DECIDE_LOG: LazyLock<Table> = LazyLock::new(|| table("decide-log"));
-
-/// Height to the payload of the block decided there, freed with its decide log entry.
-static DECIDED_PAYLOADS: LazyLock<Table> = LazyLock::new(|| table("decided-payloads"));
 
 /// View of the epoch root to its light client state certificate, until the view is decided.
 static PENDING_STATE_CERTS: LazyLock<Table> = LazyLock::new(|| table("pending-state-certs"));
@@ -100,11 +94,11 @@ impl<T, S> Clone for ConsensusStore<T, S> {
 
 /// Announcements of durable writes, for readers that follow the store.
 struct Changes {
-    /// Counts the durable writes to the decide log: new entries, entries of heights decided
-    /// late, and payloads stored after their entry.
+    /// Counts the durable writes to the decide log: new entries, and entries of heights decided
+    /// late.
     decide_log_writes: watch::Sender<u64>,
 
-    /// The bytes the decide log takes up, with the payloads of its entries.
+    /// The bytes the decide log takes up.
     decide_log_bytes: watch::Sender<u64>,
 
     /// The writer of the store while one runs, which every other write goes through.
@@ -182,9 +176,6 @@ pub struct Restored<T: NodeType> {
     /// The state certificate of the latest decided epoch root.
     pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
 
-    /// The blocks whose payload is on disk.
-    pub payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
-
     /// The latest decided leaf.
     pub anchor: Option<Anchor<T>>,
 
@@ -202,7 +193,6 @@ impl<T: NodeType> Default for Restored<T> {
             restart_view: None,
             upgrade_cert: None,
             state_cert: None,
-            payloads: BTreeSet::new(),
             anchor: None,
             service_records: Vec::new(),
         }
@@ -218,9 +208,6 @@ pub struct Import<T: NodeType> {
     pub restart_view: Option<ViewNumber>,
     pub upgrade_cert: Option<UpgradeCertificate<T>>,
     pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
-
-    /// Encoded payloads of the imported proposals' blocks, by view and payload commitment.
-    pub payloads: Vec<(ViewNumber, VidCommitment2, Arc<[u8]>)>,
 
     /// The latest decided leaf.
     pub anchor: Option<Anchor<T>>,
@@ -269,13 +256,12 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     }
 
     /// Changes after each durable write to the decide log. Writes can add entries below the
-    /// newest, of heights decided late, and payloads of entries already written.
+    /// newest, of heights decided late.
     pub fn decide_log_writes(&self) -> watch::Receiver<u64> {
         self.changes.decide_log_writes.subscribe()
     }
 
-    /// The bytes the decide log takes up, with the payloads of its entries, as it grows and
-    /// as the store acknowledges entries.
+    /// The bytes the decide log takes up, as it grows and as the store acknowledges entries.
     pub fn decide_log_bytes(&self) -> watch::Receiver<u64> {
         self.changes.decide_log_bytes.subscribe()
     }
@@ -305,11 +291,6 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             let p: SignedProposal<T, Proposal<T>> = decode(&v).context("proposal")?;
             proposals.insert(view_of(&k)?, p);
         }
-        let mut payloads = BTreeSet::new();
-        for entry in snap.range(&PAYLOADS, &KeyRange::all())? {
-            let (k, _) = entry?;
-            payloads.insert(payload_key_decode(&k)?);
-        }
         let state_cert = match snap
             .range(&STATE_CERTS, &KeyRange::all())?
             .last()
@@ -330,27 +311,18 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             restart_view: get_view(&snap, RESTART_VIEW)?,
             upgrade_cert: get(&snap, &SAFETY, UPGRADE_CERT)?,
             state_cert,
-            payloads,
             anchor: get(&snap, &SAFETY, ANCHOR)?,
             service_records,
         })
     }
 
-    /// At most `limit` decide log entries from `height` on, in height order, each with the size
-    /// of its payload. The size is `None` if this node did not have the payload when the leaf
-    /// was decided. Payloads are read one at a time, with [`Self::decided_payload`].
-    pub fn decided_from(
-        &self,
-        height: u64,
-        limit: usize,
-    ) -> anyhow::Result<Vec<(Decided<T>, Option<u64>)>> {
+    /// At most `limit` decide log entries from `height` on, in height order.
+    pub fn decided_from(&self, height: u64, limit: usize) -> anyhow::Result<Vec<Decided<T>>> {
         let snap = self.store.snapshot()?;
         let from = KeyRange::starting_at(Bytes::copy_from_slice(&key::u64(height)));
         let mut entries = Vec::new();
         for entry in snap.range(&DECIDE_LOG, &from)?.take(limit) {
-            let (k, v) = entry?;
-            let decided: Decided<T> = decode(&v).context("decide log entry")?;
-            entries.push((decided, snap.value_len(&DECIDED_PAYLOADS, &k)?));
+            entries.push(decode(&entry?.1).context("decide log entry")?);
         }
         Ok(entries)
     }
@@ -362,12 +334,6 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             Some(entry) => Ok(key::decode_u64(&entry?.0)),
             None => Ok(None),
         }
-    }
-
-    /// The payload of the block decided at `height`, if the decide log holds it.
-    pub fn decided_payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
-        let snap = self.store.snapshot()?;
-        Ok(snap.get(&DECIDED_PAYLOADS, &key::u64(height))?)
     }
 
     /// The encoded records of `epoch`, or of the latest epoch with records if `epoch` is `None`,
@@ -403,26 +369,13 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         Ok(Some((epoch, records)))
     }
 
-    /// Frees the decide log entries of the heights in `ranges`, and their payloads.
+    /// Frees the decide log entries of the heights in `ranges`.
     pub async fn ack(&self, ranges: &[Range<u64>]) -> anyhow::Result<()> {
         let mut batch = Batch::new();
         for range in ranges.iter().filter(|range| !range.is_empty()) {
             drop_decided(&mut batch, range);
         }
         self.write(batch, true).await
-    }
-
-    /// Whether the payload of the block with commitment `commitment` proposed in `view` is
-    /// stored.
-    pub(crate) fn has_payload(
-        &self,
-        view: ViewNumber,
-        commitment: &VidCommitment2,
-    ) -> anyhow::Result<bool> {
-        let snap = self.store.snapshot()?;
-        Ok(snap
-            .get(&PAYLOADS, &payload_key(view, commitment)?)?
-            .is_some())
     }
 
     /// The state certificate of the epoch root proposed in `view`, if stored and not yet decided.
@@ -548,9 +501,6 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
         if let Some(cert) = &import.state_cert {
             batch.put(&STATE_CERTS, key::u64(*cert.epoch).to_vec(), encode(cert)?);
         }
-        for (view, commitment, payload) in import.payloads {
-            put_payload(&mut batch, view, &commitment, payload)?;
-        }
         if let Some(anchor) = &import.anchor {
             put_anchor(&mut batch, anchor)?;
         }
@@ -612,39 +562,6 @@ pub(crate) fn put_proposal<T: NodeType>(
     Ok(())
 }
 
-/// Gives the decide log entry at `height`, written without its payload, the payload stored for
-/// the block with commitment `commitment` proposed in `view`. Like the copy at the decide, it
-/// shares the stored value rather than writing it again.
-pub(crate) fn put_decided_payload(
-    batch: &mut Batch,
-    height: u64,
-    view: ViewNumber,
-    commitment: &VidCommitment2,
-) -> anyhow::Result<()> {
-    batch.copy(
-        &PAYLOADS,
-        payload_key(view, commitment)?,
-        &DECIDED_PAYLOADS,
-        key::u64(height).to_vec(),
-    );
-    Ok(())
-}
-
-/// Stores the encoded payload of the block with commitment `commitment` proposed in `view`.
-pub(crate) fn put_payload(
-    batch: &mut Batch,
-    view: ViewNumber,
-    commitment: &VidCommitment2,
-    payload: Arc<[u8]>,
-) -> anyhow::Result<()> {
-    batch.put(
-        &PAYLOADS,
-        payload_key(view, commitment)?,
-        Bytes::from_owner(payload),
-    );
-    Ok(())
-}
-
 pub(crate) fn put_pending_state_cert<T: NodeType>(
     batch: &mut Batch,
     view: ViewNumber,
@@ -685,41 +602,19 @@ pub(crate) fn put_upgrade_cert<T: NodeType>(
     Ok(())
 }
 
-/// Deletes the decide log entries of the heights in `range`, and their payloads.
+/// Deletes the decide log entries of the heights in `range`.
 pub(crate) fn drop_decided(batch: &mut Batch, range: &Range<u64>) {
-    let heights = || {
+    batch.delete_range(
+        &DECIDE_LOG,
         KeyRange::between(
             Bytes::copy_from_slice(&key::u64(range.start)),
             Bytes::copy_from_slice(&key::u64(range.end)),
-        )
-    };
-    batch
-        .delete_range(&DECIDE_LOG, heights())
-        .delete_range(&DECIDED_PAYLOADS, heights());
-}
-
-/// Gives the decide log entries of `leaves` their payloads, shared with the payload table, not
-/// written again. Ahead of the collection of garbage that deletes them from that table.
-pub(crate) fn copy_decided_payloads<T: NodeType>(
-    batch: &mut Batch,
-    leaves: &[Leaf2<T>],
-) -> anyhow::Result<()> {
-    for leaf in leaves {
-        if let VidCommitment::V2(commitment) = leaf.payload_commitment() {
-            batch.copy(
-                &PAYLOADS,
-                payload_key(leaf.view_number(), &commitment)?,
-                &DECIDED_PAYLOADS,
-                key::u64(leaf.height()).to_vec(),
-            );
-        }
-    }
-    Ok(())
+        ),
+    );
 }
 
 /// Appends a decide to the decide log: `leaves` newest first, as consensus decides them,
-/// with the certificates of the newest and the VID common data and state of each. Their
-/// payloads are copied with [`copy_decided_payloads`].
+/// with the certificates of the newest and the VID common data and state of each.
 pub(crate) fn put_decided<T: NodeType>(
     batch: &mut Batch,
     leaves: &[Leaf2<T>],
@@ -752,12 +647,10 @@ pub(crate) fn put_decided<T: NodeType>(
     Ok(())
 }
 
-/// The height of the newest decide log entry.
-/// The bytes the decide log takes up in `snap`, with the payloads of its entries.
+/// The bytes the decide log takes up in `snap`.
 fn decide_log_bytes(snap: &impl Snapshot) -> Result<u64, consensus_store::Error> {
-    let mut usage = snap.usage(&DECIDE_LOG)?;
-    usage.add(snap.usage(&DECIDED_PAYLOADS)?);
-    Ok(usage.inline_bytes.saturating_add(usage.extern_bytes))
+    let usage = snap.usage(&DECIDE_LOG)?;
+    Ok(usage.bytes)
 }
 
 /// The application tables of the store, whose calls block, so they run on a blocking thread.
@@ -791,12 +684,10 @@ pub(crate) fn put_anchor<T: NodeType>(batch: &mut Batch, anchor: &Anchor<T>) -> 
     Ok(())
 }
 
-/// Deletes the proposals and payloads of views before `view`.
+/// Deletes the proposals of views before `view`.
 pub(crate) fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
     let before = || KeyRange::before(Bytes::copy_from_slice(&key::u64(*view)));
-    batch
-        .delete_range(&PROPOSALS, before())
-        .delete_range(&PAYLOADS, before());
+    batch.delete_range(&PROPOSALS, before());
 }
 
 /// Replaces the stored record of the record's signer in its epoch.
@@ -833,18 +724,6 @@ pub(crate) fn put_app(batch: &mut Batch, writes: &[AppWrite]) {
             },
         }
     }
-}
-
-fn payload_key(view: ViewNumber, commitment: &VidCommitment2) -> anyhow::Result<Vec<u8>> {
-    let mut k = key::u64(*view).to_vec();
-    k.extend(bincode::serialize(commitment).context("payload commitment")?);
-    Ok(k)
-}
-
-fn payload_key_decode(k: &[u8]) -> anyhow::Result<(ViewNumber, VidCommitment2)> {
-    let view = view_of(k)?;
-    let commitment = bincode::deserialize(&k[8..]).context("payload commitment")?;
-    Ok((view, commitment))
 }
 
 fn view_of(k: &[u8]) -> anyhow::Result<ViewNumber> {

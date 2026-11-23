@@ -5,13 +5,7 @@
 //! its fsync. Each write names the [`StorageOutput`] that reports it durable, which consensus
 //! waits on before sending the messages that depend on it.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    marker::PhantomData,
-    mem,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, marker::PhantomData, mem, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use app_tables::AppWrite;
@@ -42,7 +36,7 @@ use tokio::{
 use tracing::{error, info, warn};
 
 use crate::{
-    coordinator::metrics::Measurement,
+    coordinator::metrics::{Measurement, ignore_measurement},
     discovery::SignedServiceRecord,
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
@@ -85,7 +79,8 @@ pub enum StorageOutput<T: NodeType> {
     Action(ViewNumber, ActionKind),
     /// The locked QC at the given lock position has been durably persisted.
     HighQc(LockView),
-    /// The payload of the block with this commitment, proposed in this view, is on disk.
+    /// A storage instance acknowledged the payload of the block with this commitment, proposed in
+    /// this view, as durable.
     Payload(ViewNumber, VidCommitment2),
 }
 
@@ -141,7 +136,8 @@ pub enum StorageError {
 
 /// Time from a write's request until it is durable, including the wait for the batch it joined.
 /// These latencies gate consensus progress: proposal release waits on `append_proposal` and
-/// `record_action(Propose)`, and phase-2 votes wait on `append_da`,
+/// `record_action(Propose)`, and phase-2 votes wait on `append_da`, the time until a storage
+/// instance acknowledges a payload,
 /// `record_action(Vote)` and `append_high_qc2`.
 ///
 /// [`Measurement`] records on drop, so a write lost to shutdown still records its elapsed time.
@@ -224,19 +220,9 @@ pub struct Storage<T: NodeType, S> {
     /// the next batch.
     foreign: mpsc::UnboundedReceiver<ForeignWrite>,
 
-    /// Where payloads go instead of the store, if anywhere: the deployment's storage instances,
-    /// whose acknowledgements report them durable.
-    payload_sink: Option<PayloadSink>,
-
-    /// Payloads written since this writer started, until garbage collection.
-    written_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
-
-    /// Blocks decided without their payload stored, with their height, until garbage
-    /// collection. A payload stored for one of them in that time joins its decide log entry.
-    awaited_payloads: BTreeMap<(ViewNumber, VidCommitment2), u64>,
-
-    /// The view garbage was last collected before; no payload is awaited for earlier views.
-    collected_before: ViewNumber,
+    /// Where payloads go: the deployment's storage instances, whose acknowledgements report them
+    /// durable.
+    payload_sink: PayloadSink,
 
     /// The latest of each value the store may only raise, as written or queued.
     marks: Marks,
@@ -409,12 +395,16 @@ struct Decide<T: NodeType> {
 }
 
 impl<T: NodeType, S: Store> Storage<T, S> {
-    /// The writer of `store`, which holds `restored`, as [`ConsensusStore::load`] reads it. The
-    /// writer never lowers the values that may only rise, starting from those in `restored`.
+    /// The writer of `store`, which holds `restored`, as [`ConsensusStore::load`] reads it, and
+    /// hands payloads to the storage instances that take them from `queue`: a payload is durable
+    /// once one of them acknowledges it on `acks`. The writer never lowers the values that may
+    /// only rise, starting from those in `restored`.
     pub fn new(
         store: ConsensusStore<T, S>,
         private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         restored: &Restored<T>,
+        queue: PayloadQueue,
+        acks: Acks,
     ) -> Self {
         let marks = Marks::of(restored);
         let signature =
@@ -437,10 +427,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             state_certs: BTreeMap::new(),
             decided_state: None,
             foreign,
-            payload_sink: None,
-            written_payloads: BTreeSet::new(),
-            awaited_payloads: BTreeMap::new(),
-            collected_before: ViewNumber::genesis(),
+            payload_sink: PayloadSink {
+                queue,
+                acks,
+                offered: BTreeMap::new(),
+            },
             marks,
             metrics: None,
         }
@@ -478,19 +469,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self
     }
 
-    /// Hands payloads to the storage instances that take them from `queue`, instead of storing
-    /// them: a payload is durable once a storage instance acknowledges it on `acks`. Consensus
-    /// then keeps payloads only in memory, and the decide log carries none.
-    pub fn with_payload_sink(mut self, queue: PayloadQueue, acks: Acks) -> Self {
-        self.payload_sink = Some(PayloadSink {
-            queue,
-            acks,
-            offered: BTreeMap::new(),
-        });
-        self
-    }
-
-    /// Persists the payload of a block. Vote2 on the block waits for it.
+    /// Hands the payload of a block to the storage instances. Vote2 on the block waits for one
+    /// of them to acknowledge it.
     pub fn append_da(
         &mut self,
         view: ViewNumber,
@@ -503,32 +483,20 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             warn!(%view, "payload with a non-V2 VID commitment; not stored");
             return;
         };
-        let encoded = block_payload.encode();
-        if let Some(sink) = &mut self.payload_sink {
-            let name = vid_commit.to_string();
-            sink.offered
-                .insert((*view, name.clone()), (view, commitment));
-            sink.queue.offer(Offer {
-                view: *view,
-                commitment: name,
-                ns_table: metadata.encode().to_vec().into(),
-                // Shares the payload's buffer rather than copying it.
-                payload: Bytes::from_owner(encoded),
-            });
-            return;
-        }
-        self.written_payloads.insert((view, commitment));
-        let mut written = store::put_payload(&mut self.pending.batch, view, &commitment, encoded);
-        if let Some(height) = self.awaited_payloads.remove(&(view, commitment)) {
-            // After the payload's own write, so that the copy finds it.
-            written = written.and_then(|()| {
-                store::put_decided_payload(&mut self.pending.batch, height, view, &commitment)
-            });
-            self.pending.adds_to_decide_log = true;
-            self.pending.resizes_decide_log = true;
-        }
-        self.queued(written, StorageOutput::Payload(view, commitment), |m| {
-            &m.append_da
+        let name = vid_commit.to_string();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_da.clone()));
+        let sink = &mut self.payload_sink;
+        sink.offered
+            .insert((*view, name.clone()), (view, commitment, timer));
+        sink.queue.offer(Offer {
+            view: *view,
+            commitment: name,
+            ns_table: metadata.encode().to_vec().into(),
+            // Shares the payload's buffer rather than copying it.
+            payload: Bytes::from_owner(block_payload.encode()),
         });
     }
 
@@ -648,14 +616,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             .iter()
             .map(|leaf| self.state_cert(leaf.view_number()))
             .collect();
-        // The copies go ahead of the collection of garbage, which deletes what they share; the
-        // entries, which carry what the application makes of each leaf's state, are built where
-        // the batch is applied.
-        if let Err(err) = store::copy_decided_payloads(&mut self.pending.batch, leaves) {
-            let view = cert1.view_number();
-            self.fail(err.context(format!("leaves decided in view {view}")));
-            return;
-        }
+        // The entries, which carry what the application makes of each leaf's state, are built
+        // where the batch is applied.
         self.pending.decided.push(Decide {
             leaves: leaves.to_vec(),
             cert1: cert1.clone(),
@@ -666,18 +628,17 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         });
         self.pending.adds_to_decide_log = true;
         self.pending.resizes_decide_log = true;
-        self.await_payloads(leaves);
         self.advance_anchor(leaves, cert1, cert2);
     }
 
-    /// Deletes the stored proposals and payloads of views before `view`.
+    /// Deletes the stored proposals of views before `view`, and forgets the payloads offered for
+    /// them.
     pub fn gc(&mut self, view: ViewNumber) {
         store::collect_garbage(&mut self.pending.batch, view);
-        self.collected_before = self.collected_before.max(view);
-        self.written_payloads.retain(|(v, _)| *v >= view);
-        self.awaited_payloads.retain(|(v, _), _| *v >= view);
-        if let Some(sink) = &mut self.payload_sink {
-            sink.offered.retain(|_, (v, _)| *v >= view);
+        let collected = self.payload_sink.offered.split_off(&(*view, String::new()));
+        let collected = std::mem::replace(&mut self.payload_sink.offered, collected);
+        for (_, (_, _, timer)) in collected {
+            ignore_measurement(timer);
         }
     }
 
@@ -719,31 +680,6 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         }
     }
 
-    /// Remembers the decided `leaves` whose payloads are not stored, so that a payload stored
-    /// before garbage collection joins the decide log.
-    fn await_payloads(&mut self, leaves: &[Leaf2<T>]) {
-        // Payloads that go to the storage instances never join the decide log.
-        if self.payload_sink.is_some() {
-            return;
-        }
-        for leaf in leaves {
-            let VidCommitment::V2(commitment) = leaf.payload_commitment() else {
-                continue;
-            };
-            let key = (leaf.view_number(), commitment);
-            if key.0 < self.collected_before || self.written_payloads.contains(&key) {
-                continue;
-            }
-            match self.store.has_payload(key.0, &commitment) {
-                Ok(true) => {},
-                Ok(false) => {
-                    self.awaited_payloads.insert(key, leaf.height());
-                },
-                Err(err) => warn!(%err, view = %key.0, "failed to look up a stored payload"),
-            }
-        }
-    }
-
     /// The undecided state certificate of the epoch root proposed in `view`, if any.
     fn state_cert(&self, view: ViewNumber) -> Option<LightClientStateUpdateCertificateV2<T>> {
         if let Some(cert) = self.state_certs.get(&view) {
@@ -773,11 +709,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             while let Ok(write) = self.foreign.try_recv() {
                 self.take_foreign(write);
             }
-            if let Some(acked) = self
-                .payload_sink
-                .as_mut()
-                .and_then(|s| s.acks.try_recv().ok())
-            {
+            if let Ok(acked) = self.payload_sink.acks.try_recv() {
                 self.payload_acked(acked);
                 continue;
             }
@@ -798,18 +730,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 }
             } else {
                 let retry_at = self.failed.as_ref().map(|_| self.retry_at);
-                let acks = self.payload_sink.as_mut().map(|sink| &mut sink.acks);
-                let acked = async {
-                    match acks {
-                        Some(acks) => acks.recv().await,
-                        None => std::future::pending().await,
-                    }
-                };
                 tokio::select! {
                     // The sender lives as long as the store, which this writer holds.
                     _ = decide_log_bytes.changed() => {},
                     Some(write) = self.foreign.recv() => self.take_foreign(write),
-                    Some(acked) = acked => self.payload_acked(acked),
+                    Some(acked) = self.payload_sink.acks.recv() => self.payload_acked(acked),
                     _ = sleep_until(retry_at.unwrap_or_else(Instant::now)), if retry_at.is_some() => {},
                 }
             }
@@ -819,8 +744,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     /// Reports the payload a storage instance acknowledged durable, if it was offered and not yet
     /// collected.
     fn payload_acked(&mut self, acked: Acked) {
-        let output = acked_output(&mut self.payload_sink, acked);
-        self.durable.extend(output);
+        if let Some((view, commitment, _timer)) = self.payload_sink.offered.remove(&acked) {
+            self.durable
+                .push_back(StorageOutput::Payload(view, commitment));
+        }
     }
 
     /// Adds a write from outside the writer to the next batch, so that it shares its commit.
@@ -980,9 +907,6 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         let range = earliest..earliest + dropped;
         store::drop_decided(&mut self.pending.batch, &range);
         self.pending.resizes_decide_log = true;
-        // A payload arriving for a dropped height must not be copied into the log.
-        self.awaited_payloads
-            .retain(|_, height| !range.contains(height));
         warn!(
             bytes,
             limit = self.decide_log_limit,
@@ -1041,20 +965,12 @@ impl<T: NodeType, S: Store> Storage<T, S> {
     }
 }
 
-/// Where payloads go instead of the store.
+/// Where payloads go.
 struct PayloadSink {
     queue: PayloadQueue,
     acks: Acks,
 
-    /// Payloads offered and not yet acknowledged, by view and commitment as offered.
-    offered: BTreeMap<Acked, (ViewNumber, VidCommitment2)>,
-}
-
-/// The output that reports the payload `acked` durable, if it was offered.
-fn acked_output<T: NodeType>(
-    sink: &mut Option<PayloadSink>,
-    acked: Acked,
-) -> Option<StorageOutput<T>> {
-    let (view, commitment) = sink.as_mut()?.offered.remove(&acked)?;
-    Some(StorageOutput::Payload(view, commitment))
+    /// Payloads offered and not yet acknowledged, by view and commitment as offered, each with
+    /// the time until it is acknowledged, which `append_da` records.
+    offered: BTreeMap<Acked, (ViewNumber, VidCommitment2, Option<Measurement>)>,
 }

@@ -8,7 +8,6 @@ edition = { workspace = true }
 [dependencies]
 bytes = { workspace = true }
 consensus-store = { workspace = true }
-crc32fast = { workspace = true }
 parking_lot = { workspace = true }
 redb = { workspace = true }
 

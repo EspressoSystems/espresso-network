@@ -200,7 +200,6 @@ consensus-api = { path = "crates/a2/consensus-api" }
 consensus-store = { path = "crates/a2/consensus-store" }
 consensus-store-redb = { path = "crates/a2/consensus-store-redb" }
 membership = { path = "crates/a2/membership" }
-crc32fast = "1.5"
 criterion = "0.8.1"
 csv = "1"
 custom_debug = "0.6"

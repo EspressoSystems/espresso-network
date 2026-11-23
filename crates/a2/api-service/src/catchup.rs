@@ -3,7 +3,7 @@
 
 use catchup_api::proto::{
     AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HeightRequest, LeafChainResponse,
-    catchup_service_server::CatchupService,
+    PayloadRequest, catchup_service_server::CatchupService,
 };
 use chain_api::{StateRow, Tables};
 use chain_store::ChainStore;
@@ -183,6 +183,22 @@ impl CatchupService for Catchup {
             ))),
         }
     }
+
+    async fn get_payload(
+        &self,
+        request: Request<PayloadRequest>,
+    ) -> Result<Response<Encoded>, Status> {
+        let commitment = request.into_inner().commitment;
+        match self
+            .store
+            .payload_by_commitment(&commitment)
+            .await
+            .map_err(to_status)?
+        {
+            Some(data) => Ok(Response::new(Encoded { data })),
+            None => Err(Status::not_found(format!("no payload {commitment}"))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +217,35 @@ mod tests {
             .get_leaf_chain(Request::new(HeightRequest { height: u64::MAX }))
             .await
             .expect_err("nothing is stored");
+        assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    /// A payload is answered by its commitment, decided or not, once the store holds it.
+    #[tokio::test]
+    async fn answers_a_payload_by_its_commitment() {
+        let objects = chain_store::payloads::PayloadStore::new(
+            std::sync::Arc::new(object_store::memory::InMemory::new()),
+            "p",
+            None,
+        );
+        let store = ChainStore::new(MemBackend::default()).with_payloads(objects);
+        store
+            .put_payload("C~1", bytes::Bytes::from_static(b"payload"), None)
+            .await
+            .unwrap();
+        let catchup = Catchup::new(store, 10);
+        let request = |commitment: &str| {
+            Request::new(PayloadRequest {
+                commitment: commitment.into(),
+            })
+        };
+
+        let answer = catchup.get_payload(request("C~1")).await.unwrap();
+        assert_eq!(&answer.into_inner().data[..], b"payload");
+        let status = catchup
+            .get_payload(request("C~2"))
+            .await
+            .expect_err("no such payload");
         assert_eq!(status.code(), tonic::Code::NotFound);
     }
 

@@ -9,6 +9,7 @@ use std::{
 
 use app_tables::{AppWrite, TableName};
 use committable::RawCommitmentBuilder;
+use consensus_api::payloads::PayloadQueue;
 use consensus_store::{
     Batch, Bytes, Error, Op, Store, Table,
     mem::{MemSnapshot, MemStore},
@@ -34,12 +35,35 @@ fn test_storage() -> (
     Storage<TestTypes, FlakyStore>,
     ConsensusStore<TestTypes, FlakyStore>,
 ) {
-    let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (storage, store, _) = test_storage_with_payloads();
+    (storage, store)
+}
+
+/// [`test_storage`], with the queue its payloads are offered on, for a test to acknowledge them.
+fn test_storage_with_payloads() -> (
+    Storage<TestTypes, FlakyStore>,
+    ConsensusStore<TestTypes, FlakyStore>,
+    PayloadQueue,
+) {
     let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
-    (
-        Storage::new(store.clone(), &private_key, &store.load().unwrap()),
-        store,
-    )
+    let (storage, queue) = writer(&store);
+    (storage, store, queue)
+}
+
+/// A writer of `store`, which holds what it loads, with the queue its payloads are offered on.
+fn writer<S: consensus_store::Store>(
+    store: &ConsensusStore<TestTypes, S>,
+) -> (Storage<TestTypes, S>, PayloadQueue) {
+    let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (queue, acks) = PayloadQueue::new();
+    let storage = Storage::new(
+        store.clone(),
+        &private_key,
+        &store.load().unwrap(),
+        queue.clone(),
+        acks,
+    );
+    (storage, queue)
 }
 
 /// A write surfaces exactly one completion, once it is in the store.
@@ -133,10 +157,11 @@ async fn test_foreign_writes_share_the_writers_commit() {
     );
 }
 
-/// A payload write reports the block it stored, and garbage collection removes it.
+/// A payload offered for a view that garbage collection has passed is no longer reported
+/// durable when its acknowledgement comes.
 #[tokio::test]
-async fn test_payload_completion_and_gc() {
-    let (mut storage, store) = test_storage();
+async fn test_collected_payload_is_not_reported() {
+    let (mut storage, _store, queue) = test_storage_with_payloads();
     let view = ViewNumber::new(4);
     let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::empty();
     let commitment = VidCommitment2::default();
@@ -148,29 +173,16 @@ async fn test_payload_completion_and_gc() {
         metadata,
         VidCommitment::V2(commitment),
     );
-    let stored = storage.next().await.expect("completion");
-    assert_eq!(stored, StorageOutput::Payload(view, commitment));
-    assert!(store.load().unwrap().payloads.contains(&(view, commitment)));
-
-    storage.gc(view);
-    storage.record_action(view, ActionKind::Vote);
-    storage.next().await.expect("completion");
-    assert!(store.load().unwrap().payloads.contains(&(view, commitment)));
-
     storage.gc(view + 1);
-    storage.record_action(view + 1, ActionKind::Vote);
-    storage.next().await.expect("completion");
-    assert!(store.load().unwrap().payloads.is_empty());
+    queue.ack((*view, VidCommitment::V2(commitment).to_string()));
+    assert_nothing_more(&mut storage).await;
 }
 
-/// With a payload sink, a payload is offered to the storage instances instead of stored, and is
-/// reported durable only once one of them acknowledges it; an acknowledgement of a payload not
-/// offered is ignored.
+/// A payload is offered to the storage instances, and is reported durable only once one of them
+/// acknowledges it; an acknowledgement of a payload not offered is ignored.
 #[tokio::test]
 async fn test_payload_sink_reports_acknowledged_payloads() {
-    let (storage, store) = test_storage();
-    let (queue, acks) = consensus_api::payloads::PayloadQueue::new();
-    let mut storage = storage.with_payload_sink(queue.clone(), acks);
+    let (mut storage, _store, queue) = test_storage_with_payloads();
     let view = ViewNumber::new(4);
     let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::empty();
     let commitment = VidCommitment2::default();
@@ -188,7 +200,6 @@ async fn test_payload_sink_reports_acknowledged_payloads() {
         StorageOutput::Action(view, ActionKind::Vote),
         "not durable before an acknowledgement"
     );
-    assert!(store.load().unwrap().payloads.is_empty(), "not stored");
 
     queue.ack((99, "another".into()));
     queue.ack((*view, VidCommitment::V2(commitment).to_string()));
@@ -198,13 +209,11 @@ async fn test_payload_sink_reports_acknowledged_payloads() {
     );
 }
 
-/// The caller drops `next` whenever something else wins its select; a payload sink survives
-/// that, so later payloads still go to the storage instances instead of the store.
+/// The caller drops `next` whenever something else wins its select; acknowledgements still reach
+/// it afterwards.
 #[tokio::test]
 async fn test_payload_sink_survives_a_cancelled_next() {
-    let (storage, store) = test_storage();
-    let (queue, acks) = consensus_api::payloads::PayloadQueue::new();
-    let mut storage = storage.with_payload_sink(queue.clone(), acks);
+    let (mut storage, _store, queue) = test_storage_with_payloads();
     for _ in 0..3 {
         let waited = tokio::time::timeout(Duration::from_millis(10), storage.next()).await;
         assert!(waited.is_err(), "nothing to report, so next is cancelled");
@@ -224,7 +233,6 @@ async fn test_payload_sink_survives_a_cancelled_next() {
         storage.next().await.expect("completion"),
         StorageOutput::Payload(view, commitment)
     );
-    assert!(store.load().unwrap().payloads.is_empty(), "not stored");
 }
 
 /// The lock only moves forward, and garbage collection never removes it or the boundary
@@ -299,7 +307,7 @@ async fn test_restarted_writer_keeps_the_stored_marks() {
     next(&mut storage).await;
     next(&mut storage).await;
 
-    let mut restarted = Storage::new(store.clone(), &private_key, &store.load().unwrap());
+    let (mut restarted, _) = writer(&store);
     restarted.append_high_qc2(cert_at(8));
     restarted.record_action(ViewNumber::new(11), ActionKind::Vote);
     // Neither raises a stored value, so both are reported without a write.
@@ -470,26 +478,13 @@ impl Store for FlakyStore {
     }
 }
 
-/// Decides land in the decide log with their payloads, which outlive the payload table's
-/// garbage collection; the anchor only moves forward; `ack` frees entries below a height.
+/// Decides land in the decide log, without payloads; the anchor only moves forward; `ack` frees
+/// entries below a height.
 #[tokio::test]
 async fn test_decide_log() {
     let (mut storage, store) = test_storage();
     let data = super::common::utils::TestData::new(3).await;
     let [v0, v1, v2] = [&data.views[0], &data.views[1], &data.views[2]];
-    let payload_of = |v: &super::common::utils::TestView| {
-        let VidCommitment::V2(c) = v.leaf.payload_commitment() else {
-            panic!("test blocks have V2 commitments");
-        };
-        (c, hotshot_types::traits::EncodeBytes::encode(&v.payload))
-    };
-
-    let mut batch = Batch::new();
-    for v in [v0, v1, v2] {
-        let (c, bytes) = payload_of(v);
-        crate::store::put_payload(&mut batch, v.view_number, &c, bytes).unwrap();
-    }
-    store.store().apply(&batch).unwrap();
 
     // v2 decides v1 and v2, newest first.
     storage.append_decided(
@@ -504,35 +499,22 @@ async fn test_decide_log() {
 
     let entries = store.decided_from(0, usize::MAX).unwrap();
     assert_eq!(entries.len(), 2);
-    let heights: Vec<_> = entries.iter().map(|(d, _)| d.leaf.height()).collect();
+    let heights: Vec<_> = entries.iter().map(|d| d.leaf.height()).collect();
     assert_eq!(heights, vec![v1.leaf.height(), v2.leaf.height()]);
     assert_eq!(
-        &entries[0].0.cert1,
+        &entries[0].cert1,
         v2.leaf.justify_qc(),
         "an older leaf is certified by the next leaf's justify QC"
     );
-    assert_eq!(entries[1].0.cert1, v2.cert1);
-    assert_eq!(entries[1].0.cert2.as_ref(), Some(&v2.cert2));
-    for ((decided, size), v) in entries.iter().zip([v1, v2]) {
+    assert_eq!(entries[1].cert1, v2.cert1);
+    assert_eq!(entries[1].cert2.as_ref(), Some(&v2.cert2));
+    for decided in &entries {
         assert!(
             decided.leaf.block_payload().is_none(),
             "stored without payload"
         );
-        let payload = payload_of(v).1;
-        assert_eq!(*size, Some(payload.len() as u64));
-        assert_eq!(
-            store
-                .decided_payload(decided.leaf.height())
-                .unwrap()
-                .as_deref(),
-            Some(&payload[..])
-        );
     }
     assert_eq!(store.earliest_decided().unwrap(), Some(v1.leaf.height()));
-    assert!(
-        store.load().unwrap().payloads.is_empty(),
-        "garbage collection cleared the payload table"
-    );
     assert_eq!(
         store.load().unwrap().anchor.map(|a| a.leaf.height()),
         Some(v2.leaf.height())
@@ -562,7 +544,7 @@ async fn test_decide_log() {
         .decided_from(0, usize::MAX)
         .unwrap()
         .into_iter()
-        .map(|(d, _)| d.leaf.height())
+        .map(|d| d.leaf.height())
         .collect();
     assert_eq!(left, vec![v2.leaf.height()]);
 }
@@ -573,7 +555,6 @@ async fn test_decide_log() {
 async fn test_decide_log_drops_the_oldest_entries() {
     let data = super::common::utils::TestData::new(2).await;
     let [v0, v1] = [&data.views[0], &data.views[1]];
-    let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let decide_both = |storage: &mut Storage<TestTypes, FlakyStore>| {
         for v in [v0, v1] {
             storage.append_decided(std::slice::from_ref(&v.leaf), &v.cert1, None, &[None], &[]);
@@ -588,8 +569,7 @@ async fn test_decide_log_drops_the_oldest_entries() {
 
     // With room for exactly both, the second reaches the limit, and the first goes.
     let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
-    let mut storage = Storage::new(store.clone(), &private_key, &store.load().unwrap())
-        .with_decide_log_limit(both);
+    let mut storage = writer(&store).0.with_decide_log_limit(both);
     decide_both(&mut storage);
     assert_nothing_more(&mut storage).await;
     assert_nothing_more(&mut storage).await;
@@ -597,7 +577,7 @@ async fn test_decide_log_drops_the_oldest_entries() {
         .decided_from(0, usize::MAX)
         .unwrap()
         .into_iter()
-        .map(|(d, _)| d.leaf.height())
+        .map(|d| d.leaf.height())
         .collect();
     assert_eq!(left, vec![v1.leaf.height()]);
 }
@@ -629,7 +609,7 @@ async fn test_decided_state_cert() {
     flush(&mut storage).await;
 
     let entries = store.decided_from(0, usize::MAX).unwrap();
-    let certs: Vec<_> = entries.iter().map(|(d, _)| d.state_cert.clone()).collect();
+    let certs: Vec<_> = entries.iter().map(|d| d.state_cert.clone()).collect();
     assert_eq!(certs, vec![None, Some(cert.clone())]);
     assert_eq!(store.load().unwrap().state_cert, Some(cert));
 }
@@ -706,7 +686,7 @@ async fn test_decided_state_written_with_the_decide() {
         .decided_from(v0.leaf.height(), 2)
         .unwrap()
         .into_iter()
-        .map(|(decided, _)| decided.state)
+        .map(|decided| decided.state)
         .collect();
     let with_state = StateChange {
         chain_config: v1.leaf.height().to_be_bytes().to_vec(),
@@ -735,7 +715,6 @@ async fn test_app_tables() {
             restart_view: None,
             upgrade_cert: None,
             state_cert: None,
-            payloads: Vec::new(),
             anchor: None,
             app: vec![
                 put("a", 1, b"one"),
