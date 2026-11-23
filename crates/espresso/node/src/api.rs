@@ -14585,6 +14585,97 @@ mod test {
         Ok(())
     }
 
+    /// Catching-up nodes still fetch and verify mainnet's leaves from before its 0.3 upgrade and
+    /// across it, over the query API and over request-response. Their QCs carry no epoch, so they
+    /// are checked against the genesis stake table. A node that follows the legacy chain takes the
+    /// upgrade from the certificate the pre-epoch leaves carry.
+    #[apply(sql_data_sources)]
+    async fn test_legacy_leaf_catchup<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
+        use ::request_response::Serializable;
+
+        use crate::{catchup::verify_legacy_leaf_chain, request_response::request::Response};
+
+        let chain = LegacyChain::load("v2-v3")?;
+        let replay = chain.replay::<D>().await?;
+        let coordinator = replay.node.node_state().coordinator;
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![replay.url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        );
+        let upgraded = chain
+            .blocks
+            .iter()
+            .find(|block| block.leaf.header().version() >= EPOCH_VERSION)
+            .context("the chain upgrades to 0.3")?
+            .leaf
+            .height();
+
+        // A leaf near genesis, the last leaf of the first epoch, the last pre-epoch leaf, the first
+        // 0.3 leaf (whose justify QC is pre-epoch) and the leaf after it.
+        for height in [
+            1,
+            chain.epoch_height(),
+            upgraded - 1,
+            upgraded,
+            upgraded + 1,
+        ] {
+            let expected = &chain.blocks[height as usize].leaf;
+
+            let leaf = peers
+                .try_fetch_leaf(0, coordinator.clone(), height)
+                .await
+                .with_context(|| format!("catching up leaf {height} over the query API"))?;
+            ensure!(
+                leaf.height() == height && leaf.commit() == expected.hash(),
+                "catchup of leaf {height} returned leaf {}",
+                leaf.height()
+            );
+
+            let served = replay
+                .client
+                .get(&format!("catchup/{height}/leafchain"))
+                .send()
+                .await?;
+            let bytes = Response::Leaf(served).to_bytes()?;
+            let Response::Leaf(leaves) = Response::from_bytes(&bytes)? else {
+                bail!("the leaf chain for {height} decodes as another response");
+            };
+            ensure!(
+                Response::Leaf(leaves.clone()).to_bytes()? == bytes,
+                "the leaf chain for {height} encodes differently after a round trip"
+            );
+            let leaf = verify_legacy_leaf_chain(leaves, &coordinator, height)
+                .await
+                .with_context(|| format!("verifying leaf {height} from request-response"))?;
+            ensure!(
+                leaf.height() == height && leaf.commit() == expected.hash(),
+                "request-response catchup of leaf {height} returned leaf {}",
+                leaf.height()
+            );
+        }
+
+        let upgrade = replay
+            .persistence()
+            .await?
+            .load_upgrade_certificate()
+            .await?
+            .context("the follower stored no upgrade certificate")?;
+        ensure!(
+            upgrade.data.new_version == EPOCH_VERSION,
+            "the follower stored the upgrade to {}",
+            upgrade.data.new_version
+        );
+        ensure!(
+            replay.node.decided_leaf().await.height() == chain.tip(),
+            "the follower did not decide the tip"
+        );
+        Ok(())
+    }
+
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
     #[apply(sql_data_sources)]
     async fn test_fetch_leaf_returns_exact_height<D: TestableSqlDataSource>(

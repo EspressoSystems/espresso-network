@@ -1415,6 +1415,89 @@ mod test {
         );
     }
 
+    /// Light clients decode the proofs of mainnet's leaves from before 0.3 and across the upgrade
+    /// as the server encodes them. The JSON form is the recorded chain's leaves and QCs in the
+    /// proof's layout. The binary form is pinned.
+    #[test]
+    fn test_legacy_leaf_proof_encoding() {
+        use light_client::consensus::leaf::LeafProof;
+        use serde_json::{Value, json};
+
+        let chain = crate::legacy_chain::LegacyChain::load("v2-v3").unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/legacy-chains/v2-v3/blocks.json");
+        let recorded: Vec<Value> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let upgraded = chain
+            .blocks
+            .iter()
+            .position(|block| block.leaf.header().version() >= EPOCH_VERSION)
+            .unwrap();
+
+        let leaf = |height: usize| recorded[height]["leaf"]["leaf"].clone();
+        // A proof carries the QC on a leaf as the justify QC of the leaf after it.
+        let pair = |height: usize| json!({ "qc": recorded[height + 1]["leaf"]["leaf"]["justify_qc"], "next_epoch_qc": null });
+        let prove = |heights: std::ops::RangeInclusive<usize>| {
+            let mut proof = LeafProof::default();
+            for height in heights {
+                proof.push(chain.blocks[height].leaf.clone());
+            }
+            proof
+        };
+
+        let cases = [
+            (
+                prove(1..=4),
+                json!({
+                    "leaves": [leaf(1)],
+                    "proof": { "HotStuff": {
+                        "precommit_qc": pair(1),
+                        "committing_qc": pair(2),
+                        "deciding_qc": pair(3),
+                        "committing_leaf": leaf(2),
+                        "deciding_leaf": leaf(3),
+                    } },
+                }),
+                "pre-epoch 3-chain",
+            ),
+            (
+                prove(upgraded - 1..=upgraded + 2),
+                json!({
+                    "leaves": [leaf(upgraded - 1), leaf(upgraded)],
+                    "proof": { "HotStuff2": {
+                        "committing_qc": pair(upgraded),
+                        "deciding_qc": pair(upgraded + 1),
+                        "deciding_leaf": leaf(upgraded + 1),
+                    } },
+                }),
+                "2-chain across the upgrade",
+            ),
+        ];
+        let mut digests = vec![];
+        for (proof, expected, name) in cases {
+            assert_eq!(serde_json::to_value(&proof).unwrap(), expected, "{name}");
+            assert_eq!(
+                serde_json::from_value::<LeafProof>(expected).unwrap(),
+                proof,
+                "{name}"
+            );
+            let bytes = bincode::serialize(&proof).unwrap();
+            assert_eq!(
+                bincode::deserialize::<LeafProof>(&bytes).unwrap(),
+                proof,
+                "{name}"
+            );
+            digests.push(blake3::hash(&bytes).to_hex().to_string());
+        }
+        assert_eq!(
+            digests,
+            [
+                "42ff2e3753d9631427de7f5cb8476bfdc312a3a353309712e0e9b56f69964d86",
+                "19ccf8f0c9aff68f62027ccf81480c42029f33f24b620549d47255e98efc3429",
+            ],
+            "binary form of the pre-epoch 3-chain proof and the 2-chain proof across the upgrade"
+        );
+    }
+
     /// Every leaf of a history whose tip is past the 0.6 cutover is proved from stored leaves and
     /// cert2s alone, with no legacy QC chain stored.
     #[apply(sql_data_sources)]

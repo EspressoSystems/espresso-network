@@ -708,6 +708,108 @@ async fn test_leaf_query_data_v3() {
     reference_test_without_committable("v3", "leaf_query_data", &leaf);
 }
 
+/// The last pre-epoch height of the recorded `v2-v3` chain: its leaf and the QC on it carry no
+/// epoch. The leaf above it is the first 0.3 leaf, whose justify QC is still pre-epoch.
+const LEGACY_CHAIN_LAST_PRE_EPOCH: usize = 331;
+
+/// Every leaf of the recorded `v2-v3` chain, as the query service stored and served it. The JSON
+/// is the recording, so the chain also pins the JSON form of the leaves before the upgrade and
+/// of the first leaf after it, which the genesis vector above does not cover.
+fn legacy_chain_leaf_json() -> Vec<Value> {
+    let path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../../data/legacy-chains/v2-v3/blocks.json");
+    let blocks: Vec<Value> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    blocks
+        .into_iter()
+        .map(|block| block["leaf"].clone())
+        .collect()
+}
+
+/// Pre-epoch leaves, the first 0.3 leaf and the epoch leaves after it keep the JSON form the
+/// legacy chain recorded and a fixed binary form. Binary storage (the file system query storage)
+/// and catchup encode leaves and QCs on their own, so each part must encode as it does inside the
+/// whole.
+#[test]
+fn test_legacy_chain_leaf_query_data_encoding() {
+    let leaves = legacy_chain_leaf_json();
+    let boundary = LEGACY_CHAIN_LAST_PRE_EPOCH + 1;
+    for (height, json) in leaves.iter().enumerate().take(boundary + 2) {
+        let pre_epoch_justify = height <= boundary;
+        let pre_epoch_qc = height < boundary;
+        assert_eq!(
+            json["leaf"]["justify_qc"]["data"]["epoch"].is_null(),
+            pre_epoch_justify,
+            "justify QC of leaf {height}"
+        );
+        assert_eq!(
+            json["qc"]["data"]["epoch"].is_null(),
+            pre_epoch_qc,
+            "QC on leaf {height}"
+        );
+    }
+
+    let mut binary = [vec![], vec![], vec![]];
+    for (height, json) in leaves.iter().enumerate() {
+        let leaf: LeafQueryData<SeqTypes> = serde_json::from_value(json.clone())
+            .unwrap_or_else(|err| panic!("leaf {height} does not decode: {err:#}"));
+        assert_eq!(leaf.header().height(), height as u64);
+        assert_eq!(
+            serde_json::to_value(&leaf).unwrap(),
+            *json,
+            "JSON of leaf {height}"
+        );
+
+        let bytes = bincode::serialize(&leaf).unwrap();
+        let parsed: LeafQueryData<SeqTypes> = bincode::deserialize(&bytes)
+            .unwrap_or_else(|err| panic!("binary leaf {height} does not decode: {err:#}"));
+        assert_eq!(parsed, leaf, "binary round trip of leaf {height}");
+        assert_eq!(
+            bytes,
+            [
+                bincode::serialize(leaf.leaf()).unwrap(),
+                bincode::serialize(leaf.qc()).unwrap()
+            ]
+            .concat(),
+            "binary leaf {height} is not its leaf followed by its QC"
+        );
+
+        let era = match height {
+            ..=LEGACY_CHAIN_LAST_PRE_EPOCH => 0,
+            _ if height == boundary => 1,
+            _ => 2,
+        };
+        binary[era].extend(bytes);
+    }
+
+    let digests = binary.map(|bytes| blake3::hash(&bytes).to_hex().to_string());
+    assert_eq!(
+        digests,
+        [
+            "d29e885b01a6991006495d82bf3022ebc225a9a29168fb0ae0324af7fd5382da",
+            "4b4e6871a2e6b094dcd757524327bb86364fd05e792f74dbf3c66886e433b87f",
+            "3bee0d7342fcebba6a60f01be21327e75f94330b0dfbf3f02a98693474d17fee",
+        ],
+        "binary form of the pre-epoch leaves, the first 0.3 leaf and the epoch leaves"
+    );
+}
+
+/// A QC must sign the leaf it is stored with, in every era of the recorded chain.
+#[test]
+fn test_legacy_chain_leaf_query_data_rejects_foreign_qc() {
+    let leaves = legacy_chain_leaf_json();
+    let boundary = LEGACY_CHAIN_LAST_PRE_EPOCH + 1;
+    for height in [1, LEGACY_CHAIN_LAST_PRE_EPOCH, boundary, boundary + 1] {
+        let mut json = leaves[height].clone();
+        json["qc"] = leaves[height - 1]["qc"].clone();
+        let err = serde_json::from_value::<LeafQueryData<SeqTypes>>(json)
+            .expect_err(&format!("leaf {height} decodes with the QC on its parent"));
+        assert!(
+            err.to_string().contains("QC references leaf"),
+            "leaf {height}: {err:#}"
+        );
+    }
+}
+
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_block_query_data() {
     let block = reference_block().await;
