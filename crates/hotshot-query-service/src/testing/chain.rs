@@ -124,7 +124,7 @@ impl MockChain {
         let (payload_commitment, vid_common, vid_shares) =
             disperse(&payload, &metadata, self.num_nodes);
 
-        let parent = self.tip().leaf.leaf();
+        let parent = self.tip().leaf.leaf().as_leaf2().unwrap();
         let height = parent.block_header().block_number + 1;
         let header = MockHeader {
             block_number: height,
@@ -187,21 +187,21 @@ impl MockChain {
             .rev()
             .map(|block| {
                 let vid_share = (block.height() > 0).then(|| self.vid_disperse_share(block, node));
-                let mut leaf = block.leaf.leaf().clone();
+                let mut leaf = block.leaf.leaf().as_leaf2().unwrap().clone();
                 leaf.fill_block_payload_unchecked(block.block.payload().clone());
                 LeafInfo::new(leaf, Arc::new(Default::default()), None, vid_share, None)
             })
             .collect();
         CoordinatorEvent::NewDecide {
             leaf_infos,
-            cert1: newest.leaf.qc().clone(),
+            cert1: newest.leaf.qc().as_qc2().unwrap().clone(),
             cert2: self.cert2(newest),
         }
     }
 
     /// The cert2 finalizing `block`, or `None` for genesis, which consensus decides without one.
     pub fn cert2(&self, block: &MockBlock) -> Option<Certificate2<MockTypes>> {
-        (block.height() > 0).then(|| self.cert2_for(block.leaf.leaf()))
+        (block.height() > 0).then(|| self.cert2_for(block.leaf.leaf().as_leaf2().unwrap()))
     }
 
     fn vid_disperse_share(&self, block: &MockBlock, node: usize) -> VidDisperseShare<MockTypes> {

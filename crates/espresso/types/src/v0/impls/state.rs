@@ -6,7 +6,7 @@ use committable::{Commitment, Committable};
 use either::Either;
 use hotshot_query_service_types::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, EpochNumber, ViewNumber},
+    data::{BlockError, EpochNumber, ViewNumber, history::HistoricLeaf},
     traits::{
         ValidatedState as HotShotState, block_contents::BlockHeader,
         signature_key::BuilderSignatureKey, states::StateDelta,
@@ -368,7 +368,7 @@ impl ValidatedState {
     pub fn apply_proposal(
         &mut self,
         delta: &mut Delta,
-        parent_leaf: &Leaf2,
+        parent_leaf: &impl StateLeaf,
         l1_deposits: Vec<FeeInfo>,
     ) {
         // pushing a block into merkle tree shouldn't fail
@@ -1009,6 +1009,47 @@ fn validate_builder_fee(
     Ok(())
 }
 
+/// A leaf as the state transition reads it: its height, view and header.
+///
+/// Live consensus passes a [`Leaf2`]. The state loop rebuilds the state from history, where a leaf
+/// can be from before epochs, so it passes a [`HistoricLeaf`].
+pub trait StateLeaf: Sync {
+    /// Height of the leaf in the chain.
+    fn height(&self) -> u64;
+    /// The view the leaf was proposed in.
+    fn view_number(&self) -> ViewNumber;
+    /// The leaf's block header.
+    fn block_header(&self) -> &Header;
+}
+
+impl StateLeaf for Leaf2 {
+    fn height(&self) -> u64 {
+        Leaf2::height(self)
+    }
+
+    fn view_number(&self) -> ViewNumber {
+        Leaf2::view_number(self)
+    }
+
+    fn block_header(&self) -> &Header {
+        Leaf2::block_header(self)
+    }
+}
+
+impl StateLeaf for HistoricLeaf<SeqTypes> {
+    fn height(&self) -> u64 {
+        HistoricLeaf::height(self)
+    }
+
+    fn view_number(&self) -> ViewNumber {
+        HistoricLeaf::view_number(self)
+    }
+
+    fn block_header(&self) -> &Header {
+        HistoricLeaf::block_header(self)
+    }
+}
+
 impl ValidatedState {
     /// Updates state with [`Header`] proposal.
     ///   * Clones and updates [`ValidatedState`] (avoiding mutation).
@@ -1019,7 +1060,7 @@ impl ValidatedState {
         &self,
         instance: &NodeState,
         peers: &impl StateCatchup,
-        parent_leaf: &Leaf2,
+        parent_leaf: &impl StateLeaf,
         proposed_header: &Header,
         version: Version,
         view_number: ViewNumber,
@@ -1239,7 +1280,7 @@ impl ValidatedState {
 pub async fn get_l1_deposits(
     instance: &NodeState,
     header: &Header,
-    parent_leaf: &Leaf2,
+    parent_leaf: &impl StateLeaf,
     fee_contract_address: Option<Address>,
 ) -> Vec<FeeInfo> {
     if let (Some(addr), Some(block_info)) = (fee_contract_address, header.l1_finalized()) {
@@ -1266,7 +1307,7 @@ pub async fn get_l1_deposits(
 pub async fn get_l1_deposits(
     _instance: &NodeState,
     header: &Header,
-    _parent_leaf: &Leaf2,
+    _parent_leaf: &impl StateLeaf,
     fee_contract_address: Option<Address>,
 ) -> Vec<FeeInfo> {
     if fee_contract_address.is_some() && header.l1_finalized().is_some() {

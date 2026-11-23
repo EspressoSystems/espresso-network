@@ -31,7 +31,7 @@ use espresso_api::{
 };
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    FeeMerkleTree, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
@@ -53,7 +53,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
-    data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber, history::HistoricLeaf},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
@@ -857,7 +857,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // Try storage.
         self.inner().get_chain_config(commitment).await
     }
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         self.inner().get_leaf_chain(height).await
     }
 
@@ -1810,7 +1810,7 @@ pub mod test_helpers {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        NamespaceId, TEST_UPGRADE, ValidatedState,
+        Leaf2, NamespaceId, TEST_UPGRADE, ValidatedState,
         v0::traits::{NullEventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     };
     use futures::{
@@ -3372,8 +3372,8 @@ mod api_tests {
         for (leaf, cert) in chain1.iter().chain(&chain2) {
             tracing::info!(height = leaf.height(), "check archive");
             let qd = data_source.get_leaf(leaf.height() as usize).await.await;
-            let stored_leaf: Leaf2 = qd.leaf().clone();
-            let stored_qc = qd.qc().clone();
+            let stored_leaf: Leaf2 = qd.leaf().as_leaf2().unwrap().clone();
+            let stored_qc = qd.qc().as_qc2().unwrap().clone();
             assert_eq!(&stored_leaf, leaf);
             assert_eq!(&stored_qc, cert.qc());
 
@@ -3514,7 +3514,17 @@ mod api_tests {
             .unwrap();
 
         // Check that we still processed the leaf.
-        assert_eq!(leaf, data_source.get_leaf(1).await.await.leaf().clone());
+        assert_eq!(
+            leaf,
+            data_source
+                .get_leaf(1)
+                .await
+                .await
+                .leaf()
+                .as_leaf2()
+                .unwrap()
+                .clone()
+        );
         assert!(data_source.get_vid_common(1).await.is_pending());
         assert!(data_source.get_block(1).await.is_pending());
     }

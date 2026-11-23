@@ -4,8 +4,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, SeqTypes,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, NodeState,
+    SeqTypes,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
@@ -15,7 +15,9 @@ use espresso_types::{
 };
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
-    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
+    data::{ViewNumber, history::HistoricLeaf},
+    epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
@@ -24,7 +26,7 @@ use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     api::RewardMerkleTreeV2Data,
-    catchup::verify_legacy_leaf_chain,
+    catchup::{new_protocol_leaves, verify_legacy_leaf_chain},
     request_response::{
         RequestResponseProtocol,
         request::{Request, Response},
@@ -38,7 +40,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         _retry: usize,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;
 
@@ -233,7 +235,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         &self,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         tracing::info!("Fetching leaf for height: {height}");
 
         // Fetch the leaf chain. For new-protocol heights the responder returns the leaf range
@@ -285,9 +287,16 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                 .await
                 .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 
-            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
-                .await
-                .with_context(|| "leaf chain verification with cert2 failed")?
+            verify_new_protocol_leaf_chain(
+                new_protocol_leaves(leaf_chain)?,
+                &coordinator,
+                height,
+                &upgrade_lock,
+                cert2,
+            )
+            .await
+            .with_context(|| "leaf chain verification with cert2 failed")?
+            .into()
         } else {
             verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await?
         };

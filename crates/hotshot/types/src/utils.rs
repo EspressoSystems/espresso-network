@@ -22,7 +22,7 @@ use bincode::{
         WithOtherLimit, WithOtherTrailing,
     },
 };
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use digest::OutputSizeUser;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -32,15 +32,16 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
-    data::{BlockNumber, EpochNumber, Leaf2, VidCommitment},
+    data::{
+        BlockNumber, EpochNumber, Leaf2, VidCommitment,
+        history::{HistoricLeaf, HistoricQuorumCertificate},
+    },
     epoch::{EpochLength, EpochPosition},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::QuorumCertificate2,
-    simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{ValidatedState, election::Membership, node_implementation::NodeType},
-    vote::{Certificate, HasViewNumber},
+    vote::Certificate,
 };
 
 /// A view's state
@@ -107,59 +108,72 @@ pub type StateAndDelta<TYPES> = (
 );
 
 pub async fn verify_leaf_chain<T: NodeType>(
-    mut leaf_chain: Vec<Leaf2<T>>,
+    leaf_chain: impl IntoIterator<Item = impl Into<HistoricLeaf<T>>>,
     coordinator: &EpochMembershipCoordinator<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
-) -> anyhow::Result<Leaf2<T>> {
+) -> anyhow::Result<HistoricLeaf<T>> {
+    let mut leaf_chain: Vec<HistoricLeaf<T>> = leaf_chain.into_iter().map(Into::into).collect();
     let epoch_height = *coordinator.epoch_height();
     let first_epoch = coordinator.membership().first_epoch();
     // Derive each QC's epoch from the height of the leaf it certifies; trusting
     // the epoch claimed in the QC would let a stale epoch's quorum pick the
     // stake table that verifies its own signatures.
-    let validate_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
-        let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
-        let (entries, threshold) = match qc.data.epoch() {
-            // QCs formed before epochs were enabled carry no epoch. Epochs start part way
-            // through the first epoch, which runs on the genesis stake table like the
-            // non-epoch chain before it, so no later height may be certified this way.
-            None => {
+    let validate_qc =
+        |qc: &HistoricQuorumCertificate<T>, certified_height: u64| -> anyhow::Result<()> {
+            let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
+            let (claimed_epoch, claimed_block_number) = match qc {
+                HistoricQuorumCertificate::Epoch(qc) => (qc.data.epoch, qc.data.block_number),
+                HistoricQuorumCertificate::PreEpoch(_) => (None, None),
+            };
+            let (entries, threshold) = match claimed_epoch {
+                // QCs formed before epochs were enabled carry no epoch. Epochs start part way
+                // through the first epoch, which runs on the genesis stake table like the
+                // non-epoch chain before it, so no later height may be certified this way.
+                None => {
+                    ensure!(
+                        epoch <= first_epoch,
+                        "QC claims no epoch but certifies the leaf at height {certified_height} \
+                         in epoch {epoch}, after the first epoch {first_epoch}"
+                    );
+                    let genesis = coordinator.membership().genesis_stake_tables();
+                    (
+                        StakeTableEntries::<T>::from_iter(genesis.stake_table()).0,
+                        genesis.success_threshold(),
+                    )
+                },
+                Some(claimed) => {
+                    ensure!(
+                        claimed == epoch,
+                        "QC claims epoch {claimed} but certifies the leaf at height \
+                         {certified_height} in epoch {epoch}"
+                    );
+                    let membership = coordinator.stake_table_for_epoch(epoch).map_err(|err| {
+                        anyhow!("no stake table available for epoch {epoch}: {err:?}")
+                    })?;
+                    (
+                        StakeTableEntries::<T>::from_iter(membership.stake_table()).0,
+                        membership.success_threshold(),
+                    )
+                },
+            };
+            if let Some(block_number) = claimed_block_number {
                 ensure!(
-                    epoch <= first_epoch,
-                    "QC claims no epoch but certifies the leaf at height {certified_height} in \
-                     epoch {epoch}, after the first epoch {first_epoch}"
+                    block_number == certified_height,
+                    "QC claims block number {block_number} but certifies the leaf at height \
+                     {certified_height}"
                 );
-                let genesis = coordinator.membership().genesis_stake_tables();
-                (
-                    StakeTableEntries::<T>::from_iter(genesis.stake_table()).0,
-                    genesis.success_threshold(),
-                )
-            },
-            Some(claimed) => {
-                ensure!(
-                    claimed == epoch,
-                    "QC claims epoch {claimed} but certifies the leaf at height \
-                     {certified_height} in epoch {epoch}"
-                );
-                let membership = coordinator.stake_table_for_epoch(epoch).map_err(|err| {
-                    anyhow!("no stake table available for epoch {epoch}: {err:?}")
-                })?;
-                (
-                    StakeTableEntries::<T>::from_iter(membership.stake_table()).0,
-                    membership.success_threshold(),
-                )
-            },
+            }
+            match qc {
+                HistoricQuorumCertificate::Epoch(qc) => {
+                    qc.is_valid_cert(&entries, threshold, upgrade_lock)?
+                },
+                HistoricQuorumCertificate::PreEpoch(qc) => {
+                    qc.is_valid_cert(&entries, threshold, upgrade_lock)?
+                },
+            }
+            Ok(())
         };
-        if let Some(block_number) = qc.data.block_number {
-            ensure!(
-                block_number == certified_height,
-                "QC claims block number {block_number} but certifies the leaf at height \
-                 {certified_height}"
-            );
-        }
-        qc.is_valid_cert(&entries, threshold, upgrade_lock)?;
-        Ok(())
-    };
 
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());
@@ -181,8 +195,8 @@ pub async fn verify_leaf_chain<T: NodeType>(
     {
         return Err(anyhow!("Leaf views do not chain"));
     }
-    if newest_leaf.justify_qc().data.leaf_commit != parent.commit()
-        || parent.justify_qc().data().leaf_commit != grand_parent.commit()
+    if newest_leaf.justify_qc().leaf_commit() != parent.commit()
+        || parent.justify_qc().leaf_commit() != grand_parent.commit()
     {
         return Err(anyhow!("Leaf commits do not chain"));
     }
@@ -193,12 +207,12 @@ pub async fn verify_leaf_chain<T: NodeType>(
     }
 
     // Verify the root is in the chain of decided leaves
-    validate_qc(newest_leaf.justify_qc(), parent.height())?;
+    validate_qc(&newest_leaf.justify_qc(), parent.height())?;
     let mut last_leaf = parent;
     for leaf in leaf_chain.iter().skip(2) {
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
-        ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
-        validate_qc(last_leaf.justify_qc(), leaf.height())?;
+        ensure!(last_leaf.justify_qc().leaf_commit() == leaf.commit());
+        validate_qc(&last_leaf.justify_qc(), leaf.height())?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }

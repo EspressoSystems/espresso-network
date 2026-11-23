@@ -31,7 +31,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, ViewNumber, history::HistoricLeaf},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     new_protocol::CoordinatorEvent,
@@ -72,14 +72,14 @@ pub trait StateCatchup: Send + Sync {
         retry: usize,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2>;
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>>;
 
     /// Fetch the leaf at the given height, retrying on transient errors.
     async fn fetch_leaf(
         &self,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         self.backoff()
             .retry(self, |provider, retry| {
                 let coordinator = coordinator.clone();
@@ -312,7 +312,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         retry: usize,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         (**self).try_fetch_leaf(retry, coordinator, height).await
     }
 
@@ -320,7 +320,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         (**self).fetch_leaf(coordinator, height).await
     }
 

@@ -22,7 +22,11 @@ use derivative::Derivative;
 use derive_more::{Display, From};
 use disco_types::{request::RequestError, status::StatusCode};
 use hotshot_types::{
-    data::{Leaf, Leaf2, VidCommitment, VidCommon, ns_table::parse_ns_table},
+    data::{
+        Leaf, Leaf2, VidCommitment, VidCommon,
+        history::{HistoricLeaf, HistoricQuorumCertificate},
+        ns_table::parse_ns_table,
+    },
     simple_certificate::QuorumCertificate2,
     traits::{
         self, EncodeBytes,
@@ -283,8 +287,8 @@ where
 // Important: use `try_from` on deserializing to ensure invariants are upheld.
 #[serde(try_from = "LeafQueryDataRaw<Types>", into = "LeafQueryDataRaw<Types>")]
 pub struct LeafQueryData<Types: NodeType> {
-    pub leaf: Leaf2<Types>,
-    pub qc: QuorumCertificate2<Types>,
+    pub leaf: HistoricLeaf<Types>,
+    pub qc: HistoricQuorumCertificate<Types>,
 }
 
 impl<Types: NodeType> AsRef<Header<Types>> for LeafQueryData<Types> {
@@ -305,8 +309,8 @@ impl<Types: NodeType> AsRef<Header<Types>> for LeafQueryData<Types> {
 #[derive(Deserialize, Serialize)]
 #[serde(bound = "")]
 struct LeafQueryDataRaw<Types: NodeType> {
-    leaf: Leaf2<Types>,
-    qc: QuorumCertificate2<Types>,
+    leaf: HistoricLeaf<Types>,
+    qc: HistoricQuorumCertificate<Types>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for LeafQueryDataRaw<Types> {
@@ -336,8 +340,8 @@ pub struct LeafQueryDataLegacy<Types: NodeType> {
 impl<Types: NodeType> From<LeafQueryDataLegacy<Types>> for LeafQueryData<Types> {
     fn from(legacy: LeafQueryDataLegacy<Types>) -> Self {
         Self {
-            leaf: legacy.leaf.into(),
-            qc: legacy.qc.to_qc2(),
+            leaf: Leaf2::from(legacy.leaf).into(),
+            qc: legacy.qc.to_qc2().into(),
         }
     }
 }
@@ -435,18 +439,16 @@ impl<Types: NodeType> LeafQueryData<Types> {
     ///
     /// Fails with an [`InconsistentLeafError`] if `qc` does not reference `leaf`.
     pub fn new(
-        mut leaf: Leaf2<Types>,
-        qc: QuorumCertificate2<Types>,
+        leaf: impl Into<HistoricLeaf<Types>>,
+        qc: impl Into<HistoricQuorumCertificate<Types>>,
     ) -> Result<Self, InconsistentLeafError<Types>> {
-        // TODO: Replace with the new `commit` function in HotShot. Add an `upgrade_lock` parameter
-        // and a `HsVer: Versions` bound, then call `leaf.commit(upgrade_lock).await`. This will
-        // require updates in callers and relevant types as well.
-        let leaf_commit = <Leaf2<Types> as Committable>::commit(&leaf);
+        let (mut leaf, qc) = (leaf.into(), qc.into());
+        let leaf_commit = leaf.commit();
         ensure!(
-            qc.data.leaf_commit == leaf_commit,
+            qc.leaf_commit() == leaf_commit,
             InconsistentLeafSnafu {
                 leaf: leaf_commit,
-                qc_leaf: qc.data.leaf_commit
+                qc_leaf: qc.leaf_commit()
             }
         );
 
@@ -463,16 +465,20 @@ impl<Types: NodeType> LeafQueryData<Types> {
         upgrade: Upgrade,
     ) -> Self {
         Self {
-            leaf: Leaf2::genesis(validated_state, instance_state, upgrade.base).await,
-            qc: QuorumCertificate2::genesis(validated_state, instance_state, upgrade).await,
+            leaf: Leaf2::genesis(validated_state, instance_state, upgrade.base)
+                .await
+                .into(),
+            qc: QuorumCertificate2::genesis(validated_state, instance_state, upgrade)
+                .await
+                .into(),
         }
     }
 
-    pub fn leaf(&self) -> &Leaf2<Types> {
+    pub fn leaf(&self) -> &HistoricLeaf<Types> {
         &self.leaf
     }
 
-    pub fn qc(&self) -> &QuorumCertificate2<Types> {
+    pub fn qc(&self) -> &HistoricQuorumCertificate<Types> {
         &self.qc
     }
 
@@ -481,10 +487,7 @@ impl<Types: NodeType> LeafQueryData<Types> {
     }
 
     pub fn hash(&self) -> LeafHash<Types> {
-        // TODO: Replace with the new `commit` function in HotShot. Add an `upgrade_lock` parameter
-        // and a `HsVer: Versions` bound, then call `leaf.commit(upgrade_lock).await`. This will
-        // require updates in callers and relevant types as well.
-        <Leaf2<Types> as Committable>::commit(&self.leaf)
+        self.leaf.commit()
     }
 
     pub fn block_hash(&self) -> BlockHash<Types> {

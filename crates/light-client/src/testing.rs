@@ -27,7 +27,7 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     data::{
         EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
-        vid_commitment,
+        history::HistoricLeaf, vid_commitment,
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
@@ -350,12 +350,15 @@ impl Quorum for AlwaysFalseQuorum {
 /// signatures.
 #[derive(Clone, Debug, Default)]
 pub struct VersionCheckQuorum {
-    leaves: HashMap<Commitment<Leaf2>, Leaf2>,
+    leaves: HashMap<Commitment<Leaf2>, HistoricLeaf<SeqTypes>>,
     epoch_height: u64,
 }
 
 impl VersionCheckQuorum {
-    pub fn new(leaves: impl IntoIterator<Item = Leaf2>, epoch_height: u64) -> Self {
+    pub fn new(
+        leaves: impl IntoIterator<Item = HistoricLeaf<SeqTypes>>,
+        epoch_height: u64,
+    ) -> Self {
         Self {
             leaves: leaves
                 .into_iter()
@@ -414,7 +417,9 @@ impl Quorum for EpochChangeQuorum {
         cert: &Certificate,
     ) -> anyhow::Result<()> {
         if V::version() >= EpochVersion::version() {
-            cert.verify_next_epoch_qc(self.epoch_height)?;
+            cert.as_certificate_pair()
+                .context("pre-epoch QC in a chain with epochs")?
+                .verify_next_epoch_qc(self.epoch_height)?;
         }
         Ok(())
     }
@@ -583,7 +588,7 @@ impl InnerTestClient {
                 let parent = &self.leaves[i - 1];
                 let mut mt = self.merkle_trees[i - 1].clone();
                 mt.push(parent.block_hash()).unwrap();
-                (parent.qc().clone(), mt)
+                (parent.qc().as_qc2().unwrap().clone(), mt)
             };
 
             let random_transactions = vec![Transaction::random(&mut rand::thread_rng())];
@@ -624,7 +629,7 @@ impl InnerTestClient {
                 && self.version_at(i as u64) < NEW_PROTOCOL_VERSION
                 && is_epoch_transition(i as u64 - 1, epoch_height)
             {
-                let parent_qc = self.leaves[i - 1].qc().clone();
+                let parent_qc = self.leaves[i - 1].qc().as_qc2().unwrap().clone();
                 let parent_epoch = epoch_from_block_number(i as u64 - 1, epoch_height);
                 let parent_upgrade = Upgrade::trivial(self.version_at(i as u64 - 1));
                 let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
@@ -1017,7 +1022,7 @@ impl Client for TestClient {
                 .get(&height)
                 .with_context(|| format!("missing cert2 for new-protocol leaf {height}"))?
                 .clone();
-            proof.add_certificate(Arc::new(cert2), leaf.qc().clone());
+            proof.add_certificate(Arc::new(cert2), leaf.qc().as_qc2().unwrap().clone());
             return Ok(proof);
         }
 

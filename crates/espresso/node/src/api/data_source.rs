@@ -10,8 +10,7 @@ use espresso_api::v1::{
     status::NodePublicKeys,
 };
 use espresso_types::{
-    Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
-    Transaction,
+    Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     v0::traits::PersistenceOptions,
     v0_3::{
@@ -31,7 +30,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
-    data::{EpochNumber, VidShare, ViewNumber},
+    data::{EpochNumber, VidShare, ViewNumber, history::HistoricLeaf},
     light_client::LCV3StateSignatureRequestBody,
     signature_key::BLSPubKey,
     simple_certificate::LightClientStateUpdateCertificateV2,
@@ -282,7 +281,7 @@ pub(crate) trait CatchupDataSource: Sync {
     fn get_leaf_chain(
         &self,
         _height: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<HistoricLeaf<SeqTypes>>>> {
         async { anyhow::bail!("leaf chain catchup is not supported for this data source") }
     }
 
@@ -653,7 +652,7 @@ mod test {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
-    use espresso_types::BlockMerkleTree;
+    use espresso_types::{BlockMerkleTree, Leaf2};
     use hotshot_query_service::{
         data_source::storage::{
             AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage, sql::StorageConnectionType,

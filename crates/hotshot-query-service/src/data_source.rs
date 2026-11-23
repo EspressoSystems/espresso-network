@@ -137,7 +137,7 @@ pub mod availability_tests {
         node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
-        data::{Leaf2, vid_commitment},
+        data::vid_commitment,
         traits::{BlockPayload, block_contents::EncodeBytes},
     };
 
@@ -170,10 +170,7 @@ pub mod availability_tests {
         let mut leaves = leaf_range(ds, ..).await.enumerate();
         while let Some((i, leaf)) = leaves.next().await {
             assert_eq!(leaf.height(), i as u64);
-            assert_eq!(
-                leaf.hash(),
-                <Leaf2<MockTypes> as Committable>::commit(&leaf.leaf)
-            );
+            assert_eq!(leaf.hash(), leaf.leaf.commit());
 
             // Check indices.
             tracing::info!("looking up leaf {i} various ways");

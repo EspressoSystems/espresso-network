@@ -402,7 +402,7 @@ mod test {
         let leaf = verify_leaf_chain(chain, &coordinator, 10, &upgrade_lock)
             .await
             .unwrap();
-        assert_eq!(Committable::commit(&leaf), expected);
+        assert_eq!(leaf.commit(), expected);
     }
 
     /// A QC claiming epoch 2 in its signed payload but signed by epoch 1's quorum must fail
@@ -475,7 +475,7 @@ mod test {
         let leaf = verify_leaf_chain(chain, &coordinator, 3, &upgrade_lock)
             .await
             .unwrap();
-        assert_eq!(Committable::commit(&leaf), expected);
+        assert_eq!(leaf.commit(), expected);
     }
 
     /// A QC claiming no epoch is still checked against the genesis quorum's signatures.

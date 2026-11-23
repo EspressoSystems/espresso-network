@@ -1,11 +1,14 @@
 use anyhow::{Context, Result};
 use committable::Commitment;
 use espresso_types::{
-    Certificate2, FeeAccount, FeeMerkleTree, Leaf2,
+    Certificate2, FeeAccount, FeeMerkleTree,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
+use hotshot_types::{
+    data::{VidShare, history::HistoricLeaf},
+    simple_certificate::LightClientStateUpdateCertificateV2,
+};
 use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
@@ -49,7 +52,7 @@ pub enum Response {
     /// A response for the accounts at a given height and view
     Accounts(FeeMerkleTree),
     /// A request for the leaf chain at a given height
-    Leaf(Vec<Leaf2>),
+    Leaf(Vec<HistoricLeaf<SeqTypes>>),
     /// A response for a chain config with a particular commitment
     ChainConfig(ChainConfig),
     /// A response for the blocks frontier

@@ -56,7 +56,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, VidShare, history::HistoricLeaf},
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -2415,7 +2415,7 @@ where
             .map_err(|err| not_found(format!("{err:#}")))
     }
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_leaf_chain(height)
             .await

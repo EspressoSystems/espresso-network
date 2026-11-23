@@ -4502,7 +4502,10 @@ mod tests {
         ) -> anyhow::Result<espresso_types::v0_3::ChainConfig> {
             unimplemented!()
         }
-        async fn get_leaf_chain(&self, _height: u64) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
+        async fn get_leaf_chain(
+            &self,
+            _height: u64,
+        ) -> anyhow::Result<Vec<hotshot_types::data::history::HistoricLeaf<SeqTypes>>> {
             unimplemented!()
         }
         async fn get_cert2(

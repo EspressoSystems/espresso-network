@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail, ensure};
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use disco_types::status::StatusCode;
 use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
 use futures::{TryStreamExt, future::try_join, stream::StreamExt};
@@ -13,7 +13,9 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::simple_certificate::QuorumCertificate2;
+use hotshot_types::{
+    data::history::HistoricQuorumCertificate, simple_certificate::QuorumCertificate2,
+};
 use itertools::izip;
 use jf_merkle_tree_compat::{
     DigestAlgorithm, MerkleTreeScheme,
@@ -183,7 +185,7 @@ async fn complete_proof_with_cert2<State>(
     state: &State,
     proof: &mut LeafProof,
     leaf: LeafQueryData<SeqTypes>,
-    requested_leaf_qc: QuorumCertificate2<SeqTypes>,
+    requested_leaf_qc: HistoricQuorumCertificate<SeqTypes>,
     fetch_timeout: Duration,
     chain_limit: usize,
 ) -> Result<(), Error>
@@ -263,7 +265,7 @@ where
         if start_commit != cert2.data.leaf_commit {
             return Err(internal("stored cert2 does not finalize the expected leaf"));
         }
-        proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+        proof.add_certificate(Arc::new(cert2), require_qc2(requested_leaf_qc)?);
         return Ok(());
     }
 
@@ -284,7 +286,7 @@ where
                 return Err(internal("stored cert2 does not finalize the expected leaf"));
             }
             if !proof.push(leaf) {
-                proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+                proof.add_certificate(Arc::new(cert2), require_qc2(requested_leaf_qc)?);
             }
             return Ok(());
         }
@@ -294,6 +296,15 @@ where
     }
 
     Err(not_found("missing cert2 leaf"))
+}
+
+/// The QC a new-protocol proof carries for its requested leaf, which a cert2 proves and so has an
+/// epoch.
+fn require_qc2(
+    qc: HistoricQuorumCertificate<SeqTypes>,
+) -> Result<QuorumCertificate2<SeqTypes>, Error> {
+    qc.into_qc2()
+        .ok_or_else(|| internal("a new-protocol proof needs a QC with an epoch"))
 }
 
 pub(crate) async fn get_leaf_proof_with_finalized_assumption<State>(
@@ -793,7 +804,7 @@ mod test {
     fn cert2_for_leaf(leaf: &LeafQueryData<SeqTypes>) -> espresso_types::Certificate2<SeqTypes> {
         let data = Vote2Data {
             leaf_commit: leaf.leaf().commit(),
-            epoch: leaf.qc().data.epoch.unwrap(),
+            epoch: leaf.qc().as_qc2().unwrap().data.epoch.unwrap(),
             block_number: leaf.height(),
         };
         espresso_types::Certificate2::new(

@@ -23,6 +23,6 @@ pub use instance_state::{NodeState, UpgradeMap};
 pub use reward::*;
 pub use stake_table::*;
 pub use state::{
-    BuilderValidationError, ProposalValidationError, StateValidationError, ValidatedState,
-    get_l1_deposits,
+    BuilderValidationError, ProposalValidationError, StateLeaf, StateValidationError,
+    ValidatedState, get_l1_deposits,
 };
