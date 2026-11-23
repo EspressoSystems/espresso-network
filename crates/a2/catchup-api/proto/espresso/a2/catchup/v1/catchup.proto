@@ -27,8 +27,12 @@ service CatchupService {
   rpc GetStateCert(EpochRequest) returns (Encoded);
 
   // The payload with a VID commitment, decided or not, as consensus encodes payloads rather than
-  // bincode-encoded: what a restarted consensus node needs of blocks it voted on.
+  // bincode-encoded: what a consensus node missing a payload needs.
   rpc GetPayload(PayloadRequest) returns (Encoded);
+
+  // Whether GetPayload would answer with the payload now: asked of several services, so that the
+  // payload is downloaded from one of those that have it.
+  rpc HasPayload(PayloadRequest) returns (HasPayloadResponse);
 }
 
 message HeightRequest {
@@ -49,6 +53,10 @@ message ChainConfigRequest {
 message PayloadRequest {
   // The VID commitment, as tagged base64.
   string commitment = 1;
+}
+
+message HasPayloadResponse {
+  bool has = 1;
 }
 
 message EpochRequest {

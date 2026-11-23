@@ -19,18 +19,14 @@ use hotshot_types::{
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::{election::Membership, metrics::NoMetrics},
+    traits::{election::Membership, metrics::NoMetrics, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tokio::time::timeout;
 
 use crate::{
     helpers::test_upgrade_lock,
-    message::{
-        Message, MessageType, Validated,
-        fetch::Request,
-        payload::{PayloadFetchMessage, PayloadRequestBody},
-    },
+    message::{Message, MessageType, ProposalFetchMessage, ProposalFetchRequest, Validated},
     network::Cliquenet,
     tests::common::{runner::TestRunner, utils::epoch_length},
 };
@@ -302,10 +298,12 @@ fn send(
     view: u64,
 ) -> Message<TestTypes, Validated> {
     let view = ViewNumber::new(view);
-    let request = PayloadFetchMessage::Req(Request::new(view, PayloadRequestBody));
+    // The transport does not check what a message says, so any key may sign the request.
+    let (key, private_key) = BLSPubKey::generated_from_seed_indexed([1; 32], *view);
+    let request = ProposalFetchRequest::new(view, key, &private_key).unwrap();
     let message = Message {
         sender: from_key,
-        message_type: MessageType::PayloadFetch(request),
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
     };
     from.sender().unicast(view, &to_key, &message).unwrap();
     message

@@ -133,6 +133,15 @@ impl PayloadStore {
         }
     }
 
+    /// Whether the payload whose VID commitment is `commitment` is uploaded.
+    pub async fn has(&self, commitment: &str) -> anyhow::Result<bool> {
+        match self.objects.head(&self.key(commitment)).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// The bytes in `range` of the payload whose VID commitment is `commitment`, if it is
     /// uploaded, read without the rest of the payload.
     pub async fn get_range(

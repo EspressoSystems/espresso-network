@@ -489,6 +489,22 @@ impl ChainStore {
         }
     }
 
+    /// Whether [`Self::payload_by_commitment`] has the payload whose VID commitment is
+    /// `commitment`, found without reading it.
+    pub async fn has_payload(&self, commitment: &str) -> anyhow::Result<bool> {
+        if self
+            .recent
+            .as_ref()
+            .is_some_and(|recent| recent.get(commitment).is_some())
+        {
+            return Ok(true);
+        }
+        match &self.payloads {
+            Some(payloads) => payloads.has(commitment).await,
+            None => Ok(false),
+        }
+    }
+
     pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {
         self.decoded_part(height, Part::VidCommon).await
     }

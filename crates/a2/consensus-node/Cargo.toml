@@ -27,8 +27,10 @@ hotshot-contract-adapter = { workspace = true }
 http-client           = { workspace = true }
 humantime             = { workspace = true }
 espresso-types        = { workspace = true, features = ["node"] }
+futures               = { workspace = true }
 hotshot-types         = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
+rand                  = { workspace = true }
 serde                 = { workspace = true }
 serde_json            = { workspace = true }
 tokio                 = { workspace = true, features = ["macros", "rt-multi-thread"] }
@@ -40,8 +42,11 @@ vbs                   = { workspace = true }
 versions              = { workspace = true }
 
 [dev-dependencies]
+api-service    = { path = "../api-service" }
 axum           = { workspace = true }
+chain-store    = { workspace = true }
 espresso-types = { workspace = true, features = ["testing"] }
+object_store   = { workspace = true }
 serde_json     = { workspace = true }
 tempfile       = { workspace = true }
 tokio          = { workspace = true }

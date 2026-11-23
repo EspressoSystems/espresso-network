@@ -24,6 +24,7 @@ use espresso_types::{
     v0_4::{PermittedRewardMerkleTreeV2, RewardMerkleCommitmentV2},
     v0_7::RewardAccountV2,
 };
+use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     data::{VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -34,6 +35,7 @@ use hotshot_types::{
 use jf_merkle_tree_compat::{
     AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, MerkleTreeScheme,
 };
+use rand::seq::SliceRandom;
 use serde::de::DeserializeOwned;
 use tokio::time::timeout;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -44,6 +46,14 @@ use crate::store::NodeStore;
 
 /// How long one source may take to connect and answer, the answer's body included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How many API services are asked at once whether they have a payload: the node's own, and
+/// others drawn at random. A payload is with the store of every deployment whose node has it, so a
+/// few give a hit.
+const PAYLOAD_PROBES: usize = 4;
+
+/// How long an API service may take to say whether it has a payload.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The largest answer an API service may send; a reward tree bounds it.
 const MAX_ANSWER_SIZE: usize = 256 << 20;
@@ -292,24 +302,54 @@ async fn remembered(
 /// which acknowledged every payload this node voted vote2 on, first.
 #[async_trait]
 impl PayloadSource for ApiCatchup {
+    /// Asks the first source, the node's own API service unless it cannot be reached, and others
+    /// drawn at random, whether they have the payload, all at once, and downloads it from the
+    /// first that says so. Each time the fetcher asks again, others are drawn.
     async fn payload(&self, commitment: VidCommitment2) -> anyhow::Result<Option<Bytes>> {
         let commitment = VidCommitment::V2(commitment).to_string();
-        let answer = self
-            .ask("a payload", |mut client| {
-                let commitment = commitment.clone();
+        let mut probed = self.sources();
+        let mut others = probed.split_off(probed.len().min(1));
+        others.shuffle(&mut rand::thread_rng());
+        probed.extend(others.into_iter().take(PAYLOAD_PROBES - 1));
+
+        let mut probes: FuturesUnordered<_> = probed
+            .into_iter()
+            .map(|(url, channel)| {
+                let request = PayloadRequest {
+                    commitment: commitment.clone(),
+                };
                 async move {
-                    let answer = client.get_payload(PayloadRequest { commitment }).await?;
-                    Ok(answer.into_inner().data)
+                    let mut client = CatchupServiceClient::new(channel.clone());
+                    let has = timeout(PROBE_TIMEOUT, client.has_payload(request)).await;
+                    (url, channel, has)
                 }
             })
-            .await;
-        match answer {
-            Ok(payload) => Ok(Some(payload)),
-            Err(err) => {
-                tracing::debug!("no payload {commitment}: {err:#}");
-                Ok(None)
-            },
+            .collect();
+        while let Some((url, channel, has)) = probes.next().await {
+            match has {
+                Ok(Ok(answer)) if answer.get_ref().has => {},
+                Ok(Ok(_)) => continue,
+                Ok(Err(err)) => {
+                    tracing::debug!(%url, "has the payload {commitment}: {err:#}");
+                    continue;
+                },
+                Err(_) => {
+                    tracing::debug!(%url, "has the payload {commitment}: no answer in time");
+                    continue;
+                },
+            }
+            let mut client =
+                CatchupServiceClient::new(channel).max_decoding_message_size(MAX_ANSWER_SIZE);
+            let request = PayloadRequest {
+                commitment: commitment.clone(),
+            };
+            match timeout(REQUEST_TIMEOUT, client.get_payload(request)).await {
+                Ok(Ok(answer)) => return Ok(Some(answer.into_inner().data)),
+                Ok(Err(err)) => tracing::debug!(%url, "the payload {commitment}: {err:#}"),
+                Err(_) => tracing::debug!(%url, "the payload {commitment}: no answer in time"),
+            }
         }
+        Ok(None)
     }
 }
 
@@ -581,5 +621,55 @@ mod tests {
         let other = ValidatedState::from_header(chain[2].0.block_header()).block_merkle_tree;
         applied(&headers, 1, &frontier(&chain[1].1), 3, &other)
             .expect_err("the blocks do not make up another root");
+    }
+
+    /// A catchup service over a store holding `payloads`, keyed by commitment, at the URL returned.
+    async fn catchup_service(payloads: &[(VidCommitment2, &'static [u8])]) -> Url {
+        let objects = chain_store::payloads::PayloadStore::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            "p",
+            None,
+        );
+        let store = chain_store::ChainStore::new(chain_store::mem::MemBackend::default())
+            .with_payloads(objects);
+        for (commitment, payload) in payloads {
+            let commitment = VidCommitment::V2(*commitment).to_string();
+            store
+                .put_payload(&commitment, Bytes::from_static(payload), None)
+                .await
+                .unwrap();
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let catchup = api_service::catchup::Catchup::new(store, 10);
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(
+                    catchup_api::proto::catchup_service_server::CatchupServiceServer::new(catchup),
+                )
+                .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener)),
+        );
+        url
+    }
+
+    /// A payload is downloaded from a service that has it, whichever is asked first, and a
+    /// payload no service has is not found.
+    #[tokio::test]
+    async fn downloads_a_payload_from_a_service_that_has_it() {
+        let held = VidCommitment2::default();
+        let own = catchup_service(&[]).await;
+        let other = catchup_service(&[(held, b"payload")]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = crate::store::open(dir.path().into()).await.unwrap();
+        let catchup = ApiCatchup::new(own, vec![other], store);
+
+        let payload = catchup.payload(held).await.unwrap();
+        assert_eq!(payload.as_deref(), Some(&b"payload"[..]));
+
+        let empty = catchup_service(&[]).await;
+        let catchup = ApiCatchup::new(empty, Vec::new(), catchup.store.clone());
+        assert_eq!(catchup.payload(held).await.unwrap(), None);
     }
 }

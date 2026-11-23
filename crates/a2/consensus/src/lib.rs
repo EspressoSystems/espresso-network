@@ -13,7 +13,6 @@ pub mod logging;
 pub(crate) mod message;
 pub mod network;
 pub(crate) mod outbox;
-pub(crate) mod serve;
 pub mod state;
 pub mod storage;
 pub mod store;

@@ -73,7 +73,7 @@ pub async fn build_test_coordinator(
 ) -> Coordinator<TestTypes, MemStore> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let (payload_store, payload_source) = payloads;
-    let fetcher = crate::fetch::Fetcher::new(public_key).with_source(Arc::new(payload_source));
+    let fetcher = crate::fetch::Fetcher::new().with_source(Arc::new(payload_source));
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());

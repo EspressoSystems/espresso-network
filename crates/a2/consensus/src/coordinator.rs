@@ -48,19 +48,18 @@ use crate::{
     },
     discovery::{RETAINED_EPOCHS, ServiceBook, ServiceRecord},
     epoch::{EpochManager, EpochRootResult},
-    fetch::{Fetched, Fetcher, PayloadSource, Retry},
+    fetch::{Fetcher, PayloadSource},
     helpers::{ViewEpoch, proposal_commitment, validated_state_cert},
     leader_trace::LeaderTracerHandle,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
         MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
-        TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
+        TransactionMessage, Unchecked, Validated, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
-    serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{DEFAULT_DECIDE_LOG_LIMIT, DecidedState, Storage},
     store::{ConsensusStore, Restored},
@@ -154,10 +153,8 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(skip)]
     /// Proposals asked for, with the view this node was in when it last asked.
     requested_missing_proposals: HashMap<ProposalFetchKey<T>, ViewNumber>,
-    #[builder(default = Fetcher::new(public_key.clone()))]
+    #[builder(default)]
     fetcher: Fetcher<T>,
-    #[builder(default = Server::new(public_key.clone()))]
-    server: Server<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     /// Dispersals the block builder computed, until consensus asks to disperse their block.
@@ -458,8 +455,8 @@ where
                 upgrade_lock,
             ))
             .fetcher(match payload_source {
-                Some(source) => Fetcher::new(public_key.clone()).with_source(source),
-                None => Fetcher::new(public_key.clone()),
+                Some(source) => Fetcher::new().with_source(source),
+                None => Fetcher::new(),
             })
             .storage({
                 let storage = storage
@@ -563,6 +560,9 @@ where
                     // the vote is re-sent every timeout period until the
                     // view advances.
                     self.timer.reset();
+                    // Consensus asks again for the payloads it still needs when it handles the
+                    // timeout.
+                    self.fetcher.view_timed_out();
                     let stats = self.vote1_collector.stats(view);
                     if stats.is_empty() {
                         warn!(%view, %epoch, "timeout: no vote1 received for this view");
@@ -770,23 +770,12 @@ where
                         return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
                 },
-                Some(fetched) = self.fetcher.next() => match fetched {
-                    Fetched::Payload(out) => {
-                        self.fetcher.source_answered(out.view, out.payload_commitment);
-                        if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
-                            continue
-                        }
-                        self.vid_reconstructor.retire_view(out.view);
-                        return Ok(self.on_payload_obtained(out))
-                    },
-                    Fetched::NotInSource(view, commitment) => {
-                        self.fetcher.source_answered(view, commitment);
-                        if !self.consensus.is_reconstructed(view, commitment) {
-                            self.request_payload_from_peers(view, commitment);
-                        }
+                Some(out) = self.fetcher.next() => {
+                    if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
                         continue
-                    },
-                    Fetched::Rejected => continue,
+                    }
+                    self.vid_reconstructor.retire_view(out.view);
+                    return Ok(self.on_payload_obtained(out))
                 },
                 stored = self.storage.next() => {
                     let stored = stored.map_err(|e| {
@@ -824,8 +813,7 @@ where
     }
 
     fn on_payload_obtained(&mut self, out: ObtainedPayload<T>) -> ConsensusInput<T> {
-        self.server
-            .retain(out.view, out.payload_commitment, &out.payload);
+        self.fetcher.obtained(out.view, out.payload_commitment);
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder.on_block_reconstructed(
@@ -958,7 +946,6 @@ where
             },
             ConsensusOutput::LockUpdated(view) => {
                 debug!(%node, %view, "lock updated");
-                self.server.lock_moved(view);
             },
             ConsensusOutput::RequestMissingProposal { view, leaf_commit } => {
                 debug!(%node, %view, "request missing proposal");
@@ -971,20 +958,12 @@ where
                 payload_commitment,
             } => {
                 debug!(%node, %view, "request missing payload");
-                if let Some((peer, message)) = self.fetcher.request(
+                self.fetcher.request(
                     view,
                     payload_commitment,
-                    Retry::NewRound,
                     &self.consensus,
                     &self.membership_coordinator,
-                ) {
-                    self.unicast_in(
-                        self.slot_for(view),
-                        &peer,
-                        message.message_type,
-                        "payload request",
-                    )?;
-                }
+                );
             },
             ConsensusOutput::RequestBlockAndHeader(request) => {
                 debug!(
@@ -1339,7 +1318,6 @@ where
             },
             ConsensusOutput::ViewTimedOut(view) => {
                 debug!(%node, %view, "view timed out");
-                self.server.view_timed_out(view);
                 let epoch = self.consensus.current_epoch();
                 self.gc(epoch, GcScope::Timeout(view))?;
             },
@@ -1897,49 +1875,6 @@ where
                 self.maybe_validate_fetched_proposal(*proposal);
                 None
             },
-            MessageType::PayloadFetch(PayloadFetchMessage::Req(request)) => {
-                let view = request.view_number();
-                debug!(%node, %sender, %view, "received payload fetch request");
-                if let Err(err) = self.server.handle_request(
-                    &request,
-                    &message.sender,
-                    self.consensus.current_view(),
-                    self.network.sender(),
-                ) {
-                    warn!(%node, %sender, %view, %err, "failed to send payload response");
-                }
-                None
-            },
-            MessageType::PayloadFetch(PayloadFetchMessage::Res(response)) => {
-                let view = response.view_number();
-                debug!(%node, %sender, %view, "received payload fetch response");
-                let refused = self.fetcher.response(
-                    response,
-                    &message.sender,
-                    &self.consensus,
-                    &self.membership_coordinator,
-                );
-                for commit in refused {
-                    if !self.consensus.is_reconstructed(view, commit)
-                        && let Some((peer, message)) = self.fetcher.request(
-                            view,
-                            commit,
-                            Retry::SameRound,
-                            &self.consensus,
-                            &self.membership_coordinator,
-                        )
-                        && let Err(err) = self.unicast_in(
-                            self.slot_for(view),
-                            &peer,
-                            message.message_type,
-                            "payload request",
-                        )
-                    {
-                        warn!(%node, %sender, %view, %err, "failed to send payload request");
-                    }
-                }
-                None
-            },
             MessageType::ServiceRecord(record) => {
                 let epoch = record.record.epoch;
                 let staked = is_epoch_admissible(epoch, self.consensus.current_epoch())
@@ -2024,28 +1959,6 @@ where
             .sender()
             .broadcast(slot, &message)
             .map_err(|e| CoordinatorError::from(e).context(ctx))
-    }
-
-    /// Asks a peer for the payload with commitment `commitment` of the block proposed in `view`,
-    /// which the payload source does not have.
-    fn request_payload_from_peers(&mut self, view: ViewNumber, commitment: VidCommitment2) {
-        let Some((peer, message)) = self.fetcher.request(
-            view,
-            commitment,
-            Retry::AfterSource,
-            &self.consensus,
-            &self.membership_coordinator,
-        ) else {
-            return;
-        };
-        if let Err(err) = self.unicast_in(
-            self.slot_for(view),
-            &peer,
-            message.message_type,
-            "payload request",
-        ) {
-            warn!(%view, %err, "failed to send payload request");
-        }
     }
 
     fn unicast_in(

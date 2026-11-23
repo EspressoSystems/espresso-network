@@ -2,8 +2,8 @@
 //! keeps it, for consensus nodes that are behind. They check every answer themselves.
 
 use catchup_api::proto::{
-    AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HeightRequest, LeafChainResponse,
-    PayloadRequest, catchup_service_server::CatchupService,
+    AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HasPayloadResponse, HeightRequest,
+    LeafChainResponse, PayloadRequest, catchup_service_server::CatchupService,
 };
 use chain_api::{StateRow, Tables};
 use chain_store::ChainStore;
@@ -199,6 +199,19 @@ impl CatchupService for Catchup {
             None => Err(Status::not_found(format!("no payload {commitment}"))),
         }
     }
+
+    async fn has_payload(
+        &self,
+        request: Request<PayloadRequest>,
+    ) -> Result<Response<HasPayloadResponse>, Status> {
+        let commitment = request.into_inner().commitment;
+        let has = self
+            .store
+            .has_payload(&commitment)
+            .await
+            .map_err(to_status)?;
+        Ok(Response::new(HasPayloadResponse { has }))
+    }
 }
 
 #[cfg(test)]
@@ -220,7 +233,8 @@ mod tests {
         assert_eq!(status.code(), tonic::Code::NotFound);
     }
 
-    /// A payload is answered by its commitment, decided or not, once the store holds it.
+    /// A payload is answered by its commitment, decided or not, once the store holds it, and so is
+    /// whether the store holds it.
     #[tokio::test]
     async fn answers_a_payload_by_its_commitment() {
         let objects = chain_store::payloads::PayloadStore::new(
@@ -242,6 +256,9 @@ mod tests {
 
         let answer = catchup.get_payload(request("C~1")).await.unwrap();
         assert_eq!(&answer.into_inner().data[..], b"payload");
+        let has = |commitment| catchup.has_payload(request(commitment));
+        assert!(has("C~1").await.unwrap().into_inner().has);
+        assert!(!has("C~2").await.unwrap().into_inner().has);
         let status = catchup
             .get_payload(request("C~2"))
             .await

@@ -1,6 +1,3 @@
-pub mod fetch;
-pub mod payload;
-
 use std::marker::PhantomData;
 
 use committable::{Commitment, Committable};
@@ -31,7 +28,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     discovery::SignedServiceRecord,
     helpers::proposal_commitment,
-    message::payload::PayloadFetchMessage,
     proposal::{
         MalformedProposal, epoch_matches_height, justify_qc_matches_parent,
         state_cert_matches_parent, view_change_evidence_matches_parent,
@@ -795,7 +791,6 @@ pub enum MessageType<T: NodeType, S> {
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
-    PayloadFetch(PayloadFetchMessage),
     /// The sender's record of its API service; see [`crate::discovery`].
     ServiceRecord(SignedServiceRecord<T>),
 }
@@ -808,7 +803,6 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::Block(b) => MessageType::Block(b),
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
-            Self::PayloadFetch(r) => MessageType::PayloadFetch(r),
             Self::ServiceRecord(r) => MessageType::ServiceRecord(r),
         }
     }
@@ -848,7 +842,6 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
-            MessageType::PayloadFetch(message) => message.view_number(),
             // Records are about epochs, not views.
             MessageType::ServiceRecord(_) => ViewNumber::genesis(),
         }
