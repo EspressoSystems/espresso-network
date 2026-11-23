@@ -161,12 +161,12 @@ pub fn generate_from(
     // The raw bytes of a payload are not a proto message, so their route is served beside the
     // generated ones (`payload_data` in the crate) and documented here.
     if paths
-        .entry("/v2/availability/payload-data".to_string())
+        .entry("/v2/availability/payload-data/{hash}".to_string())
         .or_default()
         .insert("get".to_string(), payload_data_operation())
         .is_some()
     {
-        return Err("duplicate route: get /v2/availability/payload-data".into());
+        return Err("duplicate route: get /v2/availability/payload-data/{hash}".into());
     }
 
     // A GET's request message is inlined as query parameters, so nothing can `$ref` it. Publishing
@@ -192,18 +192,21 @@ pub fn generate_from(
     }))
 }
 
-/// The operation serving a payload's raw bytes by its VID commitment, which a `PayloadRef` names.
+/// The operation serving a payload's raw bytes by its VID commitment.
 fn payload_data_operation() -> Value {
     json!({
         "tags": ["Availability"],
         "operationId": "GetPayloadData",
         "summary": "Get the raw bytes of a payload by its VID commitment",
-        "description": "The URL a `PayloadRef` names. The content of a URL never changes, so it \
-                        may be cached for good. Check the bytes against the reference's `blake3` \
-                        hash, or recompute the VID commitment from them for a full check.",
+        "description": "Streamed blocks and payloads come without the payload's bytes; they are \
+                        served here, under the VID commitment the header or response names. The \
+                        content of a URL never changes, so it may be cached for good. The server \
+                        may redirect to another place holding the bytes. Check the bytes against \
+                        the response's BLAKE3 hash, or recompute the VID commitment from them for \
+                        a full check.",
         "parameters": [{
             "name": "hash",
-            "in": "query",
+            "in": "path",
             "required": true,
             "description": "VID commitment to the payload, TaggedBase64",
             "schema": { "type": "string" },

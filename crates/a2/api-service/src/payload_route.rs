@@ -1,4 +1,5 @@
-//! The payload route, `PAYLOAD_DATA_ROUTE`, which the payload references in responses name.
+//! The payload route, `PAYLOAD_DATA_ROUTE`, which serves a payload's raw bytes under its VID
+//! commitment.
 //!
 //! Where clients reach the object store the payloads live in, the route redirects to the
 //! payload's object, whose URL follows from the payload's VID commitment and is valid before the
@@ -9,13 +10,12 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{Query, State},
+    extract::{Path, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
 use espresso_api::payload_data::{PAYLOAD_DATA_ROUTE, serve};
 use hotshot_types::data::VidCommitment;
-use serde::Deserialize;
 use tonic_rest::RestError;
 
 use crate::{ApiService, request::parse};
@@ -26,19 +26,7 @@ pub(crate) fn router(service: Arc<ApiService>) -> Router {
         .with_state(service)
 }
 
-#[derive(Debug, Deserialize)]
-struct PayloadQuery {
-    hash: Option<String>,
-}
-
-async fn payload(
-    State(service): State<Arc<ApiService>>,
-    Query(query): Query<PayloadQuery>,
-) -> Response {
-    let Some(hash) = query.hash else {
-        return RestError::from(tonic::Status::invalid_argument("hash is required"))
-            .into_response();
-    };
+async fn payload(State(service): State<Arc<ApiService>>, Path(hash): Path<String>) -> Response {
     let commitment: VidCommitment = match parse(&hash, "hash") {
         Ok(commitment) => commitment,
         Err(status) => return RestError::from(status).into_response(),

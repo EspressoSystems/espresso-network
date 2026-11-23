@@ -222,8 +222,8 @@ where
         /// Where payloads go, and the acknowledgements that report them durable: the
         /// deployment's storage instances.
         payload_sink: (PayloadQueue, Acks),
-        /// Where payloads missing from memory are asked for before peers: the deployment's
-        /// store, through its API services.
+        /// Where payloads missing from memory are asked for: the deployment's store and those
+        /// of other deployments, through their API services.
         payload_source: Option<Arc<dyn PayloadSource>>,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,

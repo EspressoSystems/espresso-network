@@ -4497,7 +4497,7 @@ where
             .map_err(to_status)?;
         Ok(tonic::Response::new(
             blocks
-                .map(|block| Ok(espresso_api::block_by_reference(&block)))
+                .map(|block| Ok(espresso_api::block_without_payload(&block)))
                 .boxed(),
         ))
     }
@@ -4514,7 +4514,7 @@ where
             .map_err(to_status)?;
         Ok(tonic::Response::new(
             payloads
-                .map(|payload| Ok(espresso_api::payload_by_reference(&payload)))
+                .map(|payload| Ok(espresso_api::payload_without_data(&payload)))
                 .boxed(),
         ))
     }

@@ -58,7 +58,6 @@ use light_client::consensus::{
 use tagged_base64::TaggedBase64;
 
 use crate::{
-    payload_data,
     proto::{
         self, advz_merkle_node::Node, header_response::Header as Shape,
         resolvable_chain_config::ChainConfig,
@@ -1053,24 +1052,22 @@ impl From<&BlockQueryData<SeqTypes>> for proto::BlockResponse {
     fn from(block: &BlockQueryData<SeqTypes>) -> Self {
         proto::BlockResponse {
             payload: Some(block.payload().into()),
-            ..block_by_reference(block)
+            ..block_without_payload(block)
         }
     }
 }
 
-/// `block` as a stream sends it: its payload by reference only.
-pub fn block_by_reference(block: &BlockQueryData<SeqTypes>) -> proto::BlockResponse {
-    let hash = block.payload_hash().to_string();
+/// `block` as a stream sends it: without its payload, whose bytes the hash names.
+pub fn block_without_payload(block: &BlockQueryData<SeqTypes>) -> proto::BlockResponse {
     proto::BlockResponse {
         header: Some(block.header().into()),
         payload: None,
         hash: block.hash().to_string(),
         size: block.size(),
         num_transactions: block.num_transactions(),
-        payload_ref: Some(payload_data::reference(
-            &hash,
-            block.payload().raw_payload(),
-        )),
+        payload_blake3: blake3::hash(block.payload().raw_payload())
+            .to_hex()
+            .to_string(),
     }
 }
 
@@ -1078,8 +1075,22 @@ impl From<&PayloadQueryData<SeqTypes>> for proto::PayloadResponse {
     fn from(payload: &PayloadQueryData<SeqTypes>) -> Self {
         proto::PayloadResponse {
             data: Some(payload.data().into()),
-            ..payload_by_reference(payload)
+            ..payload_without_data(payload)
         }
+    }
+}
+
+/// `payload` as a stream sends it: without its bytes, which the hash names.
+pub fn payload_without_data(payload: &PayloadQueryData<SeqTypes>) -> proto::PayloadResponse {
+    proto::PayloadResponse {
+        height: payload.height,
+        block_hash: payload.block_hash().to_string(),
+        hash: payload.hash().to_string(),
+        size: payload.size(),
+        data: None,
+        blake3: blake3::hash(payload.data().raw_payload())
+            .to_hex()
+            .to_string(),
     }
 }
 
@@ -1091,41 +1102,26 @@ pub fn block_by_info(
     size: u64,
     num_transactions: u64,
 ) -> proto::BlockResponse {
-    let hash = header.payload_commitment().to_string();
     proto::BlockResponse {
         header: Some(header.into()),
         payload: None,
         hash: header.commit().to_string(),
         size,
         num_transactions,
-        payload_ref: Some(payload_data::reference_of(&hash, blake3, size)),
+        payload_blake3: blake3::Hash::from_bytes(*blake3).to_hex().to_string(),
     }
 }
 
 /// The payload of the block whose header is `header` as a stream sends it, from the BLAKE3 hash
 /// `blake3` and `size` of its raw bytes.
 pub fn payload_by_info(header: &Header, blake3: &[u8; 32], size: u64) -> proto::PayloadResponse {
-    let hash = header.payload_commitment().to_string();
     proto::PayloadResponse {
         height: header.height(),
         block_hash: header.commit().to_string(),
+        hash: header.payload_commitment().to_string(),
         size,
         data: None,
-        payload_ref: Some(payload_data::reference_of(&hash, blake3, size)),
-        hash,
-    }
-}
-
-/// `payload` as a stream sends it: by reference only.
-pub fn payload_by_reference(payload: &PayloadQueryData<SeqTypes>) -> proto::PayloadResponse {
-    let hash = payload.hash().to_string();
-    proto::PayloadResponse {
-        height: payload.height,
-        block_hash: payload.block_hash().to_string(),
-        size: payload.size(),
-        data: None,
-        payload_ref: Some(payload_data::reference(&hash, payload.data().raw_payload())),
-        hash,
+        blake3: blake3::Hash::from_bytes(*blake3).to_hex().to_string(),
     }
 }
 

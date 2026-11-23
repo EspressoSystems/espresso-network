@@ -5084,7 +5084,7 @@ mod tests {
             "/v2/availability/block-range",
             "/v2/availability/block-ranges",
             "/v2/availability/payload",
-            "/v2/availability/payload-data",
+            "/v2/availability/payload-data/{hash}",
             "/v2/availability/payload-range",
             "/v2/availability/vid-common",
             "/v2/availability/vid-common-range",

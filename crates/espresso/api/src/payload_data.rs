@@ -1,47 +1,33 @@
 //! The raw bytes of a payload, addressed by its VID commitment.
 //!
-//! Streams send a block's payload by reference ([`proto::PayloadRef`]): a URL of this route, the
-//! payload's BLAKE3 hash and its size. The route serves the bytes as they are, never changing for
-//! a URL, so they can be cached by anyone, or moved to an object store behind the same reference.
+//! Streams send blocks and payloads without the payload's bytes, but with their BLAKE3 hash. The
+//! bytes are served at this route of the same API, under the payload's VID commitment, which a
+//! block's header and a payload response name. A URL's content never changes, so it can be cached
+//! by anyone, and a server may redirect to another place that holds the bytes, such as an object
+//! store.
 
 use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{Query, State},
+    extract::{Path, State},
     http::header,
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde::Deserialize;
 use tonic_rest::RestError;
 
 use crate::proto::{self, availability_service_server::AvailabilityService};
 
 /// The route, which takes the payload's VID commitment as `hash`.
-pub const PAYLOAD_DATA_ROUTE: &str = "/v2/availability/payload-data";
+pub const PAYLOAD_DATA_ROUTE: &str = "/v2/availability/payload-data/{hash}";
 
 /// How long a client may cache a payload: a year, since a URL's content never changes.
 const CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
-/// The URL of the payload whose VID commitment is `hash`, relative to the API serving it.
-pub fn url(hash: &str) -> String {
-    format!("{PAYLOAD_DATA_ROUTE}?hash={hash}")
-}
-
-/// The reference to `raw`, the raw bytes of the payload whose VID commitment is `hash`.
-pub fn reference(hash: &str, raw: &[u8]) -> proto::PayloadRef {
-    reference_of(hash, blake3::hash(raw).as_bytes(), raw.len() as u64)
-}
-
-/// The reference to the payload whose VID commitment is `hash`, whose raw bytes have the BLAKE3
-/// hash `blake3` and are `size` long, for a server that knows these without the bytes.
-pub fn reference_of(hash: &str, blake3: &[u8; 32], size: u64) -> proto::PayloadRef {
-    proto::PayloadRef {
-        url: url(hash),
-        blake3: blake3::Hash::from_bytes(*blake3).to_hex().to_string(),
-        size,
-    }
+/// The path of the payload whose VID commitment is `hash`.
+pub fn path(hash: &str) -> String {
+    format!("/v2/availability/payload-data/{hash}")
 }
 
 /// The route, answered from `state`'s `GetPayload`.
@@ -54,22 +40,10 @@ where
         .with_state(state)
 }
 
-#[derive(Debug, Deserialize)]
-struct PayloadDataQuery {
-    hash: Option<String>,
-}
-
-async fn payload_data<S>(
-    State(state): State<Arc<S>>,
-    Query(query): Query<PayloadDataQuery>,
-) -> Response
+async fn payload_data<S>(State(state): State<Arc<S>>, Path(hash): Path<String>) -> Response
 where
     S: AvailabilityService + Send + Sync + 'static,
 {
-    let Some(hash) = query.hash else {
-        return RestError::from(tonic::Status::invalid_argument("hash is required"))
-            .into_response();
-    };
     serve(state.as_ref(), hash).await
 }
 

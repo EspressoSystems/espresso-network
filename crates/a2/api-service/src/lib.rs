@@ -231,10 +231,10 @@ mod tests {
         assert_eq!(status, 404);
     }
 
-    /// A streamed block carries its payload by reference only, and the reference's URL serves the
-    /// raw bytes it describes, for good.
+    /// A streamed block comes without its payload, whose raw bytes the payload route serves under
+    /// the payload commitment, for good, matching the block's BLAKE3 hash and size.
     #[tokio::test]
-    async fn streams_the_payload_by_reference() {
+    async fn streams_blocks_without_their_payloads() {
         let (store, url) = serve().await;
         let (item, _) = genesis().await;
         // Any bytes: the store does not check them against the header.
@@ -267,11 +267,14 @@ mod tests {
             .unwrap();
         let block: Value = serde_json::from_str(data.trim()).unwrap();
         assert!(block.get("payload").is_none(), "no payload inline: {block}");
-        let reference = &block["payloadRef"];
+        let commitment = item.leaf.block_header().payload_commitment().to_string();
 
-        let fetched = reqwest::get(format!("{url}{}", reference["url"].as_str().unwrap()))
-            .await
-            .unwrap();
+        let fetched = reqwest::get(format!(
+            "{url}{}",
+            espresso_api::payload_data::path(&commitment)
+        ))
+        .await
+        .unwrap();
         assert_eq!(fetched.status(), 200);
         assert!(
             fetched.headers()["cache-control"]
@@ -282,10 +285,10 @@ mod tests {
         let bytes = fetched.bytes().await.unwrap();
         assert_eq!(&bytes[..], &payload[..]);
         assert_eq!(
-            reference["blake3"].as_str().unwrap(),
+            block["payloadBlake3"].as_str().unwrap(),
             blake3::hash(&bytes).to_hex().as_str()
         );
-        assert_eq!(reference["size"], Value::from(bytes.len().to_string()));
+        assert_eq!(block["size"], Value::from(bytes.len().to_string()));
     }
 
     /// With payloads in an object store that clients reach, the payload route redirects to the
@@ -312,7 +315,7 @@ mod tests {
             .await
             .unwrap();
         let commitment = item.leaf.block_header().payload_commitment().to_string();
-        let route = format!("{url}/v2/availability/payload-data?hash={commitment}");
+        let route = format!("{url}{}", espresso_api::payload_data::path(&commitment));
 
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -334,7 +337,8 @@ mod tests {
         };
         store.put(&item, &with_payload).await.unwrap();
         let served = reqwest::get(format!(
-            "{url}/v2/availability/payload-data?hash={commitment}"
+            "{url}{}",
+            espresso_api::payload_data::path(&commitment)
         ))
         .await
         .unwrap();
