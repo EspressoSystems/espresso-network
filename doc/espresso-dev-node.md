@@ -124,3 +124,16 @@ Parameter
 | Name     | Type    | Required | Description                                                                                                          |
 | -------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
 | chain_id | integer | No       | chain id for which the height needs to be unfrozen. If not provided, the base L1 light client contract will be used. |
+
+## Reward claims
+
+The dev node serves reward claims like a production node. A claim proves a balance against the reward root that the L1
+light client contract has finalized, so the node stores reward proofs only for the HotShot height the light client has
+finalized:
+
+- Ask for `reward-state-v2/reward-claim-input/{height}/{address}` at the light client's `finalizedState().blockHeight`.
+  Any height in the same epoch gives the same answer, as the node stores the proofs at the epoch boundary below it.
+- After the prover updates the light client (every `update_interval`, 20 s by default), the node stores the new proofs
+  at its next block whose height is a multiple of 30. Until then, a claim at the new height returns 404.
+- The node deletes reward trees and proofs that are more than 5 epochs old, but keeps the ones the light client's height
+  needs.
