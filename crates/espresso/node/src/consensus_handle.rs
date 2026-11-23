@@ -264,7 +264,7 @@ where
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
         let Some(client_api) = self.client_api().await else {
             let epoch_length = self.epoch_length?;
-            return self.resting.read().leaf.epoch(epoch_length.get());
+            return self.resting.read().leaf.epoch(epoch_length);
         };
         match client_api.current_epoch().await {
             Ok(epoch) => Some(epoch),

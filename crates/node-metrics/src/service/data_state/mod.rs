@@ -16,9 +16,9 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
+    epoch::EpochLength,
     signature_key::BLSPubKey,
     traits::{BlockPayload, EncodeBytes, block_contents::BlockHeader},
-    utils::epoch_from_block_number,
 };
 use indexmap::IndexMap;
 pub use location_details::LocationDetails;
@@ -303,21 +303,21 @@ pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> Block
 
 // epoch_number_helper is a utility function that will determine the
 // epoch number based on the given [block_height], [epoch_starting_block],
-// and [num_blocks_per_epoch].
+// and [epoch_length].
 //
 // This function will ensure that the epoch number is zero if the given
 // [block_height] is less than the [epoch_starting_block]. Otherwise it
-// will return the [epoch_from_block_number] result.
+// will return the epoch of the block.
 fn epoch_number_helper(
     block_height: u64,
     epoch_starting_block: u64,
-    num_blocks_per_epoch: u64,
+    epoch_length: EpochLength,
 ) -> u64 {
     if block_height < epoch_starting_block {
         return 0;
     }
 
-    epoch_from_block_number(block_height, num_blocks_per_epoch)
+    *epoch_length.epoch_of(block_height)
 }
 
 async fn perform_stake_table_epoch_check_and_update<STSink, EVSink>(
@@ -336,15 +336,16 @@ where
     // Do we need to replace our stake table?
     tracing::debug!("processing block height: {block_height}");
     let epoch_starting_block = hotshot_config.epoch_start_block.unwrap_or(0);
-    let num_blocks_per_epoch = hotshot_config.epoch_height.unwrap_or(0);
-    if hotshot_config.epoch_height.is_some() && num_blocks_per_epoch > 0 {
+    let epoch_length = hotshot_config
+        .epoch_height
+        .and_then(|blocks| EpochLength::try_from(blocks).ok());
+    if let Some(epoch_length) = epoch_length {
         let previous_epoch = epoch_number_helper(
             block_height.saturating_sub(1),
             epoch_starting_block,
-            num_blocks_per_epoch,
+            epoch_length,
         );
-        let upcoming_epoch =
-            epoch_number_helper(block_height, epoch_starting_block, num_blocks_per_epoch);
+        let upcoming_epoch = epoch_number_helper(block_height, epoch_starting_block, epoch_length);
 
         if upcoming_epoch != previous_epoch {
             tracing::debug!(

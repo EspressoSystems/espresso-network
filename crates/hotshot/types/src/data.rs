@@ -18,7 +18,6 @@ use std::{
 
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
-use hotshot_utils::anytrace::*;
 use jf_advz::VidScheme;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -29,6 +28,7 @@ use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
+    epoch::EpochLength,
     message::{Proposal, UpgradeLock},
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
@@ -47,10 +47,7 @@ use crate::{
         signature_key::SignatureKey,
         states::TestableState,
     },
-    utils::{
-        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
-        option_epoch_from_block_number,
-    },
+    utils::{EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version},
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
@@ -942,28 +939,6 @@ impl<TYPES: NodeType> From<QuorumProposalWrapperLegacy<TYPES>> for QuorumProposa
     }
 }
 
-impl<TYPES: NodeType> QuorumProposal2<TYPES> {
-    /// Validates whether the epoch is consistent with the version and the block number
-    /// # Errors
-    /// Returns an error if the epoch is inconsistent with the version or the block number
-    pub async fn validate_epoch(
-        &self,
-        upgrade_lock: &UpgradeLock<TYPES>,
-        epoch_height: u64,
-    ) -> Result<()> {
-        let calculated_epoch = option_epoch_from_block_number(
-            upgrade_lock.epochs_enabled(self.view_number()),
-            self.block_header.block_number(),
-            epoch_height,
-        );
-        ensure!(
-            calculated_epoch == self.epoch(),
-            "Quorum proposal invalid: inconsistent epoch."
-        );
-        Ok(())
-    }
-}
-
 impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     /// Helper function to get the proposal's block_header
     pub fn block_header(&self) -> &TYPES::BlockHeader {
@@ -998,19 +973,6 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     /// Helper function to get the proposal's next_drb_result
     pub fn next_drb_result(&self) -> &Option<DrbResult> {
         &self.proposal.next_drb_result
-    }
-
-    /// Validates whether the epoch is consistent with the version and the block number
-    /// # Errors
-    /// Returns an error if the epoch is inconsistent with the version or the block number
-    pub async fn validate_epoch(
-        &self,
-        upgrade_lock: &UpgradeLock<TYPES>,
-        epoch_height: u64,
-    ) -> Result<()> {
-        self.proposal
-            .validate_epoch(upgrade_lock, epoch_height)
-            .await
     }
 
     /// Helper function to get the proposal's light client state update certificate
@@ -1367,12 +1329,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.view_number
     }
     /// Epoch in which this leaf was created.
-    pub fn epoch(&self, epoch_height: u64) -> Option<EpochNumber> {
-        option_epoch_from_block_number(
-            self.with_epoch,
-            self.block_header.block_number(),
-            epoch_height,
-        )
+    pub fn epoch(&self, epoch_length: EpochLength) -> Option<EpochNumber> {
+        self.with_epoch
+            .then(|| epoch_length.epoch_of(self.block_header.block_number()))
     }
     /// Height of this leaf in the chain.
     ///

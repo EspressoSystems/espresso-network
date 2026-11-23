@@ -828,7 +828,7 @@ async fn test_epoch_change_votes() {
 #[tokio::test]
 async fn test_first_epoch_leader_proposes_without_drb() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
-    // View 8 (block 8) is in the transition window: is_epoch_transition(8, 10) = true.
+    // View 8 (block 8) is in the transition window of a 10 block epoch.
     // Node 8 is the leader for view 8 (8 % 10 = 8).
     let mut harness = ConsensusHarness::new(8).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 8).0;
@@ -864,7 +864,7 @@ async fn test_second_epoch_node_votes_and_proposes_with_computed_drb() {
     let test_data = TestData::new_with_epoch_height(19, EPOCH_HEIGHT).await;
 
     // View 18 (block 18) is in epoch 2's transition window:
-    //   epoch_from_block_number(18, 10) = 2, is_epoch_transition(18, 10) = true.
+    //   Block 18 is in epoch 2 and in its transition window, with 10 blocks to an epoch.
     // Leader for view 18 = 18 % 10 = 8 → node 8.
     let mut harness = ConsensusHarness::new(8).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 8).0;

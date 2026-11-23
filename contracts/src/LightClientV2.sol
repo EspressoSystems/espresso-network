@@ -198,7 +198,7 @@ contract LightClientV2 is LightClient {
     }
 
     /// @notice Calculate the epoch number from the hotshot block number
-    /// @dev same logic as `hotshot_types::utils::epoch_from_block_number()`
+    /// @dev same logic as `hotshot_types::epoch::EpochLength::epoch_of()`
     function epochFromBlockNumber(uint64 _blockNum, uint64 _blocksPerEpoch)
         public
         pure

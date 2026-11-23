@@ -149,7 +149,7 @@ pub async fn build_test_coordinator(
         // `parent_block_reconstructed` check.
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
-            .epoch(epoch_height)
+            .epoch(epoch_length(epoch_height))
             .unwrap_or(EpochNumber::genesis());
         let anchor_proposal = Proposal {
             block_header: anchor_leaf.block_header().clone(),

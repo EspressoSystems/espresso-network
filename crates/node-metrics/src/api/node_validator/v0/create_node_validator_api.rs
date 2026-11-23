@@ -6,7 +6,7 @@ use futures::{
     Sink, SinkExt,
     channel::mpsc::{self, Receiver, SendError, Sender},
 };
-use hotshot_types::utils::epoch_from_block_number;
+use hotshot_types::epoch::EpochLength;
 use indexmap::IndexMap;
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
@@ -130,14 +130,16 @@ pub async fn create_node_validator_processing(
     let mut validator_map = IndexMap::new();
 
     let epoch_starting_block = hotshot_config.epoch_start_block.unwrap_or(0);
-    let num_blocks_per_epoch = hotshot_config.epoch_height.unwrap_or(0);
-    if hotshot_config.epoch_height.is_some() && num_blocks_per_epoch > 0 {
+    let epoch_length = hotshot_config
+        .epoch_height
+        .and_then(|blocks| EpochLength::try_from(blocks).ok());
+    if let Some(epoch_length) = epoch_length {
         tracing::info!(
             "epoch starting block: {}, num blocks per epoch: {}",
             epoch_starting_block,
-            num_blocks_per_epoch
+            epoch_length.get()
         );
-        let epoch = epoch_from_block_number(config.starting_block_height, num_blocks_per_epoch);
+        let epoch = *epoch_length.epoch_of(config.starting_block_height);
         if config.starting_block_height >= epoch_starting_block {
             // Let's fetch our initial stake table that is not derived from the
             // initial configuration.

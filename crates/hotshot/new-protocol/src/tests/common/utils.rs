@@ -1266,7 +1266,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            self.consensus.epoch_length.get(),
+            self.consensus.epoch_length,
         );
         record_leader(&mut self.trace, &self.consensus, &input);
         record_fallback_anchor(&mut self.trace, &self.consensus);
@@ -1415,7 +1415,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            self.consensus.epoch_length.get(),
+            self.consensus.epoch_length,
         );
         self.trace.placed(view, epoch);
         self.consensus.set_view(view, epoch);
@@ -1433,7 +1433,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            self.consensus.epoch_length.get(),
+            self.consensus.epoch_length,
         );
         let first_allowed = (anchor_view + 1)
             .max(restart_view)
@@ -1450,7 +1450,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            self.consensus.epoch_length.get(),
+            self.consensus.epoch_length,
         );
         self.trace.forced(view);
         self.consensus.force_set_proposal(view, proposal);
@@ -1465,7 +1465,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            self.consensus.epoch_length.get(),
+            self.consensus.epoch_length,
         );
         for proposal in &proposals {
             self.trace.held(proposal);
@@ -1534,7 +1534,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            self.consensus.epoch_length.get(),
+            self.consensus.epoch_length,
         );
         let input = ConsensusInput::Proposal(sender, proposal);
         record_leader(&mut self.trace, &self.consensus, &input);

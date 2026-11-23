@@ -11,7 +11,7 @@
 //! next epoch's DRB result (`NewProtocolDiff.transitionWindow`). The two have
 //! to name the same blocks, or a node waiting for a DRB result is read as late.
 
-use hotshot_types::utils::is_epoch_transition;
+use super::common::utils::epoch_length;
 
 /// This crate's recorder, read as text.
 const TRACE_RS: &str = include_str!("../trace.rs");
@@ -74,10 +74,10 @@ fn every_name_the_checker_reads_is_one_the_recorder_writes() {
 fn the_checker_copies_the_transition_window() {
     let window = lean_number("transitionWindow");
     let root = lean_number("rootDistance");
-    for height in 0..=12 {
+    for height in 1..=12 {
         for block in 0..=3 * height + 1 {
             assert_eq!(
-                is_epoch_transition(block, height),
+                epoch_length(height).position(block).is_epoch_transition(),
                 block != 0
                     && height > root
                     && (block % height >= height - window || block % height == 0),
