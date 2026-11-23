@@ -24,11 +24,12 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
   `verify_block_merkle_root` hashes it and compares the result with `blockCommRoot`. It arrives inside the header at
   `F`, and no other field of that header is used or trusted. Every epoch root the seed uses is proven against it.
 - `top_held_epoch` (`start` in code): the top of the highest pair of consecutive held epochs.
-- `requested_epoch` (`epoch` or `target` in code): the epoch catchup was asked for.
+- `requested_epoch` (`epoch` or `target` in code): the epoch of one `catchup` call. Several calls, each with its own
+  `requested_epoch`, can run at once.
 - `seed_window_first`, `seed_window_last` (`first`, `last` in code): the lowest and highest epoch of the seed window.
 - preceding root: `root(seed_window_first-3)`, fetched only for the block reward of `table(seed_window_first)`.
 
-## Where `requested_epoch` comes from
+## Which epochs catchup is requested for
 
 - Validator: no single value. Each message the node cannot verify yet starts a catchup for the epoch it names:
   - `HighQc` or TC3: catchup evidence that up-to-date peers send in reply to the node's stale timeout vote.
