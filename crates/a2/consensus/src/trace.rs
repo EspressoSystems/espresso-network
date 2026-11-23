@@ -994,9 +994,6 @@ fn write_json<T: NodeType>(write: &StorageOutput<T>) -> String {
                 obj(&[("v", view_json(*view)), ("kind", quoted(kind))]),
             )
         },
-        StorageOutput::DecideLogFull(_) => {
-            unreachable!("nothing held back waits on the decide log")
-        },
         StorageOutput::HighQc(lock) => tagged(
             "lock",
             obj(&[

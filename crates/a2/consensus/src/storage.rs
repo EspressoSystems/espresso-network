@@ -57,7 +57,7 @@ const MIN_RETRY_DELAY: Duration = Duration::from_millis(300);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// How many bytes the decide log may take up, with the payloads of its entries, before this
-/// node stops sending vote2, unless configured otherwise.
+/// node drops its oldest entries, unless configured otherwise.
 pub const DEFAULT_DECIDE_LOG_LIMIT: u64 = 10 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,9 +87,6 @@ pub enum StorageOutput<T: NodeType> {
     HighQc(LockView),
     /// The payload of the block with this commitment, proposed in this view, is on disk.
     Payload(ViewNumber, VidCommitment2),
-
-    /// The decide log has reached its limit, or has room again after reaching it.
-    DecideLogFull(bool),
 }
 
 impl<T: NodeType> StorageOutput<T> {
@@ -97,7 +94,6 @@ impl<T: NodeType> StorageOutput<T> {
         match self {
             Self::Proposal(view, _) | Self::Action(view, _) | Self::Payload(view, _) => *view,
             Self::HighQc(lock) => lock.view,
-            Self::DecideLogFull(_) => ViewNumber::genesis(),
         }
     }
 }
@@ -217,9 +213,6 @@ pub struct Storage<T: NodeType, S> {
     /// The size of the decide log, and the size at which it is full.
     decide_log_bytes: watch::Receiver<u64>,
     decide_log_limit: u64,
-
-    /// Whether the last [`StorageOutput::DecideLogFull`] reported the log full.
-    decide_log_full: bool,
 
     /// State certificates written since this writer started and not yet decided, by the view of
     /// their epoch root. A decide finds them here even before their write is durable.
@@ -441,7 +434,6 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             durable: Default::default(),
             decide_log_bytes,
             decide_log_limit: DEFAULT_DECIDE_LOG_LIMIT,
-            decide_log_full: false,
             state_certs: BTreeMap::new(),
             decided_state: None,
             foreign,
@@ -467,8 +459,10 @@ impl<T: NodeType, S: Store> Storage<T, S> {
 
     /// Sets how many bytes the decide log may take up, with the payloads of its entries.
     ///
-    /// Once it is full, [`Self::next`] reports [`StorageOutput::DecideLogFull`], and consensus
-    /// holds its vote2 until the store acknowledges entries.
+    /// Once it is full, the writer drops its oldest entries. The store then lacks those heights,
+    /// and its API instances fill them from other API services. A store that acknowledges
+    /// nothing for this long has also stopped acknowledging payloads, so this node has stopped
+    /// voting already, and the blocks were decided by others, whose stores have them.
     pub fn with_decide_log_limit(mut self, limit: u64) -> Self {
         self.decide_log_limit = limit;
         if let Some(m) = &self.metrics {
@@ -761,7 +755,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             .flatten()
     }
 
-    /// The next write that has become durable, or a change of whether the decide log is full.
+    /// The next write that has become durable.
     ///
     /// Starts applying the queued writes whenever no batch is being applied. Cancel-safe: a
     /// batch in progress stays in progress.
@@ -773,9 +767,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             if let Some(output) = self.durable.pop_front() {
                 return Ok(output);
             }
-            if let Some(full) = self.decide_log_full_changed() {
-                return Ok(StorageOutput::DecideLogFull(full));
-            }
+            self.trim_decide_log();
             // Writes from outside that arrived while a batch was applied join the next one.
             while let Ok(write) = self.foreign.try_recv() {
                 self.take_foreign(write);
@@ -954,28 +946,50 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self.fatal.get_or_insert(StorageError::Encoding(err));
     }
 
-    /// Whether the decide log is full, if that differs from what was last reported.
-    fn decide_log_full_changed(&mut self) -> Option<bool> {
+    /// Drops the oldest entries of the decide log once a measurement finds it at its limit,
+    /// down to nine tenths of it. The entries are taken to be of equal size; if dropping them
+    /// was not enough, the next measurement drops more.
+    fn trim_decide_log(&mut self) {
+        if !self.decide_log_bytes.has_changed().unwrap_or(false) {
+            return;
+        }
         let bytes = *self.decide_log_bytes.borrow_and_update();
         if let Some(m) = &self.metrics {
             m.decide_log_bytes
                 .set(usize::try_from(bytes).unwrap_or(usize::MAX));
         }
-        let full = bytes >= self.decide_log_limit;
-        if full == self.decide_log_full {
-            return None;
+        if bytes < self.decide_log_limit {
+            return;
         }
-        self.decide_log_full = full;
-        if full {
-            warn!(
-                bytes,
-                limit = self.decide_log_limit,
-                "the decide log is full; holding vote2 until the store acknowledges entries"
-            );
-        } else {
-            info!(bytes, "the decide log has room again");
-        }
-        Some(full)
+        let earliest = match self.store.earliest_decided() {
+            Ok(Some(earliest)) => earliest,
+            Ok(None) => return,
+            Err(err) => {
+                warn!(%err, "cannot read the earliest decide log entry");
+                return;
+            },
+        };
+        let Some(newest) = self.marks.anchor.filter(|newest| *newest >= earliest) else {
+            return;
+        };
+        let entries = newest - earliest + 1;
+        let excess = bytes - self.decide_log_limit / 10 * 9;
+        let dropped = u128::from(entries) * u128::from(excess) / u128::from(bytes);
+        let dropped = u64::try_from(dropped).unwrap_or(entries).clamp(1, entries);
+        let range = earliest..earliest + dropped;
+        store::drop_decided(&mut self.pending.batch, &range);
+        self.pending.resizes_decide_log = true;
+        // A payload arriving for a dropped height must not be copied into the log.
+        self.awaited_payloads
+            .retain(|_, height| !range.contains(height));
+        warn!(
+            bytes,
+            limit = self.decide_log_limit,
+            from = range.start,
+            to = range.end,
+            "the decide log is full; dropping its oldest entries, which the store's API instances \
+             fill from other API services"
+        );
     }
 
     fn queued(

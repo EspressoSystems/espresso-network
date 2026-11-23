@@ -217,7 +217,7 @@ where
         /// `Certificate2` of the anchor persisted on a prior run.
         anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
-        /// How many bytes the decide log may take up before this node holds its vote2.
+        /// How many bytes the decide log may take up before this node drops its oldest entries.
         #[builder(default = DEFAULT_DECIDE_LOG_LIMIT)]
         decide_log_limit: u64,
         /// What the application keeps of the latest decided state.

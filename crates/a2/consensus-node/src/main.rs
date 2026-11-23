@@ -57,7 +57,7 @@ struct Options {
     #[arg(long, env = "ESPRESSO_CONSENSUS_STATE_RELAY_SERVER_URL")]
     state_relay_server_url: Option<Url>,
 
-    /// How many bytes the decide log may take up before the node holds its vote.
+    /// How many bytes the decide log may take up before the node drops its oldest entries.
     #[arg(long, env = "ESPRESSO_CONSENSUS_DECIDE_LOG_LIMIT", default_value_t = DEFAULT_DECIDE_LOG_LIMIT)]
     decide_log_limit: u64,
 

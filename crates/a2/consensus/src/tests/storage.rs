@@ -567,52 +567,39 @@ async fn test_decide_log() {
     assert_eq!(left, vec![v2.leaf.height()]);
 }
 
-/// The writer reports when the decide log reaches its limit, and again when the store frees
-/// enough of it.
+/// Once the decide log reaches its limit, the writer drops its oldest entries, and reports
+/// nothing about it.
 #[tokio::test]
-async fn test_decide_log_limit() {
+async fn test_decide_log_drops_the_oldest_entries() {
+    let data = super::common::utils::TestData::new(2).await;
+    let [v0, v1] = [&data.views[0], &data.views[1]];
     let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let decide_both = |storage: &mut Storage<TestTypes, FlakyStore>| {
+        for v in [v0, v1] {
+            storage.append_decided(std::slice::from_ref(&v.leaf), &v.cert1, None, &[None], &[]);
+        }
+    };
+
+    // The size of both entries, written without a limit.
+    let (mut storage, store) = test_storage();
+    decide_both(&mut storage);
+    assert_nothing_more(&mut storage).await;
+    let both = *store.decide_log_bytes().borrow();
+
+    // With room for exactly both, the second reaches the limit, and the first goes.
     let store = ConsensusStore::new(Arc::new(FlakyStore::default()));
-    let mut storage =
-        Storage::new(store.clone(), &private_key, &store.load().unwrap()).with_decide_log_limit(1);
-    let data = super::common::utils::TestData::new(1).await;
-    let v0 = &data.views[0];
-    let view = ViewNumber::new(5);
-
-    storage.append_decided(
-        std::slice::from_ref(&v0.leaf),
-        &v0.cert1,
-        None,
-        &[None],
-        &[],
-    );
-    storage.record_action(view, ActionKind::Vote);
-    // The log is measured while the batch completes, so either may be reported first.
-    let mut outputs = vec![storage.next().await.unwrap(), storage.next().await.unwrap()];
-    outputs.sort_by_key(|output| matches!(output, StorageOutput::DecideLogFull(_)));
-    assert_eq!(
-        outputs,
-        vec![
-            StorageOutput::Action(view, ActionKind::Vote),
-            StorageOutput::DecideLogFull(true)
-        ]
-    );
+    let mut storage = Storage::new(store.clone(), &private_key, &store.load().unwrap())
+        .with_decide_log_limit(both);
+    decide_both(&mut storage);
     assert_nothing_more(&mut storage).await;
-
-    let end = v0.leaf.height() + 1;
-    let ranges = [Range { start: 0, end }];
-    let (acked, mut outputs) = driving(&mut storage, store.ack(&ranges)).await;
-    acked.unwrap();
-    if outputs.is_empty() {
-        outputs.push(
-            timeout(Duration::from_secs(5), storage.next())
-                .await
-                .expect("the freed log is reported")
-                .unwrap(),
-        );
-    }
-    assert_eq!(outputs, vec![StorageOutput::DecideLogFull(false)]);
     assert_nothing_more(&mut storage).await;
+    let left: Vec<_> = store
+        .decided_from(0, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .map(|(d, _)| d.leaf.height())
+        .collect();
+    assert_eq!(left, vec![v1.leaf.height()]);
 }
 
 /// A decided epoch root carries its state certificate in the decide log, and the certificate is

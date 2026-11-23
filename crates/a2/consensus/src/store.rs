@@ -407,15 +407,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
     pub async fn ack(&self, ranges: &[Range<u64>]) -> anyhow::Result<()> {
         let mut batch = Batch::new();
         for range in ranges.iter().filter(|range| !range.is_empty()) {
-            let heights = || {
-                KeyRange::between(
-                    Bytes::copy_from_slice(&key::u64(range.start)),
-                    Bytes::copy_from_slice(&key::u64(range.end)),
-                )
-            };
-            batch
-                .delete_range(&DECIDE_LOG, heights())
-                .delete_range(&DECIDED_PAYLOADS, heights());
+            drop_decided(&mut batch, range);
         }
         self.write(batch, true).await
     }
@@ -691,6 +683,19 @@ pub(crate) fn put_upgrade_cert<T: NodeType>(
 ) -> anyhow::Result<()> {
     batch.put(&SAFETY, UPGRADE_CERT, encode(cert)?);
     Ok(())
+}
+
+/// Deletes the decide log entries of the heights in `range`, and their payloads.
+pub(crate) fn drop_decided(batch: &mut Batch, range: &Range<u64>) {
+    let heights = || {
+        KeyRange::between(
+            Bytes::copy_from_slice(&key::u64(range.start)),
+            Bytes::copy_from_slice(&key::u64(range.end)),
+        )
+    };
+    batch
+        .delete_range(&DECIDE_LOG, heights())
+        .delete_range(&DECIDED_PAYLOADS, heights());
 }
 
 /// Gives the decide log entries of `leaves` their payloads, shared with the payload table, not
