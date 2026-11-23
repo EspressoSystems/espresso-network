@@ -153,8 +153,8 @@ pub struct StateChange {
 
     pub chain_config: Vec<u8>,
 
-    /// Every reward balance, unless they are the parent leaf's.
-    pub rewards: Option<Vec<u8>>,
+    /// The reward balances that differ from those of the parent leaf's state.
+    pub reward_changes: Vec<u8>,
 }
 
 /// The latest decided leaf with the certificates that decided it.
@@ -693,11 +693,28 @@ pub(crate) fn put_upgrade_cert<T: NodeType>(
     Ok(())
 }
 
+/// Gives the decide log entries of `leaves` their payloads, shared with the payload table, not
+/// written again. Ahead of the collection of garbage that deletes them from that table.
+pub(crate) fn copy_decided_payloads<T: NodeType>(
+    batch: &mut Batch,
+    leaves: &[Leaf2<T>],
+) -> anyhow::Result<()> {
+    for leaf in leaves {
+        if let VidCommitment::V2(commitment) = leaf.payload_commitment() {
+            batch.copy(
+                &PAYLOADS,
+                payload_key(leaf.view_number(), &commitment)?,
+                &DECIDED_PAYLOADS,
+                key::u64(leaf.height()).to_vec(),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Appends a decide to the decide log: `leaves` newest first, as consensus decides them,
-/// with the certificates of the newest and the VID common data of each.
-///
-/// Each payload is shared with the payload table, not written again. Moves the anchor to the
-/// newest leaf, unless a later one is stored: a decide that fills a gap trails the anchor.
+/// with the certificates of the newest and the VID common data and state of each. Their
+/// payloads are copied with [`copy_decided_payloads`].
 pub(crate) fn put_decided<T: NodeType>(
     batch: &mut Batch,
     leaves: &[Leaf2<T>],
@@ -712,14 +729,6 @@ pub(crate) fn put_decided<T: NodeType>(
         leaf.unfill_block_payload();
         let newest = i == 0;
         let height = key::u64(leaf.height()).to_vec();
-        if let VidCommitment::V2(commitment) = leaf.payload_commitment() {
-            batch.copy(
-                &PAYLOADS,
-                payload_key(leaf.view_number(), &commitment)?,
-                &DECIDED_PAYLOADS,
-                height.clone(),
-            );
-        }
         // Leaves are newest first: the one before in the slice is the child.
         let certifying = match i {
             0 => cert1.clone(),

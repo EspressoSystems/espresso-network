@@ -2,10 +2,10 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chain_api::{RewardSet, Tables};
+use chain_api::{SentState, Tables};
 use chain_store::{ChainStore, Item, Parts};
 use consensus_api::{discovery::SignedServiceRecord, proto::State};
-use espresso_types::{ChainConfig, Leaf2, SeqTypes};
+use espresso_types::{Leaf2, SeqTypes};
 use hotshot_types::{PeerConfig, data::EpochNumber};
 use membership::RETAINED_EPOCHS;
 
@@ -93,40 +93,36 @@ impl Sink<SeqTypes> for ChainStore {
     }
 }
 
-/// Stores the state after `height` as consensus sent it. A state that does not decode, or whose
-/// rewards are its parent's while the store lacks the parent's state, is left to the follower.
+/// Stores the state after `height` as consensus sent it, for the follower. A state that does
+/// not decode is left out, and the follower applies the block instead.
 async fn put_state(store: &ChainStore, height: u64, state: &State) -> anyhow::Result<()> {
     let decoded = (|| {
         let frontier = match state.frontier.is_empty() {
             true => None,
             false => Some(bincode::deserialize(&state.frontier)?),
         };
-        let chain_config: ChainConfig = bincode::deserialize(&state.chain_config)?;
-        let rewards: Option<RewardSet> = state
-            .rewards
-            .as_ref()
-            .map(|rewards| bincode::deserialize(rewards))
-            .transpose()?;
-        anyhow::Ok((frontier, chain_config, rewards))
+        anyhow::Ok(SentState {
+            frontier,
+            chain_config: bincode::deserialize(&state.chain_config)?,
+            reward_changes: bincode::deserialize(&state.reward_changes)?,
+        })
     })();
-    let (frontier, chain_config, rewards) = match decoded {
-        Ok(decoded) => decoded,
+    match decoded {
+        Ok(sent) => {
+            Tables::new(store.clone())
+                .put_sent_state(height, &sent)
+                .await
+        },
         Err(err) => {
             tracing::warn!(height, "ignoring a state that does not decode: {err:#}");
-            return Ok(());
+            Ok(())
         },
-    };
-    let stored = Tables::new(store.clone())
-        .put_state(height, frontier, chain_config, rewards.as_ref())
-        .await?;
-    if !stored {
-        tracing::debug!(height, "no state of the parent to take the rewards from");
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use chain_api::RewardSet;
     use chain_store::mem::MemBackend;
     use espresso_types::{NodeState, ValidatedState};
     use hotshot_types::simple_certificate::QuorumCertificate2;
@@ -176,7 +172,7 @@ mod tests {
             ..Default::default()
         };
         let upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
-        let rewards: RewardSet = Vec::new();
+        let changes: RewardSet = vec![(Default::default(), 7u64.into())];
         let block = Block {
             leaf: Leaf2::genesis(&state, &instance, NEW_PROTOCOL_VERSION).await,
             cert1: QuorumCertificate2::genesis(&state, &instance, upgrade).await,
@@ -187,21 +183,26 @@ mod tests {
             state: Some(State {
                 frontier: Bytes::new(),
                 chain_config: bincode::serialize(&instance.chain_config).unwrap().into(),
-                rewards: Some(bincode::serialize(&rewards).unwrap().into()),
+                reward_changes: bincode::serialize(&changes).unwrap().into(),
             }),
         };
         let store = ChainStore::new(MemBackend::default());
         let tables = Tables::new(store.clone());
 
         Sink::append(&store, block).await.unwrap();
-        let row = tables
-            .state(0)
+        let sent = tables
+            .sent_state(0)
             .await
             .unwrap()
             .expect("the state of height 0");
-        assert_eq!(row.chain_config, instance.chain_config);
-        assert_eq!(row.frontier, None);
-        assert_eq!(tables.rewards(0).await.unwrap(), Some(rewards));
+        assert_eq!(
+            sent,
+            SentState {
+                frontier: None,
+                chain_config: instance.chain_config,
+                reward_changes: changes,
+            }
+        );
 
         let table: Vec<PeerConfig<SeqTypes>> = Vec::new();
         Sink::put_stake_table(&store, 4, bincode::serialize(&table).unwrap().into())

@@ -173,9 +173,8 @@ message State {
   // The chain config.
   bytes chain_config = 2;
 
-  // Every reward balance, if they may differ from those of the parent block's state; absent if
-  // they are the parent's.
-  optional bytes rewards = 3;
+  // The reward balances that differ from those of the parent block's state.
+  bytes reward_changes = 3;
 }
 
 message AckRequest {

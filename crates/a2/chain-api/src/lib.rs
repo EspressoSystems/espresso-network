@@ -8,7 +8,7 @@ pub mod discovery;
 pub mod records;
 mod tables;
 
-pub use tables::{BlocksFrontier, KEPT_STATES, RewardSet, StateRow, Tables};
+pub use tables::{BlocksFrontier, KEPT_STATES, RewardSet, SentState, StateRow, Tables};
 
 /// The services of the API service's own, generated from `proto/espresso/a2/v1`.
 pub mod proto {

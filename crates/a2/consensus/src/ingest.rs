@@ -133,7 +133,7 @@ fn entry<T: NodeType>(
         state: decided.state.map(|state| State {
             frontier: state.frontier.into(),
             chain_config: state.chain_config.into(),
-            rewards: state.rewards.map(Into::into),
+            reward_changes: state.reward_changes.into(),
         }),
     };
     Ok(DecidedEntry {

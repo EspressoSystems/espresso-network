@@ -1,10 +1,12 @@
 //! The state of the chain at recent heights, for consensus nodes catching up through the API
 //! instances.
 //!
-//! Consensus sends the state after each block it validated, and the storage instances store it with the
-//! block. The follower writes the state of the heights it did not send: it follows the store in
-//! height order, takes the state of each height that has it, and applies the header of each one
-//! that lacks it to the state of its parent, checking the result against the roots the header
+//! Consensus sends the state after each block it validated, with the reward balances the block
+//! changed rather than all of them, and the storage instances store it as sent. The follower makes
+//! the state of each height from it: it follows the store in height order, takes the state of
+//! each height that has one, applies the sent reward changes to the balances of the parent's
+//! state, and applies the header of each height that lacks one, or whose changes do not make up
+//! its reward root, to the state of its parent, checking the result against the roots the header
 //! commits to. It hands each epoch root and each DRB result to membership, which needs both to
 //! know the leaders whose rewards the state pays at the end of an epoch.
 //!
@@ -21,7 +23,10 @@
 //! the skipped blocks would have given it. Only if no peer has the state and the store starts at
 //! genesis does the follower apply the chain from there.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    time::Duration,
+};
 
 use anyhow::{Context, bail, ensure};
 use catchup_api::proto::{
@@ -148,7 +153,7 @@ impl ChainFollower {
         height: u64,
         leaf: Leaf2,
     ) -> anyhow::Result<Parent> {
-        if self.tables.state(height).await?.is_some() {
+        if self.tables.state(height).await?.is_some() || self.store_sent_state(&leaf).await? {
             track_epoch(&self.node, &leaf)
                 .await
                 .context("membership did not take the block")?;
@@ -173,6 +178,58 @@ impl ChainFollower {
         let parent_state = parent.as_ref().map(|(_, state)| state);
         self.store_state(height, &state, parent_state).await?;
         Ok(Parent::Applied(leaf, Box::new(state)))
+    }
+
+    /// Stores the state consensus sent for `leaf`, if the store holds one: its reward changes
+    /// applied to the balances of the parent's state, checked against the header's reward root.
+    /// Returns whether it stored it; changes that do not check out leave the block to be applied.
+    async fn store_sent_state(&mut self, leaf: &Leaf2) -> anyhow::Result<bool> {
+        let height = leaf.height();
+        let Some(sent) = self.tables.sent_state(height).await? else {
+            return Ok(false);
+        };
+        let Some(parent) = height.checked_sub(1) else {
+            return Ok(false);
+        };
+        let Some(row) = self.tables.state(parent).await? else {
+            return Ok(false);
+        };
+        let root = leaf.block_header().reward_merkle_tree_root().right();
+        let rewards = if sent.reward_changes.is_empty() {
+            // The balances are the parent's, so the root must be too.
+            let parent_root = self
+                .store
+                .item(parent)
+                .await?
+                .and_then(|item| item.leaf.block_header().reward_merkle_tree_root().right());
+            if parent_root != root {
+                tracing::warn!(height, "no reward changes, but the reward root changed");
+                return Ok(false);
+            }
+            None
+        } else {
+            let parent_balances = self
+                .tables
+                .rewards(row.rewards_at)
+                .await?
+                .with_context(|| format!("no reward balances at height {}", row.rewards_at))?;
+            let mut balances: HashMap<_, _> = parent_balances.into_iter().collect();
+            balances.extend(sent.reward_changes);
+            let balances: RewardSet = balances.into_iter().collect();
+            let tree = RewardMerkleTreeV2::from_kv_set(
+                REWARD_MERKLE_TREE_V2_HEIGHT,
+                balances.iter().copied(),
+            )
+            .context("rebuilding the reward tree")?;
+            if Some(tree.commitment()) != root {
+                tracing::warn!(height, "the reward changes do not make up the reward root");
+                return Ok(false);
+            }
+            Some(balances)
+        };
+        self.tables
+            .put_state(height, sent.frontier, sent.chain_config, rewards.as_ref())
+            .await
     }
 
     /// The state after `leaf`, from the row the store holds for it.
@@ -604,6 +661,7 @@ mod tests {
 
     use alloy::primitives::{Address, U256};
     use async_lock::Mutex as AsyncMutex;
+    use chain_api::SentState;
     use chain_store::{Item, Parts, mem::MemBackend};
     use espresso_types::{
         AuthenticatedValidatorMap, EpochCommittees, FeeAccount, Header, L1ClientOptions, Payload,
@@ -878,14 +936,7 @@ mod tests {
 
         let store = ChainStore::new(MemBackend::default());
         let node = epoch_node(&store).await;
-        let upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
-        for (leaf, state) in &chain {
-            let item = Item {
-                leaf: leaf.clone(),
-                cert1: QuorumCertificate2::genesis(state, &node, upgrade).await,
-            };
-            store.put(&item, &Parts::default()).await.unwrap();
-        }
+        put_chain(&store, &node, &chain).await;
         let mut follower = follower(store, node);
         for (height, (_, state)) in chain.iter().enumerate().take(stored_boundary as usize + 1) {
             let parent = height.checked_sub(1).map(|parent| &chain[parent].1);
@@ -914,6 +965,100 @@ mod tests {
                 .commitment(),
             "the boundary pays rewards"
         );
+    }
+
+    /// A height whose state consensus sent is taken without applying its block, the reward
+    /// changes at the last block of an epoch applied to the balances of the parent's state.
+    /// Changes that do not make up the header's reward root leave the block to be applied.
+    #[tokio::test]
+    async fn takes_the_state_consensus_sent() {
+        let built = epoch_node(&ChainStore::new(MemBackend::default())).await;
+        let boundary = 4 * EPOCH_HEIGHT;
+        let chain = epoch_chain(&built, boundary).await;
+        let balances = |state: &ValidatedState| -> HashMap<_, _> {
+            state
+                .reward_merkle_tree_v2
+                .iter()
+                .map(|(account, amount)| (*account, *amount))
+                .collect()
+        };
+
+        for corrupt in [false, true] {
+            let store = ChainStore::new(MemBackend::default());
+            let node = epoch_node(&store).await;
+            put_chain(&store, &node, &chain).await;
+            let tables = Tables::new(store.clone());
+            let mut follower = follower(store, node);
+            let first_sent = boundary - EPOCH_HEIGHT + 1;
+            for (height, (_, state)) in chain.iter().enumerate().take(first_sent as usize) {
+                let parent = height.checked_sub(1).map(|parent| &chain[parent].1);
+                follower
+                    .store_state(height as u64, state, parent)
+                    .await
+                    .unwrap();
+            }
+            for height in first_sent..=boundary {
+                let (before, state) = (&chain[height as usize - 1].1, &chain[height as usize].1);
+                let before = balances(before);
+                let mut reward_changes: RewardSet = balances(state)
+                    .into_iter()
+                    .filter(|(account, amount)| before.get(account) != Some(amount))
+                    .collect();
+                if corrupt && height == boundary {
+                    reward_changes.pop();
+                }
+                let last = state.block_merkle_tree.num_leaves() - 1;
+                let sent = SentState {
+                    frontier: Some(state.block_merkle_tree.lookup(last).expect_ok().unwrap().1),
+                    chain_config: state.chain_config.resolve().unwrap(),
+                    reward_changes,
+                };
+                tables.put_sent_state(height, &sent).await.unwrap();
+            }
+            assert!(
+                !tables
+                    .sent_state(boundary)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .reward_changes
+                    .is_empty(),
+                "the boundary changes rewards"
+            );
+
+            let mut parent = Parent::Stored(chain[first_sent as usize - 1].0.clone());
+            for (leaf, _) in &chain[first_sent as usize..] {
+                let height = leaf.height();
+                parent = follower
+                    .follow(&parent, height, leaf.clone())
+                    .await
+                    .unwrap_or_else(|err| panic!("following height {height}: {err:#}"));
+                let taken = matches!(parent, Parent::Stored(_));
+                assert_eq!(taken, !corrupt || height < boundary, "height {height}");
+            }
+            let row = tables.state(boundary).await.unwrap().unwrap();
+            let stored: HashMap<_, _> = tables
+                .rewards(row.rewards_at)
+                .await
+                .unwrap()
+                .unwrap()
+                .into_iter()
+                .collect();
+            assert_eq!(stored, balances(&chain[boundary as usize].1));
+            assert_eq!(tables.sent_state(boundary).await.unwrap(), None);
+        }
+    }
+
+    /// Stores the blocks of `chain` as items, without payloads.
+    async fn put_chain(store: &ChainStore, node: &NodeState, chain: &[(Leaf2, ValidatedState)]) {
+        let upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        for (leaf, state) in chain {
+            let item = Item {
+                leaf: leaf.clone(),
+                cert1: QuorumCertificate2::genesis(state, node, upgrade).await,
+            };
+            store.put(&item, &Parts::default()).await.unwrap();
+        }
     }
 
     /// A node of a chain whose epochs after the genesis committee's have the validators of

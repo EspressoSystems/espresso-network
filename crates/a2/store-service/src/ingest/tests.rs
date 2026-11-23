@@ -403,7 +403,7 @@ async fn passes_the_state_stake_tables_and_records() {
     let state = State {
         frontier: Bytes::from_static(b"frontier"),
         chain_config: Bytes::from_static(b"config"),
-        rewards: None,
+        reward_changes: Bytes::new(),
     };
     log.entries
         .lock()

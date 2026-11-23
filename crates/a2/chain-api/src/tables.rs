@@ -25,6 +25,10 @@ static STATES: LazyLock<TableName> = LazyLock::new(|| TableName::of("catchup-sta
 /// Height to the reward balances of the state after it, written only where they changed.
 static REWARDS: LazyLock<TableName> = LazyLock::new(|| TableName::of("catchup-rewards"));
 
+/// Height to the [`SentState`] consensus sent for it, until the follower makes a [`StateRow`] of
+/// it.
+static SENT_STATES: LazyLock<TableName> = LazyLock::new(|| TableName::of("catchup-sent-states"));
+
 /// The commitment of a chain config, as a string, to the chain config.
 static CHAIN_CONFIGS: LazyLock<TableName> = LazyLock::new(|| TableName::of("chain-configs"));
 
@@ -43,7 +47,7 @@ pub const KEPT_STATES: u64 = 256;
 
 pub type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
 
-/// Every reward balance of a state.
+/// Reward balances by account: every balance of a state, or those a block changed.
 pub type RewardSet = Vec<(RewardAccountV2, RewardAmount)>;
 
 /// What a state holds besides the roots its block's header commits to, and besides the fee tree,
@@ -58,6 +62,15 @@ pub struct StateRow {
     /// The height under which [`Tables::rewards`] finds the reward balances of the state: the
     /// first height whose state had them.
     pub rewards_at: u64,
+}
+
+/// The state after a block as consensus sent it: what a [`StateRow`] holds, but with the reward
+/// balances the block changed instead of all of them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentState {
+    pub frontier: Option<BlocksFrontier>,
+    pub chain_config: ChainConfig,
+    pub reward_changes: RewardSet,
 }
 
 /// The tables of a chain store that the API instances serve besides the chain.
@@ -90,6 +103,11 @@ impl Tables {
     /// The reward balances first written for the state after `at`.
     pub async fn rewards(&self, at: u64) -> anyhow::Result<Option<RewardSet>> {
         self.get(&REWARDS, &at.to_be_bytes()).await
+    }
+
+    /// The state consensus sent for `height`, if the follower has not passed it yet.
+    pub async fn sent_state(&self, height: u64) -> anyhow::Result<Option<SentState>> {
+        self.get(&SENT_STATES, &height.to_be_bytes()).await
     }
 
     /// The chain config whose commitment, as a string, is `commitment`.
@@ -136,8 +154,9 @@ impl Tables {
 
     /// Stores what the state after `height` holds besides its header's roots: `frontier`,
     /// `chain_config`, and `rewards`, every reward balance, or `None` if they are those of the
-    /// state after `height - 1`. Forgets the rows of heights no longer among the newest
-    /// [`KEPT_STATES`] and the reward balances no kept row refers to.
+    /// state after `height - 1`. Forgets the sent states up to `height`, which the follower has
+    /// passed, the rows of heights no longer among the newest [`KEPT_STATES`], and the reward
+    /// balances no kept row refers to.
     ///
     /// Returns whether it stored the row: without `rewards` it needs the row of `height - 1`.
     pub async fn put_state(
@@ -184,11 +203,24 @@ impl Tables {
             writes.push(put(&REWARDS, &height.to_be_bytes(), rewards)?);
         }
         writes.extend([
+            delete_before(&SENT_STATES, height + 1),
             delete_before(&STATES, keep_from),
             delete_before(&REWARDS, keep_rewards_from),
         ]);
         self.store.app_write(writes).await?;
         Ok(true)
+    }
+
+    /// Stores the state consensus sent for `height`, for the follower, and forgets those of
+    /// heights no longer among the newest [`KEPT_STATES`].
+    pub async fn put_sent_state(&self, height: u64, state: &SentState) -> anyhow::Result<()> {
+        let keep_from = (height + 1).saturating_sub(KEPT_STATES);
+        self.store
+            .app_write(vec![
+                put(&SENT_STATES, &height.to_be_bytes(), state)?,
+                delete_before(&SENT_STATES, keep_from),
+            ])
+            .await
     }
 
     pub async fn put_chain_config(&self, config: &ChainConfig) -> anyhow::Result<()> {
@@ -335,5 +367,33 @@ mod tests {
             tables.chain_config(&commitment).await.unwrap(),
             Some(config)
         );
+    }
+
+    /// A sent state stays until a row at or after its height is written, or until it leaves the
+    /// kept window.
+    #[tokio::test]
+    async fn keeps_sent_states_until_the_follower_passes_them() {
+        let tables = Tables::new(ChainStore::new(MemBackend::default()));
+        let config = ChainConfig::default();
+        let sent = SentState {
+            frontier: None,
+            chain_config: config,
+            reward_changes: rewards(1),
+        };
+        for height in 1..=3 {
+            tables.put_sent_state(height, &sent).await.unwrap();
+        }
+        assert!(
+            tables
+                .put_state(2, None, config, Some(&rewards(0)))
+                .await
+                .unwrap()
+        );
+        assert_eq!(tables.sent_state(1).await.unwrap(), None);
+        assert_eq!(tables.sent_state(2).await.unwrap(), None);
+        assert_eq!(tables.sent_state(3).await.unwrap(), Some(sent.clone()));
+
+        tables.put_sent_state(3 + KEPT_STATES, &sent).await.unwrap();
+        assert_eq!(tables.sent_state(3).await.unwrap(), None);
     }
 }

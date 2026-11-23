@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use app_tables::AppWrite;
 use committable::Commitment;
 use consensus_api::payloads::{Acked, Acks, Offer, PayloadQueue};
@@ -29,8 +30,10 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
+    vid::avidm_gf2::AvidmGf2Common,
     vote::HasViewNumber,
 };
+use parking_lot::Mutex;
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
@@ -103,7 +106,8 @@ impl<T: NodeType> StorageOutput<T> {
 /// what of each decided leaf's state the decide log carries.
 ///
 /// Its writes join the batch that appends the decide to the decide log, so the tables never
-/// fall behind or run ahead of the anchor.
+/// fall behind or run ahead of the anchor. It runs where that batch is applied, off the
+/// coordinator, so that its cost delays the store, not consensus.
 pub trait DecidedState<T: NodeType>: Send + Sync {
     /// The writes that bring the application's tables up to date with the decided `leaf`, and
     /// the parts of its state for the decide log.
@@ -221,7 +225,7 @@ pub struct Storage<T: NodeType, S> {
     /// their epoch root. A decide finds them here even before their write is durable.
     state_certs: BTreeMap<ViewNumber, LightClientStateUpdateCertificateV2<T>>,
 
-    decided_state: Option<Box<dyn DecidedState<T>>>,
+    decided_state: Option<Arc<Mutex<Box<dyn DecidedState<T>>>>>,
 
     /// Writes from outside the writer, such as acknowledgements of the decide log, which join
     /// the next batch.
@@ -284,6 +288,10 @@ struct Pending<T: NodeType> {
     foreign_batch: Batch,
     foreign: Vec<oneshot::Sender<anyhow::Result<()>>>,
 
+    /// Decides whose decide log entries and application writes are added to `batch` where it
+    /// is applied, in this order, after the rest of it.
+    decided: Vec<Decide<T>>,
+
     /// Whether the batch adds to the decide log, which its readers then hear of, and whether
     /// it or the foreign writes change the decide log's size, which is then measured.
     adds_to_decide_log: bool,
@@ -299,6 +307,7 @@ impl<T: NodeType> Default for Pending<T> {
             timers: Vec::new(),
             foreign_batch: Batch::new(),
             foreign: Vec::new(),
+            decided: Vec::new(),
             adds_to_decide_log: false,
             resizes_decide_log: false,
             foreign_resizes_decide_log: false,
@@ -314,7 +323,7 @@ impl<T: NodeType> Pending<T> {
     }
 
     fn writes_nothing(&self) -> bool {
-        self.batch.is_empty() && self.foreign_batch.is_empty()
+        self.batch.is_empty() && self.foreign_batch.is_empty() && self.decided.is_empty()
     }
 
     /// The writer's batch with the foreign writes after it.
@@ -351,11 +360,59 @@ impl<T: NodeType> Pending<T> {
             });
         }
     }
+
+    /// Adds the decide log entries of `decided`, and the application's writes for them, to the
+    /// batch, so that a retry applies them as they are.
+    fn add_decided(
+        &mut self,
+        decided_state: Option<&Mutex<Box<dyn DecidedState<T>>>>,
+    ) -> anyhow::Result<()> {
+        for decide in mem::take(&mut self.decided) {
+            let mut decided: Vec<DecidedWrites> = Vec::new();
+            if let Some(decided_state) = decided_state {
+                let mut decided_state = decided_state.lock();
+                decided.resize_with(decide.leaves.len(), DecidedWrites::default);
+                for (i, leaf) in decide.leaves.iter().enumerate().rev() {
+                    decided[i] =
+                        decided_state.decided(leaf, decide.states.get(i).and_then(Option::as_ref));
+                }
+            }
+            let states: Vec<_> = decided.iter_mut().map(|d| d.state.take()).collect();
+            let view = decide.cert1.view_number();
+            store::put_decided(
+                &mut self.batch,
+                &decide.leaves,
+                &decide.cert1,
+                decide.cert2.as_ref(),
+                &decide.vid_common,
+                &decide.state_certs,
+                &states,
+            )
+            .with_context(|| format!("leaves decided in view {view}"))?;
+            for d in decided.iter().rev() {
+                store::put_app(&mut self.batch, &d.writes);
+            }
+        }
+        Ok(())
+    }
 }
 
 struct Applied<T: NodeType> {
     pending: Pending<T>,
     result: Result<(), consensus_store::Error>,
+
+    /// Why the batch was not applied: a decide log entry could not be encoded.
+    encoding: Option<anyhow::Error>,
+}
+
+/// A decide as [`Storage::append_decided`] takes it, for its decide log entries.
+struct Decide<T: NodeType> {
+    leaves: Vec<Leaf2<T>>,
+    cert1: Certificate1<T>,
+    cert2: Option<Certificate2<T>>,
+    vid_common: Vec<Option<AvidmGf2Common>>,
+    state_certs: Vec<Option<LightClientStateUpdateCertificateV2<T>>>,
+    states: Vec<Option<StateEntry<T>>>,
 }
 
 impl<T: NodeType, S: Store> Storage<T, S> {
@@ -423,7 +480,7 @@ impl<T: NodeType, S: Store> Storage<T, S> {
 
     /// Keeps the application's decided state with every decide.
     pub fn with_decided_state(mut self, decided_state: Box<dyn DecidedState<T>>) -> Self {
-        self.decided_state = Some(decided_state);
+        self.decided_state = Some(Arc::new(Mutex::new(decided_state)));
         self
     }
 
@@ -596,38 +653,26 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             .iter()
             .map(|leaf| self.state_cert(leaf.view_number()))
             .collect();
-        let mut decided: Vec<DecidedWrites> = Vec::new();
-        if let Some(decided_state) = &mut self.decided_state {
-            decided.resize_with(leaves.len(), DecidedWrites::default);
-            for (i, leaf) in leaves.iter().enumerate().rev() {
-                decided[i] = decided_state.decided(leaf, states.get(i).and_then(Option::as_ref));
-            }
+        // The copies go ahead of the collection of garbage, which deletes what they share; the
+        // entries, which carry what the application makes of each leaf's state, are built where
+        // the batch is applied.
+        if let Err(err) = store::copy_decided_payloads(&mut self.pending.batch, leaves) {
+            let view = cert1.view_number();
+            self.fail(err.context(format!("leaves decided in view {view}")));
+            return;
         }
-        let decided_states: Vec<_> = decided.iter_mut().map(|d| d.state.take()).collect();
-        match store::put_decided(
-            &mut self.pending.batch,
-            leaves,
-            cert1,
-            cert2,
-            &vid_common,
-            &state_certs,
-            &decided_states,
-        ) {
-            Ok(()) => {
-                self.pending.adds_to_decide_log = true;
-                self.pending.resizes_decide_log = true;
-                self.await_payloads(leaves);
-                self.advance_anchor(leaves, cert1, cert2);
-            },
-            Err(err) => {
-                let view = cert1.view_number();
-                self.fail(err.context(format!("leaves decided in view {view}")));
-                return;
-            },
-        }
-        for d in decided.iter().rev() {
-            store::put_app(&mut self.pending.batch, &d.writes);
-        }
+        self.pending.decided.push(Decide {
+            leaves: leaves.to_vec(),
+            cert1: cert1.clone(),
+            cert2: cert2.cloned(),
+            vid_common,
+            state_certs,
+            states: states.to_vec(),
+        });
+        self.pending.adds_to_decide_log = true;
+        self.pending.resizes_decide_log = true;
+        self.await_payloads(leaves);
+        self.advance_anchor(leaves, cert1, cert2);
     }
 
     /// Deletes the stored proposals and payloads of views before `view`.
@@ -862,7 +907,12 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         let Applied {
             mut pending,
             result,
+            encoding,
         } = applied;
+        if let Some(err) = encoding {
+            self.fail(err);
+            return Ok(());
+        }
         // While the writer's batch is failing, only foreign writes are applied.
         let writers = self.failed.is_none();
         match result {
@@ -946,10 +996,18 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         self.pending.outputs.push(output);
     }
 
-    fn spawn(&self, pending: Pending<T>) -> JoinHandle<Applied<T>> {
+    fn spawn(&self, mut pending: Pending<T>) -> JoinHandle<Applied<T>> {
         let store = self.store.clone();
+        let decided_state = self.decided_state.clone();
         let apply_histogram = self.metrics.as_ref().map(|m| m.apply.clone());
         tokio::task::spawn_blocking(move || {
+            if let Err(err) = pending.add_decided(decided_state.as_deref()) {
+                return Applied {
+                    pending,
+                    result: Ok(()),
+                    encoding: Some(err),
+                };
+            }
             let timer = apply_histogram.map(Measurement::start);
             let result = store.store().apply(&pending.combined());
             drop(timer);
@@ -959,7 +1017,11 @@ impl<T: NodeType, S: Store> Storage<T, S> {
             {
                 warn!(%err, "failed to measure the decide log");
             }
-            Applied { pending, result }
+            Applied {
+                pending,
+                result,
+                encoding: None,
+            }
         })
     }
 }
