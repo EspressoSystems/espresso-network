@@ -507,6 +507,7 @@ impl From<VidShare2> for VidShare {
     }
 }
 
+pub mod history;
 pub mod ns_table;
 pub mod vid_disperse;
 
@@ -1453,25 +1454,58 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
             with_epoch,
         } = self;
 
-        let mut cb = RawCommitmentBuilder::new("leaf commitment")
-            .u64_field("view number", **view_number)
-            .field("parent leaf commitment", *parent_commitment)
-            .field("block header", block_header.commit())
-            .field("justify qc", justify_qc.commit())
-            .optional("upgrade certificate", upgrade_certificate);
+        LeafCommitment {
+            view_number: *view_number,
+            parent_commitment: *parent_commitment,
+            block_header,
+            justify_qc,
+            upgrade_certificate,
+            with_epoch: *with_epoch,
+            next_epoch_justify_qc,
+            next_drb_result,
+            view_change_evidence,
+        }
+        .commit()
+    }
+}
 
-        if *with_epoch {
+/// The fields a leaf commitment covers.
+///
+/// [`Leaf2`] and [`history::PreEpochLeaf`] both commit through it, so a pre-epoch leaf keeps the
+/// commitment it had as a [`Leaf2`].
+pub(crate) struct LeafCommitment<'a, TYPES: NodeType, QC: Committable> {
+    pub view_number: ViewNumber,
+    pub parent_commitment: Commitment<Leaf2<TYPES>>,
+    pub block_header: &'a TYPES::BlockHeader,
+    pub justify_qc: &'a QC,
+    pub upgrade_certificate: &'a Option<UpgradeCertificate<TYPES>>,
+    pub with_epoch: bool,
+    pub next_epoch_justify_qc: &'a Option<NextEpochQuorumCertificate2<TYPES>>,
+    pub next_drb_result: &'a Option<DrbResult>,
+    pub view_change_evidence: &'a Option<ViewChangeEvidence2<TYPES>>,
+}
+
+impl<TYPES: NodeType, QC: Committable> LeafCommitment<'_, TYPES, QC> {
+    pub(crate) fn commit(self) -> Commitment<Leaf2<TYPES>> {
+        let mut cb = RawCommitmentBuilder::new("leaf commitment")
+            .u64_field("view number", *self.view_number)
+            .field("parent leaf commitment", self.parent_commitment)
+            .field("block header", self.block_header.commit())
+            .field("justify qc", self.justify_qc.commit())
+            .optional("upgrade certificate", self.upgrade_certificate);
+
+        if self.with_epoch {
             cb = cb
                 .constant_str("with_epoch")
-                .optional("next_epoch_justify_qc", next_epoch_justify_qc);
+                .optional("next_epoch_justify_qc", self.next_epoch_justify_qc);
 
-            if let Some(next_drb_result) = next_drb_result {
+            if let Some(next_drb_result) = self.next_drb_result {
                 cb = cb
                     .constant_str("next_drb_result")
                     .fixed_size_bytes(next_drb_result);
             }
 
-            match view_change_evidence {
+            match self.view_change_evidence {
                 Some(ViewChangeEvidence2::Timeout(cert)) => {
                     cb = cb.field("timeout cert", cert.commit());
                 },
