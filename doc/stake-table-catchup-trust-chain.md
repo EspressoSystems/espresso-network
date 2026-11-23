@@ -120,8 +120,7 @@ In `EpochMembershipCoordinator::catchup`.
    `(top_held_epoch-1, top_held_epoch)`, searching down from the lower of `requested_epoch - 1` and the highest
    in-memory epoch.
 2. If `top_held_epoch + 1 < requested_epoch`, the seed takes `seed_lock` and re-checks `top_held_epoch`.
-3. L1 reads: the finalized block number, the LC contract address (cached in a `OnceCell`), then `finalizedState`, both
-   at that finalized block.
+3. L1 reads: the finalized block number, the LC contract address, then `finalizedState`, both at that finalized block.
 4. `seed_window` picks the epochs to install:
    - `seed_window_last = min(requested_epoch, epoch(F) + 1)`
    - `seed_window_first = max(seed_window_last - 4, top_held_epoch + 1, 3)`
