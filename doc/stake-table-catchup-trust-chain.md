@@ -30,8 +30,13 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 
 ## Where `requested_epoch` comes from
 
-- Validator: from a peer. A node that starts behind knows only its stored anchor epoch. Its timeout vote reaches
-  up-to-date peers, which reply with their locked QC. That QC's `epoch` is `requested_epoch`.
+- Validator: no single value. Each message the node cannot verify yet starts a catchup for the epoch it names:
+  - `HighQc` or TC3: catchup evidence that up-to-date peers send in reply to the node's stale timeout vote.
+  - TC2, re-vote, epoch change.
+  - The node's next epoch, requested on every view change.
+- One catchup per distinct epoch. Catchups for different epochs run concurrently and share the tables they install.
+- The node advances once a certificate verifies. A certificate naming an epoch without valid tables fails and is
+  dropped.
 - The claim is checked after catchup: the QC commits to its epoch and block number, and its signatures must reach the
   threshold of the table catchup installed for that epoch. Only then does the node's own epoch advance.
 - Catchup does not take the peer's tables on trust: the seed stops at `epoch(F) + 1` from the LC contract, and the walk
