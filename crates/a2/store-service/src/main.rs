@@ -3,7 +3,7 @@
 //! write to the store's database; the API service reaches the store through them. Any number of
 //! them can share one database.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, anyhow, ensure};
 use chain_store::{
@@ -11,17 +11,10 @@ use chain_store::{
 };
 use clap::Parser;
 use espresso_types::SeqTypes;
-use tokio::{net::TcpListener, task::JoinSet, time::sleep};
+use store_service::MIN_KEEP_HEIGHTS;
+use tokio::{net::TcpListener, task::JoinSet};
 use tonic::transport::{Server, server::TcpIncoming};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
-
-/// How often the store prunes.
-const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
-
-/// The fewest heights a store may keep. The API services over it resume from snapshots of the
-/// chain's state some heights back, and consensus nodes catch up from its recent heights; both
-/// need the heights to still be there.
-const MIN_KEEP_HEIGHTS: u64 = 1024;
 
 #[derive(Debug, Parser)]
 struct Options {
@@ -93,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(keep) = options.keep_heights {
         let backend = backend.clone();
         tasks.spawn(async move {
-            prune(backend, keep).await;
+            store_service::prune(backend, keep).await;
             anyhow!("pruning stopped")
         });
     }
@@ -143,23 +136,6 @@ async fn main() -> anyhow::Result<()> {
     });
     let stopped = tasks.join_next().await.context("no task to run")?;
     Err(stopped.unwrap_or_else(|err| anyhow!("a task failed: {err}")))
-}
-
-/// Keeps the newest `keep` heights, pruning the rest every [`PRUNE_INTERVAL`].
-async fn prune(backend: Arc<dyn Backend>, keep: u64) {
-    loop {
-        match backend.newest().await {
-            Ok(Some(newest)) => {
-                let below = (newest + 1).saturating_sub(keep);
-                if let Err(err) = backend.prune_below(below).await {
-                    tracing::warn!(below, "pruning failed: {err:#}");
-                }
-            },
-            Ok(None) => {},
-            Err(err) => tracing::warn!("reading the newest height failed: {err:#}"),
-        }
-        sleep(PRUNE_INTERVAL).await;
-    }
 }
 
 /// Logs to stdout, at the level `RUST_LOG` sets or INFO, as JSON when `RUST_LOG_FORMAT=json`.

@@ -10,7 +10,10 @@ use consensus::{
     client::{ClientApi, QueryError},
     ingest::{IngestSource, StakeTables},
 };
-use consensus_api::{Node, SubmitError, payloads::PayloadQueue};
+use consensus_api::{
+    Node, SubmitError, payloads::PayloadQueue, proto::decide_log_server::DecideLogServer,
+};
+use consensus_store_redb::RedbStore;
 use espresso_types::SeqTypes;
 use hotshot_types::{
     data::EpochNumber,
@@ -21,11 +24,14 @@ use hotshot_types::{
 
 use crate::store::NodeStore;
 
+/// The decide log a storage instance takes its entries from, as one in the node's process calls it.
+pub type DecideLog = consensus_api::Service<IngestSource<SeqTypes, RedbStore>>;
+
 /// Binds the consensus node's API to `addr`: the decide log over `store`, with the stake tables
-/// of `membership` and the undecided payloads of `payloads`, for the API service's store, and the node service over the coordinator behind
-/// `client` for the API service. Returns the address
-/// it is bound to, which differs from `addr` for port 0, with the server, which runs until it is
-/// dropped or fails.
+/// of `membership` and the undecided payloads of `payloads`, for the API service's store, and the
+/// node service over the coordinator behind `client` for the API service. Returns the address it
+/// is bound to, which differs from `addr` for port 0, the decide log, for a storage instance in
+/// this process to call directly, and the server, which runs until it is dropped or fails.
 pub fn bind(
     store: NodeStore,
     epoch_height: u64,
@@ -35,12 +41,13 @@ pub fn bind(
     addr: SocketAddr,
 ) -> std::io::Result<(
     SocketAddr,
+    Arc<DecideLog>,
     impl Future<Output = Result<(), tonic::transport::Error>> + Send,
 )> {
     // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
     let incoming = tonic::transport::server::TcpIncoming::bind(addr)?.with_nodelay(Some(true));
     let bound = incoming.local_addr()?;
-    let (decide_log, dispatcher) = consensus_api::server(
+    let (decide_log, dispatcher) = consensus_api::service(
         IngestSource::new(
             store,
             epoch_height,
@@ -48,8 +55,9 @@ pub fn bind(
         ),
         payloads,
     );
+    let decide_log = Arc::new(decide_log);
     let server = tonic::transport::Server::builder()
-        .add_service(decide_log)
+        .add_service(DecideLogServer::from_arc(decide_log.clone()))
         .add_service(consensus_api::node_server(Arc::new(NodeService { client })))
         .serve_with_incoming(incoming);
     // The decide log's dispatcher runs as long as the server; it ends only with the store.
@@ -59,7 +67,7 @@ pub fn bind(
             () = dispatcher => Ok(()),
         }
     };
-    Ok((bound, server))
+    Ok((bound, decide_log, server))
 }
 
 /// The stake tables of the node's membership, each as the list of its validators.

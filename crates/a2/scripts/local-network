@@ -20,7 +20,7 @@ Usage: ${SCRIPT_NAME} RUNDIR
 
 Run an a2 network, keeping its stores and logs in RUNDIR, which must not exist. Needs anvil on the
 PATH or in the repository root, Postgres, and the binaries deploy, consensus-node, store-service,
-api-service and staking-cli in target/PROFILE or target/debug.
+api-service and staking-cli, and deployment for SINGLE_PROCESS, in target/PROFILE or target/debug.
 
 The API services serve on http://127.0.0.1:24000 to http://127.0.0.1:24004, one per node.
 
@@ -30,6 +30,8 @@ ENVIRONMENT:
   EMPTY_BLOCK_DELAY
                  How long a leader without transactions waits before proposing an empty
                  block, e.g. 3ms; the consensus node's default if unset
+  SINGLE_PROCESS The nodes, of 1, 2 and 3, whose deployment runs as one process, with one
+                 storage instance and one API instance, comma-separated, e.g. 1,3
 EOF
 }
 
@@ -92,6 +94,27 @@ main() {
     local x25519="ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_$i"
     local port="ESPRESSO_DEMO_NODE_CLIQUENET_PORT_$i"
     psql -h 127.0.0.1 -p "$pg_port" -U root -d espresso -c "CREATE DATABASE chain$i" >/dev/null
+    if single_process "$i"; then
+      mkdir -p "$rundir/objects-chain$i"
+      ESPRESSO_NODE_PRIVATE_STAKING_KEY=${!staking} \
+        ESPRESSO_NODE_PRIVATE_STATE_KEY=${!state} \
+        ESPRESSO_NODE_PRIVATE_X25519_KEY=${!x25519} \
+        deployment \
+        --genesis-file "$genesis" \
+        --l1-provider "$l1" \
+        --consensus-store-path "$rundir/consensus-$i" \
+        --bind-address "127.0.0.1:${!port}" \
+        --consensus-api-address "127.0.0.1:$((9978 + i))" \
+        --public-api-url "http://127.0.0.1:$((24000 + i))" \
+        --bootstrap http://127.0.0.1:24000 \
+        --database "postgres://root@127.0.0.1:${pg_port}/chain$i" \
+        --payload-store "file://$rundir/objects-chain$i" \
+        --payload-dir "$rundir/staging-$i" \
+        --api-port $((24000 + i)) \
+        ${EMPTY_BLOCK_DELAY:+--empty-block-delay "$EMPTY_BLOCK_DELAY"} \
+        >"$rundir/deployment-$i.log" 2>&1 &
+      continue
+    fi
     local ingest=(--consensus-api "127.0.0.1:$((9978 + i))")
     if ((i == 4)); then
       ingest=()
@@ -124,7 +147,9 @@ main() {
 
   sleep 5
   for i in 0 1 2 3 4; do
-    start_api "$rundir" "$i" "$genesis" "$l1" $((24000 + i)) "api-$i"
+    if ! single_process "$i"; then
+      start_api "$rundir" "$i" "$genesis" "$l1" $((24000 + i)) "api-$i"
+    fi
   done
   start_api "$rundir" 4 "$genesis" "$l1" 24014 "api-4b"
 
@@ -136,6 +161,11 @@ main() {
     --database "postgres://root@127.0.0.1:${pg_port}/chain4" >"$rundir/store-4b.log" 2>&1 &
   echo "node 4's decide log moved to its real store"
   wait
+}
+
+# Whether node $1's deployment runs as one process; see SINGLE_PROCESS.
+single_process() {
+  (($1 >= 1 && $1 <= 3)) && [[ ",${SINGLE_PROCESS:-}," == *",$1,"* ]]
 }
 
 # Starts an API instance of node $2, with genesis file $3 and L1 $4, serving on port $5 and

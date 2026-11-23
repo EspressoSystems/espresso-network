@@ -17,7 +17,7 @@ use anyhow::Context;
 use app_tables::AppWrite;
 use committable::Commitment;
 use consensus_api::payloads::{Acked, Acks, Offer, PayloadQueue};
-use consensus_store::{Batch, Store};
+use consensus_store::{Batch, Bytes, Store};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
     event::HotShotAction,
@@ -512,7 +512,8 @@ impl<T: NodeType, S: Store> Storage<T, S> {
                 view: *view,
                 commitment: name,
                 ns_table: metadata.encode().to_vec().into(),
-                payload: encoded.to_vec().into(),
+                // Shares the payload's buffer rather than copying it.
+                payload: Bytes::from_owner(encoded),
             });
             return;
         }

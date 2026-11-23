@@ -11,7 +11,7 @@
 //! verified otherwise. A payload that joins an entry later can go to another instance than the
 //! entry did; whichever stores the payload acknowledges the entry once the store also has it.
 
-use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, anyhow, ensure};
 use async_trait::async_trait;
@@ -19,9 +19,12 @@ use bytes::Bytes;
 use committable::Committable;
 use consensus_api::{
     BODY_FORMAT, DecideLogClient, FINALITY_VIEWS,
-    proto::{AckRequest, Decided, HeightRange, State, SubscribeRequest, subscribe_response::Event},
+    proto::{
+        AckRequest, Decided, HeightRange, State, SubscribeRequest, SubscribeResponse,
+        decide_log_server::DecideLog, subscribe_response::Event,
+    },
 };
-use futures::StreamExt;
+use futures::{StreamExt, stream::BoxStream};
 use hotshot_types::{
     data::{Leaf2, VidCommitment, VidCommon, ViewNumber, ns_table::parse_ns_table},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
@@ -37,6 +40,7 @@ use hotshot_types::{
 };
 use jf_advz::VidScheme;
 use tokio::time::interval;
+use tonic::{Request, Status, transport::Channel};
 
 pub mod payloads;
 mod store;
@@ -101,16 +105,45 @@ pub struct Block<Types: NodeType> {
 /// come again after every reconnect.
 pub async fn run<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Error {
     loop {
-        match ingest(addr, sink).await {
-            Ok(()) => tracing::warn!(%addr, "decide log stream ended; reconnecting"),
-            Err(err) if err.is::<ChainBroken>() || err.is::<BadEntry>() => {
-                tracing::error!(%addr, "stopped ingesting: {err:#}");
-                return err;
-            },
-            Err(err) => tracing::warn!(%addr, "ingesting failed; reconnecting: {err:#}"),
+        let ingested = async {
+            let mut client = DecideLogClient::connect(format!("http://{addr}"))
+                .await
+                .context("connecting to the decide log")?;
+            ingest(&mut client, sink).await
+        };
+        if let Some(err) = stopped(ingested.await) {
+            return err;
         }
         tokio::time::sleep(RECONNECT_DELAY).await;
     }
+}
+
+/// Ingests from `log`, the decide log of the consensus node in this process, into `sink`, as
+/// [`run`] does over the consensus API.
+pub async fn run_local<Types: NodeType, D: DecideLog>(
+    log: Arc<D>,
+    sink: &dyn Sink<Types>,
+) -> anyhow::Error {
+    loop {
+        if let Some(err) = stopped(ingest(&mut Local(log.clone()), sink).await) {
+            return err;
+        }
+        tokio::time::sleep(RECONNECT_DELAY).await;
+    }
+}
+
+/// The error to stop ingesting with after `ingested`, if it is one that would come again after
+/// every reconnect; any other end is logged, to be followed by a reconnect.
+fn stopped(ingested: anyhow::Result<()>) -> Option<anyhow::Error> {
+    match ingested {
+        Ok(()) => tracing::warn!("decide log stream ended; reconnecting"),
+        Err(err) if err.is::<ChainBroken>() || err.is::<BadEntry>() => {
+            tracing::error!("stopped ingesting: {err:#}");
+            return Some(err);
+        },
+        Err(err) => tracing::warn!("ingesting failed; reconnecting: {err:#}"),
+    }
+    None
 }
 
 /// An entry that does not fit the chain the sink holds.
@@ -126,11 +159,8 @@ pub struct BadEntry(anyhow::Error);
 
 /// Ingests until the stream ends or fails. What this instance was sent and did not acknowledge
 /// goes to another subscription, or to this one after it reconnects, so nothing is missed.
-async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> anyhow::Result<()> {
-    let mut client = DecideLogClient::connect(format!("http://{addr}"))
-        .await
-        .context("connecting to the decide log")?;
-    let mut stream = client.subscribe(SubscribeRequest {}).await?.into_inner();
+async fn ingest<Types: NodeType>(log: &mut dyn Log, sink: &dyn Sink<Types>) -> anyhow::Result<()> {
+    let mut stream = log.subscribe().await?;
     let mut chain = Chain::default();
     let mut receiving: Option<Receiving<Types>> = None;
     let mut acks = interval(ACK_INTERVAL);
@@ -149,10 +179,55 @@ async fn ingest<Types: NodeType>(addr: SocketAddr, sink: &dyn Sink<Types>) -> an
             _ = acks.tick() => {
                 let ranges = chain.take_ackable();
                 if !ranges.is_empty() {
-                    client.ack(AckRequest { ranges }).await?;
+                    log.ack(ranges).await?;
                 }
             },
         }
+    }
+}
+
+/// Where this instance takes its share of the decide log from.
+#[async_trait]
+trait Log: Send {
+    /// The stream of this instance's share of the entries, with the stake tables and records.
+    async fn subscribe(
+        &mut self,
+    ) -> anyhow::Result<BoxStream<'static, Result<SubscribeResponse, Status>>>;
+
+    /// Frees the entries of `ranges`, which the sink holds.
+    async fn ack(&mut self, ranges: Vec<HeightRange>) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+impl Log for DecideLogClient<Channel> {
+    async fn subscribe(
+        &mut self,
+    ) -> anyhow::Result<BoxStream<'static, Result<SubscribeResponse, Status>>> {
+        let stream = DecideLogClient::subscribe(self, SubscribeRequest {}).await?;
+        Ok(stream.into_inner().boxed())
+    }
+
+    async fn ack(&mut self, ranges: Vec<HeightRange>) -> anyhow::Result<()> {
+        DecideLogClient::ack(self, AckRequest { ranges }).await?;
+        Ok(())
+    }
+}
+
+/// The decide log of the consensus node in this process, called directly.
+struct Local<D>(Arc<D>);
+
+#[async_trait]
+impl<D: DecideLog> Log for Local<D> {
+    async fn subscribe(
+        &mut self,
+    ) -> anyhow::Result<BoxStream<'static, Result<SubscribeResponse, Status>>> {
+        let stream = self.0.subscribe(Request::new(SubscribeRequest {})).await?;
+        Ok(stream.into_inner().boxed())
+    }
+
+    async fn ack(&mut self, ranges: Vec<HeightRange>) -> anyhow::Result<()> {
+        self.0.ack(Request::new(AckRequest { ranges })).await?;
+        Ok(())
     }
 }
 

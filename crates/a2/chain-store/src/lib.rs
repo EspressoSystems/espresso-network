@@ -35,6 +35,7 @@ pub mod mem;
 pub mod payloads;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+mod recent;
 #[cfg(feature = "remote")]
 pub mod remote;
 #[cfg(feature = "service")]
@@ -237,6 +238,9 @@ pub struct ChainStore {
     /// payloads for.
     payloads: Option<payloads::PayloadStore>,
     staging: Option<payloads::Staging>,
+
+    /// The newest payloads written through this store, for readers in the same process.
+    recent: Option<Arc<recent::RecentPayloads>>,
 }
 
 impl fmt::Debug for ChainStore {
@@ -256,6 +260,7 @@ impl ChainStore {
             backend,
             payloads: None,
             staging: None,
+            recent: None,
         }
     }
 
@@ -281,6 +286,14 @@ impl ChainStore {
         Ok((self, uploader))
     }
 
+    /// The store, keeping the newest payloads written through it in memory, up to `bytes` of
+    /// them, for its clones to read without reading the object store. For a process that both
+    /// writes payloads and serves them.
+    pub fn with_recent_payloads(mut self, bytes: usize) -> Self {
+        self.recent = Some(Arc::new(recent::RecentPayloads::new(bytes)));
+        self
+    }
+
     /// The object store the payloads live in, if not in the backend.
     pub fn payload_store(&self) -> Option<&payloads::PayloadStore> {
         self.payloads.as_ref()
@@ -302,6 +315,7 @@ impl ChainStore {
             .as_ref()
             .context("this store keeps no payloads by commitment")?;
         let info = PayloadInfo::of(&payload, ns_table);
+        let kept = payload.clone();
         let uploaded = match &self.staging {
             Some(staging) => {
                 staging.stage(commitment, &payload).await?;
@@ -318,6 +332,9 @@ impl ChainStore {
             &payloads::PayloadRecord { info, uploaded },
         )
         .await?;
+        if let Some(recent) = &self.recent {
+            recent.insert(commitment, kept);
+        }
         // A block with the payload may be stored already, without its info; see `put`.
         if let Some(height) = self.backend.height_of(Column::Payload, commitment).await? {
             self.describe_payload(height, commitment).await?;
@@ -429,6 +446,14 @@ impl ChainStore {
             return Ok(None);
         };
         let commitment = item.leaf.block_header().payload_commitment().to_string();
+        if let Some(payload) = self.recent.as_ref().and_then(|r| r.get(&commitment)) {
+            let (start, end) = (usize::try_from(range.start)?, usize::try_from(range.end)?);
+            anyhow::ensure!(
+                start <= end && end <= payload.len(),
+                "a range past the end of the payload"
+            );
+            return Ok(Some(payload.slice(start..end)));
+        }
         payloads.get_range(&commitment, range).await
     }
 
@@ -442,6 +467,9 @@ impl ChainStore {
             return Ok(None);
         };
         let commitment = item.leaf.block_header().payload_commitment().to_string();
+        if let Some(payload) = self.recent.as_ref().and_then(|r| r.get(&commitment)) {
+            return Ok(Some(payload));
+        }
         payloads.get(&commitment).await
     }
 

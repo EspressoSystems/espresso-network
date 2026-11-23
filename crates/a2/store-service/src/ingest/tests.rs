@@ -726,3 +726,54 @@ async fn takes_and_acknowledges_offered_payloads() {
         Some(&b"offered"[..])
     );
 }
+
+/// An instance in the consensus node's process ingests the decide log by calling it directly.
+#[tokio::test]
+async fn ingests_a_decide_log_in_the_same_process() {
+    let chain = chain(2).await;
+    let log = FakeLog::new();
+    log.decide(&chain, 0..=2);
+    let (service, dispatcher) =
+        consensus_api::service(log.clone(), consensus_api::payloads::PayloadQueue::new().0);
+    tokio::spawn(dispatcher);
+    let sink = MemSink::new();
+    let instance = sink.clone();
+    let service = Arc::new(service);
+    tokio::spawn(async move { run_local::<MockTypes, _>(service, instance.as_ref()).await });
+
+    eventually("every block is acknowledged", || {
+        log.acked() == vec![0, 1, 2]
+    })
+    .await;
+    assert_eq!(sink.appended(), vec![0, 1, 2]);
+}
+
+/// An instance in the consensus node's process takes payloads from its queue, and acknowledges
+/// each once stored.
+#[tokio::test]
+async fn takes_payloads_in_the_same_process() {
+    use chain_store::{ChainStore, payloads::PayloadStore};
+    use consensus_api::payloads::{Offer, PayloadQueue};
+
+    let (payloads, mut acks) = PayloadQueue::new();
+    let objects = PayloadStore::new(Arc::new(object_store::memory::InMemory::new()), "p", None);
+    let store =
+        ChainStore::new(chain_store::mem::MemBackend::default()).with_payloads(objects.clone());
+    let queue = payloads.clone();
+    tokio::spawn(async move { super::payloads::run_local(queue, &store).await });
+
+    payloads.offer(Offer {
+        view: 3,
+        commitment: "C~3".into(),
+        ns_table: Bytes::new(),
+        payload: Bytes::from_static(b"offered"),
+    });
+    let acked = timeout(Duration::from_secs(10), acks.recv())
+        .await
+        .expect("an acknowledgement");
+    assert_eq!(acked, Some((3, "C~3".to_string())));
+    assert_eq!(
+        objects.get("C~3").await.unwrap().as_deref(),
+        Some(&b"offered"[..])
+    );
+}

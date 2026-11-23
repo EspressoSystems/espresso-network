@@ -151,6 +151,16 @@ pub fn server<S: Source>(
     source: Arc<S>,
     payloads: PayloadQueue,
 ) -> (DecideLogServer<Service<S>>, impl Future<Output = ()> + Send) {
+    let (service, dispatcher) = service(source, payloads);
+    (DecideLogServer::new(service), dispatcher)
+}
+
+/// The service [`server`] serves, for subscribers in the same process to call directly, and its
+/// dispatcher.
+pub fn service<S: Source>(
+    source: Arc<S>,
+    payloads: PayloadQueue,
+) -> (Service<S>, impl Future<Output = ()> + Send) {
     let (queue, work) = async_channel::unbounded();
     let (progress, progress_rx) = watch::channel(0);
     let dispatcher = Dispatcher::new(source.clone(), queue.clone(), progress);
@@ -161,7 +171,7 @@ pub fn server<S: Source>(
         progress: progress_rx,
         payloads,
     };
-    (DecideLogServer::new(service), dispatcher.run())
+    (service, dispatcher.run())
 }
 
 pub struct Service<S> {
@@ -199,7 +209,7 @@ impl<S: Source> DecideLog for Service<S> {
         _: Request<TakePayloadsRequest>,
     ) -> Result<Response<Self::TakePayloadsStream>, Status> {
         let (tx, rx) = mpsc::channel(BATCH);
-        let mut taker = self.payloads.taker();
+        let mut taker = self.payloads.subscribe();
         // Runs as part of the stream, and stops with it, giving back what was not acknowledged.
         let feed = async move {
             while let Some(offer) = taker.next().await {

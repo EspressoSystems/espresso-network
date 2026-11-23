@@ -15,7 +15,7 @@ use consensus::{
     coordinator::{Coordinator, error::Severity},
     network::{Cliquenet, Role, message_limit},
 };
-use consensus_api::discovery::ServiceRecord;
+use consensus_api::{discovery::ServiceRecord, payloads::PayloadQueue};
 use consensus_store_redb::RedbStore;
 use espresso_genesis::Genesis;
 use espresso_types::{PubKey, SeqTypes, v0_3::StakeTableError};
@@ -44,6 +44,7 @@ use vbs::version::Version;
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
+    api::DecideLog,
     catchup::ApiCatchup,
     decided_state::DecidedStateWriter,
     initializer::initializer,
@@ -86,15 +87,38 @@ pub struct Config {
     /// The state relay server to send light client state signatures to, if any.
     pub relay: Option<Url>,
 
-    /// How many bytes the decide log may take up before the node holds its vote.
+    /// How many bytes the decide log may take up before the node drops its oldest entries.
     pub decide_log_limit: u64,
 
     /// How long a leader waits for transactions before proposing an empty block.
     pub empty_block_delay: Duration,
 }
 
+/// What a consensus node hands the parts of its deployment that run in its own process.
+pub struct Local {
+    /// The payloads consensus offers, shared with a storage instance rather than copied.
+    pub payloads: PayloadQueue,
+
+    /// The decide log, for a storage instance to call directly.
+    pub decide_log: Arc<DecideLog>,
+
+    /// Where the consensus API is served, which an API instance submits transactions to.
+    pub consensus_api: SocketAddr,
+}
+
 /// Runs a consensus node until consensus stops, which it does only on a critical error.
 pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()> {
+    run_with(config, metrics, |_, _| {}).await
+}
+
+/// Runs a consensus node as [`run`] does, and hands `local` what the parts of the deployment in
+/// this process need, once the consensus API is up. The tasks it adds to the set run beside
+/// consensus, which stops when one of them does.
+pub async fn run_with(
+    config: Config,
+    metrics: Box<dyn Metrics>,
+    local: impl FnOnce(Local, &mut JoinSet<anyhow::Error>),
+) -> anyhow::Result<()> {
     let Config {
         genesis,
         staking_key,
@@ -193,7 +217,7 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
     });
     let config = &network_config.config;
     // Payloads go to the deployment's storage instances, which report them durable.
-    let (payloads, payload_acks) = consensus_api::payloads::PayloadQueue::new();
+    let (payloads, payload_acks) = PayloadQueue::new();
     let coordinator = Coordinator::maker()
         .membership_coordinator(membership.clone())
         .network(network)
@@ -228,11 +252,11 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         .service_record(record)
         .make();
 
-    let (addr, server) = crate::api::bind(
+    let (addr, decide_log, server) = crate::api::bind(
         store,
         initializer.epoch_height(),
         membership,
-        payloads,
+        payloads.clone(),
         coordinator.client_api().clone(),
         consensus_api,
     )
@@ -245,6 +269,14 @@ pub async fn run(config: Config, metrics: Box<dyn Metrics>) -> anyhow::Result<()
         }
     });
 
+    local(
+        Local {
+            payloads,
+            decide_log,
+            consensus_api: addr,
+        },
+        &mut tasks,
+    );
     run_coordinator(coordinator, decided, tasks).await
 }
 

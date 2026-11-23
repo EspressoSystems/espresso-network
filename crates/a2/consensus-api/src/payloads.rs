@@ -1,9 +1,10 @@
 //! The payloads a consensus node hands its storage instances before their blocks are decided.
 //!
-//! Consensus [offers](PayloadQueue::offer) each payload once; the `TakePayloads` subscriptions
-//! take them in turn, and a subscriber acknowledges each payload once it is durable, which
-//! consensus learns from the [acknowledgements](Acks). A payload sent to a subscription that ends
-//! before it is acknowledged is offered again.
+//! Consensus [offers](PayloadQueue::offer) each payload once; the subscriptions, over gRPC
+//! (`TakePayloads`) or [in the same process](PayloadQueue::subscribe), take them in turn, and a
+//! subscriber acknowledges each payload once it is durable, which consensus learns from the
+//! [acknowledgements](Acks). A payload sent to a subscription that ends before it is
+//! acknowledged is offered again. In the same process an offer is shared, not copied.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -67,8 +68,9 @@ impl PayloadQueue {
         let _ = self.acked.send(acked);
     }
 
-    pub(crate) fn taker(&self) -> Taker {
-        Taker {
+    /// A subscription in this process, which takes its share of the offers.
+    pub fn subscribe(&self) -> Subscription {
+        Subscription {
             taken: self.taken.clone(),
             acked: self.acked.subscribe(),
             sent: Sent {
@@ -80,15 +82,15 @@ impl PayloadQueue {
 }
 
 /// One subscription's share of the queue.
-pub(crate) struct Taker {
+pub struct Subscription {
     taken: async_channel::Receiver<Arc<Offer>>,
     acked: broadcast::Receiver<Acked>,
     sent: Sent,
 }
 
-impl Taker {
+impl Subscription {
     /// The next offer for this subscription, which it then holds until it is acknowledged.
-    pub(crate) async fn next(&mut self) -> Option<Arc<Offer>> {
+    pub async fn next(&mut self) -> Option<Arc<Offer>> {
         loop {
             tokio::select! {
                 offer = self.taken.recv() => {

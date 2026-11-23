@@ -11,7 +11,13 @@
 //! store, records them as uploaded, and deletes the staged copies. A restarted uploader uploads
 //! what is still staged. A writer without a staging directory uploads at once.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use anyhow::Context;
 use app_tables::{AppWrite, TableName};
@@ -158,6 +164,10 @@ impl PayloadStore {
 pub(crate) struct Staging {
     dir: PathBuf,
     uploads: mpsc::UnboundedSender<String>,
+
+    /// Numbers the writes, so that two writes of one payload, as repair and a storage instance
+    /// in one process can make, do not share a partial file.
+    writes: Arc<AtomicU64>,
 }
 
 impl Staging {
@@ -165,7 +175,8 @@ impl Staging {
     /// and queues it for upload.
     pub(crate) async fn stage(&self, commitment: &str, payload: &[u8]) -> anyhow::Result<()> {
         let path = self.dir.join(commitment);
-        let partial = self.dir.join(format!(".{commitment}"));
+        let write = self.writes.fetch_add(1, Ordering::Relaxed);
+        let partial = self.dir.join(format!(".{commitment}.{write}"));
         let mut file = fs::File::create(&partial).await?;
         file.write_all(payload).await?;
         file.sync_all().await?;
@@ -182,38 +193,20 @@ pub struct Uploader {
     payloads: PayloadStore,
     backend: Arc<dyn Backend>,
     queue: mpsc::UnboundedReceiver<String>,
+
+    /// The payloads a previous run left staged.
+    leftovers: Vec<String>,
 }
 
 impl Uploader {
     /// Uploads what a previous run left staged, then each payload as it is staged.
     pub async fn run(mut self) {
-        match self.leftovers().await {
-            Ok(leftovers) => {
-                for commitment in leftovers {
-                    self.upload(&commitment).await;
-                }
-            },
-            Err(err) => tracing::error!("reading the staged payloads failed: {err:#}"),
+        for commitment in std::mem::take(&mut self.leftovers) {
+            self.upload(&commitment).await;
         }
         while let Some(commitment) = self.queue.recv().await {
             self.upload(&commitment).await;
         }
-    }
-
-    async fn leftovers(&self) -> anyhow::Result<Vec<String>> {
-        let mut staged = Vec::new();
-        let mut entries = fs::read_dir(&self.dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match name.starts_with('.') {
-                // A write that did not finish was never reported durable.
-                true => {
-                    let _ = fs::remove_file(entry.path()).await;
-                },
-                false => staged.push(name),
-            }
-        }
-        Ok(staged)
     }
 
     /// Uploads the payload staged under `commitment`, trying again until it succeeds, then records
@@ -268,18 +261,40 @@ pub(crate) async fn staging(
     fs::create_dir_all(&dir)
         .await
         .with_context(|| format!("creating {}", dir.display()))?;
+    // Before any write, which the removal of a previous run's partial writes would break.
+    let leftovers = leftovers(&dir)
+        .await
+        .with_context(|| format!("reading the staged payloads in {}", dir.display()))?;
     let (uploads, queue) = mpsc::unbounded_channel();
     let staging = Staging {
         dir: dir.clone(),
         uploads,
+        writes: Arc::default(),
     };
     let uploader = Uploader {
         dir,
         payloads,
         backend,
         queue,
+        leftovers,
     };
     Ok((staging, uploader))
+}
+
+/// The payloads staged in `dir`, removing the partial writes, which were never reported durable.
+async fn leftovers(dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let mut staged = Vec::new();
+    let mut entries = fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match name.starts_with('.') {
+            true => {
+                let _ = fs::remove_file(entry.path()).await;
+            },
+            false => staged.push(name),
+        }
+    }
+    Ok(staged)
 }
 
 #[cfg(test)]
@@ -455,6 +470,46 @@ mod tests {
             store.payload(0).await.unwrap().as_deref(),
             Some(&b"early"[..])
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A store that keeps recent payloads gives its clones the buffer a payload was written
+    /// from, whole or in part, before the staged payload is uploaded.
+    #[tokio::test]
+    async fn a_recent_payload_is_read_from_the_written_buffer() {
+        let dir = std::env::temp_dir().join(format!("staging-{:016x}", rand_suffix()));
+        let (store, _uploader) = ChainStore::new(MemBackend::default())
+            .with_recent_payloads(1 << 20)
+            .with_staged_payloads(objects(), dir.clone())
+            .await
+            .unwrap();
+        let reader = store.clone();
+        let item = genesis().await;
+        let header = item.leaf.block_header();
+        let written = Bytes::from(b"recent".to_vec());
+        store
+            .put_payload(
+                &header.payload_commitment().to_string(),
+                written.clone(),
+                Some(header.metadata()),
+            )
+            .await
+            .unwrap();
+        store.put(&item, &Parts::default()).await.unwrap();
+
+        let read = reader
+            .payload(0)
+            .await
+            .unwrap()
+            .expect("the recent payload");
+        assert_eq!(
+            read.as_ptr(),
+            written.as_ptr(),
+            "the written buffer, not a copy"
+        );
+        let range = reader.payload_range(0, 2..4).await.unwrap().unwrap();
+        assert_eq!(&range[..], b"ce");
+        assert_eq!(range.as_ptr(), written[2..].as_ptr());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

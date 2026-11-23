@@ -1,0 +1,27 @@
+[package]
+name        = "deployment"
+description = "A whole a2 deployment in one process: consensus, a storage instance and an API instance"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+anyhow             = { workspace = true }
+api-service        = { path = "../api-service" }
+chain-store        = { workspace = true, features = ["postgres"] }
+clap               = { workspace = true }
+consensus          = { workspace = true }
+consensus-node     = { path = "../consensus-node" }
+espresso-genesis   = { workspace = true }
+espresso-keyset    = { workspace = true }
+espresso-types     = { workspace = true }
+hotshot-types      = { workspace = true }
+humantime          = { workspace = true }
+store-service      = { path = "../store-service" }
+tokio              = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+url                = { workspace = true }
+
+[lints]
+workspace = true
