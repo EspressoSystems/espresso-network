@@ -937,6 +937,50 @@ pub mod testing {
         }
     }
 
+    /// Sets the HotShot height that the mock L1 light client of the stake table `stake_table` has
+    /// finalized to `height`, as the light client prover would, and keeps the rest of its
+    /// finalized state. Mines an L1 block for the transaction, as a replayed L1 mines only on
+    /// request.
+    pub async fn set_mock_light_client_height(
+        l1_url: Url,
+        signer: LocalSigner<SigningKey>,
+        stake_table: Address,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        use alloy::providers::ext::AnvilApi;
+        use hotshot_contract_adapter::sol_types::{
+            LightClientStateSol, LightClientV3Mock, StakeTableV3,
+        };
+
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer))
+            .connect_http(l1_url);
+        let address = StakeTableV3::new(stake_table, &provider)
+            .lightClient()
+            .call()
+            .await?;
+        let light_client = LightClientV3Mock::new(address, &provider);
+        let state: LightClientStateSol = light_client.finalizedState().call().await?.into();
+        let pending = light_client
+            .setFinalizedState(
+                LightClientStateSol {
+                    blockHeight: height,
+                    ..state
+                }
+                .into(),
+            )
+            .send()
+            .await?;
+        provider.anvil_mine(Some(1), None).await?;
+        pending.get_receipt().await?;
+        let set = light_client.finalizedState().call().await?.blockHeight;
+        anyhow::ensure!(
+            set == height,
+            "the light client finalized height is {set}, not {height}"
+        );
+        Ok(())
+    }
+
     pub fn staking_priv_keys(
         priv_keys: &[BLSPrivKey],
         state_key_pairs: &[StateKeyPair],

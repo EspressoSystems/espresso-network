@@ -5253,37 +5253,20 @@ mod test {
         network: &TestNetwork<P, N>,
         height: u64,
     ) -> anyhow::Result<()> {
-        use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3Mock};
-
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(network.cfg.signer()))
-            .connect_http(network.cfg.l1_url());
-        let address = network
+        let stake_table = network
             .server
             .node_state()
-            .light_client_contract_address()
-            .await
-            .context("setup: node 0 finds no light client contract")?;
-        let light_client = LightClientV3Mock::new(address, &provider);
-        let state: LightClientStateSol = light_client.finalizedState().call().await?.into();
-        light_client
-            .setFinalizedState(
-                LightClientStateSol {
-                    blockHeight: height,
-                    ..state
-                }
-                .into(),
-            )
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        let set = light_client.finalizedState().call().await?.blockHeight;
-        ensure!(
-            set == height,
-            "setup: the light client finalized height is {set}, not {height}"
-        );
-        Ok(())
+            .chain_config
+            .stake_table_contract
+            .context("setup: node 0 has no stake table contract")?;
+        crate::testing::set_mock_light_client_height(
+            network.cfg.l1_url(),
+            network.cfg.signer(),
+            stake_table,
+            height,
+        )
+        .await
+        .context("setup: setting the light client finalized height")
     }
 
     /// How long to wait for a node to store reward proofs after the L1 light client's finalized
@@ -8131,7 +8114,8 @@ mod test {
             - 1;
         // The node reads the L1-finalized height when its state starts, so set it first.
         if expected == EmptyStateStart::RecentBoundary {
-            set_l1_finalized_hotshot_height(&network, PRUNED_START_L1_FINALIZED_HEIGHT).await?;
+            set_light_client_finalized_height(&network.network, PRUNED_START_L1_FINALIZED_HEIGHT)
+                .await?;
         }
         let (_query_node, query_client) = network.start_query_node(db_opt).await;
 
@@ -8228,51 +8212,6 @@ mod test {
         } else {
             (epoch_from_block_number(finalized, epoch_height) - 1) * epoch_height
         }
-    }
-
-    /// Set the HotShot height the L1 light client has finalized to `height`, on the mock light
-    /// client the stake table of `network` points to, as the light client prover would.
-    async fn set_l1_finalized_hotshot_height<D: TestableSqlDataSource>(
-        network: &PrunedStartNetwork<D>,
-        height: u64,
-    ) -> anyhow::Result<()> {
-        use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3Mock};
-
-        let cfg = &network.network.cfg;
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(cfg.signer()))
-            .connect_http(cfg.l1_url());
-        let stake_table = network
-            .genesis_state
-            .chain_config
-            .resolve()
-            .context("genesis chain config")?
-            .stake_table_contract
-            .context("no stake table contract in the genesis chain config")?;
-        let address = StakeTableV3::new(stake_table, &provider)
-            .lightClient()
-            .call()
-            .await?;
-        let light_client = LightClientV3Mock::new(address, &provider);
-        let state: LightClientStateSol = light_client.finalizedState().call().await?.into();
-        light_client
-            .setFinalizedState(
-                LightClientStateSol {
-                    blockHeight: height,
-                    ..state
-                }
-                .into(),
-            )
-            .send()
-            .await?
-            .get_receipt()
-            .await?;
-        let set = light_client.finalizedState().call().await?.blockHeight;
-        ensure!(
-            set == height,
-            "setup: the light client finalized height is {set}, not {height}"
-        );
-        Ok(())
     }
 
     /// The route that serves a node's reward tree at `height` from its own storage.
