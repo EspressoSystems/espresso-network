@@ -194,7 +194,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         );
         Ok(timeout(timeout_duration, request)
             .await
-            .context("timed out while fetching the LC contract header")??)
+            .context("timed out while fetching the LC contract block Merkle root")??)
     }
 
     /// `Request::HeaderProof { root: root_height, height }` under `request_batch_interval * 3`; an
