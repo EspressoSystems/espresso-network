@@ -4894,6 +4894,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotshot-metrics"
+version = "0.1.0"
+dependencies = [
+ "dyn-clone",
+ "hotshot-metrics",
+ "itertools 0.14.0",
+ "prometheus",
+ "snafu 0.8.9",
+ "test-log",
+ "tracing",
+]
+
+[[package]]
 name = "hotshot-new-protocol"
 version = "0.1.0"
 dependencies = [
@@ -5005,6 +5018,7 @@ dependencies = [
  "futures",
  "generic-array 0.14.7",
  "hotshot-example-types",
+ "hotshot-metrics",
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
@@ -5017,7 +5031,6 @@ dependencies = [
  "lazy_static",
  "log",
  "pretty_assertions",
- "prometheus",
  "rand 0.8.6",
  "refinery",
  "refinery-core",
@@ -5141,9 +5154,9 @@ dependencies = [
  "derive_more 2.1.1",
  "digest 0.10.7",
  "displaydoc",
- "dyn-clone",
  "futures",
  "generic-array 1.4.3",
+ "hotshot-metrics",
  "hotshot-utils",
  "jf-advz",
  "jf-crhf",
@@ -7668,7 +7681,7 @@ dependencies = [
 name = "process-metrics"
 version = "0.1.0"
 dependencies = [
- "hotshot-types",
+ "hotshot-metrics",
  "humantime",
  "procfs",
  "sha2 0.10.9",
