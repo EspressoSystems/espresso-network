@@ -47,7 +47,7 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
   use. Chain configs fetched from peers are checked against the commitment in a proven header. Leaves of the walk above
   the seed window and of `drb_ready` are QC-checked against the installed tables.
 - Trusted inputs:
-  - chain config
+  - genesis file: `[chain_config].stake_table_contract`
   - L1 RPC
   - local storage: stake table events, and stored committees, whose validators, reward and hash are reused without
     recomputing
@@ -60,7 +60,7 @@ and what each fetched value is checked against. Mechanism details: `doc/agents/a
 
 ```mermaid
 flowchart TD
-    CC[chain config: stake_table_contract] -->|L1 RPC, finalized block| ST[StakeTableV3.lightClient]
+    CC["genesis file: [chain_config].stake_table_contract"] -->|L1 RPC, finalized block| ST[StakeTableV3.lightClient]
     ST -->|L1 RPC, finalized block| LC["LcContract.finalizedState: F, blockCommRoot (SNARK-verified)"]
     LC --> AR["anchor_root: block Merkle root (peer, carried in header F)"]
     AR -->|"Rescue hash equals blockCommRoot"| AV[verified anchor_root]
@@ -87,7 +87,7 @@ flowchart TD
 
 0. LC contract address
    - `StakeTableV3(chain_config.stake_table_contract).lightClient()`.
-   - Trusts chain config, L1 RPC and the stake table contract admin.
+   - Trusts the genesis file, L1 RPC and the stake table contract admin.
 1. `F`, `blockCommRoot`
    - `LightClientV3.finalizedState()` at the L1 finalized block.
    - Trusts L1 RPC, the LC contract owner and the circuit.
