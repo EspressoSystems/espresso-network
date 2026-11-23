@@ -13,7 +13,7 @@ use hotshot_types::{
 use crate::BlockMerkleCommitment;
 
 /// The LC contract's `finalizedState` at one L1 finalized block: `F` and the block commitment
-/// root of the header at `F`. Only headers below `F` are provable against that header.
+/// root of the header at `F`. Only headers below `F` are provable against that root.
 ///
 /// An `epoch_height` of 5 or less is unsupported: the chain cannot run that way.
 #[derive(Clone, Debug, PartialEq)]
@@ -114,6 +114,7 @@ mod tests {
     use crate::{BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree};
 
     const EPOCH_HEIGHT: u64 = 100;
+
     /// A block Merkle tree commitment holding `leaves` leaves, each derived from `seed`.
     fn root_of(leaves: u64, seed: u8) -> BlockMerkleCommitment {
         let mut tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);

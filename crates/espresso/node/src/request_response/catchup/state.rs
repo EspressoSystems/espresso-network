@@ -573,7 +573,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 }
 
 /// The block Merkle root of the header the leaf chain in `response` starts with, if
-/// `lc_contract_state` accepts that header.
+/// `lc_contract_state` accepts its block Merkle root.
 fn verified_lc_contract_root(
     lc_contract_state: &LcContractFinalizedState,
     response: Response,
