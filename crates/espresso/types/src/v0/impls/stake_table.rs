@@ -1,6 +1,7 @@
 use std::{
     cmp::{max, min},
     collections::{HashMap, HashSet},
+    num::NonZeroU64,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -31,11 +32,13 @@ use async_lock::Mutex as AsyncMutex;
 use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+#[cfg(feature = "node")]
+use futures::FutureExt;
 use futures::future::BoxFuture;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
-    StakeTableV3,
+    LightClientStateSol, LightClientV3, StakeTableV3,
 };
 use hotshot_contract_adapter::{
     sol_types::StakeTableV3::{
@@ -45,6 +48,8 @@ use hotshot_contract_adapter::{
     },
     stake_table::StakeTableSolError,
 };
+#[cfg(feature = "node")]
+use hotshot_types::light_client::LightClientState;
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
@@ -63,9 +68,16 @@ use tokio::time::sleep;
 #[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
+use versions::CANONICAL_STAKE_TABLE_ORDER_VERSION;
 
 #[cfg(feature = "node")]
+use super::BackoffParams;
+#[cfg(feature = "node")]
 use super::L1Client;
+#[cfg(feature = "node")]
+use super::LcContractFinalizedState;
+#[cfg(feature = "node")]
+use super::l1::L1_FINALIZED_WAIT;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
@@ -200,6 +212,7 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+/// Order decoded logs by their place on L1: block number, then index in the block.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
@@ -627,28 +640,23 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
+                // The token supply keeps the events on L1 far from an overflow. Events from
+                // elsewhere, such as those a server sends a light client, are not bound by it.
+                let stake = val
+                    .stake
+                    .checked_add(amount)
+                    .ok_or(StakeTableError::StakeOverflow(validator))?;
+                let delegator_stake = val
+                    .delegators
+                    .get(&delegator)
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(amount)
+                    .ok_or(StakeTableError::StakeOverflow(validator))?;
+
                 // All checks ok, applying changes
-                // This cannot overflow in practice
-                val.stake = val.stake.checked_add(amount).unwrap_or_else(|| {
-                    panic!(
-                        "validator stake overflow: validator={validator}, stake={}, \
-                         amount={amount}",
-                        val.stake
-                    )
-                });
-                // Insert the delegator with the given stake
-                // or increase the stake if already present
-                val.delegators
-                    .entry(delegator)
-                    .and_modify(|stake| {
-                        *stake = stake.checked_add(amount).unwrap_or_else(|| {
-                            panic!(
-                                "delegator stake overflow: delegator={delegator}, stake={stake}, \
-                                 amount={amount}"
-                            )
-                        });
-                    })
-                    .or_insert(amount);
+                val.stake = stake;
+                val.delegators.insert(delegator, delegator_stake);
             },
 
             StakeTableEvent::Undelegate(Undelegated {
@@ -953,6 +961,8 @@ impl StakeTableState {
     }
 }
 
+/// Decode a network key from a stake table event.
+///
 /// The contract enforces canonical nonzero encodings, so an error here means a
 /// contract bug. Callers degrade it to `None` instead of aborting (defense in
 /// depth): the key only affects p2p networking, not consensus safety, so this
@@ -991,13 +1001,17 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Filters out unauthenticated validator candidates, those without stake, and selects
 /// the top [`MAX_VALIDATORS`] staked validators.
 /// Returns a new AuthenticatedValidatorMap containing only the selected validators.
+///
+/// From [`CANONICAL_STAKE_TABLE_ORDER_VERSION`] on, the result depends only on the
+/// candidates' contents, not on their registration order: equal stakes are ranked by
+/// address, and the selected validators are listed by address.
 pub(crate) fn select_active_validator_set(
     candidates: &RegisteredValidatorMap,
     protocol_version: Version,
 ) -> Result<AuthenticatedValidatorMap, StakeTableError> {
     let total_candidates = candidates.len();
 
-    let valid_validators: AuthenticatedValidatorMap = candidates
+    let mut valid_validators: AuthenticatedValidatorMap = candidates
         .iter()
         .filter_map(
             |(address, validator)| match AuthenticatedValidator::try_from(validator) {
@@ -1037,6 +1051,13 @@ pub(crate) fn select_active_validator_set(
     if valid_validators.is_empty() {
         tracing::warn!("Validator selection failed: no validators passed minimum criteria");
         return Err(StakeTableError::NoValidValidators);
+    }
+
+    if protocol_version >= CANONICAL_STAKE_TABLE_ORDER_VERSION {
+        // In address order, the stable sort by stake below ranks equal stakes by
+        // address, and the selected validators are listed by address. Certificate
+        // signers are given by position in that list.
+        valid_validators.sort_unstable_keys();
     }
 
     let maximum_stake = valid_validators.values().map(|v| v.stake).max().unwrap();
@@ -1234,7 +1255,13 @@ impl Fetcher {
             chain_config: Arc::new(AsyncMutex::new(chain_config)),
             update_task: StakeTableUpdateTask(AsyncMutex::new(None)).into(),
             initial_supply: Arc::new(AsyncRwLock::new(None)),
+            lc_contract_address: Arc::default(),
         }
+    }
+
+    /// The catchup provider the stake table catchup fetches from.
+    pub fn peers(&self) -> &dyn StateCatchup {
+        &*self.peers
     }
 
     #[cfg(feature = "node")]
@@ -1448,22 +1475,21 @@ impl Fetcher {
     }
 
     /// Break a block range into fixed-size chunks.
+    ///
+    /// Both bounds of every chunk are inclusive. The chunks cover `from_block..=to_block` for
+    /// every chunk size, also where `from_block + chunk_size` or `to_block + 1` is not a `u64`.
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
-    fn block_range_chunks(
+    pub(crate) fn block_range_chunks(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let mut start = from_block;
-        let end = to_block;
+        let mut next = (from_block <= to_block).then_some(from_block);
         std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
+            let start = next?;
+            let chunk_end = min(start.saturating_add(chunk_size.get() - 1), to_block);
+            next = chunk_end.checked_add(1).filter(|start| *start <= to_block);
+            Some((start, chunk_end))
         })
     }
 
@@ -1475,9 +1501,8 @@ impl Fetcher {
     fn block_range_chunks_rev(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let chunk_size = chunk_size.max(1);
         let mut end = to_block;
         let mut exhausted = to_block < from_block;
         std::iter::from_fn(move || {
@@ -1485,7 +1510,7 @@ impl Fetcher {
                 return None;
             }
             let chunk_end = end;
-            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size.get() - 1));
             exhausted = chunk_start == from_block;
             end = chunk_start.saturating_sub(1);
             Some((chunk_start, chunk_end))
@@ -1883,13 +1908,15 @@ impl Fetcher {
         Ok(())
     }
 
+    /// The validator set of `epoch` at the L1 block that its root `header` names, with events from
+    /// `source`.
     #[cfg(feature = "node")]
-    pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
-        let chain_config = *self.chain_config.lock().await;
-        let Some(address) = chain_config.stake_table_contract else {
-            bail!("No stake table contract address found in Chain config");
-        };
-
+    pub async fn fetch(
+        &self,
+        epoch: EpochNumber,
+        header: &Header,
+        source: EventSource,
+    ) -> anyhow::Result<ValidatorSet> {
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
             bail!(
                 "The epoch root for epoch {epoch} is missing the L1 finalized block info. This is \
@@ -1897,8 +1924,35 @@ impl Fetcher {
             );
         };
 
+        // Selection runs at the epoch root header's protocol version: that header's
+        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
+        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
+        // than each event's wall-clock version.
+        let l1_block = l1_finalized_block_info.number();
+        match source {
+            EventSource::StoredThenL1 => self.validator_set_at(l1_block, header.version()).await,
+            EventSource::StoredOnly => {
+                self.validator_set_from_stored_events(l1_block, header.version())
+                    .await
+            },
+        }
+    }
+
+    /// The validator set from stake table events up to `l1_block`, selected under `version`.
+    /// Events missing from storage are fetched from L1 and stored.
+    #[cfg(feature = "node")]
+    pub async fn validator_set_at(
+        &self,
+        l1_block: u64,
+        version: Version,
+    ) -> anyhow::Result<ValidatorSet> {
+        let chain_config = *self.chain_config.lock().await;
+        let Some(address) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+
         let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
+            .fetch_and_store_stake_table_events(address, l1_block)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
         {
@@ -1908,16 +1962,81 @@ impl Fetcher {
             },
         };
 
-        // Selection runs at the epoch root header's protocol version: that header's
-        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
-        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
-        // than each event's wall-clock version.
-        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), header.version()) {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                bail!("failed to construct stake table {e:?}");
-            },
-        }
+        validator_set_from_events(events, version)
+    }
+
+    /// The validator set from the stored stake table events up to `l1_block`, selected under
+    /// `version`. Makes no L1 request; errors when storage does not hold the events up to
+    /// `l1_block`.
+    #[cfg(feature = "node")]
+    pub(crate) async fn validator_set_from_stored_events(
+        &self,
+        l1_block: u64,
+        version: Version,
+    ) -> anyhow::Result<ValidatorSet> {
+        let (read, events) = self
+            .persistence
+            .lock()
+            .await
+            .load_events(0, l1_block)
+            .await?;
+        ensure!(
+            read == Some(EventsPersistenceRead::Complete),
+            "stored stake table events do not cover L1 block {l1_block} ({read:?})"
+        );
+        validator_set_from_events(events, version)
+    }
+
+    /// The LC contract's `finalizedState` at the L1 finalized block. The wait for that block and the
+    /// contract reads are each bounded by `L1_FINALIZED_WAIT`; each call is retried, with a timeout.
+    #[cfg(feature = "node")]
+    pub async fn lc_contract_finalized_state(&self) -> anyhow::Result<LcContractFinalizedState> {
+        let chain_config = *self.chain_config.lock().await;
+        let Some(stake_table_contract) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+        let block = self.l1_client.finalized_number_within_wait().await?;
+        let request_timeout = self.l1_client.options().l1_request_timeout;
+        let backoff = BackoffParams::default();
+        let read = backoff.retry(self, move |this, _| {
+            let this = *this;
+            async move {
+                let provider = this.l1_client.provider.clone();
+                let lc_contract = *this
+                    .lc_contract_address
+                    .get_or_try_init(|| async {
+                        tokio::time::timeout(
+                            request_timeout,
+                            StakeTableV3::new(stake_table_contract, provider.clone())
+                                .lightClient()
+                                .call(),
+                        )
+                        .await
+                        .context("reading the LC contract address timed out")?
+                        .context("failed to read the LC contract address")
+                    })
+                    .await?;
+                tokio::time::timeout(
+                    request_timeout,
+                    LightClientV3::new(lc_contract, provider)
+                        .finalizedState()
+                        .block(BlockId::number(block))
+                        .call(),
+                )
+                .await
+                .context("reading finalizedState timed out")?
+                .context("failed to read finalizedState")
+            }
+            .boxed()
+        });
+        let state = tokio::time::timeout(L1_FINALIZED_WAIT, read)
+            .await
+            .context("reading the LC contract exceeded the L1 wait")??;
+        let state = LightClientState::from(LightClientStateSol::from(state));
+        Ok(LcContractFinalizedState {
+            height: state.block_height,
+            block_comm_root: state.block_comm_root,
+        })
     }
 
     /// Retrieve and verify `ChainConfig`
@@ -1960,6 +2079,27 @@ impl Fetcher {
             chain_config,
         )
     }
+}
+
+/// Where the stake table events of a derived table come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(feature = "node")]
+pub enum EventSource {
+    /// Storage, then L1 for what storage lacks; fetched events are stored.
+    StoredThenL1,
+    /// Storage only; an error when it does not cover the L1 block.
+    StoredOnly,
+}
+
+/// The validator set that `events`, ordered by L1 position, select under `version`.
+#[cfg(feature = "node")]
+fn validator_set_from_events(
+    events: Vec<(EventKey, StakeTableEvent)>,
+    version: Version,
+) -> anyhow::Result<ValidatorSet> {
+    // The source error stays in the chain so callers can downcast to `StakeTableError`.
+    ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), version)
+        .context("failed to construct stake table")
 }
 
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
@@ -2123,7 +2263,7 @@ pub mod testing {
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{Rng as _, RngCore as _};
+    use rand::{CryptoRng, Rng as _, RngCore};
 
     use super::*;
 
@@ -2143,9 +2283,16 @@ pub mod testing {
 
     impl TestValidator {
         pub fn random() -> Self {
-            let account = Address::random();
-            let commission = rand::thread_rng().gen_range(0..10000);
-            Self::random_update_keys(account, commission)
+            Self::from_rng(&mut rand::thread_rng())
+        }
+
+        /// A validator whose account, commission and keys are drawn from `rng`, so that a
+        /// seeded `rng` gives the same validators every time.
+        pub fn from_rng<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+            let mut account = [0u8; 20];
+            rng.fill_bytes(&mut account);
+            let commission = rng.gen_range(0..10000);
+            Self::keys_from_rng(rng, Address::from(account), commission)
         }
 
         pub fn randomize_keys(&self) -> Self {
@@ -2153,7 +2300,15 @@ pub mod testing {
         }
 
         pub fn random_update_keys(account: Address, commission: u16) -> Self {
-            let mut rng = &mut rand::thread_rng();
+            Self::keys_from_rng(&mut rand::thread_rng(), account, commission)
+        }
+
+        /// The validator registered under `account`, with keys drawn from `rng`.
+        pub fn keys_from_rng<R: RngCore + CryptoRng>(
+            mut rng: &mut R,
+            account: Address,
+            commission: u16,
+        ) -> Self {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
             let bls_key_pair = BLSKeyPair::generate(&mut rng);
@@ -2320,16 +2475,28 @@ pub mod testing {
 }
 
 #[cfg(test)]
+mod corpus;
+
+#[cfg(test)]
 mod tests {
     use alloy::{
+        node_bindings::Anvil,
         primitives::{Address, Bytes},
+        providers::{ProviderBuilder, ext::AnvilApi},
         rpc::types::Log,
     };
+    use espresso_contract_deployer::{
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+        network_config::light_client_genesis_from_stake_table,
+    };
     use hotshot_contract_adapter::{
-        sol_types::{G1PointSol, G2PointSol},
+        sol_types::{G1PointSol, G2PointSol, LightClientMock, LightClientStateSol},
         stake_table::{StakeTableContractVersion, sign_address_bls},
     };
-    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
+    use hotshot_types::{
+        light_client::{CircuitField, StateKeyPair},
+        signature_key::BLSKeyPair,
+    };
     use pretty_assertions::assert_matches;
     use rstest::rstest;
     use versions::{
@@ -2355,13 +2522,81 @@ mod tests {
         }
     }
 
+    /// The finalized LC contract state is read through the stake table contract.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn lc_contract_finalized_state_reads_the_contract() -> anyhow::Result<()> {
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "1"]).spawn();
+        let wallet = anvil.wallet().unwrap();
+        let deployer_address = wallet.default_signer().address();
+        let provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_http(anvil.endpoint_url());
+        let (genesis_state, genesis_stake) =
+            light_client_genesis_from_stake_table(&Default::default(), 10)?;
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(provider.clone())
+            .rpc_url(anvil.endpoint_url())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(100)
+            .epoch_start_block(1)
+            .multisig_pauser(deployer_address)
+            .exit_escrow_period(U256::from(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS))
+            .token_name("Espresso".to_string())
+            .token_symbol("ESP".to_string())
+            .initial_token_supply(U256::from(100000u64))
+            .ops_timelock_delay(U256::from(0))
+            .ops_timelock_admin(deployer_address)
+            .ops_timelock_proposers(vec![deployer_address])
+            .ops_timelock_executors(vec![deployer_address])
+            .safe_exit_timelock_delay(U256::from(10))
+            .safe_exit_timelock_admin(deployer_address)
+            .safe_exit_timelock_proposers(vec![deployer_address])
+            .safe_exit_timelock_executors(vec![deployer_address])
+            .build()?;
+        args.deploy_to_stake_table_v3(&mut contracts).await?;
+
+        let lc_contract = contracts.address(Contract::LightClientProxy).unwrap();
+        let finalized = LightClientStateSol {
+            viewNum: 3,
+            blockHeight: 42,
+            blockCommRoot: U256::from(7),
+        };
+        LightClientMock::new(lc_contract, &provider)
+            .setFinalizedState(finalized.clone().into())
+            .send()
+            .await?
+            .watch()
+            .await?;
+
+        let l1_client = L1ClientOptions::default().connect(vec![anvil.endpoint_url()])?;
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
+            l1_client.clone(),
+            ChainConfig {
+                stake_table_contract: contracts.address(Contract::StakeTableProxy),
+                ..Default::default()
+            },
+        );
+        l1_client.anvil_mine(Some(5), None).await?;
+
+        let state = fetcher.lc_contract_finalized_state().await?;
+
+        assert_eq!(state.height, 42);
+        assert_eq!(state.block_comm_root, CircuitField::from(7u64));
+        Ok(())
+    }
+
     /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
     /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
     /// "Block range 10001 exceeds the maximum of 10000 blocks per logs request", so the fallback
     /// scan for the token `Initialized` event could never succeed at the default range.
     #[test_log::test]
     fn test_block_range_chunks_never_exceed_chunk_size() {
-        const MAX_RANGE: u64 = 10_000;
+        const MAX_RANGE: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
         const INIT_BLOCK: u64 = 1_000_000;
         const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
 
@@ -2370,10 +2605,13 @@ mod tests {
         let descending: Vec<_> =
             Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
 
-        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(
+            descending[0],
+            (INIT_BLOCK - MAX_RANGE.get() + 1, INIT_BLOCK)
+        );
         assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
         for chunk in &descending {
-            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+            assert_eq!(width(chunk), MAX_RANGE.get(), "chunk {chunk:?} is missized");
         }
         for pair in descending.windows(2) {
             assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
@@ -2383,9 +2621,15 @@ mod tests {
             Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
         for chunk in &ascending {
             assert!(
-                width(chunk) <= MAX_RANGE,
+                width(chunk) <= MAX_RANGE.get(),
                 "chunk {chunk:?} exceeds {MAX_RANGE}"
             );
+        }
+
+        assert_eq!(ascending[0].0, LOWEST_BLOCK);
+        assert_eq!(ascending.last().unwrap().1, INIT_BLOCK);
+        for pair in ascending.windows(2) {
+            assert_eq!(pair[1].0, pair[0].1 + 1, "gap or overlap at {pair:?}");
         }
 
         // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
@@ -2394,9 +2638,35 @@ mod tests {
             vec![(0, 5)]
         );
         assert_eq!(
-            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
-            vec![(1, MAX_RANGE), (0, 0)]
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE.get(), MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE.get()), (0, 0)]
         );
+    }
+
+    /// The chunks cover the range where `from_block + chunk_size` or `to_block + 1` is not a
+    /// `u64`. The sum used to wrap in release builds, which ended the iterator before the range
+    /// was covered, and to panic in debug builds.
+    #[test_log::test]
+    fn test_block_range_chunks_at_the_u64_bounds() {
+        let chunks = |from, to, size| {
+            let size = NonZeroU64::new(size).unwrap();
+            Fetcher::block_range_chunks(from, to, size).collect::<Vec<_>>()
+        };
+        const MAX: u64 = u64::MAX;
+
+        assert_eq!(chunks(2, 100, MAX), vec![(2, 100)]);
+        assert_eq!(chunks(0, MAX, MAX), vec![(0, MAX - 1), (MAX, MAX)]);
+        assert_eq!(
+            chunks(MAX - 4, MAX, 2),
+            vec![(MAX - 4, MAX - 3), (MAX - 2, MAX - 1), (MAX, MAX)]
+        );
+        assert_eq!(
+            chunks(MAX - 5, MAX - 1, 4),
+            vec![(MAX - 5, MAX - 2), (MAX - 1, MAX - 1)]
+        );
+        assert_eq!(chunks(MAX, MAX, 1), vec![(MAX, MAX)]);
+        assert_eq!(chunks(5, 4, MAX), vec![]);
+        assert_eq!(chunks(MAX, 0, 1), vec![]);
     }
 
     #[test_log::test]
@@ -3074,6 +3344,75 @@ mod tests {
                 if addr == addr && invalid_commission == invalid_commission);
     }
 
+    /// A delegation that takes a validator's stake beyond 256 bits is an error and leaves
+    /// the state as it was. A light client replays events a server sends, so they can
+    /// hold such a delegation.
+    #[test]
+    fn test_delegate_overflow_is_rejected() {
+        let mut state = StakeTableState::default();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap()
+            .unwrap();
+        let delegator = Address::random();
+        let delegate = |delegator, amount| {
+            StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: account,
+                amount,
+            })
+        };
+        state
+            .apply_event(delegate(delegator, U256::MAX))
+            .unwrap()
+            .unwrap();
+        let before = state.clone();
+
+        for delegator in [delegator, Address::random()] {
+            assert_matches!(
+                state.apply_event(delegate(delegator, U256::from(1))),
+                Err(StakeTableError::StakeOverflow(addr)) if addr == account
+            );
+            assert_eq!(state, before);
+        }
+    }
+
+    /// A delegation that takes a delegator's amount beyond 256 bits is an error and leaves
+    /// the state as it was, also where the validator's stake has room for it.
+    ///
+    /// Replaying events keeps the stake equal to the sum of the delegations, so this
+    /// takes a state built another way, as one decoded from storage can be.
+    #[test]
+    fn test_delegate_overflow_of_delegator_is_rejected() {
+        let mut state = StakeTableState::default();
+        let validator = TestValidator::random();
+        let account = validator.account;
+        state
+            .apply_event(StakeTableEvent::Register((&validator).into()))
+            .unwrap()
+            .unwrap();
+        let delegator = Address::random();
+        state
+            .validators
+            .get_mut(&account)
+            .unwrap()
+            .delegators
+            .insert(delegator, U256::MAX);
+        let before = state.clone();
+
+        assert_matches!(
+            state.apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: account,
+                amount: U256::from(1),
+            })),
+            Err(StakeTableError::StakeOverflow(addr)) if addr == account
+        );
+        assert_eq!(state, before);
+    }
+
     #[test]
     fn test_delegate_zero_amount_is_rejected() {
         let mut state = StakeTableState::default();
@@ -3328,7 +3667,7 @@ mod tests {
     ) {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3416,7 +3755,7 @@ mod tests {
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3487,7 +3826,7 @@ mod tests {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
             // max block range for public node rpc is 50000 so this should result in a panic
-            l1_events_max_block_range: 10_u64.pow(9),
+            l1_events_max_block_range: NonZeroU64::new(10_u64.pow(9)).unwrap(),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
@@ -4544,6 +4883,69 @@ mod tests {
 
         let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// A complete validator with `stake`, delegated by a single delegator.
+    fn staked_mock_validator(stake: u64) -> RegisteredValidator<BLSPubKey> {
+        let mut v = complete_mock_validator();
+        v.stake = U256::from(stake);
+        v.delegators = [(Address::random(), v.stake)].into_iter().collect();
+        v
+    }
+
+    /// The candidates, registered in the order given.
+    fn registered(order: &[&RegisteredValidator<BLSPubKey>]) -> RegisteredValidatorMap {
+        order.iter().map(|v| (v.account, (*v).clone())).collect()
+    }
+
+    /// From the canonical order on, the selected validators and the order they are listed in
+    /// depend only on the candidates, not on the order they registered in.
+    #[test]
+    fn test_select_canonical_order_ignores_registration_order() {
+        let validators: Vec<_> = [3, 1, 2, 2, 1]
+            .into_iter()
+            .map(staked_mock_validator)
+            .collect();
+        let forward: Vec<_> = validators.iter().collect();
+        let backward: Vec<_> = validators.iter().rev().collect();
+
+        let select = |order: &[&RegisteredValidator<BLSPubKey>]| {
+            select_active_validator_set(&registered(order), CANONICAL_STAKE_TABLE_ORDER_VERSION)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let active = select(&forward);
+        assert_eq!(active, select(&backward));
+        assert!(active.is_sorted_by_key(|(address, _)| *address));
+    }
+
+    /// When stakes tie at the cut-off, the validator with the lower address is selected from
+    /// the canonical order on, and the one that registered first before it.
+    #[test]
+    fn test_select_canonical_order_breaks_cutoff_ties_by_address() {
+        let others: Vec<_> = (0..MAX_VALIDATORS - 1)
+            .map(|_| staked_mock_validator(2))
+            .collect();
+        let (low, high) = {
+            let a = staked_mock_validator(1);
+            let b = staked_mock_validator(1);
+            if a.account < b.account {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        let mut order: Vec<_> = others.iter().collect();
+        order.extend([&high, &low]);
+        let candidates = registered(&order);
+
+        let canonical =
+            select_active_validator_set(&candidates, CANONICAL_STAKE_TABLE_ORDER_VERSION).unwrap();
+        assert!(canonical.contains_key(&low.account) && !canonical.contains_key(&high.account));
+
+        let before = select_active_validator_set(&candidates, NEW_PROTOCOL_VERSION).unwrap();
+        assert!(before.contains_key(&high.account) && !before.contains_key(&low.account));
     }
 
     /// Integration test: a RegisterV3 event with an unparsable p2p address results in

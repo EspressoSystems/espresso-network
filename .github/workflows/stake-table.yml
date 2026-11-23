@@ -1,0 +1,59 @@
+name: Stake table check
+
+on:
+  push:
+    branches:
+      - main
+      - release-*
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # ensure non-PR jobs run in parallel
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Build the Lean stake table specification and implementation with their proofs,
+  # generate stake table cases with the node's results, and check each against the
+  # Lean implementation.
+  check-stake-table:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        name: Checkout Repository
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        name: Enable Rust Caching
+        with:
+          shared-key: "stake-table-lean"
+          cache-on-failure: "true"
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          prefix-key: v1-stake-table
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      # The checker depends on the specification and the implementation, so this
+      # builds all three packages and checks their proofs.
+      - uses: leanprover/lean-action@v1
+        name: Install Lean and Build the Checker
+        with:
+          lake-package-directory: lean/stake-table-diff
+          use-github-cache: "false"
+
+      - name: Generate and check stake table cases
+        run: just stake-diff
+        working-directory: lean
+        timeout-minutes: 60
+        env:
+          RUST_BACKTRACE: full

@@ -344,6 +344,35 @@ impl Config {
     }
 }
 
+/// Heights of totals [`SqlStorage::delete_aggregates`] deletes per transaction on SQLite, when a
+/// data source without an aggregator deletes the ones an earlier run left.
+const AGGREGATE_DELETE_HEIGHTS: u64 = 1000;
+
+/// The pause between two transactions of [`SqlStorage::delete_aggregates`].
+const AGGREGATE_DELETE_PAUSE: Duration = Duration::from_millis(250);
+
+/// Run `op`, and retry it with backoff when it fails, so that one failed transaction does not end
+/// work that takes hours. `what` names it in the warnings.
+async fn with_retries<T, F, Fut>(what: &str, mut op: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
+    loop {
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(err) => match backoff.next() {
+                Some(delay) => {
+                    tracing::warn!("retrying {what}: {err:#}");
+                    sleep(delay).await;
+                },
+                None => return Err(err),
+            },
+        }
+    }
+}
+
 /// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
 #[derive(Clone, Debug)]
 pub struct SqlStorage {
@@ -363,6 +392,12 @@ struct PruneState {
     target_height: u64,
     minimum_retention_height: u64,
 }
+
+/// A data batch deletes at most `CERT2_PRUNE_FACTOR * batch_size` cert2s, the lowest first.
+///
+/// A node that pruned before cert2s were pruned has a backlog of them below its pruned height.
+/// Each batch adds up to `batch_size` more, so the backlog only shrinks with a factor above 1.
+const CERT2_PRUNE_FACTOR: u64 = 10;
 
 fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
     // A zero step would underflow the subtraction to `u64::MAX` and prune the whole table.
@@ -682,6 +717,129 @@ impl SqlStorage {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 
+    /// Delete every row of the transaction and payload totals and give their space back to the
+    /// disk. Returns whether there were any.
+    ///
+    /// For a node without an aggregator, which keeps no totals, to drop the ones an earlier run
+    /// left. Nothing else may read or write the totals meanwhile.
+    ///
+    /// On Postgres it truncates the table. That returns the table and its index at once and writes
+    /// almost no WAL, where deleted rows would stay in the index until a `VACUUM FULL`.
+    ///
+    /// On SQLite it deletes the newest heights first, at most `heights` heights per transaction.
+    /// After each transaction it gives the freed pages back with an incremental vacuum and pauses,
+    /// so that the write lock, which consensus shares, is free most of the time. The rows left at
+    /// any point are the totals of every height from genesis up to some height, so an aggregator
+    /// started later resumes from them.
+    pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<bool> {
+        let Some(top) = with_retries("reading the totals' heights", || {
+            self.highest_aggregate_height(u64::MAX)
+        })
+        .await?
+        else {
+            return Ok(false);
+        };
+        match Db::KIND {
+            DbKind::Postgres => {
+                with_retries("truncating the totals", || self.truncate_aggregates()).await?
+            },
+            DbKind::Sqlite => self.delete_aggregates_from(top, heights.max(1)).await?,
+        }
+        Ok(true)
+    }
+
+    /// Delete the totals from height `top` down, `heights` heights per transaction, each followed
+    /// by an incremental vacuum and a pause.
+    async fn delete_aggregates_from(&self, top: u64, heights: u64) -> anyhow::Result<()> {
+        let vacuum_pages = self.pruner_cfg.as_ref().map_or_else(
+            || PrunerCfg::default().incremental_vacuum_pages(),
+            |cfg| cfg.incremental_vacuum_pages(),
+        );
+        let mut top = Some(top);
+        let mut rows = 0;
+        let mut batches = 0u64;
+        while let Some(height) = top {
+            rows += with_retries("deleting totals", || {
+                self.delete_newest_aggregates(height, heights)
+            })
+            .await?;
+            with_retries("vacuuming deleted totals", || self.vacuum(vacuum_pages)).await?;
+            // Below the heights just deleted, which also skips any gap in the heights.
+            top = match height.checked_sub(heights) {
+                Some(below) => {
+                    with_retries("reading the totals' heights", || {
+                        self.highest_aggregate_height(below)
+                    })
+                    .await?
+                },
+                None => None,
+            };
+            batches += 1;
+            if batches.is_multiple_of(100) {
+                tracing::info!(
+                    target: "announce",
+                    rows,
+                    batches,
+                    "deleting transaction and payload totals"
+                );
+            }
+            if top.is_some() {
+                sleep(AGGREGATE_DELETE_PAUSE).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete every row of the totals in one transaction, on Postgres.
+    async fn truncate_aggregates(&self) -> anyhow::Result<()> {
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to truncate totals")?;
+        query("TRUNCATE aggregate")
+            .execute(tx.as_mut())
+            .await
+            .context("truncating totals")?;
+        tx.commit().await.context("committing truncated totals")
+    }
+
+    /// The highest height of the totals at or below `at_most`, if any.
+    async fn highest_aggregate_height(&self, at_most: u64) -> anyhow::Result<Option<u64>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to read the totals' heights")?;
+        let (height,): (Option<i64>,) =
+            query_as("SELECT max(height) FROM aggregate WHERE height <= $1")
+                .bind(i64::try_from(at_most).unwrap_or(i64::MAX))
+                .fetch_one(tx.as_mut())
+                .await
+                .context("reading the totals' heights")?;
+        Ok(height.map(|height| height as u64))
+    }
+
+    /// Delete the rows of the `heights` heights of the totals from `top` down in one transaction,
+    /// and return how many rows were deleted.
+    ///
+    /// Both ends of the range are bound values: Postgres then searches the primary key, where a
+    /// bound it cannot estimate, such as a subquery, makes it scan the whole table.
+    async fn delete_newest_aggregates(&self, top: u64, heights: u64) -> anyhow::Result<u64> {
+        let top = i64::try_from(top).unwrap_or(i64::MAX);
+        let bottom = top.saturating_sub(i64::try_from(heights).unwrap_or(i64::MAX));
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to delete totals")?;
+        let res = query("DELETE FROM aggregate WHERE height > $1 AND height <= $2")
+            .bind(bottom)
+            .bind(top)
+            .execute(tx.as_mut())
+            .await
+            .context("deleting totals")?;
+        tx.commit().await.context("committing deleted totals")?;
+        Ok(res.rows_affected())
+    }
+
     async fn new_pruner<'a>(&'a self) -> anyhow::Result<Pruner<'a>> {
         let cfg = self
             .pruner_cfg
@@ -822,14 +980,14 @@ impl SqlStorage {
     ) -> anyhow::Result<()> {
         tracing::info!("pruning batch");
         match category {
-            PruneCategory::Data => self.prune_data_batch(to).await?,
+            PruneCategory::Data => self.prune_data_batch(pruner.cfg, to).await?,
             PruneCategory::State => self.prune_state_batch(pruner.cfg, from, to).await?,
         }
         pruner.set_pruned_height(category, to);
         Ok(())
     }
 
-    async fn prune_data_batch(&self, to: u64) -> anyhow::Result<()> {
+    async fn prune_data_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
         self.set_pruned_height(to).await?;
@@ -838,7 +996,8 @@ impl SqlStorage {
             .prune_write()
             .await
             .context("opening pruning transaction")?;
-        tx.delete_batch(to).await?;
+        let cert2_limit = cfg.batch_size().saturating_mul(CERT2_PRUNE_FACTOR);
+        tx.delete_batch(to, cert2_limit).await?;
         tx.commit().await.context("committing deleted batch")
     }
 
@@ -1132,6 +1291,10 @@ impl PruneStorage for SqlStorage {
         Ok(Some(to))
     }
 
+    async fn delete_leftover_aggregates(&self) -> anyhow::Result<bool> {
+        self.delete_aggregates(AGGREGATE_DELETE_HEIGHTS).await
+    }
+
     async fn init_pruned_height(&self, height: u64) -> anyhow::Result<()> {
         if height == 0
             || self.pruner_cfg.is_none()
@@ -1267,12 +1430,13 @@ pub mod testing {
 // These tests start `postgres` from PATH, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use std::time::Duration;
+    use std::{ops::RangeInclusive, time::Duration};
 
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
+    use hotshot_types::simple_certificate::Certificate2;
     use jf_merkle_tree_compat::{
         MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::UniversalMerkleTree,
     };
@@ -1285,7 +1449,10 @@ mod test {
             MerklizedStateStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
         },
         merklized_state::{MerklizedState, Snapshot, UpdateStateData},
-        testing::mocks::{MockMerkleTree, MockTypes},
+        testing::{
+            chain::{EPOCH_HEIGHT, MockChain, NUM_NODES},
+            mocks::{MockMerkleTree, MockTypes},
+        },
     };
 
     impl SqlStorage {
@@ -1890,6 +2057,322 @@ mod test {
             .await
             .unwrap();
         count
+    }
+
+    /// A pruner run deletes the cert2s at the heights it prunes, and keeps the ones above.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning() {
+        let db = TmpDb::init().await;
+        let (storage, chain) = storage_with_sparse_cert2s(&db).await;
+
+        let cfg = PrunerCfg::default();
+        let mut pruner = Some(data_pruner(&cfg, 3));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(2));
+        assert_eq!(count_rows(&storage, "leaf2").await, 2);
+
+        let mut tx = storage.read().await.unwrap();
+        let cert2_1: Option<Certificate2<MockTypes>> = tx.load_cert2(1).await.unwrap();
+        assert_eq!(cert2_1, None);
+        let cert2_2: Option<Certificate2<MockTypes>> = tx.load_cert2(2).await.unwrap();
+        assert_eq!(cert2_2, None);
+        let cert2_4: Option<Certificate2<MockTypes>> = tx.load_cert2(4).await.unwrap();
+        assert_eq!(cert2_4, Some(cert2_at(&chain, 4)));
+        let earliest: Option<Certificate2<MockTypes>> = tx.load_earliest_cert2(0).await.unwrap();
+        assert_eq!(earliest, Some(cert2_at(&chain, 4)));
+    }
+
+    /// A later pruner run, which starts above genesis, deletes the cert2s at its heights too.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_later_run() {
+        let db = TmpDb::init().await;
+        let (storage, _) = storage_with_sparse_cert2s(&db).await;
+
+        let cfg = PrunerCfg::default();
+        let mut pruner = Some(data_pruner(&cfg, 3));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(2));
+        pruner.as_mut().unwrap().data.target_height = 5;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(4));
+
+        assert_eq!(count_rows(&storage, "leaf2").await, 0);
+        assert_eq!(count_rows(&storage, "cert2").await, 0);
+    }
+
+    /// A batch deletes the backlog of cert2s that older versions left below the pruned height,
+    /// when the backlog fits in the batch's cert2 limit but holds more rows than `batch_size` and
+    /// is not a multiple of it. The cert2s above the batch stay.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_larger_than_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 9).await;
+        insert_cert2s(&storage, &chain, [8, 9]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 6));
+        for to in [1, 3, 5] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=5).await;
+
+        pruner.as_mut().unwrap().data.target_height = 8;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(7));
+        assert_cert2s_pruned_to(&storage, &chain, 7, &[8, 9]).await;
+    }
+
+    /// As above, with a backlog of exactly twice `batch_size` rows and no cert2 in the batch.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_exact_multiple_of_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 8).await;
+        insert_cert2s(&storage, &chain, [7, 8]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 5));
+        for to in [1, 3, 4] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=4).await;
+
+        pruner.as_mut().unwrap().data.target_height = 7;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(6));
+        assert_cert2s_pruned_to(&storage, &chain, 6, &[7, 8]).await;
+    }
+
+    /// A batch deletes a backlog that fits in its cert2 limit together with the cert2s at its own
+    /// heights.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_with_batch_window() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 8).await;
+        insert_cert2s(&storage, &chain, [4, 5, 6, 8]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 4));
+        for to in [1, 3] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=3).await;
+
+        pruner.as_mut().unwrap().data.target_height = 6;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
+        assert_cert2s_pruned_to(&storage, &chain, 5, &[6, 8]).await;
+    }
+
+    /// A batch deletes at most `CERT2_PRUNE_FACTOR * batch_size` cert2s, the lowest first, so a
+    /// larger backlog shrinks over several batches. A cert2 at a batch's own height waits until
+    /// the backlog below it is gone, and the cert2s above the batch stay.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_bounded_per_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(1);
+        let limit = CERT2_PRUNE_FACTOR * cfg.batch_size();
+        // Two full batches of backlog and 3 rows more, so not a multiple of the limit.
+        let backlog_end = 2 * limit + 3;
+        // In the window of the first batch, in the window of the third batch, and above all
+        // batches.
+        let window_cert2s = [backlog_end + 1, backlog_end + 3, backlog_end + 5];
+        let (storage, chain) = storage_with_leaves(&db, &cfg, (backlog_end + 5) as usize).await;
+        insert_cert2s(&storage, &chain, window_cert2s).await;
+
+        let mut pruner = Some(data_pruner(&cfg, backlog_end + 1));
+        for to in 0..=backlog_end {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=backlog_end).await;
+        let kept_from =
+            |lowest: u64| -> Vec<u64> { (lowest..=backlog_end).chain(window_cert2s).collect() };
+
+        pruner.as_mut().unwrap().data.target_height = backlog_end + 4;
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 1)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, limit, &kept_from(limit + 1)).await;
+
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 2)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, 2 * limit, &kept_from(2 * limit + 1)).await;
+
+        // The rest of the backlog and the cert2s of the first and third windows fit in the limit.
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 3)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, backlog_end + 3, &[backlog_end + 5]).await;
+    }
+
+    /// A batch whose window holds no header still deletes the cert2s at or below its end: the
+    /// backlog, and a cert2 in the window without a leaf. The cert2 above the batch stays.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_batch_without_headers() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, mut chain) = storage_with_leaves(&db, &cfg, 3).await;
+        // Blocks 4 to 6 are missing, so the batch window 4 to 5 has no header. Block 7 has its
+        // leaf, so a header that the batch must not delete exists.
+        chain.push_empty(4).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf(&chain.blocks()[7].leaf).await.unwrap();
+        tx.commit().await.unwrap();
+        insert_cert2s(&storage, &chain, [5, 7]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 4));
+        for to in [1, 3] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=3).await;
+        assert_eq!(count_rows(&storage, "header").await, 1);
+
+        pruner.as_mut().unwrap().data.target_height = 6;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
+        assert_eq!(count_rows(&storage, "header").await, 1);
+        assert_cert2s_pruned_to(&storage, &chain, 5, &[7]).await;
+    }
+
+    /// Storage with leaves at heights 0 to 4 and cert2s at heights 1, 2 and 4 only: a leaf
+    /// finalized indirectly, by the decide of a later leaf, has no cert2 of its own.
+    async fn storage_with_sparse_cert2s(db: &TmpDb) -> (SqlStorage, MockChain) {
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(Default::default());
+
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push_empty(4).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf_range(chain.blocks().iter().map(|block| &block.leaf))
+            .await
+            .unwrap();
+        for height in [1, 2, 4] {
+            tx.insert_cert2(height, cert2_at(&chain, height))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        assert_eq!(count_rows(&storage, "leaf2").await, 5);
+        assert_eq!(count_rows(&storage, "cert2").await, 3);
+        (storage, chain)
+    }
+
+    /// The cert2 finalizing the block at `height`.
+    fn cert2_at(chain: &MockChain, height: u64) -> Certificate2<MockTypes> {
+        let cert2 = chain.cert2(&chain.blocks()[height as usize]).unwrap();
+        assert_eq!(cert2.data.block_number, height);
+        cert2
+    }
+
+    /// A pruner whose next data batches delete every height below `target_height`.
+    fn data_pruner(cfg: &PrunerCfg, target_height: u64) -> Pruner<'_> {
+        Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height,
+                minimum_retention_height: target_height,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg,
+            extra_pruning: false,
+        }
+    }
+
+    /// Storage with leaves at heights 0 to `tip` and no cert2s, configured to prune with `cfg`.
+    async fn storage_with_leaves(
+        db: &TmpDb,
+        cfg: &PrunerCfg,
+        tip: usize,
+    ) -> (SqlStorage, MockChain) {
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(cfg.clone());
+
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push_empty(tip).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf_range(chain.blocks().iter().map(|block| &block.leaf))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        (storage, chain)
+    }
+
+    async fn insert_cert2s(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        heights: impl IntoIterator<Item = u64>,
+    ) {
+        let mut tx = storage.write().await.unwrap();
+        for height in heights {
+            tx.insert_cert2(height, cert2_at(chain, height))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+    }
+
+    /// Insert cert2s at `heights`, all at or below the pruned height, as a node upgraded from a
+    /// version whose pruner never deleted cert2s still has them.
+    async fn insert_cert2_backlog(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        heights: RangeInclusive<u64>,
+    ) {
+        let pruned = storage
+            .read()
+            .await
+            .unwrap()
+            .load_pruned_height()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            *heights.end() <= pruned,
+            "backlog above pruned height {pruned}"
+        );
+
+        insert_cert2s(storage, chain, heights.clone()).await;
+        let mut tx = storage.read().await.unwrap();
+        for height in heights {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(cert2, Some(cert2_at(chain, height)));
+        }
+    }
+
+    /// Assert that no cert2 at or below `pruned` is left, and that exactly the cert2s at `kept`,
+    /// in ascending order, are left, unchanged.
+    async fn assert_cert2s_pruned_to(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        pruned: u64,
+        kept: &[u64],
+    ) {
+        let mut tx = storage.read().await.unwrap();
+        for height in 0..=pruned {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(cert2, None, "cert2 left at height {height}");
+        }
+        for &height in kept {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(
+                cert2,
+                Some(cert2_at(chain, height)),
+                "cert2 at height {height}"
+            );
+        }
+        let earliest: Option<Certificate2<MockTypes>> = tx.load_earliest_cert2(0).await.unwrap();
+        assert_eq!(
+            earliest,
+            kept.first().map(|&height| cert2_at(chain, height))
+        );
+        drop(tx);
+
+        assert_eq!(count_rows(storage, "cert2").await, kept.len() as i64);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -3010,5 +3493,543 @@ mod test {
         tx.upsert("does_not_exist", ["test"], ["test"], [(1_i64,)])
             .await
             .unwrap_err();
+    }
+
+    /// [`write_aggregates`] stores totals at heights 0 to `AGGREGATE_HEIGHTS - 1`.
+    const AGGREGATE_HEIGHTS: u64 = 10;
+
+    /// Each namespace and the first height whose block has transactions in it. From that height
+    /// on, every height has a row for the namespace, as the aggregator writes them.
+    const AGGREGATE_NAMESPACES: [(i64, u64); 3] = [(1, 0), (2, 3), (3, 6)];
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_deletes_all_rows() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // One height per chunk, chunks that do not divide the heights, one that does, and one
+        // larger than the table.
+        for heights in [1, 3, 4, 5, AGGREGATE_HEIGHTS + 5] {
+            write_aggregates(&storage).await;
+            assert!(
+                delete_all_aggregates(&storage, heights).await,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_zero_heights_deletes_all_rows() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        write_aggregates(&storage).await;
+        assert!(delete_all_aggregates(&storage, 0).await);
+        assert_no_aggregates(&storage).await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_empty_table() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [0, 1, AGGREGATE_HEIGHTS] {
+            assert!(
+                !delete_all_aggregates(&storage, heights).await,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// The aggregator writes every height, but `delete_aggregates` deletes every row whatever
+    /// heights the table holds, also across gaps wider than a chunk.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_heights_with_gaps() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for table in [
+            [0, 1, 7, 20, 21].as_slice(),
+            &[5, 6, 30],
+            &[0, 1000, 1001, 5000],
+        ] {
+            for heights in [1, 2, 3, 25] {
+                let rows = totals_at(table);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert!(
+                    delete_all_aggregates(&storage, heights).await,
+                    "table {table:?}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_lowest_height_above_zero() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let tables: [Vec<u64>; 2] = [(6..=13).collect(), (1_000_000..1_000_005).collect()];
+        for table in &tables {
+            for heights in [1, 3, 8, 20] {
+                let rows = totals_at(table);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert!(
+                    delete_all_aggregates(&storage, heights).await,
+                    "table {table:?}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_single_height() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Heights with one row and with several.
+        for height in [0, 2, 41] {
+            for heights in [1, 2, AGGREGATE_HEIGHTS] {
+                let rows = totals_at(&[height]);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert!(
+                    delete_all_aggregates(&storage, heights).await,
+                    "height {height}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    /// A chunk wider than any difference of two heights deletes every row, and does not overflow.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_chunk_beyond_i64() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX] {
+            write_aggregates(&storage).await;
+            assert!(
+                delete_all_aggregates(&storage, heights).await,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// While `delete_aggregates` runs, the rows left are always every row up to some height, so an
+    /// aggregator started at any moment resumes from the right totals.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_keeps_oldest_heights_while_running() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [1, 3] {
+            write_aggregates(&storage).await;
+            watch_delete_all_aggregates(&storage, heights).await;
+        }
+        insert_aggregate_rows(&storage, &totals_at(&[0, 1, 7, 20, 21])).await;
+        watch_delete_all_aggregates(&storage, 3).await;
+    }
+
+    /// `delete_aggregates` gives the space of the deleted totals back: on SQLite no free page is
+    /// left in the file, and on Postgres the table and its index are back to their empty size.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_returns_space() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let rows = totals_at(&(0..3000).collect::<Vec<_>>());
+
+        match Db::KIND {
+            DbKind::Sqlite => {
+                assert_eq!(
+                    sqlite_pragma(&storage, "auto_vacuum").await,
+                    2,
+                    "not incremental"
+                );
+                // Free pages the migrations left, so that every free page at the end is one the
+                // deletion freed.
+                vacuum(&storage).await;
+                assert_eq!(sqlite_pragma(&storage, "freelist_count").await, 0);
+                let empty = sqlite_pragma(&storage, "page_count").await;
+                insert_aggregate_rows(&storage, &rows).await;
+                let filled = sqlite_pragma(&storage, "page_count").await - empty;
+                assert!(filled >= 10, "the totals fill only {filled} pages");
+
+                run_delete_aggregates(&storage, 100).await;
+
+                let free = sqlite_pragma(&storage, "freelist_count").await;
+                assert_eq!(
+                    free, 0,
+                    "{free} free pages are left after deleting totals that filled {filled} pages"
+                );
+            },
+            DbKind::Postgres => {
+                insert_aggregate_rows(&storage, &rows).await;
+                let (table, index) = aggregate_relation_sizes(&storage).await;
+                assert!(
+                    table >= 10 * PG_PAGE_SIZE && index > PG_PAGE_SIZE,
+                    "the totals fill only {table} bytes of table and {index} bytes of index"
+                );
+
+                run_delete_aggregates(&storage, 100).await;
+
+                let (table, index) = aggregate_relation_sizes(&storage).await;
+                assert_eq!(
+                    table, 0,
+                    "table of {table} bytes, index of {index} bytes left"
+                );
+                assert!(
+                    index <= PG_PAGE_SIZE,
+                    "table of {table} bytes, index of {index} bytes left"
+                );
+            },
+        }
+        assert_no_aggregates(&storage).await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_newest_aggregates_deletes_top_heights() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let blocks = write_aggregates(&storage).await;
+
+        // Each chunk starts at the newest height the one before left. The chunks cross the heights
+        // where a namespace starts, so their heights have different numbers of rows.
+        let mut end = AGGREGATE_HEIGHTS;
+        for heights in [3, 1, 2] {
+            let new_end = end - heights;
+            let kept = aggregate_rows(&storage)
+                .await
+                .into_iter()
+                .filter(|&(height, ..)| (height as u64) < new_end)
+                .collect::<Vec<_>>();
+            let deleted = (new_end..end).map(rows_at_height).sum::<u64>();
+
+            assert_eq!(
+                storage
+                    .delete_newest_aggregates(end - 1, heights)
+                    .await
+                    .unwrap(),
+                deleted,
+                "heights {new_end}..{end}"
+            );
+            assert_eq!(
+                aggregate_rows(&storage).await,
+                kept,
+                "heights {new_end}..{end}"
+            );
+            assert_resumes_after(&storage, &blocks, new_end - 1).await;
+            end = new_end;
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_newest_aggregates_more_heights_than_table() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [AGGREGATE_HEIGHTS, AGGREGATE_HEIGHTS + 5] {
+            write_aggregates(&storage).await;
+            let rows = count_rows(&storage, "aggregate").await;
+            assert_eq!(
+                storage
+                    .delete_newest_aggregates(AGGREGATE_HEIGHTS - 1, heights)
+                    .await
+                    .unwrap(),
+                rows as u64,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_newest_aggregates_empty_table() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [1, AGGREGATE_HEIGHTS] {
+            assert_eq!(
+                storage
+                    .delete_newest_aggregates(AGGREGATE_HEIGHTS - 1, heights)
+                    .await
+                    .unwrap(),
+                0,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// Write the totals of [`aggregate_blocks`] the way the aggregator does: in chunks, each one
+    /// starting from the newest totals stored. Returns the blocks.
+    async fn write_aggregates(
+        storage: &SqlStorage,
+    ) -> Vec<crate::availability::PayloadMetadata<MockTypes>> {
+        use crate::data_source::storage::{AggregatesStorage, UpdateAggregatesStorage};
+
+        let blocks = aggregate_blocks().await;
+        for chunk in blocks.chunks(4) {
+            let mut tx = storage.write().await.unwrap();
+            let prev = AggregatesStorage::<MockTypes>::load_prev_aggregate(&mut tx)
+                .await
+                .unwrap()
+                .unwrap_or_default();
+            tx.update_aggregates(prev, chunk).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let rows = (0..AGGREGATE_HEIGHTS).map(rows_at_height).sum::<u64>();
+        assert_eq!(count_rows(storage, "aggregate").await as u64, rows);
+        blocks
+    }
+
+    /// One block per height below [`AGGREGATE_HEIGHTS`]. From its first height on, namespace `ns`
+    /// has `ns` transactions in each block, of `ns * (height + 1)` bytes in all.
+    async fn aggregate_blocks() -> Vec<crate::availability::PayloadMetadata<MockTypes>> {
+        use crate::availability::{NamespaceInfo, NamespaceMap, PayloadMetadata};
+
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        );
+        (0..AGGREGATE_HEIGHTS)
+            .map(|height| {
+                let namespaces: NamespaceMap<MockTypes> = AGGREGATE_NAMESPACES
+                    .iter()
+                    .filter(|&&(_, first)| first <= height)
+                    .map(|&(ns, _)| {
+                        let info = NamespaceInfo {
+                            num_transactions: ns as u64,
+                            size: ns as u64 * (height + 1),
+                        };
+                        (ns, info)
+                    })
+                    .collect();
+                PayloadMetadata {
+                    height,
+                    num_transactions: namespaces.values().map(|ns| ns.num_transactions).sum(),
+                    size: namespaces.values().map(|ns| ns.size).sum(),
+                    namespaces,
+                    ..genesis.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// The number of rows the totals have at `height`: one for all namespaces together, and one for
+    /// each namespace that has had transactions by then.
+    fn rows_at_height(height: u64) -> u64 {
+        let namespaces = AGGREGATE_NAMESPACES
+            .iter()
+            .filter(|&&(_, first)| first <= height)
+            .count();
+        1 + namespaces as u64
+    }
+
+    /// Every row of the totals as (height, namespace, transactions, bytes), in key order.
+    async fn aggregate_rows(storage: &SqlStorage) -> Vec<(i64, i64, i64, i64)> {
+        let mut tx = storage.read().await.unwrap();
+        query_as(
+            "SELECT height, namespace, num_transactions, payload_size FROM aggregate
+              ORDER BY height, namespace",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+    }
+
+    /// Run `delete_aggregates`, and fail instead of hanging if it never finishes.
+    async fn delete_all_aggregates(storage: &SqlStorage, heights: u64) -> bool {
+        tokio::time::timeout(Duration::from_secs(60), storage.delete_aggregates(heights))
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"))
+            .unwrap()
+    }
+
+    /// Run `delete_aggregates`, and fail instead of hanging if it never finishes. Unlike
+    /// [`delete_all_aggregates`], it does not look at what `delete_aggregates` returns.
+    async fn run_delete_aggregates(storage: &SqlStorage, heights: u64) {
+        tokio::time::timeout(Duration::from_secs(60), storage.delete_aggregates(heights))
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"))
+            .unwrap();
+    }
+
+    /// The size of a Postgres page, and of an empty B-tree index, which is only its metapage.
+    const PG_PAGE_SIZE: i64 = 8192;
+
+    /// The value of the SQLite `PRAGMA {name}`.
+    async fn sqlite_pragma(storage: &SqlStorage, name: &str) -> i64 {
+        let mut tx = storage.read().await.unwrap();
+        let (value,) = query_as::<(i64,)>(&format!("PRAGMA {name}"))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        value
+    }
+
+    /// The sizes in bytes of the Postgres table of the totals and of its primary key index.
+    async fn aggregate_relation_sizes(storage: &SqlStorage) -> (i64, i64) {
+        let mut tx = storage.read().await.unwrap();
+        query_as("SELECT pg_relation_size('aggregate'), pg_relation_size('aggregate_pkey')")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap()
+    }
+
+    /// Assert that no totals are left, so an aggregator would start again at genesis.
+    async fn assert_no_aggregates(storage: &SqlStorage) {
+        use crate::data_source::storage::AggregatesStorage;
+
+        assert_eq!(count_rows(storage, "aggregate").await, 0);
+        let mut tx = storage.read().await.unwrap();
+        let prev = AggregatesStorage::<MockTypes>::load_prev_aggregate(&mut tx)
+            .await
+            .unwrap();
+        assert_eq!(prev.map(|agg| agg.height), None);
+    }
+
+    /// Assert that the newest totals left are the sums over `blocks` up to `height`, so an
+    /// aggregator would resume right after `height`.
+    async fn assert_resumes_after(
+        storage: &SqlStorage,
+        blocks: &[crate::availability::PayloadMetadata<MockTypes>],
+        height: u64,
+    ) {
+        use crate::data_source::storage::{Aggregate, AggregatesStorage};
+
+        let mut expected = Aggregate::<MockTypes>::default();
+        for block in &blocks[..=height as usize] {
+            *expected.num_transactions.entry(None).or_default() += block.num_transactions as usize;
+            *expected.payload_size.entry(None).or_default() += block.size as usize;
+            for (&ns, info) in &block.namespaces {
+                *expected.num_transactions.entry(Some(ns)).or_default() +=
+                    info.num_transactions as usize;
+                *expected.payload_size.entry(Some(ns)).or_default() += info.size as usize;
+            }
+        }
+
+        let mut tx = storage.read().await.unwrap();
+        let prev = AggregatesStorage::<MockTypes>::load_prev_aggregate(&mut tx)
+            .await
+            .unwrap()
+            .expect("no totals left");
+        assert_eq!(prev.height, height as i64);
+        assert_eq!(prev.num_transactions, expected.num_transactions);
+        assert_eq!(prev.payload_size, expected.payload_size);
+    }
+
+    /// Rows of the totals as (height, namespace, transactions, bytes) at each of `heights`: one for
+    /// all namespaces together, and one for each of namespaces 1 to `height % 3`, so that heights
+    /// have different numbers of rows.
+    fn totals_at(heights: &[u64]) -> Vec<(i64, i64, i64, i64)> {
+        heights
+            .iter()
+            .flat_map(|&height| {
+                let height = height as i64;
+                std::iter::once(-1)
+                    .chain(1..=height % 3)
+                    .map(move |ns| (height, ns, height + 1, (ns + 2) * (height + 1)))
+            })
+            .collect()
+    }
+
+    /// Insert `rows` into an empty table of the totals, as (height, namespace, transactions,
+    /// bytes).
+    async fn insert_aggregate_rows(storage: &SqlStorage, rows: &[(i64, i64, i64, i64)]) {
+        assert_eq!(count_rows(storage, "aggregate").await, 0);
+        let mut tx = storage.write().await.unwrap();
+        for &(height, namespace, num_transactions, payload_size) in rows {
+            query(
+                "INSERT INTO aggregate (height, namespace, num_transactions, payload_size)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(height)
+            .bind(namespace)
+            .bind(num_transactions)
+            .bind(payload_size)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(aggregate_rows(storage).await, rows);
+    }
+
+    /// Run `delete_aggregates` and read the totals again and again until it finishes. Assert that
+    /// each read finds the rows there were up to some height, that on SQLite some read finds only
+    /// part of them, and that it reports that there were totals.
+    async fn watch_delete_all_aggregates(storage: &SqlStorage, heights: u64) {
+        let written = aggregate_rows(storage).await;
+        let deleting = tokio::spawn({
+            let storage = storage.clone();
+            async move { storage.delete_aggregates(heights).await }
+        });
+
+        let watch = async {
+            let mut partial_reads = 0;
+            while !deleting.is_finished() {
+                let left = aggregate_rows(storage).await;
+                let newest = left.last().map(|&(height, ..)| height);
+                let oldest_written = written
+                    .iter()
+                    .copied()
+                    .filter(|&(height, ..)| newest.is_some_and(|newest| height <= newest))
+                    .collect::<Vec<_>>();
+                assert_eq!(left, oldest_written, "heights {heights}");
+                if !left.is_empty() && left.len() < written.len() {
+                    partial_reads += 1;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+            partial_reads
+        };
+        let partial_reads = tokio::time::timeout(Duration::from_secs(60), watch)
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"));
+
+        // On SQLite each transaction deletes at most `heights` heights, and a pause follows it, so
+        // the reads see the table partly deleted. Postgres truncates the table in one step.
+        if Db::KIND == DbKind::Sqlite {
+            assert!(
+                partial_reads > 0,
+                "heights {heights}: no read found the table partly deleted"
+            );
+        }
+        assert!(deleting.await.unwrap().unwrap(), "heights {heights}");
+        assert_no_aggregates(storage).await;
     }
 }

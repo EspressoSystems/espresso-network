@@ -21,15 +21,12 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::{
-    data::{VidShare, ViewNumber},
-    vote::HasViewNumber,
-};
-use itertools::Itertools;
+use hotshot_types::data::{VidShare, ViewNumber};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
+use light_client::consensus::header::HeaderProof;
 use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
@@ -91,6 +88,9 @@ pub trait RequestStorage: Send + Sync {
     async fn load_tree(&self, height: u64) -> Result<Vec<u8>>;
 
     async fn get_vid_share(&self, block_number: u64) -> Result<VidShare>;
+
+    /// Header at `height` and its path in the block Merkle tree at `root`.
+    async fn get_header_proof(&self, root: u64, height: u64) -> Result<HeaderProof>;
 }
 
 #[derive(Clone)]
@@ -153,14 +153,6 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
 
             Request::Leaf(height) => {
-                // Legacy heights can be served from in-memory undecided leaves; new-protocol
-                // heights always fall through to storage.
-                if let Ok(leaf_chain) =
-                    legacy_leaf_chain_from_memory(&*self.consensus_handle, *height).await
-                {
-                    return Ok(Response::Leaf(leaf_chain));
-                }
-
                 let leaf_chain = self
                     .sql_storage("leaf")?
                     .get_leaf_chain(*height)
@@ -346,6 +338,13 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                     None => bail!("no cert2 available at height {height}"),
                 }
             },
+            // Only nodes with SQL storage answer.
+            Request::HeaderProof { root, height } => Ok(Response::HeaderProof(Box::new(
+                self.sql_storage("header proof")?
+                    .get_header_proof(*root, *height)
+                    .await
+                    .context("failed to get header proof from sql storage")?,
+            ))),
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {
@@ -374,49 +373,6 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
         }
     }
-}
-
-/// Build a legacy-protocol 3-chain leaf chain decided at `height` from in-memory undecided leaves.
-///
-/// Returns an error if the chain cannot be assembled from memory (e.g. the height is below the
-/// latest decided leaf).
-async fn legacy_leaf_chain_from_memory<P: SequencerPersistence>(
-    consensus_handle: &ConsensusHandle<SeqTypes, Arc<P>>,
-    height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
-    let mut leaves = consensus_handle.undecided_leaves().await;
-    leaves.sort_by_key(|l| l.view_number());
-
-    let (position, mut last_leaf) = leaves
-        .iter()
-        .find_position(|l| l.height() == height)
-        .ok_or_else(|| anyhow::anyhow!("leaf at height {height} not in memory"))?;
-
-    let mut leaf_chain = vec![last_leaf.clone()];
-    for leaf in leaves.iter().skip(position + 1) {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-        } else {
-            continue;
-        }
-        if leaf.view_number() == last_leaf.view_number() + 1 {
-            last_leaf = leaf;
-            break;
-        }
-        last_leaf = leaf;
-    }
-
-    for leaf in leaves
-        .iter()
-        .skip_while(|l| l.view_number() <= last_leaf.view_number())
-    {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-            return Ok(leaf_chain);
-        }
-    }
-
-    anyhow::bail!("incomplete leaf chain in memory for height {height}")
 }
 
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.

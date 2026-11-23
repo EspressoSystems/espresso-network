@@ -14,7 +14,7 @@ path = "../new-protocol-spec"
 [[require]]
 name = "verso"
 git = "https://github.com/leanprover/verso"
-rev = "v4.35.0"
+rev = "v4.36.0"
 
 [[lean_lib]]
 name = "Reference"
