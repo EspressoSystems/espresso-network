@@ -2950,8 +2950,11 @@ mod tests {
     async fn test_reward_lc_proofs_only_on_throttle_blocks() {
         use tokio::time::{Duration, sleep};
 
+        // The stored call reads a later L1-finalized height, whose boundary is 30, so a late write
+        // of the skipped call at 20 cannot hide behind the stored call's proofs.
+        const STORED_FINALIZED: u64 = LC_FINALIZED + LC_EPOCH_HEIGHT;
         // (node id, a block it skips, a block it stores proofs at)
-        for (node_id, skipped, stored) in [(0, 23, 30), (7, 30, 23)] {
+        for (node_id, skipped, stored) in [(0, 23, 30), (7, 30, 53)] {
             let db = TmpDb::init().await;
             let account = super::RewardAccountV2(Address::repeat_byte(1));
             let storage = reward_lc_storage(&db, account).await;
@@ -2973,14 +2976,16 @@ mod tests {
                 );
             }
 
+            cache_l1_finalized(&mut node_state, STORED_FINALIZED).await;
             storage
                 .persist_reward_proofs(&node_state, stored, EPOCH_REWARD_VERSION)
                 .await
                 .unwrap();
             let at = wait_for_proofs_at_any(&storage, &[20, 30]).await;
             assert_eq!(
-                at, 20,
-                "node {node_id}: the call at block {stored} stored proofs at {at}"
+                at, 30,
+                "node {node_id}: proofs stored at {at}; the call at block {stored} stores them at \
+                 30, and the call at block {skipped} stores none"
             );
         }
     }
