@@ -1,7 +1,7 @@
 use std::ops::Add;
 
 use alloy::primitives::{Address, U256};
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use committable::{Commitment, Committable};
 use either::Either;
 use hotshot_query_service_types::merklized_state::MerklizedState;
@@ -32,8 +32,10 @@ use versions::{
 #[cfg(feature = "node")]
 use super::L1Client;
 use super::{
-    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, fee_info::FeeError,
-    instance_state::NodeState, v0_1::IterableFeeInfo,
+    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment,
+    fee_info::{self, FeeError},
+    instance_state::NodeState,
+    v0_1::IterableFeeInfo,
 };
 use crate::{
     BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount,
@@ -1515,6 +1517,29 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for BlockMerkleTree {
     }
 }
 
+/// Remember `frontier`, the proof of the last leaf of `tree`, so that blocks can be appended to
+/// `tree`.
+pub fn remember_blocks_frontier(
+    tree: &mut BlockMerkleTree,
+    frontier: &<BlockMerkleTree as MerkleTreeScheme>::MembershipProof,
+) -> anyhow::Result<()> {
+    let last = tree
+        .num_leaves()
+        .checked_sub(1)
+        .context("cannot remember a frontier into an empty tree")?;
+    let elem = frontier
+        .elem()
+        .context("provided frontier is missing leaf element")?;
+    // `remember` keeps the leaf's stored digest, which the next `push` hashes.
+    ensure!(
+        fee_info::is_lookup_shaped(&frontier.proof),
+        "frontier is not shaped like a lookup"
+    );
+    tree.remember(last, elem, frontier)
+        .context("verifying block proof")?;
+    Ok(())
+}
+
 impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     type Key = Self::Index;
     type Entry = Self::Element;
@@ -1622,6 +1647,8 @@ mod test {
         data::ViewNumber,
         traits::{BlockPayload, signature_key::BuilderSignatureKey},
     };
+    use jf_merkle_tree_compat::prelude::MerkleNode;
+    use rstest::rstest;
     use tracing::debug;
     use versions::{
         FEE_VERSION, LARGE_BLOCK_VERSION, MAX_SUPPORTED_VERSION, NEW_PROTOCOL_VERSION, version,
@@ -1856,6 +1883,48 @@ mod test {
         proof2.remember(&mut tree).unwrap();
         FeeAccountProof::prove(&tree, account1).unwrap();
         FeeAccountProof::prove(&tree, account2).unwrap();
+    }
+
+    /// A tree of `num_leaves` blocks that keeps only the path to its last leaf.
+    fn blocks_tree(num_leaves: u64) -> BlockMerkleTree {
+        let blocks: Vec<Commitment<Header>> = (0..num_leaves)
+            .map(|i| Commitment::from_raw([i as u8; 32]))
+            .collect();
+        BlockMerkleTree::from_elems(Some(BLOCK_MERKLE_TREE_HEIGHT), &blocks).unwrap()
+    }
+
+    #[rstest]
+    fn test_remember_blocks_frontier(#[values(1, 2, 3, 4, 9, 10, 28)] num_leaves: u64) {
+        let mut tree = blocks_tree(num_leaves);
+        let (_, frontier) = tree.lookup(num_leaves - 1).expect_ok().unwrap();
+        let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
+        remember_blocks_frontier(&mut remembered, &frontier).unwrap();
+
+        let next = Commitment::from_raw([u8::MAX; 32]);
+        tree.push(next).unwrap();
+        remembered.push(next).unwrap();
+        assert_eq!(remembered.commitment(), tree.commitment());
+    }
+
+    #[test]
+    fn test_remember_blocks_frontier_rejects_a_leaf_storing_another_digest() {
+        let tree = blocks_tree(2);
+        let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
+        let Some(MerkleNode::Leaf { value, .. }) = frontier.proof.first_mut() else {
+            panic!("expected a leaf at the bottom of the frontier");
+        };
+        *value = Sha3Node::default();
+
+        let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
+        assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
+    }
+
+    #[test]
+    fn test_remember_blocks_frontier_rejects_an_empty_tree() {
+        let tree = blocks_tree(1);
+        let (_, frontier) = tree.lookup(0).expect_ok().unwrap();
+        let mut empty = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
+        assert!(remember_blocks_frontier(&mut empty, &frontier).is_err());
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

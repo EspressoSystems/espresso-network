@@ -439,13 +439,7 @@ impl Frontier {
                 .expect("a frontier decodes from its own encoding");
 
         let mut local = BlockMerkleTree::from_commitment(self.tree.commitment());
-        let Some(elem) = proof.elem() else {
-            return false;
-        };
-        if local
-            .remember(local.num_leaves() - 1, elem, &proof)
-            .is_err()
-        {
+        if espresso_types::remember_blocks_frontier(&mut local, &proof).is_err() {
             return false;
         }
         let (last, _) = local

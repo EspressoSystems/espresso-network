@@ -332,11 +332,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                         .get::<BlocksFrontier>(&paths::catchup_blocks(height, view.u64()))
                         .send()
                         .await?;
-                    let elem = frontier
-                        .elem()
-                        .context("provided frontier is missing leaf element")?;
-                    mt.remember(mt.num_leaves() - 1, *elem, &frontier)
-                        .context("verifying block proof")?;
+                    espresso_types::remember_blocks_frontier(&mut mt, &frontier)?;
                     anyhow::Ok(mt)
                 }
             })

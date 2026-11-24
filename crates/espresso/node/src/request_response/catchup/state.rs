@@ -18,7 +18,7 @@ use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2,
 };
-use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use tokio::time::timeout;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -389,18 +389,8 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                     return Err(anyhow::anyhow!("expected blocks frontier response"));
                 };
 
-                // Get the leaf element associated with the proof
-                let leaf_elem = blocks_frontier
-                    .elem()
-                    .with_context(|| "provided frontier is missing leaf element")?;
-
                 // Verify the block proof
-                block_merkle_tree
-                    .remember(
-                        block_merkle_tree.num_leaves() - 1,
-                        *leaf_elem,
-                        blocks_frontier,
-                    )
+                espresso_types::remember_blocks_frontier(&mut block_merkle_tree, &blocks_frontier)
                     .with_context(|| "merkle tree verification failed")?;
 
                 // Return the verified merkle tree
