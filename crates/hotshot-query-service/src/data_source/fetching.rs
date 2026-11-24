@@ -344,7 +344,9 @@ impl<Types, S, P> Builder<Types, S, P> {
     /// Run without an aggregator.
     ///
     /// This can reduce load on the CPU and the database, but transaction counts, payload sizes and
-    /// the explorer summary then return [`QueryError::NotFound`].
+    /// the explorer summary then return [`QueryError::NotFound`]. The data source also deletes the
+    /// totals an earlier run with an aggregator left, which it never reads; an aggregator started
+    /// later counts them again from genesis.
     pub fn disable_aggregator(mut self) -> Self {
         self.aggregator = false;
         self
@@ -418,6 +420,9 @@ where
     scanner: Option<BackgroundTask>,
     // The aggregator task, which derives aggregate statistics from a block stream.
     aggregator: Option<BackgroundTask>,
+    // Without an aggregator, the task that deletes the totals an earlier run left. This is only
+    // saved here so that we can cancel it on drop.
+    leftover_totals_cleanup: Option<BackgroundTask>,
     pruner: Pruner<Types, S>,
 }
 
@@ -565,6 +570,12 @@ where
         } else {
             None
         };
+        let leftover_totals_cleanup = aggregator.is_none().then(|| {
+            BackgroundTask::spawn(
+                "leftover totals cleanup",
+                delete_leftover_totals(fetcher.storage.clone()),
+            )
+        });
 
         let storage = fetcher.storage.clone();
 
@@ -574,6 +585,7 @@ where
             scanner,
             pruner,
             aggregator,
+            leftover_totals_cleanup,
         };
 
         Ok(ds)
@@ -582,6 +594,15 @@ where
     /// Get a copy of the (shared) inner storage
     pub fn inner(&self) -> Arc<S> {
         self.fetcher.storage.clone()
+    }
+}
+
+/// Delete the transaction and payload totals an earlier run with an aggregator left.
+async fn delete_leftover_totals<S: PruneStorage + Sync>(storage: Arc<S>) {
+    match storage.delete_leftover_aggregates().await {
+        Ok(false) => {},
+        Ok(true) => tracing::info!("deleted the totals an earlier run left"),
+        Err(err) => tracing::warn!("failed to delete the totals an earlier run left: {err:#}"),
     }
 }
 
@@ -3606,5 +3627,157 @@ mod test {
             ),
             "{err:?}"
         );
+    }
+
+    /// A data source without an aggregator never reads or adds to the transaction and payload
+    /// totals, so it deletes the ones an earlier run with an aggregator left.
+    #[apply(sql_dbs)]
+    async fn test_data_source_without_aggregator_deletes_old_totals<Db: TestSqlDb>(
+        _db: PhantomData<Db>,
+    ) {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
+        seed_totals::<Db>(&db).await;
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+
+        let deadline = Instant::now() + OLD_TOTALS_TIMEOUT;
+        loop {
+            let heights_left = stored_totals::<Db>(ds.as_ref())
+                .await
+                .map(|totals| totals.len());
+            if matches!(heights_left, Ok(0)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the old totals are still stored {OLD_TOTALS_TIMEOUT:?} after a data source \
+                 without an aggregator started (heights left: {heights_left:?})"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// A data source with an aggregator keeps the totals an earlier run left: its aggregator
+    /// resumes from them.
+    #[apply(sql_dbs)]
+    async fn test_data_source_with_aggregator_keeps_old_totals<Db: TestSqlDb>(
+        _db: PhantomData<Db>,
+    ) {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
+        seed_totals::<Db>(&db).await;
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .build()
+            .await
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            assert_eq!(
+                stored_totals::<Db>(ds.as_ref()).await.unwrap(),
+                seeded_totals()
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// How long a data source without an aggregator may take to delete the old totals.
+    const OLD_TOTALS_TIMEOUT: Duration = Duration::from_secs(60);
+
+    /// Number of heights, from genesis up, of the totals [`seed_totals`] stores.
+    const SEEDED_HEIGHTS: usize = 10;
+
+    /// The only namespace of the blocks [`seed_totals`] counts.
+    const SEEDED_NAMESPACE: i64 = 7;
+
+    /// Transactions and bytes of each block [`seed_totals`] counts, all in [`SEEDED_NAMESPACE`].
+    const SEEDED_BLOCK: crate::availability::NamespaceInfo = crate::availability::NamespaceInfo {
+        num_transactions: 2,
+        size: 30,
+    };
+
+    /// The cumulative totals stored at one height, as (transactions, bytes).
+    #[derive(Debug, PartialEq)]
+    struct HeightTotals {
+        all_namespaces: (usize, usize),
+        seeded_namespace: (usize, usize),
+    }
+
+    /// Store the totals of [`SEEDED_HEIGHTS`] blocks the way an earlier run with an aggregator
+    /// leaves them, and check that the storage then holds [`seeded_totals`].
+    async fn seed_totals<Db: TestSqlDb>(storage: &Db::Storage) {
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        );
+        let blocks = (0..SEEDED_HEIGHTS as u64)
+            .map(|height| PayloadMetadata {
+                height,
+                num_transactions: SEEDED_BLOCK.num_transactions,
+                size: SEEDED_BLOCK.size,
+                namespaces: [(SEEDED_NAMESPACE, SEEDED_BLOCK)].into_iter().collect(),
+                ..genesis.clone()
+            })
+            .collect::<Vec<_>>();
+        let mut tx = storage.write().await.unwrap();
+        tx.update_aggregates(Aggregate::default(), &blocks)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(stored_totals::<Db>(storage).await.unwrap(), seeded_totals());
+    }
+
+    /// What [`stored_totals`] returns after [`seed_totals`].
+    fn seeded_totals() -> Vec<HeightTotals> {
+        (1..=SEEDED_HEIGHTS)
+            .map(|blocks| {
+                let totals = (
+                    blocks * SEEDED_BLOCK.num_transactions as usize,
+                    blocks * SEEDED_BLOCK.size as usize,
+                );
+                HeightTotals {
+                    all_namespaces: totals,
+                    seeded_namespace: totals,
+                }
+            })
+            .collect()
+    }
+
+    /// The totals in storage at each height from genesis up to the highest height of any row.
+    /// Empty if and only if there are no rows.
+    async fn stored_totals<Db: TestSqlDb>(
+        storage: &Db::Storage,
+    ) -> anyhow::Result<Vec<HeightTotals>> {
+        let mut tx = storage.read().await?;
+        let heights = AggregatesStorage::<MockTypes>::aggregates_height(&mut tx).await?;
+        let mut totals = Vec::with_capacity(heights);
+        for height in 0..heights {
+            totals.push(HeightTotals {
+                all_namespaces: totals_up_to(&mut tx, height, None).await?,
+                seeded_namespace: totals_up_to(&mut tx, height, Some(SEEDED_NAMESPACE)).await?,
+            });
+        }
+        Ok(totals)
+    }
+
+    /// The (transactions, bytes) of `namespace` (all namespaces if `None`) in the blocks up to and
+    /// including `height`.
+    async fn totals_up_to(
+        tx: &mut impl NodeStorage<MockTypes>,
+        height: usize,
+        namespace: Option<i64>,
+    ) -> anyhow::Result<(usize, usize)> {
+        Ok((
+            tx.count_transactions_in_range(..=height, namespace).await?,
+            tx.payload_size_in_range(..=height, namespace).await?,
+        ))
     }
 }

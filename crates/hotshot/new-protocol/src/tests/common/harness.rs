@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     PeerConnectInfo,
@@ -55,6 +56,7 @@ pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     connect_info: PeerConnectInfo,
     membership: EpochMembershipCoordinator<TestTypes>,
+    storage: TestStorage<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
     /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
     trace: trace::Recorder,
@@ -184,6 +186,7 @@ impl TestHarness {
         );
 
         let membership_handle = membership.clone();
+        let storage_handle = storage.clone();
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
             .network(network)
@@ -225,6 +228,7 @@ impl TestHarness {
             coordinator,
             connect_info,
             membership: membership_handle,
+            storage: storage_handle,
             outputs: Outbox::new(),
             trace: trace::Recorder::for_current_test(),
         }
@@ -438,5 +442,10 @@ impl TestHarness {
     /// buffered rather than judged, which hides the checks that judge it.
     pub fn membership(&self) -> &EpochMembershipCoordinator<TestTypes> {
         &self.membership
+    }
+
+    /// What this harness's coordinator has persisted, as a restart loads it.
+    pub fn storage(&self) -> &TestStorage<TestTypes> {
+        &self.storage
     }
 }
