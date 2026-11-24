@@ -31,6 +31,7 @@ impl Sink<SeqTypes> for ChainStore {
             certs_known: true,
             // Computed, and the payload uploaded, when it is written.
             payload_info: None,
+            payload_index: None,
             payload_stored: false,
         };
         self.put(&item, &parts).await

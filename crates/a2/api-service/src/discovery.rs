@@ -59,7 +59,7 @@ mod tests {
             .put_service_records(EpochNumber::new(3), &[record], EpochNumber::new(1))
             .await
             .unwrap();
-        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap());
+        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap(), 10);
 
         for epoch in [Some(3), None] {
             let peers = service

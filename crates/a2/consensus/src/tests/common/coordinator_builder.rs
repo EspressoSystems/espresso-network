@@ -206,6 +206,7 @@ pub async fn build_test_coordinator(
 
     // As in `Coordinator::maker`: restore the lock, the boundary certificate
     // and never act again in a view acted in before.
+    consensus.seed_earlier_locks(restored.earlier_locks);
     if let Some(locked_qc) = restored.locked_qc {
         consensus.seed_locked_cert(locked_qc);
     }

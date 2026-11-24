@@ -133,6 +133,11 @@ pub struct TestRunner {
     #[builder(default)]
     persistent_storage: bool,
 
+    /// The view from which on no node's store takes payloads, until a later view times out and
+    /// every node restarts: each node locks on the block of that view, whose payload the restart
+    /// then loses everywhere.
+    withhold_payloads_from: Option<u64>,
+
     /// Per-node storage, created at the start of `run()`.  Exposed so tests
     /// can inspect persisted state (e.g. the action log) after a run.
     #[builder(skip)]
@@ -486,6 +491,13 @@ impl TestRunner {
         self.node_payloads = (0..self.num_nodes)
             .map(|_| TestPayloadStore::default())
             .collect();
+        let mut withheld = self.withhold_payloads_from;
+        let mut resume_stores = false;
+        if let Some(view) = withheld {
+            for store in &self.node_payloads {
+                store.withhold_from(view);
+            }
+        }
         self.node_locks = vec![None; self.num_nodes];
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
@@ -638,7 +650,7 @@ impl TestRunner {
             };
 
             // Apply pending node changes when progress reaches their view.
-            if !self.node_changes.is_empty() {
+            if !pending_changes.is_empty() {
                 let views_to_apply: Vec<u64> = pending_changes
                     .range(..=max_decided_view)
                     .map(|(&v, _)| v)
@@ -758,6 +770,12 @@ impl TestRunner {
                     }
                 }
             }
+            // The stores take payloads again once every node restarted without the withheld ones.
+            if std::mem::take(&mut resume_stores) {
+                for store in &self.node_payloads {
+                    store.resume();
+                }
+            }
 
             // Get the next event from any node, rather than polling each
             // node in sequence.  Stale events (from tasks aborted by a
@@ -790,6 +808,19 @@ impl TestRunner {
                 },
                 NodeEvent::TimedOut(view) => {
                     node_timeouts[tagged.idx].insert(view);
+                    if let Some(from) = withheld.filter(|from| *view > *from) {
+                        info!(
+                            from,
+                            "restarting every node, which loses the withheld payloads"
+                        );
+                        withheld = None;
+                        resume_stores = true;
+                        let restarts = (0..self.num_nodes).map(|idx| NodeChange {
+                            idx,
+                            action: NodeAction::Restart,
+                        });
+                        pending_changes.entry(0).or_default().extend(restarts);
+                    }
                 },
             }
         }

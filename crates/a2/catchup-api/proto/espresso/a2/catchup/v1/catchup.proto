@@ -31,7 +31,8 @@ service CatchupService {
   rpc GetPayload(PayloadRequest) returns (Encoded);
 
   // Whether GetPayload would answer with the payload now: asked of several services, so that the
-  // payload is downloaded from one of those that have it.
+  // payload is downloaded from one of those that have it. Also whether the store holds it at all,
+  // which a restarted consensus node asks its own service.
   rpc HasPayload(PayloadRequest) returns (HasPayloadResponse);
 }
 
@@ -56,7 +57,13 @@ message PayloadRequest {
 }
 
 message HasPayloadResponse {
+  // Whether GetPayload would answer with the payload now.
   bool has = 1;
+
+  // Whether the store holds the payload durably, uploaded or still staged: true of every payload
+  // a storage instance acknowledged to its consensus node, even before GetPayload can answer with
+  // it.
+  bool held = 2;
 }
 
 message EpochRequest {

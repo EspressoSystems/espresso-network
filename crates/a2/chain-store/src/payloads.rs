@@ -10,6 +10,9 @@
 //! stages it in a local directory first; an [`Uploader`] copies staged payloads to the object
 //! store, records them as uploaded, and deletes the staged copies. A restarted uploader uploads
 //! what is still staged. A writer without a staging directory uploads at once.
+//!
+//! A payload's transaction index is stored under its commitment too, once the writer has
+//! computed it, after reporting the payload durable.
 
 use std::{
     path::PathBuf,
@@ -26,11 +29,16 @@ use object_store::{ObjectStore, PutPayload, path::Path};
 use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt, sync::mpsc};
 
-use crate::{Backend, PayloadInfo};
+use crate::{Backend, PayloadIndex, PayloadInfo};
 
 /// The table of payload records, by VID commitment.
 static RECORDS: std::sync::LazyLock<TableName> =
     std::sync::LazyLock::new(|| TableName::of("payload-records"));
+
+/// The table of payload indexes, by VID commitment. Apart from the records, since a payload is
+/// indexed after it is reported durable, while the uploader may update its record.
+static INDEXES: std::sync::LazyLock<TableName> =
+    std::sync::LazyLock::new(|| TableName::of("payload-indexes"));
 
 /// What the store knows of a payload it keeps by commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +79,31 @@ pub(crate) async fn put_record(
             table: RECORDS.clone(),
             key: Bytes::copy_from_slice(commitment.as_bytes()),
             value: bincode::serialize(&record)?.into(),
+        }])
+        .await
+}
+
+/// The index of the payload whose VID commitment is `commitment`.
+pub(crate) async fn index(
+    backend: &dyn Backend,
+    commitment: &str,
+) -> anyhow::Result<Option<PayloadIndex>> {
+    let Some(bytes) = backend.app_get(&INDEXES, commitment.as_bytes()).await? else {
+        return Ok(None);
+    };
+    Ok(Some(bincode::deserialize(&bytes)?))
+}
+
+pub(crate) async fn put_index(
+    backend: &dyn Backend,
+    commitment: &str,
+    index: &PayloadIndex,
+) -> anyhow::Result<()> {
+    backend
+        .app_write(vec![AppWrite::Put {
+            table: INDEXES.clone(),
+            key: Bytes::copy_from_slice(commitment.as_bytes()),
+            value: bincode::serialize(index)?.into(),
         }])
         .await
 }
@@ -449,8 +482,9 @@ mod tests {
     }
 
     /// A payload stored by its commitment before any block has it gives a block that has it its
-    /// info when the block's item is written; staged, the block counts as missing it until it is
-    /// uploaded, and is marked once repair looks again after the upload.
+    /// info when the block's item is written; staged, the store holds it but cannot serve it, the
+    /// block counts as missing it until it is uploaded, and is marked once repair looks again
+    /// after the upload.
     #[tokio::test]
     async fn a_payload_stored_before_its_block_reaches_the_block() {
         let dir = std::env::temp_dir().join(format!("staging-{:016x}", rand_suffix()));
@@ -469,6 +503,13 @@ mod tests {
             )
             .await
             .unwrap();
+
+        assert!(store.holds_payload(&commitment).await.unwrap(), "staged");
+        assert!(
+            !store.has_payload(&commitment).await.unwrap(),
+            "not uploaded yet"
+        );
+        assert!(!store.holds_payload("C~other").await.unwrap());
 
         store.put(&item, &Parts::default()).await.unwrap();
         let parts = store.summary(0).await.unwrap().unwrap().parts().unwrap();
@@ -669,5 +710,77 @@ mod tests {
             .unwrap()
             .as_nanos() as u64
             ^ std::process::id() as u64
+    }
+
+    /// A block's transactions are indexed, and counted, from its payload's index whether the
+    /// payload is indexed before the block is stored or after it, and from the payload itself in
+    /// a store that keeps payloads with the blocks.
+    #[tokio::test]
+    async fn the_index_reaches_the_block_from_the_payload() {
+        use committable::Committable;
+        use espresso_types::{NamespaceId, Payload, Transaction};
+        use hotshot_types::traits::EncodeBytes;
+
+        let transactions: Vec<_> = [(7u32, 0u8), (7, 1), (9, 2)]
+            .into_iter()
+            .map(|(namespace, byte)| Transaction::new(NamespaceId::from(namespace), vec![byte; 5]))
+            .collect();
+        let (payload, ns_table) =
+            Payload::from_transactions_sync(&transactions, NodeState::mock().chain_config).unwrap();
+        let bytes = Bytes::from(payload.encode().to_vec());
+        let mut item = genesis().await;
+        *item.leaf.block_header_mut().ns_table_mut() = ns_table.clone();
+        let commitment = item.leaf.block_header().payload_commitment().to_string();
+
+        let (hash, size) = (transactions[2].commit(), bytes.len() as u64);
+        let check = |store: ChainStore| async move {
+            assert_eq!(
+                store.transaction_position(&hash).await.unwrap(),
+                Some((0, 2))
+            );
+            let all = store.totals(0..=0, None).await.unwrap();
+            assert_eq!(all.transactions, 3);
+            assert_eq!(all.bytes, size);
+            let (seven, nine) = (
+                store.totals(0..=0, Some(7)).await.unwrap(),
+                store.totals(0..=0, Some(9)).await.unwrap(),
+            );
+            assert_eq!((seven.transactions, nine.transactions), (2, 1));
+            assert_eq!(
+                seven.bytes + nine.bytes,
+                all.bytes,
+                "the namespaces make up the payload"
+            );
+        };
+
+        for payload_first in [true, false] {
+            let store = ChainStore::new(MemBackend::default()).with_payloads(objects());
+            let put_payload = || async {
+                store
+                    .put_payload(&commitment, bytes.clone(), Some(&ns_table))
+                    .await
+                    .unwrap();
+                store
+                    .index_payload(&commitment, bytes.clone(), ns_table.clone())
+                    .await
+                    .unwrap();
+            };
+            if payload_first {
+                put_payload().await;
+            }
+            store.put(&item, &Parts::default()).await.unwrap();
+            if !payload_first {
+                put_payload().await;
+            }
+            check(store).await;
+        }
+
+        let store = ChainStore::new(MemBackend::default());
+        let parts = Parts {
+            payload: Some(bytes.clone()),
+            ..Default::default()
+        };
+        store.put(&item, &parts).await.unwrap();
+        check(store).await;
     }
 }

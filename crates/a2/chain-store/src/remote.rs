@@ -1,6 +1,9 @@
 //! A [`Backend`] that is a client of the store service.
 
-use std::{ops::Range, time::Duration};
+use std::{
+    ops::{Range, RangeInclusive},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -9,7 +12,7 @@ use tokio::{sync::watch, task::JoinSet, time::sleep};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
-    AppWrite, Backend, Column, KeyBounds, Part, Row, TableName, TipUpdate,
+    AppWrite, Backend, Column, KeyBounds, Part, Row, TableName, TipUpdate, Totals,
     wire::{
         MAX_MESSAGE_SIZE, app_write_to, parts_from, parts_to,
         proto::{self, store_client::StoreClient},
@@ -229,6 +232,39 @@ impl Backend for RemoteBackend {
             .await
             .map_err(status)?;
         Ok(response.into_inner().heights)
+    }
+
+    async fn transaction_position(&self, hash: &str) -> anyhow::Result<Option<(u64, u64)>> {
+        let response = self
+            .client()
+            .transaction_position(proto::TransactionPositionRequest {
+                hash: hash.to_string(),
+            })
+            .await
+            .map_err(status)?
+            .into_inner();
+        Ok(response.height.map(|height| (height, response.position)))
+    }
+
+    async fn totals(
+        &self,
+        heights: RangeInclusive<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<Totals> {
+        let response = self
+            .client()
+            .totals(proto::TotalsRequest {
+                from: *heights.start(),
+                to: *heights.end(),
+                namespace,
+            })
+            .await
+            .map_err(status)?
+            .into_inner();
+        Ok(Totals {
+            transactions: response.transactions,
+            bytes: response.bytes,
+        })
     }
 
     async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {

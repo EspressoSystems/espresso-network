@@ -169,6 +169,40 @@ async fn restart_all_nodes_at_epoch_boundary() {
     }
 }
 
+/// Every node locks on a block whose payload no store took, then every node restarts, which loses
+/// the payload everywhere. The nodes must give up that lock: leaders would build on it, and no
+/// vote1 on a child could be sent without the payload.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_locked_on_a_lost_payload() {
+    let num_nodes = 5;
+    let lost = 6;
+    let mut runner = TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(20)
+        .epoch_height(10)
+        .persistent_storage(true)
+        .withhold_payloads_from(lost)
+        // Unique payloads: the lost one is not the empty payload of another block.
+        .transactions(3000)
+        .max_runtime(Duration::from_secs(120))
+        .tolerated_failed_views(views(1..=30))
+        .build();
+    runner.run().await.unwrap();
+
+    for (idx, storage) in runner.node_storages().iter().enumerate() {
+        assert_no_view_reentered(idx, storage).await;
+        let (anchor, _) = storage
+            .anchor_leaf()
+            .await
+            .unwrap_or_else(|| panic!("node {idx} has no persisted anchor"));
+        assert!(
+            *anchor.view_number() > lost,
+            "node {idx} anchor stuck at view {}",
+            anchor.view_number()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // View divergence between cohorts
 // ---------------------------------------------------------------------------

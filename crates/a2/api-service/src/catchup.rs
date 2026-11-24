@@ -210,7 +210,13 @@ impl CatchupService for Catchup {
             .has_payload(&commitment)
             .await
             .map_err(to_status)?;
-        Ok(Response::new(HasPayloadResponse { has }))
+        let held = has
+            || self
+                .store
+                .holds_payload(&commitment)
+                .await
+                .map_err(to_status)?;
+        Ok(Response::new(HasPayloadResponse { has, held }))
     }
 }
 
@@ -257,8 +263,12 @@ mod tests {
         let answer = catchup.get_payload(request("C~1")).await.unwrap();
         assert_eq!(&answer.into_inner().data[..], b"payload");
         let has = |commitment| catchup.has_payload(request(commitment));
-        assert!(has("C~1").await.unwrap().into_inner().has);
-        assert!(!has("C~2").await.unwrap().into_inner().has);
+        let (one, two) = (
+            has("C~1").await.unwrap().into_inner(),
+            has("C~2").await.unwrap().into_inner(),
+        );
+        assert!(one.has && one.held);
+        assert!(!two.has && !two.held);
         let status = catchup
             .get_payload(request("C~2"))
             .await

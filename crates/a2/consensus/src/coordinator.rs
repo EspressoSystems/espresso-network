@@ -3,7 +3,7 @@ pub(crate) mod metrics;
 pub mod timer;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -61,7 +61,7 @@ use crate::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
-    storage::{DEFAULT_DECIDE_LOG_LIMIT, DecidedState, Storage},
+    storage::{DEFAULT_DECIDE_LOG_LIMIT, DecidedState, Storage, StorageOutput},
     store::{ConsensusStore, Restored},
     upgrade::UpgradeProtocol,
     vid::{
@@ -155,6 +155,10 @@ pub struct Coordinator<T: NodeType, S> {
     requested_missing_proposals: HashMap<ProposalFetchKey<T>, ViewNumber>,
     #[builder(default)]
     fetcher: Fetcher<T>,
+    /// The check, once a restarted node starts, of which payloads of its restored locks its
+    /// deployment's store does not hold.
+    #[builder(skip)]
+    unheld: tokio::task::JoinSet<BTreeSet<(ViewNumber, VidCommitment2)>>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     /// Dispersals the block builder computed, until consensus asks to disperse their block.
@@ -310,8 +314,9 @@ where
         // No block counts as reconstructed: consensus keeps no payloads across a restart, and a
         // vote1 on a child needs its parent's, which a fetch brings.
         consensus.seed_parent(cert1, parent_proposal, Vec::new());
-        // Restore the persisted lock; it can be newer than the anchor QC, so
+        // Restore the persisted locks; they can be newer than the anchor QC, so
         // this must run after `seed_parent`.
+        consensus.seed_earlier_locks(restored.earlier_locks);
         if let Some(locked_qc) = restored.locked_qc {
             consensus.seed_locked_cert(locked_qc);
         }
@@ -515,6 +520,12 @@ where
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(view, epoch));
         self.consensus.request_restored_payloads(&mut self.outbox);
+        let lock_payloads = self.consensus.restored_lock_payloads();
+        if !lock_payloads.is_empty()
+            && let Some(unheld) = self.fetcher.unheld(lock_payloads)
+        {
+            self.unheld.spawn(unheld);
+        }
 
         if let Some(leader) = self.leader(view, epoch)
             && leader == self.public_key
@@ -776,6 +787,12 @@ where
                     }
                     self.vid_reconstructor.retire_view(out.view);
                     return Ok(self.on_payload_obtained(out))
+                },
+                Some(unheld) = self.unheld.join_next() => match unheld {
+                    Ok(unheld) => {
+                        return Ok(ConsensusInput::Stored(StorageOutput::Unheld(unheld)))
+                    }
+                    Err(err) => warn!(%err, "asking whether the store holds the lock payloads failed"),
                 },
                 stored = self.storage.next() => {
                     let stored = stored.map_err(|e| {

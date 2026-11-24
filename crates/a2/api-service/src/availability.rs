@@ -6,8 +6,16 @@ use espresso_api::{
     error::to_status,
     proto::{self, availability_service_server::AvailabilityService},
 };
-use futures::stream::BoxStream;
-use hotshot_query_service_types::availability::PayloadQueryData;
+use espresso_types::{NamespaceId, SeqTypes, StateCertQueryDataV1, StateCertQueryDataV2};
+use futures::stream::{self, BoxStream, StreamExt};
+use hotshot_query_service_types::{
+    HeightIndexed,
+    availability::{
+        BlockQueryData, BlockSummaryQueryData, PayloadQueryData, QueryablePayload,
+        TransactionIndex, TransactionQueryData, TransactionWithProofQueryData,
+    },
+};
+use hotshot_types::utils::root_block_in_epoch;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -53,6 +61,42 @@ impl ApiService {
         }
         Ok(values)
     }
+
+    /// The block height and position in it of the transaction a request names, by those or by
+    /// its hash; by its hash, the earliest block that holds it.
+    async fn position(
+        &self,
+        height: Option<u64>,
+        index: Option<u64>,
+        hash: Option<String>,
+    ) -> Result<(u64, u64), Status> {
+        match (height, index, hash) {
+            (Some(height), Some(index), None) => Ok((height, index)),
+            (None, None, Some(hash)) => self
+                .reader
+                .store()
+                .transaction_position(&parse(&hash, "hash")?)
+                .await
+                .map_err(to_status)?
+                .ok_or_else(|| Status::not_found(format!("no stored block holds {hash}"))),
+            _ => Err(Status::invalid_argument("set height and index, or hash")),
+        }
+    }
+
+    /// The light client state certificate of `epoch`, which the store keeps at the epoch's root
+    /// block.
+    async fn state_cert(&self, epoch: u64) -> Result<StateCertQueryDataV2<SeqTypes>, Status> {
+        let root = root_block_in_epoch(epoch, self.epoch_height);
+        let cert = self
+            .reader
+            .store()
+            .state_cert(root)
+            .await
+            .map_err(to_status)?;
+        let cert = cert
+            .ok_or_else(|| Status::not_found(format!("no state certificate of epoch {epoch}")))?;
+        Ok(StateCertQueryDataV2(cert))
+    }
 }
 
 fn unimplemented<T>(what: &str) -> Result<T, Status> {
@@ -65,6 +109,42 @@ fn ranges(ranges: Vec<proto::HeightRange>) -> Result<Vec<Range<u64>>, Status> {
     ranges
         .into_iter()
         .map(|r| Ok(required(r.from, "from")?..required(r.until, "until")?))
+        .collect()
+}
+
+/// The transaction at `index` in `block`, with where it is in the payload.
+fn transaction_at(
+    block: &BlockQueryData<SeqTypes>,
+    index: u64,
+) -> Result<(TransactionIndex<SeqTypes>, TransactionQueryData<SeqTypes>), Status> {
+    let not_found = || {
+        Status::not_found(format!(
+            "block {} has no transaction {index}",
+            block.height()
+        ))
+    };
+    let position = block
+        .payload()
+        .nth(block.metadata(), index as usize)
+        .ok_or_else(not_found)?;
+    let transaction = block.transaction(&position).ok_or_else(not_found)?;
+    let data = TransactionQueryData::new(transaction, block, &position, index)
+        .ok_or_else(|| Status::internal(format!("transaction {index} of {}", block.height())))?;
+    Ok((position, data))
+}
+
+/// The transactions of `block`, those of `namespace` only if given.
+fn transactions(
+    block: &BlockQueryData<SeqTypes>,
+    namespace: Option<NamespaceId>,
+) -> Vec<TransactionQueryData<SeqTypes>> {
+    block
+        .enumerate()
+        .enumerate()
+        .filter(|(_, (_, transaction))| namespace.is_none_or(|ns| transaction.namespace() == ns))
+        .filter_map(|(index, (position, transaction))| {
+            TransactionQueryData::new(transaction, block, &position, index as u64)
+        })
         .collect()
 }
 
@@ -294,30 +374,66 @@ impl AvailabilityService for ApiService {
 
     async fn get_transaction(
         &self,
-        _: Request<proto::GetTransactionRequest>,
+        request: Request<proto::GetTransactionRequest>,
     ) -> Result<Response<proto::TransactionResponse>, Status> {
-        unimplemented("transactions")
+        let r = request.into_inner();
+        let (height, index) = self.position(r.height, r.index, r.hash).await?;
+        let block = self.reader.block(height, Wait::Briefly).await?;
+        let (_, transaction) = transaction_at(&block, index)?;
+        Ok(Response::new(proto::TransactionResponse::from(
+            &transaction,
+        )))
     }
 
     async fn get_transaction_proof(
         &self,
-        _: Request<proto::GetTransactionProofRequest>,
+        request: Request<proto::GetTransactionProofRequest>,
     ) -> Result<Response<proto::TransactionWithProofResponse>, Status> {
-        unimplemented("transaction proofs")
+        let r = request.into_inner();
+        let (height, index) = self.position(r.height, r.index, r.hash).await?;
+        let (block, common) = futures::try_join!(
+            self.reader.block(height, Wait::Briefly),
+            self.reader.vid_common(height, Wait::Briefly),
+        )?;
+        let (position, transaction) = transaction_at(&block, index)?;
+        let proof = block.transaction_proof(&common, &position).ok_or_else(|| {
+            Status::internal(format!("no proof of transaction {index} of {height}"))
+        })?;
+        Ok(Response::new(
+            proto::TransactionWithProofResponse::try_from(&TransactionWithProofQueryData::new(
+                transaction,
+                proof,
+            ))?,
+        ))
     }
 
     async fn get_block_summary(
         &self,
-        _: Request<proto::GetBlockSummaryRequest>,
+        request: Request<proto::GetBlockSummaryRequest>,
     ) -> Result<Response<proto::BlockSummaryResponse>, Status> {
-        unimplemented("block summaries")
+        let height = required(request.into_inner().height, "height")?;
+        let block = self.reader.block(height, Wait::Briefly).await?;
+        Ok(Response::new(proto::BlockSummaryResponse::from(
+            &BlockSummaryQueryData::from(block),
+        )))
     }
 
     async fn get_block_summary_range(
         &self,
-        _: Request<proto::GetBlockSummaryRangeRequest>,
+        request: Request<proto::GetBlockSummaryRangeRequest>,
     ) -> Result<Response<proto::BlockSummaryRangeResponse>, Status> {
-        unimplemented("block summaries")
+        let r = request.into_inner();
+        let range = range(r.from, r.until, LARGE_RANGE_LIMIT)?;
+        let summaries = self
+            .read_ranges([range], LARGE_RANGE_LIMIT, |reader, height| async move {
+                Ok(BlockSummaryQueryData::from(
+                    reader.block(height, Wait::Briefly).await?,
+                ))
+            })
+            .await?;
+        Ok(Response::new(proto::BlockSummaryRangeResponse::from(
+            &*summaries,
+        )))
     }
 
     async fn get_namespace_proof(
@@ -367,16 +483,22 @@ impl AvailabilityService for ApiService {
 
     async fn get_state_cert(
         &self,
-        _: Request<proto::GetStateCertRequest>,
+        request: Request<proto::GetStateCertRequest>,
     ) -> Result<Response<proto::StateCertV1Response>, Status> {
-        unimplemented("state certificates")
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let cert = self.state_cert(epoch).await?;
+        Ok(Response::new(proto::StateCertV1Response::from(
+            &StateCertQueryDataV1::from(cert),
+        )))
     }
 
     async fn get_state_cert_v2(
         &self,
-        _: Request<proto::GetStateCertV2Request>,
+        request: Request<proto::GetStateCertV2Request>,
     ) -> Result<Response<proto::StateCertV2Response>, Status> {
-        unimplemented("state certificates")
+        let epoch = required(request.into_inner().epoch, "epoch")?;
+        let cert = self.state_cert(epoch).await?;
+        Ok(Response::new(proto::StateCertV2Response::from(&cert)))
     }
 
     type StreamLeavesStream = Stream<proto::LeafResponse>;
@@ -473,9 +595,26 @@ impl AvailabilityService for ApiService {
 
     async fn stream_transactions(
         &self,
-        _: Request<proto::StreamTransactionsRequest>,
+        request: Request<proto::StreamTransactionsRequest>,
     ) -> Result<Response<Self::StreamTransactionsStream>, Status> {
-        unimplemented("transactions")
+        let r = request.into_inner();
+        let from = required(r.from, "from")?;
+        let namespace = r.namespace.map(|ns| namespace(Some(ns))).transpose()?;
+        let blocks = self.reader.stream(from, move |reader, height| async move {
+            let block = reader.block(height, Wait::Forever).await?;
+            Ok(transactions(&block, namespace)
+                .iter()
+                .map(|transaction| Ok(proto::TransactionResponse::from(transaction)))
+                .collect::<Vec<_>>())
+        });
+        Ok(Response::new(
+            blocks
+                .flat_map(|block| match block {
+                    Ok(transactions) => stream::iter(transactions),
+                    Err(status) => stream::iter(vec![Err(status)]),
+                })
+                .boxed(),
+        ))
     }
 
     type StreamNamespaceProofsStream = Stream<proto::NamespaceProofResponse>;

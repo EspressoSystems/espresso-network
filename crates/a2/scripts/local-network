@@ -43,6 +43,8 @@ main() {
   local rundir=$1
   local root
   root=$(git rev-parse --show-toplevel)
+  export PATH="$root/target/${PROFILE:-debug}:$root/target/debug:$root:$PATH"
+  require_commands
   mkdir "$rundir"
   rundir=$(cd "$rundir" && pwd)
   cd "$root"
@@ -51,7 +53,6 @@ main() {
   # shellcheck disable=SC1091
   source .env
   set +a
-  export PATH="$root/target/${PROFILE:-debug}:$root/target/debug:$root:$PATH"
   local l1="http://127.0.0.1:${ESPRESSO_L1_PORT}"
   local genesis=${GENESIS_FILE:-data/genesis/demo-ff.toml}
 
@@ -222,6 +223,24 @@ wait_for_l1() {
   until curl -s -H "Content-Type: application/json" --data "$body" "$1" >/dev/null; do
     sleep 1
   done
+}
+
+# Fails, before anything starts, unless every program the network needs is on the PATH.
+require_commands() {
+  local needed=(anvil pg_isready psql curl deploy staking-cli consensus-node store-service
+    api-service)
+  if [[ -n "${SINGLE_PROCESS:-}" ]]; then
+    needed+=(deployment)
+  fi
+  local missing=()
+  local cmd
+  for cmd in "${needed[@]}"; do
+    command -v "$cmd" >/dev/null || missing+=("$cmd")
+  done
+  if ((${#missing[@]} > 0)); then
+    echo "${SCRIPT_NAME}: not found: ${missing[*]}" >&2
+    exit 1
+  fi
 }
 
 main "$@"

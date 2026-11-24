@@ -41,6 +41,13 @@ service Store {
   // Heights from `from` on that have an item but not `part`.
   rpc MissingParts(MissingPartsRequest) returns (HeightsResponse);
 
+  // The height and position in its block of a transaction, by hash; the earliest if several
+  // blocks hold it.
+  rpc TransactionPosition(TransactionPositionRequest) returns (MaybePosition);
+
+  // The transactions and payload bytes of a range of heights, of one namespace if given.
+  rpc Totals(TotalsRequest) returns (TotalsResponse);
+
   // The value of a key in an application table.
   rpc AppGet(AppGetRequest) returns (MaybeBytes);
 
@@ -135,6 +142,29 @@ message MissingPartsRequest {
   Part part = 1;
   uint64 from = 2;
   uint64 limit = 3;
+}
+
+message TransactionPositionRequest {
+  // The transaction's hash, as tagged base64.
+  string hash = 1;
+}
+
+message MaybePosition {
+  // Absent if no stored block holds the transaction.
+  optional uint64 height = 1;
+  uint64 position = 2;
+}
+
+message TotalsRequest {
+  // The first and last height, inclusive.
+  uint64 from = 1;
+  uint64 to = 2;
+  optional uint32 namespace = 3;
+}
+
+message TotalsResponse {
+  uint64 transactions = 1;
+  uint64 bytes = 2;
 }
 
 message MaybeBytes {

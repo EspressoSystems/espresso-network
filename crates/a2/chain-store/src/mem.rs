@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    ops::Range,
+    ops::{Range, RangeBounds, RangeInclusive},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::sync::watch;
 
-use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row, TableName};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, PayloadIndex, Row, TableName, Totals};
 
 #[derive(Debug)]
 pub struct MemBackend {
@@ -47,6 +47,18 @@ impl MemBackend {
 
     fn read<R>(&self, f: impl FnOnce(&State) -> R) -> R {
         f(&self.state.lock().unwrap())
+    }
+
+    /// The decoded [`Part::Index`] of each stored height in `heights`, in height order.
+    fn indexes(&self, heights: impl RangeBounds<u64>) -> Vec<(u64, anyhow::Result<PayloadIndex>)> {
+        self.read(|state| {
+            state
+                .parts
+                .iter()
+                .filter(|((height, part), _)| *part == Part::Index && heights.contains(height))
+                .map(|((height, _), bytes)| (*height, crate::decode(bytes)))
+                .collect()
+        })
     }
 }
 
@@ -96,6 +108,7 @@ impl Backend for MemBackend {
             let parts = Part::ALL
                 .into_iter()
                 .filter(|part| payload || *part != Part::Payload)
+                .filter(|part| *part != Part::Index)
                 .filter_map(|part| Some((part, state.parts.get(&(height, part))?.clone())))
                 .collect();
             Some((item, parts))
@@ -168,6 +181,36 @@ impl Backend for MemBackend {
                 .take(limit)
                 .collect()
         }))
+    }
+
+    async fn transaction_position(&self, hash: &str) -> anyhow::Result<Option<(u64, u64)>> {
+        for (height, index) in self.indexes(..) {
+            if let Some(position) = index?.transactions.iter().position(|tx| tx == hash) {
+                return Ok(Some((height, position as u64)));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn totals(
+        &self,
+        heights: RangeInclusive<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<Totals> {
+        let mut totals = Totals::default();
+        for (_, index) in self.indexes(heights) {
+            let index = index?;
+            match namespace {
+                Some(namespace) => {
+                    if let Some((_, of)) = index.namespaces.iter().find(|(id, _)| *id == namespace)
+                    {
+                        totals += *of;
+                    }
+                },
+                None => totals += index.total,
+            }
+        }
+        Ok(totals)
     }
 
     async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {

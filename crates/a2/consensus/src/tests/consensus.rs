@@ -3561,54 +3561,112 @@ async fn test_revote2_after_restart_without_cert2() {
     );
 }
 
-/// A lock is persisted only once the store acknowledges its block's payload: after every node
-/// restarts, leaders build on the newest persisted lock, and the votes on its children need that
-/// payload.
-#[tokio::test]
-async fn a_lock_is_persisted_once_its_payload_is_stored() {
-    let test_data = TestData::new(4).await;
+/// A node restarted with locks on the blocks of `test_data.views[2]` and `[3]`, anchored at
+/// `[1]`, holding the proposals after the anchor but none of their payloads, as a restart leaves
+/// it.
+async fn restarted_with_locks(test_data: &TestData) -> ConsensusHarness {
     let anchor = &test_data.views[1];
-    let locked = &test_data.views[2];
-
-    // The block's payload is held in memory, not yet acknowledged by the store.
-    let mut harness = ConsensusHarness::restarted_from(
-        0,
-        anchor.proposal.data.clone(),
-        anchor.cert1.clone(),
-        [locked.proposal.data.clone()],
-    )
-    .await;
-    harness.resume_from_restart(
-        anchor.view_number,
-        anchor.view_number + 1,
-        anchor.view_number,
-    );
-    let persisted = |harness: &ConsensusHarness| {
-        harness
-            .outputs()
+    let mut harness =
+        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
+            .await;
+    harness.seed_proposals(
+        test_data.views[2..]
             .iter()
-            .filter(|output| {
-                matches!(output, ConsensusOutput::PersistHighQc(cert)
-                    if cert.view_number() == locked.view_number)
-            })
-            .count()
-    };
-
-    harness.apply(locked.cert1_input()).await;
-    assert_eq!(
-        harness.consensus.lock_view().map(|lock| lock.view),
-        Some(locked.view_number),
-        "the node locks on the block"
+            .map(|view| view.proposal.data.clone()),
     );
-    assert_eq!(persisted(&harness), 0, "the lock waits for the payload");
+    harness
+        .consensus
+        .seed_earlier_locks([test_data.views[2].cert1.clone()]);
+    harness
+        .consensus
+        .seed_locked_cert(test_data.views[3].cert1.clone());
+    harness
+}
 
+/// The payload key of the block of `test_data.views[i]`.
+fn payload_of(test_data: &TestData, i: usize) -> (ViewNumber, VidCommitment2) {
+    let view = &test_data.views[i];
+    (view.view_number, view.vid_commitment())
+}
+
+fn unheld(
+    keys: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+) -> ConsensusInput<TestTypes> {
+    ConsensusInput::Stored(StorageOutput::Unheld(keys.into_iter().collect()))
+}
+
+/// A restarted node asks its store about the payloads of the locks after its anchor, and gives up
+/// the latest locks whose payloads the store does not hold, back to the anchor's certificate if
+/// none is held: it voted no vote2 on them, and leaders could not build on them.
+#[tokio::test]
+async fn a_restarted_node_gives_up_locks_whose_payloads_no_store_holds() {
+    let test_data = TestData::new(4).await;
+    let lock_view = |harness: &ConsensusHarness| harness.consensus.lock_view().map(|l| l.view);
+
+    let mut harness = restarted_with_locks(&test_data).await;
+    assert_eq!(
+        harness.consensus.restored_lock_payloads(),
+        [payload_of(&test_data, 2), payload_of(&test_data, 3)].into()
+    );
+    harness.apply(unheld([payload_of(&test_data, 3)])).await;
+    assert_eq!(lock_view(&harness), Some(test_data.views[2].view_number));
+
+    let mut harness = restarted_with_locks(&test_data).await;
+    harness
+        .apply(unheld([
+            payload_of(&test_data, 2),
+            payload_of(&test_data, 3),
+        ]))
+        .await;
+    assert_eq!(lock_view(&harness), Some(test_data.views[1].view_number));
+}
+
+/// A lock is kept if its payload is held, so are the earlier ones, whose payloads may be lost: a
+/// vote2 on it may count this node among the holders of its payload.
+#[tokio::test]
+async fn a_restarted_node_keeps_a_lock_whose_payload_is_held() {
+    let test_data = TestData::new(4).await;
+    let lock_view = |harness: &ConsensusHarness| harness.consensus.lock_view().map(|l| l.view);
+    let latest = Some(test_data.views[3].view_number);
+
+    let mut harness = restarted_with_locks(&test_data).await;
+    harness.apply(unheld([payload_of(&test_data, 2)])).await;
+    assert_eq!(lock_view(&harness), latest, "held");
+
+    let mut harness = restarted_with_locks(&test_data).await;
+    let (view, commitment) = payload_of(&test_data, 3);
     harness
         .apply(ConsensusInput::Stored(StorageOutput::Payload(
-            locked.view_number,
-            locked.vid_commitment(),
+            view, commitment,
         )))
         .await;
-    assert_eq!(persisted(&harness), 1);
+    harness.apply(unheld([payload_of(&test_data, 3)])).await;
+    assert_eq!(
+        lock_view(&harness),
+        latest,
+        "acknowledged since the restart, after the store was asked"
+    );
+}
+
+/// A lock taken since the restart is kept, whatever the store says of the restored ones.
+#[tokio::test]
+async fn a_lock_taken_after_the_restart_is_kept() {
+    let test_data = TestData::new(5).await;
+    let mut harness = restarted_with_locks(&test_data).await;
+    harness
+        .apply(test_data.views[4].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[4].cert1_input()).await;
+    let taken = harness.consensus.lock_view().map(|l| l.view);
+    assert_eq!(taken, Some(test_data.views[4].view_number));
+
+    harness
+        .apply(unheld([
+            payload_of(&test_data, 2),
+            payload_of(&test_data, 3),
+        ]))
+        .await;
+    assert_eq!(harness.consensus.lock_view().map(|l| l.view), taken);
 }
 
 /// A replayed Cert1+Cert2 pair for a view below the restart anchor (decided

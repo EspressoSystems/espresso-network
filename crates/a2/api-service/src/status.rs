@@ -1,4 +1,4 @@
-//! The status service: how far the store has come.
+//! The status service: how far the store has come, and how well the chain does by it.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,13 +41,23 @@ impl StatusService for ApiService {
         }))
     }
 
+    /// The share of views that decided a block, up to the newest stored block: its height over its
+    /// view. main divides by the consensus node's current view instead, which this API service
+    /// does not know; the two differ by the views since the newest decide.
     async fn get_success_rate(
         &self,
         _: Request<proto::GetSuccessRateRequest>,
     ) -> Result<Response<proto::SuccessRateResponse>, Status> {
-        Err(Status::unimplemented(
-            "the API service takes no part in consensus; ask the consensus node",
-        ))
+        let rate = match self.reader.newest().await? {
+            Some(newest) => {
+                let item = self.reader.item(newest, Wait::Briefly).await?;
+                (newest + 1) as f64 / item.leaf.view_number().u64() as f64
+            },
+            None => 0.,
+        };
+        // protoJSON cannot encode a non-finite double, as for main's.
+        let rate = if rate.is_finite() { rate } else { 0. };
+        Ok(Response::new(proto::SuccessRateResponse { rate }))
     }
 
     async fn get_node_keys(
@@ -55,7 +65,7 @@ impl StatusService for ApiService {
         _: Request<proto::GetNodeKeysRequest>,
     ) -> Result<Response<proto::NodeKeysResponse>, Status> {
         Err(Status::unimplemented(
-            "the API service has no keys of its own; ask the consensus node",
+            "the API service has no keys of its own",
         ))
     }
 }

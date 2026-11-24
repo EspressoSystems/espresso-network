@@ -136,7 +136,7 @@ mod tests {
         config.config.epoch_start_block = 1;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let service = ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap())
+        let service = ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap(), 10)
             .with_compat(Compat::new(store, config));
         tokio::spawn(service.serve(listener));
         url.parse().unwrap()

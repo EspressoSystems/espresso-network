@@ -273,7 +273,7 @@ async fn serve_api(
         Err(err) => return err.context("reading the genesis file's network config"),
     };
     let epoch_height = config.config.epoch_height;
-    let api = ApiService::new(store.clone(), consensus_api)
+    let api = ApiService::new(store.clone(), consensus_api, epoch_height)
         .with_compat(Compat::new(store.clone(), config))
         .with_catchup(Catchup::new(store.clone(), epoch_height));
     tokio::select! {

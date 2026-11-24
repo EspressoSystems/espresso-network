@@ -27,6 +27,7 @@ bytes         = { workspace = true }
 committable   = { workspace = true }
 espresso-types = { workspace = true }
 futures       = { workspace = true }
+hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 prost         = { workspace = true, optional = true }
 serde         = { workspace = true }
@@ -47,7 +48,6 @@ espresso-types = { workspace = true, features = ["testing"] }
 test-utils     = { workspace = true }
 tokio          = { workspace = true, features = ["full"] }
 versions       = { workspace = true }
-hotshot-query-service-types = { workspace = true }
 
 [lints]
 workspace = true

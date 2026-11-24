@@ -9,7 +9,7 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row, TableName};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, PayloadIndex, Row, TableName, Totals};
 
 /// A row at `height` whose payload commitment is `payload`.
 pub fn row(height: u64, payload: &str) -> Row {
@@ -292,6 +292,79 @@ pub async fn conformance(backend: &dyn Backend) {
     // Filling the gap leaves none.
     backend.put(row(7, "p"), Vec::new()).await.unwrap();
     assert_eq!(backend.newest_gap().await.unwrap(), None);
+
+    index(backend).await;
+}
+
+/// The transaction index and the counts, at heights after those [`conformance`] used before.
+async fn index(backend: &dyn Backend) {
+    let index = |transactions: &[&str], namespaces: &[(u32, u64, u64)]| {
+        let index = PayloadIndex {
+            transactions: transactions.iter().map(ToString::to_string).collect(),
+            namespaces: namespaces
+                .iter()
+                .map(|&(id, transactions, bytes)| {
+                    (
+                        id,
+                        Totals {
+                            transactions,
+                            bytes,
+                        },
+                    )
+                })
+                .collect(),
+            total: Totals {
+                transactions: transactions.len() as u64,
+                bytes: namespaces.iter().map(|&(_, _, bytes)| bytes).sum(),
+            },
+        };
+        vec![(Part::Index, crate::encode(&index).unwrap())]
+    };
+    // Height 11's index comes after its row; 12 holds a transaction 10 holds too.
+    backend
+        .put(
+            row(10, "i10"),
+            index(&["a", "b", "c"], &[(7, 2, 20), (9, 1, 5)]),
+        )
+        .await
+        .unwrap();
+    backend.put(row(11, "i11"), Vec::new()).await.unwrap();
+    backend
+        .put_parts(11, index(&["d"], &[(7, 1, 8)]))
+        .await
+        .unwrap();
+    backend
+        .put(row(12, "i12"), index(&["b"], &[(9, 1, 4)]))
+        .await
+        .unwrap();
+    // A height's index, once written, is kept.
+    backend
+        .put_parts(11, index(&["x"], &[(7, 9, 99)]))
+        .await
+        .unwrap();
+
+    let position = |hash| backend.transaction_position(hash);
+    assert_eq!(position("b").await.unwrap(), Some((10, 1)), "the earliest");
+    assert_eq!(position("d").await.unwrap(), Some((11, 0)));
+    assert_eq!(position("x").await.unwrap(), None, "kept");
+    let totals = |heights, namespace| backend.totals(heights, namespace);
+    let of = |transactions, bytes| Totals {
+        transactions,
+        bytes,
+    };
+    assert_eq!(totals(10..=12, None).await.unwrap(), of(5, 37));
+    assert_eq!(totals(11..=12, Some(7)).await.unwrap(), of(1, 8));
+    assert_eq!(totals(10..=12, Some(9)).await.unwrap(), of(2, 9));
+    assert_eq!(totals(13..=u64::MAX, None).await.unwrap(), of(0, 0));
+    let (_, parts) = backend.record(10, true).await.unwrap().unwrap();
+    assert!(
+        parts.iter().all(|(part, _)| *part != Part::Index),
+        "the index is not read back as a part"
+    );
+
+    backend.prune_below(11).await.unwrap();
+    assert_eq!(position("a").await.unwrap(), None, "pruned");
+    assert_eq!(totals(0..=u64::MAX, None).await.unwrap(), of(2, 12));
 }
 
 /// A throwaway Postgres server, with user `postgres` and trust auth, removed on drop. Needs

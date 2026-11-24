@@ -29,6 +29,7 @@ use espresso_api::{
     },
     rest,
 };
+use membership::MembershipStore;
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
 
@@ -58,6 +59,12 @@ pub struct ApiService {
     /// What the store holds besides blocks.
     tables: Tables,
 
+    /// The validators and rewards of recent epochs, which repair keeps in the store.
+    membership: MembershipStore<ChainStore>,
+
+    /// How many blocks an epoch has, from the chain's genesis file.
+    epoch_height: u64,
+
     /// The channel to the consensus node's API, for submissions.
     consensus: Channel,
 
@@ -69,10 +76,14 @@ pub struct ApiService {
 }
 
 impl ApiService {
-    pub fn new(store: ChainStore, consensus_api: SocketAddr) -> Self {
+    /// The API over `store`, for a chain whose epochs have `epoch_height` blocks, submitting
+    /// transactions to the consensus API at `consensus_api`.
+    pub fn new(store: ChainStore, consensus_api: SocketAddr, epoch_height: u64) -> Self {
         let (follower, tip) = chain_store::tip::follower(store.clone());
         Self {
             tables: Tables::new(store.clone()),
+            membership: MembershipStore::new(store.clone()),
+            epoch_height,
             reader: Reader::new(store, tip),
             follower: Some(follower),
             consensus: consensus_api::channel(consensus_api),
@@ -169,7 +180,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         // Nothing here reaches consensus.
-        let service = ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap());
+        let service = ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap(), 10);
         tokio::spawn(service.serve(listener));
         (store, url)
     }
@@ -354,5 +365,281 @@ mod tests {
         ))
         .await;
         assert_eq!(status, 400);
+    }
+    /// Transactions of namespaces 7 (three), 9 (one) and 11 (two), in that order.
+    fn transactions() -> Vec<espresso_types::Transaction> {
+        [(7u32, 3), (9, 1), (11, 2)]
+            .into_iter()
+            .flat_map(|(namespace, count)| {
+                (0..count).map(move |i| {
+                    espresso_types::Transaction::new(namespace.into(), vec![i as u8; 10 + i])
+                })
+            })
+            .collect()
+    }
+
+    /// The block at `height` with timestamp `timestamp`, holding `transactions`, with its payload
+    /// and VID common data as the store keeps them.
+    async fn block_at(
+        height: u64,
+        timestamp: u64,
+        transactions: &[espresso_types::Transaction],
+    ) -> (Item, Parts) {
+        use hotshot_types::{
+            data::{VidCommon, ns_table::parse_ns_table},
+            vid::avidm_gf2::{AvidmGf2Param, AvidmGf2Scheme},
+        };
+
+        let (mut item, _) = genesis().await;
+        let chain_config = NodeState::mock().chain_config;
+        let (payload, ns_table) =
+            Payload::from_transactions_sync(transactions, chain_config).unwrap();
+        let bytes = payload.encode().to_vec();
+        let ranges = parse_ns_table(bytes.len(), &ns_table.encode());
+        let param = AvidmGf2Param::new(5, 10).unwrap();
+        let (_, common) = AvidmGf2Scheme::commit(&param, &bytes, ranges).unwrap();
+        let header = item.leaf.block_header_mut();
+        *header.ns_table_mut() = ns_table;
+        *header.height_mut() = height;
+        header.set_timestamp(timestamp, timestamp * 1000);
+        let parts = Parts {
+            payload: Some(bytes.into()),
+            vid_common: Some(VidCommon::V2(common)),
+            ..Default::default()
+        };
+        (item, parts)
+    }
+
+    /// Reads `count` events of the server-sent event stream at `url`.
+    async fn events(url: &str, count: usize) -> Vec<Value> {
+        let mut response = reqwest::Client::new()
+            .get(url)
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        let mut text = String::new();
+        loop {
+            let events: Vec<Value> = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(|data| serde_json::from_str(data.trim()).unwrap())
+                .collect();
+            if events.len() >= count {
+                return events;
+            }
+            let chunk = response.chunk().await.unwrap().unwrap();
+            text.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    }
+
+    /// Transactions are served from the stored payload by their position or hash, with their
+    /// proofs, in block summaries and in the transaction stream, and counted, with their bytes,
+    /// from the index the store keeps: per namespace as the block summary counts them.
+    #[tokio::test]
+    async fn serves_transactions_from_stored_blocks() {
+        let (store, url) = serve().await;
+        let (item, parts) = block_at(0, 100, &transactions()).await;
+        store.put(&item, &parts).await.unwrap();
+        let availability = format!("{url}/v2/availability");
+
+        let (status, body) = get(&format!("{availability}/transaction?height=0&index=3")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["namespace"], Value::from("9"));
+        assert_eq!(body["index"], Value::from("3"));
+        let (status, _) = get(&format!("{availability}/transaction?height=0&index=6")).await;
+        assert_eq!(status, 404);
+        let hash = transactions()[3].commit().to_string();
+        let (status, body) = get(&format!("{availability}/transaction?hash={hash}")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["index"], Value::from("3"));
+        let elsewhere = espresso_types::Transaction::new(7u32.into(), vec![1, 2, 3]);
+        let (status, _) = get(&format!(
+            "{availability}/transaction?hash={}",
+            elsewhere.commit()
+        ))
+        .await;
+        assert_eq!(status, 404);
+        let (status, body) = get(&format!("{availability}/transaction-proof?hash={hash}")).await;
+        assert_eq!(status, 200, "{body}");
+
+        let (status, body) = get(&format!(
+            "{availability}/transaction-proof?height=0&index=1"
+        ))
+        .await;
+        assert_eq!(status, 200, "{body}");
+
+        let (status, summary) = get(&format!("{availability}/block-summary?height=0")).await;
+        assert_eq!(status, 200, "{summary}");
+        assert_eq!(summary["numTransactions"], Value::from("6"));
+        let node = format!("{url}/v2/node");
+        let (_, count) = get(&format!("{node}/transaction-count")).await;
+        assert_eq!(count["count"], Value::from("6"));
+        let (_, size) = get(&format!("{node}/payload-size?from=0&to=0")).await;
+        assert_eq!(size["size"], summary["size"]);
+        for namespace in ["7", "9", "11"] {
+            let info = &summary["namespaces"][namespace];
+            let query = format!("namespace={namespace}");
+            let (_, count) = get(&format!("{node}/transaction-count?{query}")).await;
+            assert_eq!(count["count"], info["numTransactions"], "{namespace}");
+            let (_, size) = get(&format!("{node}/payload-size?{query}")).await;
+            assert_eq!(size["size"], info["size"], "{namespace}");
+        }
+        // protoJSON leaves out a count of zero.
+        let (status, count) = get(&format!("{node}/transaction-count?from=1")).await;
+        assert_eq!(status, 200);
+        assert!(count.get("count").is_none(), "{count}");
+        let (status, body) = get(&format!(
+            "{availability}/block-summary-range?from=0&until=1"
+        ))
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["summaries"].as_array().unwrap().len(), 1);
+
+        let streamed = events(
+            &format!("{availability}/stream/transactions?from=0&namespace=11"),
+            2,
+        )
+        .await;
+        let indexes: Vec<_> = streamed.iter().map(|tx| tx["index"].clone()).collect();
+        assert_eq!(indexes, [Value::from("4"), Value::from("5")]);
+    }
+
+    /// The node service answers from the store: which heights it lacks, header windows, stake
+    /// tables, validators and block rewards.
+    #[tokio::test]
+    async fn serves_the_node_service_from_the_store() {
+        use alloy::primitives::{Address, U256};
+        use espresso_types::{
+            AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap, SeqTypes,
+            traits::MembershipPersistence,
+            v0_3::{RegisteredValidator, RewardAmount},
+        };
+        use hotshot_types::{
+            PeerConfig, data::EpochNumber, light_client::StateKeyPair,
+            traits::signature_key::SignatureKey,
+        };
+
+        let (store, url) = serve().await;
+        // Heights 0 to 2 in full, none at 3, and 4 without its payload and VID common data.
+        for (height, timestamp) in [(0, 100), (1, 110), (2, 120)] {
+            let (item, parts) = block_at(height, timestamp, &transactions()).await;
+            store.put(&item, &parts).await.unwrap();
+        }
+        let (item, _) = block_at(4, 140, &transactions()).await;
+        store.put(&item, &Parts::default()).await.unwrap();
+        let node = format!("{url}/v2/node");
+
+        let (status, body) = get(&format!("{node}/sync-status")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["leaves"]["missing"], Value::from("1"));
+        assert_eq!(body["blocks"]["missing"], Value::from("2"));
+        assert_eq!(body["vidCommon"]["missing"], Value::from("2"));
+
+        let (status, body) = get(&format!("{node}/header-window?start_height=0&end=115")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["window"].as_array().unwrap().len(), 2);
+        assert!(body.get("prev").is_none(), "{body}");
+        assert!(body.get("next").is_some(), "{body}");
+        let (status, body) = get(&format!("{node}/header-window?start_time=105&end=118")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["window"].as_array().unwrap().len(), 1);
+        assert!(body.get("prev").is_some(), "{body}");
+        assert!(body.get("next").is_some(), "{body}");
+
+        let (status, body) = get(&format!("{node}/limits")).await;
+        assert_eq!((status, &body["windowLimit"]), (200, &Value::from("500")));
+
+        let committee: Vec<PeerConfig<SeqTypes>> = (0..4)
+            .map(|i| PeerConfig {
+                stake_table_entry: PubKey::generated_from_seed_indexed([0; 32], i)
+                    .0
+                    .stake_table_entry(U256::from(100)),
+                state_ver_key: StateKeyPair::generate_from_seed_indexed([0; 32], i).ver_key(),
+                connect_info: None,
+            })
+            .collect();
+        let epoch = EpochNumber::new(1);
+        Tables::new(store.clone())
+            .put_stake_table(epoch, &committee)
+            .await
+            .unwrap();
+        for query in ["?epoch=1", ""] {
+            let (status, body) = get(&format!("{node}/stake-table{query}")).await;
+            assert_eq!(status, 200, "{query}: {body}");
+            assert_eq!(body["epoch"], Value::from("1"), "{query}");
+            assert_eq!(body["stakeTable"].as_array().unwrap().len(), 4);
+        }
+
+        let validator = RegisteredValidator::<PubKey>::mock();
+        let account: Address = validator.account;
+        let eligible: AuthenticatedValidatorMap =
+            [(account, validator.clone().try_into().unwrap())]
+                .into_iter()
+                .collect();
+        let registered: RegisteredValidatorMap = [(account, validator)].into_iter().collect();
+        let membership = MembershipStore::new(store.clone());
+        membership
+            .store_stake(epoch, eligible, Some(RewardAmount(U256::from(5))), None)
+            .await
+            .unwrap();
+        membership
+            .store_all_validators(epoch, registered)
+            .await
+            .unwrap();
+        let (status, body) = get(&format!("{node}/validators?epoch=1")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["validators"].as_array().unwrap().len(), 1);
+        let (status, _) = get(&format!("{node}/validators?epoch=2")).await;
+        assert_eq!(status, 404);
+        let (status, body) = get(&format!("{node}/all-validators?epoch=1&offset=0&limit=10")).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["validators"].as_array().unwrap().len(), 1);
+        let (status, _) = get(&format!(
+            "{node}/all-validators?epoch=1&offset=0&limit=1001"
+        ))
+        .await;
+        assert_eq!(status, 400);
+        let (status, body) = get(&format!("{node}/block-reward?epoch=1")).await;
+        assert_eq!((status, &body["amount"]), (200, &Value::from("5")));
+        let (status, body) = get(&format!("{node}/block-reward?epoch=2")).await;
+        assert_eq!(status, 200);
+        assert!(body.get("amount").is_none(), "{body}");
+    }
+
+    /// The state certificate of an epoch is served from the store's part at the epoch's root, in
+    /// both versions.
+    #[tokio::test]
+    async fn serves_state_certificates_by_epoch() {
+        use hotshot_types::{
+            data::EpochNumber, light_client::StateVerKey,
+            simple_certificate::LightClientStateUpdateCertificateV2, utils::root_block_in_epoch,
+        };
+
+        let (store, url) = serve().await;
+        let epoch = 2;
+        let cert = LightClientStateUpdateCertificateV2::<espresso_types::SeqTypes> {
+            epoch: EpochNumber::new(epoch),
+            light_client_state: Default::default(),
+            next_stake_table_state: Default::default(),
+            signatures: Vec::<(StateVerKey, _, _)>::new(),
+            auth_root: Default::default(),
+        };
+        // The service is built with 10 blocks an epoch.
+        let parts = Parts {
+            state_cert: Some(cert),
+            ..Default::default()
+        };
+        store
+            .put_parts(root_block_in_epoch(epoch, 10), &parts)
+            .await
+            .unwrap();
+
+        for path in ["state-cert", "state-cert-v2"] {
+            let (status, body) = get(&format!("{url}/v2/availability/{path}?epoch={epoch}")).await;
+            assert_eq!(status, 200, "{path}: {body}");
+            let (status, _) = get(&format!("{url}/v2/availability/{path}?epoch=3")).await;
+            assert_eq!(status, 404, "{path}");
+        }
     }
 }

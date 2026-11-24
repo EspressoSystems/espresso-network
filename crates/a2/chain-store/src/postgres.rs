@@ -3,7 +3,10 @@
 //! Each write commits with a `NOTIFY`, and every backend `LISTEN`s, so a write by any process
 //! reaches the [`changes`](Backend::changes) of all of them.
 
-use std::{ops::Range, time::Duration};
+use std::{
+    ops::{Range, RangeInclusive},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -13,7 +16,7 @@ use sqlx::{
 };
 use tokio::{sync::watch, task::JoinSet};
 
-use crate::{AppWrite, Backend, Column, KeyBounds, Part, Row, TableName};
+use crate::{AppWrite, Backend, Column, KeyBounds, Part, PayloadIndex, Row, TableName, Totals};
 
 /// The channel writes are announced on.
 const CHANNEL: &str = "chain_store";
@@ -38,6 +41,21 @@ CREATE TABLE IF NOT EXISTS chain_parts (
     data   BYTEA NOT NULL,
     PRIMARY KEY (height, part)
 );
+CREATE TABLE IF NOT EXISTS chain_transactions (
+    hash     TEXT NOT NULL,
+    height   BIGINT NOT NULL,
+    position BIGINT NOT NULL,
+    PRIMARY KEY (hash, height, position)
+);
+CREATE INDEX IF NOT EXISTS chain_transactions_height ON chain_transactions (height);
+CREATE TABLE IF NOT EXISTS chain_totals (
+    height       BIGINT NOT NULL,
+    namespace    BIGINT NOT NULL,
+    transactions BIGINT NOT NULL,
+    bytes        BIGINT NOT NULL,
+    PRIMARY KEY (namespace, height)
+);
+CREATE INDEX IF NOT EXISTS chain_totals_height ON chain_totals (height);
 CREATE TABLE IF NOT EXISTS chain_floor (
     id     BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
     height BIGINT NOT NULL
@@ -129,18 +147,76 @@ async fn lock_floor(tx: &mut Transaction<'_, Postgres>) -> anyhow::Result<u64> {
     Ok(height as u64)
 }
 
+/// The `chain_totals` namespace of a payload's totals across all its namespaces.
+const ALL_NAMESPACES: i64 = -1;
+
+/// Writes `part` of `height`. The index of a payload goes to the tables its queries read.
 async fn insert_part(
     tx: &mut Transaction<'_, Postgres>,
     height: u64,
     part: Part,
     data: &[u8],
 ) -> anyhow::Result<()> {
+    if part == Part::Index {
+        return insert_index(tx, height, &crate::decode(data)?).await;
+    }
     sqlx::query(
         "INSERT INTO chain_parts (height, part, data) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
     )
     .bind(height as i64)
     .bind(part.id())
     .bind(data)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Writes the rows of `index`, the index of the payload of `height`, unless the height has them.
+async fn insert_index(
+    tx: &mut Transaction<'_, Postgres>,
+    height: u64,
+    index: &PayloadIndex,
+) -> anyhow::Result<()> {
+    let indexed: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM chain_totals WHERE namespace = $1 AND height = $2")
+            .bind(ALL_NAMESPACES)
+            .bind(height as i64)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if indexed.is_some() {
+        return Ok(());
+    }
+    let positions: Vec<i64> = (0..index.transactions.len() as i64).collect();
+    sqlx::query(
+        "INSERT INTO chain_transactions (hash, height, position)
+         SELECT hash, $2, position FROM UNNEST($1::TEXT[], $3::BIGINT[]) AS t (hash, position)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(&index.transactions)
+    .bind(height as i64)
+    .bind(&positions)
+    .execute(&mut **tx)
+    .await?;
+    let totals = std::iter::once((ALL_NAMESPACES, index.total)).chain(
+        index
+            .namespaces
+            .iter()
+            .map(|(namespace, totals)| (i64::from(*namespace), *totals)),
+    );
+    let (namespaces, totals): (Vec<i64>, Vec<Totals>) = totals.unzip();
+    let transactions: Vec<i64> = totals.iter().map(|t| t.transactions as i64).collect();
+    let bytes: Vec<i64> = totals.iter().map(|t| t.bytes as i64).collect();
+    sqlx::query(
+        "INSERT INTO chain_totals (height, namespace, transactions, bytes)
+         SELECT $1, namespace, transactions, bytes
+           FROM UNNEST($2::BIGINT[], $3::BIGINT[], $4::BIGINT[])
+             AS t (namespace, transactions, bytes)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(height as i64)
+    .bind(&namespaces)
+    .bind(&transactions)
+    .bind(&bytes)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -326,6 +402,38 @@ impl Backend for PostgresBackend {
         Ok(heights.into_iter().map(|h| h as u64).collect())
     }
 
+    async fn transaction_position(&self, hash: &str) -> anyhow::Result<Option<(u64, u64)>> {
+        let position: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT height, position FROM chain_transactions
+             WHERE hash = $1 ORDER BY height, position LIMIT 1",
+        )
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(position.map(|(height, position)| (height as u64, position as u64)))
+    }
+
+    async fn totals(
+        &self,
+        heights: RangeInclusive<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<Totals> {
+        let (transactions, bytes): (i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(transactions), 0)::BIGINT, COALESCE(SUM(bytes), 0)::BIGINT
+               FROM chain_totals
+              WHERE namespace = $1 AND height >= $2 AND height <= $3",
+        )
+        .bind(namespace.map_or(ALL_NAMESPACES, i64::from))
+        .bind(i64::try_from(*heights.start()).unwrap_or(i64::MAX))
+        .bind(i64::try_from(*heights.end()).unwrap_or(i64::MAX))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(Totals {
+            transactions: transactions as u64,
+            bytes: bytes as u64,
+        })
+    }
+
     async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
         let value: Option<Vec<u8>> =
             sqlx::query_scalar("SELECT value FROM chain_app WHERE tbl = $1 AND key = $2")
@@ -405,7 +513,12 @@ impl Backend for PostgresBackend {
         .bind(height as i64)
         .fetch_one(&mut *tx)
         .await?;
-        for table in ["chain_items", "chain_parts"] {
+        for table in [
+            "chain_items",
+            "chain_parts",
+            "chain_transactions",
+            "chain_totals",
+        ] {
             sqlx::query(&format!("DELETE FROM {table} WHERE height < $1"))
                 .bind(floor)
                 .execute(&mut *tx)

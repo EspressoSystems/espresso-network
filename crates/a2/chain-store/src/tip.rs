@@ -323,6 +323,18 @@ mod tests {
             self.inner.missing_parts(part, from, limit).await
         }
 
+        async fn transaction_position(&self, hash: &str) -> anyhow::Result<Option<(u64, u64)>> {
+            self.inner.transaction_position(hash).await
+        }
+
+        async fn totals(
+            &self,
+            heights: std::ops::RangeInclusive<u64>,
+            namespace: Option<u32>,
+        ) -> anyhow::Result<crate::Totals> {
+            self.inner.totals(heights, namespace).await
+        }
+
         async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>> {
             self.inner.app_get(table, key).await
         }

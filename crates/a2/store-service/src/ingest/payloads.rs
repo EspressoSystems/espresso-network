@@ -1,6 +1,6 @@
 //! The payloads consensus offers before their blocks are decided: this instance takes its share,
 //! makes each durable in the store by its commitment, and acknowledges it, which lets consensus
-//! vote on the block.
+//! vote on the block, then indexes its transactions.
 //!
 //! The payloads come over the consensus API, or, for an instance in the consensus node's own
 //! process, straight from its payload queue, which shares each payload with consensus rather than
@@ -59,6 +59,9 @@ pub async fn run_local(queue: PayloadQueue, store: &ChainStore) -> anyhow::Error
 
 /// Takes payloads until `source` ends or fails. A payload taken and not acknowledged goes to
 /// another subscription, or to this one after it subscribes again.
+///
+/// Each payload is indexed after it is acknowledged, beside taking the next ones, since consensus
+/// waits for the acknowledgement and not for the index.
 async fn take(source: &mut dyn Source, store: &ChainStore) -> anyhow::Result<()> {
     while let Some(offer) = source.next().await? {
         let ns_table = NsTable::from_bytes_unchecked(&offer.ns_table);
@@ -66,6 +69,15 @@ async fn take(source: &mut dyn Source, store: &ChainStore) -> anyhow::Result<()>
             .put_payload(&offer.commitment, offer.payload.clone(), Some(&ns_table))
             .await?;
         source.ack(&offer).await?;
+        let store = store.clone();
+        tokio::spawn(async move {
+            let indexed = store
+                .index_payload(&offer.commitment, offer.payload.clone(), ns_table)
+                .await;
+            if let Err(err) = indexed {
+                tracing::warn!(commitment = %offer.commitment, "indexing a payload failed: {err:#}");
+            }
+        });
     }
     Ok(())
 }

@@ -72,6 +72,10 @@ pub struct ApiCatchup {
     /// channel that connects on first use, so that their requests share a connection.
     known: Vec<(Url, Channel)>,
 
+    /// The channel to the node's own API service, whose store the node's storage instances write
+    /// to, if its URL is usable.
+    own: Option<Channel>,
+
     /// The consensus store, whose records name the other validators' API services.
     store: NodeStore,
 
@@ -90,7 +94,7 @@ impl std::fmt::Debug for ApiCatchup {
 impl ApiCatchup {
     pub fn new(own: Url, bootstrap: Vec<Url>, store: NodeStore) -> Self {
         let mut known: Vec<(Url, Channel)> = Vec::new();
-        for url in std::iter::once(own).chain(bootstrap) {
+        for url in std::iter::once(own.clone()).chain(bootstrap) {
             if known.iter().any(|(known, _)| *known == url) {
                 continue;
             }
@@ -99,8 +103,13 @@ impl ApiCatchup {
                 Err(err) => tracing::warn!(%url, "cannot catch up from it: {err:#}"),
             }
         }
+        let own = known
+            .first()
+            .filter(|(url, _)| *url == own)
+            .map(|(_, channel)| channel.clone());
         Self {
             known,
+            own,
             store,
             backoff: BackoffParams::default(),
         }
@@ -350,6 +359,25 @@ impl PayloadSource for ApiCatchup {
             }
         }
         Ok(None)
+    }
+
+    /// Asks the node's own API service, which answers from the store the node's storage instances
+    /// write to.
+    async fn held(&self, commitment: VidCommitment2) -> anyhow::Result<bool> {
+        let own = self
+            .own
+            .clone()
+            .context("the node's own API service is unusable")?;
+        let request = PayloadRequest {
+            commitment: VidCommitment::V2(commitment).to_string(),
+        };
+        let answer = timeout(
+            REQUEST_TIMEOUT,
+            CatchupServiceClient::new(own).has_payload(request),
+        )
+        .await
+        .context("no answer in time")??;
+        Ok(answer.into_inner().held)
     }
 }
 

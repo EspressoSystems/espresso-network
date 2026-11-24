@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use consensus_store::Bytes;
@@ -26,6 +30,11 @@ pub trait PayloadSource: Send + Sync {
     /// The payload with VID commitment `commitment`, as consensus encodes payloads, if a store has
     /// it. It is checked against the commitment, so a source need not be trusted.
     async fn payload(&self, commitment: VidCommitment2) -> anyhow::Result<Option<Bytes>>;
+
+    /// Whether the node's own deployment's store holds the payload with VID commitment
+    /// `commitment` durably, as it holds every payload a storage instance acknowledged, whether
+    /// or not it can serve it yet.
+    async fn held(&self, commitment: VidCommitment2) -> anyhow::Result<bool>;
 }
 
 /// How long to wait before asking the source again for a payload it did not have. A fresh payload
@@ -73,6 +82,38 @@ impl<T: NodeType> Fetcher<T> {
                 Err(_) => {},
             }
         }
+    }
+
+    /// Asks the source whether the node's own deployment's store holds each of `payloads`, by
+    /// the view their block was proposed in and their commitment, until it answers for all of
+    /// them, and yields those it does not hold. `None` without a source.
+    pub fn unheld(
+        &self,
+        payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
+    ) -> Option<impl Future<Output = BTreeSet<(ViewNumber, VidCommitment2)>> + Send + 'static> {
+        let Some(source) = self.source.clone() else {
+            warn!("no source to ask whether the store holds the payloads of restored locks");
+            return None;
+        };
+        Some(async move {
+            let mut unheld = BTreeSet::new();
+            for (view, commitment) in payloads {
+                loop {
+                    match source.held(commitment).await {
+                        Ok(true) => break,
+                        Ok(false) => {
+                            unheld.insert((view, commitment));
+                            break;
+                        },
+                        Err(err) => {
+                            warn!(%view, "asking whether the store holds a payload failed: {err:#}")
+                        },
+                    }
+                    tokio::time::sleep(RETRY_DELAY).await;
+                }
+            }
+            unheld
+        })
     }
 
     /// Asks the source for the payload with commitment `commitment` of the block proposed in
@@ -299,6 +340,10 @@ mod tests {
             let asked = self.asked.fetch_add(1, Ordering::Relaxed);
             let (held, data) = &self.payload;
             Ok((asked >= self.misses && *held == commitment).then(|| Bytes::from(data.clone())))
+        }
+
+        async fn held(&self, commitment: VidCommitment2) -> anyhow::Result<bool> {
+            Ok(self.payload.0 == commitment)
         }
     }
 

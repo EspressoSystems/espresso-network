@@ -283,7 +283,7 @@ mod tests {
         }
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap());
+        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap(), 10);
         tokio::spawn(service.serve(listener));
         url.parse().unwrap()
     }

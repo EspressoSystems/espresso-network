@@ -827,7 +827,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap())
             .parse()
             .unwrap();
-        let service = crate::ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap())
+        let service = crate::ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap(), 10)
             .with_catchup(crate::catchup::Catchup::new(store.clone(), 10));
         tokio::spawn(service.serve(listener));
         url

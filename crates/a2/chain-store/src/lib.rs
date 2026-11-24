@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use committable::{Commitment, Committable};
 use espresso_types::{Header, Leaf2, NsTable, Payload, SeqTypes};
+use hotshot_query_service_types::availability::QueryablePayload;
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
     simple_certificate::{Certificate1, Certificate2, LightClientStateUpdateCertificateV2},
@@ -47,7 +48,7 @@ pub mod tip;
 pub mod wire;
 
 pub use app_tables::{AppTables, AppWrite, TableName};
-pub use backend::{Backend, Column, KeyBounds, Part, Row, TipUpdate};
+pub use backend::{Backend, Column, KeyBounds, Part, PayloadIndex, Row, TipUpdate, Totals};
 
 /// The store's record of one block height.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,10 @@ pub struct Parts {
     /// The BLAKE3 hash and size of the payload, which the store computes when the payload is
     /// written, so that readers need not read the payload to describe it.
     pub payload_info: Option<PayloadInfo>,
+
+    /// What the transaction index and the counts take from the payload, which the store computes
+    /// with its info. Written only: the store answers from the index, not from this part.
+    pub payload_index: Option<PayloadIndex>,
 
     pub vid_common: Option<VidCommon>,
 
@@ -123,9 +128,46 @@ impl PayloadInfo {
     }
 }
 
+impl PayloadIndex {
+    /// The index of `payload`, whose namespace table is `ns_table`, counted as main's query
+    /// service counts: a namespace's bytes are its range of the payload, and a namespace is listed
+    /// once it has a transaction.
+    pub fn of(payload: &[u8], ns_table: &NsTable) -> Self {
+        let decoded = Payload::from_bytes(payload, ns_table);
+        let byte_len = decoded.byte_len();
+        let mut index = Self {
+            total: Totals {
+                transactions: 0,
+                bytes: payload.len() as u64,
+            },
+            ..Self::default()
+        };
+        for (position, transaction) in QueryablePayload::<SeqTypes>::enumerate(&decoded, ns_table) {
+            index.transactions.push(transaction.commit().to_string());
+            index.total.transactions += 1;
+            let namespace = u32::from(transaction.namespace());
+            match index.namespaces.iter_mut().find(|(id, _)| *id == namespace) {
+                Some((_, totals)) => totals.transactions += 1,
+                None => {
+                    let range = ns_table.ns_range(&position.ns_index, &byte_len);
+                    let bytes = range.as_block_range().len() as u64;
+                    index.namespaces.push((
+                        namespace,
+                        Totals {
+                            transactions: 1,
+                            bytes,
+                        },
+                    ));
+                },
+            }
+        }
+        index
+    }
+}
+
 impl Parts {
-    /// The parts to write, of a block whose header is `header`, if known. The info of a payload
-    /// is computed here, so every writer stores it.
+    /// The parts to write, of a block whose header is `header`, if known. The info and the index
+    /// of a payload are computed here, so every writer stores them.
     fn encode(&self, header: Option<&Header>) -> anyhow::Result<Vec<(Part, Bytes)>> {
         let mut parts = Vec::new();
         if let Some(payload) = &self.payload {
@@ -138,6 +180,16 @@ impl Parts {
         };
         if let Some(info) = info {
             parts.push((Part::PayloadInfo, encode(&info)?));
+        }
+        let index = match (&self.payload, &self.payload_index, header) {
+            (_, Some(index), _) => Some(index.clone()),
+            (Some(payload), None, Some(header)) => {
+                Some(PayloadIndex::of(payload, header.metadata()))
+            },
+            _ => None,
+        };
+        if let Some(index) = index {
+            parts.push((Part::Index, encode(&index)?));
         }
         if let Some(common) = &self.vid_common {
             parts.push((Part::VidCommon, encode(common)?));
@@ -168,6 +220,7 @@ impl Parts {
                 Part::CertsKnown => decoded.certs_known = true,
                 Part::PayloadInfo => decoded.payload_info = Some(decode(bytes)?),
                 Part::PayloadStored => decoded.payload_stored = true,
+                Part::Index => decoded.payload_index = Some(decode(bytes)?),
             }
         }
         Ok(decoded)
@@ -345,6 +398,30 @@ impl ChainStore {
         Ok(info)
     }
 
+    /// Indexes the transactions of `payload`, stored under `commitment` by
+    /// [`Self::put_payload`], whose namespace table is `ns_table`. Apart from storing the
+    /// payload, since a writer reports a payload durable without waiting for its index, which
+    /// takes a hash of every transaction.
+    pub async fn index_payload(
+        &self,
+        commitment: &str,
+        payload: Bytes,
+        ns_table: NsTable,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.payloads.is_some(),
+            "this store keeps no payloads by commitment"
+        );
+        let index =
+            tokio::task::spawn_blocking(move || PayloadIndex::of(&payload, &ns_table)).await?;
+        payloads::put_index(self.backend.as_ref(), commitment, &index).await?;
+        // A block with the payload may be stored already, without the index; see `put`.
+        if let Some(height) = self.backend.height_of(Column::Payload, commitment).await? {
+            self.describe_payload(height, commitment).await?;
+        }
+        Ok(())
+    }
+
     /// `parts` of the block at `height`, whose header is `header`, as the backend keeps them: for a
     /// store whose payloads live in the object store, a payload goes there, and the parts carry
     /// what the payload's record says of it.
@@ -355,7 +432,10 @@ impl ChainStore {
         let commitment = header.payload_commitment().to_string();
         let record = match &parts.payload {
             Some(payload) => {
-                self.put_payload(&commitment, payload.clone(), Some(header.metadata()))
+                let ns_table = header.metadata();
+                self.put_payload(&commitment, payload.clone(), Some(ns_table))
+                    .await?;
+                self.index_payload(&commitment, payload.clone(), ns_table.clone())
                     .await?;
                 payloads::record(self.backend.as_ref(), &commitment).await?
             },
@@ -369,6 +449,9 @@ impl ChainStore {
             kept.payload_info = kept.payload_info.or(Some(record.info));
             kept.payload_stored |= record.uploaded;
         }
+        if kept.payload_index.is_none() {
+            kept.payload_index = payloads::index(self.backend.as_ref(), &commitment).await?;
+        }
         Ok(kept)
     }
 
@@ -380,25 +463,33 @@ impl ChainStore {
         self.backend
             .put(row(item)?, kept.encode(Some(header))?)
             .await?;
-        // A payload whose record was written after this item read it, but before the item was
-        // stored, would leave the item without its payload's info for good: the writer of the
-        // record looked for the item too early. Looking again after the write closes that gap.
-        if self.payloads.is_some() && kept.payload_info.is_none() {
+        // A payload whose record or index was written after this item read it, but before the
+        // item was stored, would leave the item without its payload's info or index for good:
+        // the writer looked for the item too early. Looking again after the write closes that
+        // gap.
+        if self.payloads.is_some() && (kept.payload_info.is_none() || kept.payload_index.is_none())
+        {
             let commitment = header.payload_commitment().to_string();
             self.describe_payload(item.height(), &commitment).await?;
         }
         Ok(())
     }
 
-    /// Gives the stored height `height` its payload's info, and whether it is uploaded, from the
-    /// record under `commitment`, if both are there.
+    /// Gives the stored height `height` its payload's info, whether it is uploaded, and its index,
+    /// from what the store holds under `commitment`.
     async fn describe_payload(&self, height: u64, commitment: &str) -> anyhow::Result<()> {
-        let Some(record) = payloads::record(self.backend.as_ref(), commitment).await? else {
+        let mut parts = Vec::new();
+        if let Some(record) = payloads::record(self.backend.as_ref(), commitment).await? {
+            parts.push((Part::PayloadInfo, encode(&record.info)?));
+            if record.uploaded {
+                parts.push((Part::PayloadStored, Bytes::new()));
+            }
+        }
+        if let Some(index) = payloads::index(self.backend.as_ref(), commitment).await? {
+            parts.push((Part::Index, encode(&index)?));
+        }
+        if parts.is_empty() {
             return Ok(());
-        };
-        let mut parts = vec![(Part::PayloadInfo, encode(&record.info)?)];
-        if record.uploaded {
-            parts.push((Part::PayloadStored, Bytes::new()));
         }
         self.backend.put_parts(height, parts).await
     }
@@ -503,6 +594,15 @@ impl ChainStore {
             Some(payloads) => payloads.has(commitment).await,
             None => Ok(false),
         }
+    }
+
+    /// Whether the store holds the payload whose VID commitment is `commitment` durably, uploaded
+    /// or still staged: what a writer reports once [`Self::put_payload`] returns, before
+    /// [`Self::payload_by_commitment`] can read it.
+    pub async fn holds_payload(&self, commitment: &str) -> anyhow::Result<bool> {
+        Ok(payloads::record(self.backend.as_ref(), commitment)
+            .await?
+            .is_some())
     }
 
     pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {
@@ -618,6 +718,25 @@ impl ChainStore {
             }
         }
         Ok(missing)
+    }
+
+    /// The height and position in its block of the transaction with hash `hash`, the earliest if
+    /// several blocks hold it.
+    pub async fn transaction_position(
+        &self,
+        hash: &Commitment<espresso_types::Transaction>,
+    ) -> anyhow::Result<Option<(u64, u64)>> {
+        self.backend.transaction_position(&hash.to_string()).await
+    }
+
+    /// The transactions and payload bytes of the stored heights in `heights`, of `namespace` only
+    /// if given.
+    pub async fn totals(
+        &self,
+        heights: std::ops::RangeInclusive<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<Totals> {
+        self.backend.totals(heights, namespace).await
     }
 
     /// The value of `key` in the application table `table`.

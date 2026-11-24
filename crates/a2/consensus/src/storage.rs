@@ -5,7 +5,13 @@
 //! its fsync. Each write names the [`StorageOutput`] that reports it durable, which consensus
 //! waits on before sending the messages that depend on it.
 
-use std::{collections::BTreeMap, marker::PhantomData, mem, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
+    mem,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
 use app_tables::AppWrite;
@@ -82,6 +88,10 @@ pub enum StorageOutput<T: NodeType> {
     /// A storage instance acknowledged the payload of the block with this commitment, proposed in
     /// this view, as durable.
     Payload(ViewNumber, VidCommitment2),
+    /// The deployment's store does not hold these payloads of the blocks of restored locks, by
+    /// the view each block was proposed in and its commitment (see
+    /// [`Consensus::restored_lock_payloads`](crate::consensus::Consensus::restored_lock_payloads)).
+    Unheld(BTreeSet<(ViewNumber, VidCommitment2)>),
 }
 
 impl<T: NodeType> StorageOutput<T> {
@@ -89,6 +99,9 @@ impl<T: NodeType> StorageOutput<T> {
         match self {
             Self::Proposal(view, _) | Self::Action(view, _) | Self::Payload(view, _) => *view,
             Self::HighQc(lock) => lock.view,
+            Self::Unheld(unheld) => unheld
+                .last()
+                .map_or_else(ViewNumber::genesis, |(view, _)| *view),
         }
     }
 }
@@ -230,12 +243,11 @@ pub struct Storage<T: NodeType, S> {
     metrics: Option<StorageMetrics>,
 }
 
-/// The latest of each value the store may only raise: the lock, the boundary certificate, the
-/// acted and restart views, and the height of the anchor. The writer compares against them
+/// The latest of each value the store may only raise: the boundary certificate, the acted and
+/// restart views, and the height of the anchor. The writer compares against them
 /// before it queues a write, so a value is never lowered.
 #[derive(Clone, Copy, Debug, Default)]
 struct Marks {
-    locked: Option<LockView>,
     boundary: Option<LockView>,
     acted: Option<ViewNumber>,
     restart: Option<ViewNumber>,
@@ -246,7 +258,6 @@ impl Marks {
     /// The values a restarted node finds in its store.
     fn of<T: NodeType>(restored: &Restored<T>) -> Self {
         Self {
-            locked: restored.locked_qc.as_ref().map(LockView::of),
             boundary: restored.boundary_qc.as_ref().map(LockView::of),
             acted: restored.acted_view,
             restart: restored.restart_view,
@@ -512,16 +523,14 @@ impl<T: NodeType, S: Store> Storage<T, S> {
         }
     }
 
-    /// Persists the locked QC; once durable, emits [`StorageOutput::HighQc`], which gates the
-    /// matching phase-2 vote.
+    /// Adds a lock to the stored ones; once durable, emits [`StorageOutput::HighQc`], which gates
+    /// the matching phase-2 vote.
+    ///
+    /// Every lock is stored, an earlier one than a stored lock too: a restarted node can give up
+    /// a lock whose payload no store holds, and then locks earlier ones again.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
         let lock = LockView::of(&high_qc);
-        // An earlier lock leaves the stored one, and is durable as soon as that is.
-        let written = match self.marks.locked < Some(lock) {
-            true => store::put_locked_qc(&mut self.pending.batch, &high_qc)
-                .inspect(|()| self.marks.locked = Some(lock)),
-            false => Ok(()),
-        };
+        let written = store::put_lock(&mut self.pending.batch, &high_qc);
         self.queued(written, StorageOutput::HighQc(lock), |m| &m.append_high_qc);
     }
 

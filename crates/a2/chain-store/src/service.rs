@@ -200,6 +200,37 @@ impl proto::store_server::Store for StoreService {
         Ok(Response::new(proto::HeightsResponse { heights }))
     }
 
+    async fn transaction_position(
+        &self,
+        request: Request<proto::TransactionPositionRequest>,
+    ) -> Result<Response<proto::MaybePosition>, Status> {
+        let position = self
+            .backend
+            .transaction_position(&request.into_inner().hash)
+            .await
+            .map_err(internal)?;
+        Ok(Response::new(proto::MaybePosition {
+            height: position.map(|(height, _)| height),
+            position: position.map_or(0, |(_, position)| position),
+        }))
+    }
+
+    async fn totals(
+        &self,
+        request: Request<proto::TotalsRequest>,
+    ) -> Result<Response<proto::TotalsResponse>, Status> {
+        let r = request.into_inner();
+        let totals = self
+            .backend
+            .totals(r.from..=r.to, r.namespace)
+            .await
+            .map_err(internal)?;
+        Ok(Response::new(proto::TotalsResponse {
+            transactions: totals.transactions,
+            bytes: totals.bytes,
+        }))
+    }
+
     async fn app_get(
         &self,
         request: Request<proto::AppGetRequest>,

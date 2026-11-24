@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
         .context("loading the genesis file")?;
     let config = genesis.unstaked_network_config()?;
     let epoch_height = config.config.epoch_height;
-    let api = ApiService::new(store.clone(), options.consensus_api)
+    let api = ApiService::new(store.clone(), options.consensus_api, epoch_height)
         .with_compat(Compat::new(store.clone(), config))
         .with_catchup(Catchup::new(store.clone(), epoch_height));
     let repair = async {

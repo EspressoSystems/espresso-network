@@ -235,10 +235,11 @@ async fn test_payload_sink_survives_a_cancelled_next() {
     );
 }
 
-/// The lock only moves forward, and garbage collection never removes it or the boundary
-/// certificate: nothing else carries the boundary certificate once its view has passed.
+/// Every lock is kept, an earlier one than the latest too, until garbage collection passes its
+/// view, and the latest is restored as the lock. Garbage collection never removes the boundary
+/// certificate: nothing else carries it once its view has passed.
 #[tokio::test]
-async fn test_lock_is_monotonic_and_survives_gc() {
+async fn test_locks_are_kept_until_gc_and_the_boundary_survives_it() {
     let (mut storage, store) = test_storage();
     let epoch = EpochNumber::genesis();
     let membership = mock_membership().membership_for_epoch(epoch).unwrap();
@@ -265,14 +266,26 @@ async fn test_lock_is_monotonic_and_survives_gc() {
         StorageOutput::HighQc(LockView::of(&later))
     );
     storage.append_high_qc2(earlier.clone());
-    storage.gc(ViewNumber::new(15));
     assert_eq!(
         storage.next().await.expect("completion"),
         StorageOutput::HighQc(LockView::of(&earlier))
     );
-
     let restored = store.load().unwrap();
     assert_eq!(restored.locked_qc, Some(later.clone()));
+    assert_eq!(restored.earlier_locks, vec![earlier]);
+
+    storage.gc(ViewNumber::new(9));
+    storage.record_action(ViewNumber::new(12), ActionKind::Vote);
+    storage.next().await.expect("completion");
+    let restored = store.load().unwrap();
+    assert_eq!(restored.locked_qc, Some(later.clone()));
+    assert!(restored.earlier_locks.is_empty());
+
+    storage.gc(ViewNumber::new(15));
+    storage.record_action(ViewNumber::new(16), ActionKind::Vote);
+    storage.next().await.expect("completion");
+    let restored = store.load().unwrap();
+    assert_eq!(restored.locked_qc, None, "the anchor stands in for it");
     assert_eq!(restored.boundary_qc, Some(later));
 }
 
@@ -302,20 +315,15 @@ async fn test_restarted_writer_keeps_the_stored_marks() {
             .unwrap()
     };
     let later = cert_at(10);
-    storage.append_high_qc2(later.clone());
+    storage.append_boundary_qc2(later.clone());
     storage.record_action(ViewNumber::new(12), ActionKind::Vote);
-    next(&mut storage).await;
     next(&mut storage).await;
 
     let (mut restarted, _) = writer(&store);
-    restarted.append_high_qc2(cert_at(8));
+    restarted.append_boundary_qc2(cert_at(8));
     restarted.record_action(ViewNumber::new(11), ActionKind::Vote);
-    // Neither raises a stored value, so both are reported without a write.
+    // Neither raises a stored value, so the action is reported without a write.
     let commits = store.store().commits.load(Ordering::Relaxed);
-    assert_eq!(
-        next(&mut restarted).await,
-        StorageOutput::HighQc(LockView::of(&cert_at(8)))
-    );
     assert_eq!(
         next(&mut restarted).await,
         StorageOutput::Action(ViewNumber::new(11), ActionKind::Vote)
@@ -323,7 +331,7 @@ async fn test_restarted_writer_keeps_the_stored_marks() {
     assert_eq!(store.store().commits.load(Ordering::Relaxed), commits);
 
     let restored = store.load().unwrap();
-    assert_eq!(restored.locked_qc, Some(later));
+    assert_eq!(restored.boundary_qc, Some(later));
     assert_eq!(restored.acted_view, Some(ViewNumber::new(12)));
     assert_eq!(restored.restart_view, Some(ViewNumber::new(13)));
 }

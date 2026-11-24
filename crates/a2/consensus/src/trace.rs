@@ -983,6 +983,10 @@ fn write_json<T: NodeType>(write: &StorageOutput<T>) -> String {
         ),
         // The payload stands in for the share it determines.
         StorageOutput::Payload(view, _) => tagged("share", obj(&[("v", view_json(*view))])),
+        StorageOutput::Unheld(unheld) => {
+            let views: Vec<String> = unheld.iter().map(|(view, _)| view_json(*view)).collect();
+            tagged("unheld", obj(&[("vs", format!("[{}]", views.join(",")))]))
+        },
         StorageOutput::Action(view, kind) => {
             let kind = match kind {
                 ActionKind::Vote => "vote",

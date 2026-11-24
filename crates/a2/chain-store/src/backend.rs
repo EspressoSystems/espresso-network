@@ -1,4 +1,7 @@
-use std::{ops::Range, time::Duration};
+use std::{
+    ops::{Range, RangeInclusive},
+    time::Duration,
+};
 
 use app_tables::{AppWrite, TableName};
 use async_trait::async_trait;
@@ -47,6 +50,18 @@ pub trait Backend: Send + Sync + 'static {
 
     /// See [`ChainStore::missing_parts`](crate::ChainStore::missing_parts).
     async fn missing_parts(&self, part: Part, from: u64, limit: usize) -> anyhow::Result<Vec<u64>>;
+
+    /// The height and position in its block of the transaction with hash `hash`, from the
+    /// [`Part::Index`] of the heights stored; the earliest, if several blocks hold it.
+    async fn transaction_position(&self, hash: &str) -> anyhow::Result<Option<(u64, u64)>>;
+
+    /// The transactions and payload bytes of the heights in `heights`, of `namespace` only if
+    /// given, from the [`Part::Index`] of the heights stored.
+    async fn totals(
+        &self,
+        heights: RangeInclusive<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<Totals>;
 
     /// The value of `key` in the application table `table`.
     async fn app_get(&self, table: &TableName, key: &[u8]) -> anyhow::Result<Option<Bytes>>;
@@ -128,10 +143,15 @@ pub enum Part {
     /// An empty marker: the payload is in the store's object store, for a store that keeps its
     /// payloads there; see [`payloads`](crate::payloads).
     PayloadStored,
+
+    /// What the transaction index and the counts take from the payload, a [`PayloadIndex`],
+    /// written with its info. A backend keeps it in the form those queries need, so it is not
+    /// read back as a part.
+    Index,
 }
 
 impl Part {
-    pub const ALL: [Part; 7] = [
+    pub const ALL: [Part; 8] = [
         Self::Payload,
         Self::VidCommon,
         Self::Cert2,
@@ -139,6 +159,7 @@ impl Part {
         Self::CertsKnown,
         Self::PayloadInfo,
         Self::PayloadStored,
+        Self::Index,
     ];
 
     /// The number a backend stores the part under.
@@ -151,11 +172,41 @@ impl Part {
             Self::CertsKnown => 4,
             Self::PayloadInfo => 5,
             Self::PayloadStored => 6,
+            Self::Index => 7,
         }
     }
 
     pub fn from_id(id: i16) -> Option<Self> {
         Self::ALL.into_iter().find(|part| part.id() == id)
+    }
+}
+
+/// What the transaction index and the counts take from a payload: the hash of each of its
+/// transactions, in block order, and how many transactions and bytes each namespace and the whole
+/// payload hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PayloadIndex {
+    /// Each transaction's hash, as tagged base64, at its position in the block.
+    pub transactions: Vec<String>,
+
+    /// Each namespace with transactions, by id.
+    pub namespaces: Vec<(u32, Totals)>,
+
+    /// The whole payload.
+    pub total: Totals,
+}
+
+/// How many transactions, and how many payload bytes, some heights hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Totals {
+    pub transactions: u64,
+    pub bytes: u64,
+}
+
+impl std::ops::AddAssign for Totals {
+    fn add_assign(&mut self, other: Self) {
+        self.transactions += other.transactions;
+        self.bytes += other.bytes;
     }
 }
 

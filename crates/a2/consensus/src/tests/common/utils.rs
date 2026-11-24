@@ -766,11 +766,33 @@ pub fn acking_payload_sink() -> (
 }
 
 /// The payloads a node's storage instance acknowledged, by commitment, which a node keeps across
-/// its restarts as a deployment's store does.
-#[derive(Clone, Default)]
-pub struct TestPayloadStore(Arc<Mutex<HashMap<String, consensus_store::Bytes>>>);
+/// its restarts as a deployment's store does, and the view from which on it takes none.
+#[derive(Clone)]
+pub struct TestPayloadStore(
+    Arc<Mutex<HashMap<String, consensus_store::Bytes>>>,
+    Arc<std::sync::atomic::AtomicU64>,
+);
+
+impl Default for TestPayloadStore {
+    fn default() -> Self {
+        Self(
+            Arc::default(),
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+        )
+    }
+}
 
 impl TestPayloadStore {
+    /// Takes no payloads of blocks proposed in `view` or later, until [`Self::resume`], as a
+    /// store that is down would not.
+    pub fn withhold_from(&self, view: u64) {
+        self.1.store(view, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn resume(&self) {
+        self.withhold_from(u64::MAX);
+    }
+
     /// A payload sink whose payloads a task stores here and acknowledges as soon as they are
     /// offered.
     pub fn sink(
@@ -780,10 +802,13 @@ impl TestPayloadStore {
         consensus_api::payloads::Acks,
     ) {
         let (queue, acks) = consensus_api::payloads::PayloadQueue::new();
-        let (storing, payloads) = (queue.clone(), self.0.clone());
+        let (storing, payloads, withheld) = (queue.clone(), self.0.clone(), self.1.clone());
         tokio::spawn(async move {
             let mut subscription = storing.subscribe();
             while let Some(offer) = subscription.next().await {
+                if offer.view >= withheld.load(std::sync::atomic::Ordering::Relaxed) {
+                    continue;
+                }
                 payloads
                     .lock()
                     .insert(offer.commitment.clone(), offer.payload.clone());
@@ -809,6 +834,14 @@ impl crate::PayloadSource for TestPayloadSource {
             .0
             .iter()
             .find_map(|store| store.0.lock().get(&key).cloned()))
+    }
+
+    async fn held(&self, commitment: VidCommitment2) -> anyhow::Result<bool> {
+        let key = VidCommitment::V2(commitment).to_string();
+        Ok(self
+            .0
+            .first()
+            .is_some_and(|own| own.0.lock().contains_key(&key)))
     }
 }
 

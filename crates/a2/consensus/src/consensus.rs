@@ -275,12 +275,15 @@ pub struct Consensus<T: NodeType> {
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
     /// Highest locked QC confirmed persisted; gates release of phase-2 votes.
     stored_high_qc: Option<LockView>,
-    /// The newest lock taken on a block whose payload the store has not acknowledged yet, with
-    /// that block's view and payload commitment. It is persisted once the store acknowledges the
-    /// payload, so that a persisted lock is always on a block whose payload is in this node's
-    /// store: after every node restarts, leaders must build on the newest lock, and the votes on
-    /// its children need its payload.
-    lock_awaiting_payload: Option<(Certificate1<T>, ViewNumber, VidCommitment2)>,
+    /// The locks a restarted node found stored, the anchor's certificate first and the latest
+    /// last, until it learns which of their payloads its deployment's store holds.
+    ///
+    /// A lock is persisted before its block's payload is acknowledged, and a vote2 waits for
+    /// both. After every node restarts, the newest lock can be on a block whose payload no store
+    /// holds; leaders would have to build on it, and no vote1 on a child could be sent without
+    /// the parent's payload. Such a lock had no vote2 from this node, so it is given up, as if it
+    /// had never arrived (see [`Self::give_up_unheld_locks`]).
+    restored_locks: Vec<Certificate1<T>>,
 
     /// Messages constructed and accounted for in `voted_*_views` /
     /// `proposed_views`, awaiting their storage confirmations. A pending vote2
@@ -476,7 +479,7 @@ impl<T: NodeType> Consensus<T> {
             stored_actions: BTreeSet::new(),
             requested_actions: BTreeSet::new(),
             stored_high_qc: None,
-            lock_awaiting_payload: None,
+            restored_locks: Vec::new(),
             pending_vote1: BTreeMap::new(),
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
@@ -550,6 +553,7 @@ impl<T: NodeType> Consensus<T> {
         let anchor = self.last_decided_leaf.commit();
         self.hold_proposal_under(proposal, anchor);
         self.insert_cert1(cert1.clone());
+        self.restored_locks = vec![cert1.clone()];
         self.locked_cert = Some(cert1);
         for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
@@ -619,6 +623,7 @@ impl<T: NodeType> Consensus<T> {
         let lock = LockView::of(&cert1);
         self.bump_stored_high_qc(lock);
         self.insert_cert1(cert1.clone());
+        self.restore_lock(cert1.clone());
         if self
             .locked_cert
             .as_ref()
@@ -628,6 +633,97 @@ impl<T: NodeType> Consensus<T> {
             self.set_current_epoch_max(lock.epoch);
             self.locked_cert = Some(cert1);
         }
+    }
+
+    /// Seed the locks persisted on a prior run before the latest one, earliest first, after
+    /// [`Self::seed_parent`] and before [`Self::seed_locked_cert`]. A restarted node falls back
+    /// to one of them if it gives up the later ones (see [`Self::give_up_unheld_locks`]).
+    pub fn seed_earlier_locks(&mut self, locks: impl IntoIterator<Item = Certificate1<T>>) {
+        for lock in locks {
+            self.insert_cert1(lock.clone());
+            self.restore_lock(lock);
+        }
+    }
+
+    /// Adds `lock` to the restored locks, unless it is no later than the last of them, as a lock
+    /// before the anchor's certificate is.
+    fn restore_lock(&mut self, lock: Certificate1<T>) {
+        if self
+            .restored_locks
+            .last()
+            .is_none_or(|last| LockView::of(last) < LockView::of(&lock))
+        {
+            self.restored_locks.push(lock);
+        }
+    }
+
+    /// The payloads of the blocks of the locks restored after the anchor's certificate, by the
+    /// view each block was proposed in, which the node asks its deployment's store about when it
+    /// starts, to answer with [`StorageOutput::Unheld`].
+    pub fn restored_lock_payloads(&self) -> BTreeSet<(ViewNumber, VidCommitment2)> {
+        self.restored_locks
+            .iter()
+            .skip(1)
+            .filter_map(|lock| self.lock_payload(lock))
+            .collect()
+    }
+
+    /// The block a lock certifies, by the view it was proposed in and its payload commitment, if
+    /// this node holds its proposal.
+    fn lock_payload(&self, lock: &Certificate1<T>) -> Option<(ViewNumber, VidCommitment2)> {
+        let (view, proposal) = self.certified_proposal(
+            lock.view_number(),
+            lock.data.leaf_commit,
+            lock.data.block_number,
+        )?;
+        match proposal.block_header.payload_commitment() {
+            VidCommitment::V2(commitment) => Some((view, commitment)),
+            _ => None,
+        }
+    }
+
+    /// Gives up the latest restored locks whose payloads are `unheld` by the deployment's store,
+    /// and locks the latest restored one before them again, unless the node has locked since it
+    /// started.
+    ///
+    /// A vote2 waits until the lock is persisted and the store acknowledged the block's payload,
+    /// so this node voted no vote2 on a lock whose payload the store does not hold, unless the
+    /// acknowledgement came after it restarted. Giving such a lock up is what a crash before the
+    /// lock arrived would have left. The earlier lock is persisted already, so it gates a vote2
+    /// at once; a later lock taken again is persisted again first.
+    fn give_up_unheld_locks(
+        &mut self,
+        unheld: &BTreeSet<(ViewNumber, VidCommitment2)>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let restored = std::mem::take(&mut self.restored_locks);
+        if self.lock_view() != restored.last().map(LockView::of) {
+            return;
+        }
+        let unheld_payload = |lock: &Certificate1<T>| {
+            self.lock_payload(lock)
+                .is_some_and(|key| unheld.contains(&key) && !self.stored_payloads.contains(&key))
+        };
+        let kept = restored
+            .iter()
+            .skip(1)
+            .rposition(|lock| !unheld_payload(lock))
+            .map_or(1, |position| position + 2);
+        if kept == restored.len() {
+            return;
+        }
+        let lock = restored[kept - 1].clone();
+        let block_view = self
+            .lock_payload(&lock)
+            .map_or_else(|| lock.view_number(), |(view, _)| view);
+        warn!(
+            given_up = %restored[restored.len() - 1].view_number(),
+            lock = %lock.view_number(),
+            "giving up restored locks whose payloads the store does not hold"
+        );
+        self.stored_high_qc = Some(LockView::of(&lock));
+        self.locked_cert = Some(lock);
+        outbox.push_back(ConsensusOutput::LockUpdated(block_view));
     }
 
     /// Seed the boundary certificate persisted on a prior run (see
@@ -2808,15 +2904,12 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::ProposalCertified(proposal.clone()));
 
         // Locked on without the payload, which the commit shows a quorum had,
-        // so that a node new to the incoming committee can lock. The lock is
-        // persisted at once: the quorum's stores acknowledged the payload before
-        // their vote2s, so it can be fetched after any restart.
+        // so that a node new to the incoming committee can lock.
         if self
             .lock_view()
             .is_none_or(|lock| lock < LockView::of(&cert1))
         {
             self.locked_cert = Some(cert1.clone());
-            self.lock_awaiting_payload = None;
             outbox.push_back(ConsensusOutput::LockUpdated(block_view));
             outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
@@ -3462,14 +3555,6 @@ impl<T: NodeType> Consensus<T> {
             },
             StorageOutput::Payload(view, commitment) => {
                 self.stored_payloads.insert((view, commitment));
-                if self
-                    .lock_awaiting_payload
-                    .as_ref()
-                    .is_some_and(|(_, v, c)| (*v, *c) == (view, commitment))
-                {
-                    let (lock, ..) = self.lock_awaiting_payload.take().expect("checked above");
-                    outbox.push_back(ConsensusOutput::PersistHighQc(lock));
-                }
                 // A vote1 on a child, or a re-vote at a later view, can wait on this payload;
                 // re-check all.
                 let pending: Vec<ViewEpoch> = self.pending_vote1.keys().copied().collect();
@@ -3480,6 +3565,10 @@ impl<T: NodeType> Consensus<T> {
                 for key in pending {
                     self.release_vote2_at(key, outbox);
                 }
+                return;
+            },
+            StorageOutput::Unheld(unheld) => {
+                self.give_up_unheld_locks(&unheld, outbox);
                 return;
             },
             StorageOutput::HighQc(lock) => {
@@ -4022,17 +4111,8 @@ impl<T: NodeType> Consensus<T> {
                 ));
             }
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
-            // Persist the new lock, once its block's payload is in the store; `release_vote2`
-            // gates the phase-2 vote on it.
-            if self
-                .stored_payloads
-                .contains(&(block_view, proposal_block_commitment))
-            {
-                self.lock_awaiting_payload = None;
-                outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
-            } else {
-                self.lock_awaiting_payload = Some((cert1, block_view, proposal_block_commitment));
-            }
+            // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
+            outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
         // The block's own certificate, which opens the next epoch, also when the
         // lock is already a re-vote's later certificate over the block.

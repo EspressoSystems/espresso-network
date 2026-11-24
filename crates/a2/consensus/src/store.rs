@@ -24,6 +24,7 @@ use hotshot_types::{
     simple_certificate::{
         Certificate1, Certificate2, LightClientStateUpdateCertificateV2, UpgradeCertificate,
     },
+    simple_vote::LockView,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vid::avidm_gf2::AvidmGf2Common,
 };
@@ -37,6 +38,11 @@ static SAFETY: LazyLock<Table> = LazyLock::new(|| table("safety"));
 
 /// View to the proposal this node voted for or made.
 static PROPOSALS: LazyLock<Table> = LazyLock::new(|| table("proposals"));
+
+/// `(view, epoch)` of each lock this node took since the last decide, to the lock's
+/// `Certificate1`. A restarted node resumes from the latest of them whose block's payload is in its
+/// deployment's store, so every lock it may have voted vote2 on is kept.
+static LOCKS: LazyLock<Table> = LazyLock::new(|| table("locks"));
 
 /// Height to the decided leaf there, until the store acknowledges it.
 static DECIDE_LOG: LazyLock<Table> = LazyLock::new(|| table("decide-log"));
@@ -55,9 +61,6 @@ const ACTED_VIEW: &[u8] = b"acted-view";
 
 /// The view after the latest one this node voted in.
 const RESTART_VIEW: &[u8] = b"restart-view";
-
-/// This node's lock, the latest `Certificate1` it voted vote2 on.
-const LOCKED_QC: &[u8] = b"locked-qc";
 
 /// This node's `Certificate1` of the last block of an epoch.
 const BOUNDARY_QC: &[u8] = b"boundary-qc";
@@ -167,7 +170,13 @@ pub struct Anchor<T: NodeType> {
 #[derive(Debug)]
 pub struct Restored<T: NodeType> {
     pub proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
+
+    /// The latest lock.
     pub locked_qc: Option<Certificate1<T>>,
+
+    /// The locks before the latest one since the last decide, earliest first.
+    pub earlier_locks: Vec<Certificate1<T>>,
+
     pub boundary_qc: Option<Certificate1<T>>,
     pub acted_view: Option<ViewNumber>,
     pub restart_view: Option<ViewNumber>,
@@ -188,6 +197,7 @@ impl<T: NodeType> Default for Restored<T> {
         Self {
             proposals: BTreeMap::new(),
             locked_qc: None,
+            earlier_locks: Vec::new(),
             boundary_qc: None,
             acted_view: None,
             restart_view: None,
@@ -303,9 +313,16 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             .range(&SERVICE_RECORDS, &KeyRange::all())?
             .map(|entry| decode(&entry?.1).context("service record"))
             .collect::<anyhow::Result<_>>()?;
+        let mut earlier_locks = snap
+            .range(&LOCKS, &KeyRange::all())?
+            .map(|entry| decode(&entry?.1).context("lock"))
+            .collect::<anyhow::Result<Vec<Certificate1<T>>>>()?;
+        earlier_locks.sort_by_key(LockView::of);
+        let locked_qc = earlier_locks.pop();
         Ok(Restored {
             proposals,
-            locked_qc: get(&snap, &SAFETY, LOCKED_QC)?,
+            locked_qc,
+            earlier_locks,
             boundary_qc: get(&snap, &SAFETY, BOUNDARY_QC)?,
             acted_view: get_view(&snap, ACTED_VIEW)?,
             restart_view: get_view(&snap, RESTART_VIEW)?,
@@ -484,7 +501,7 @@ impl<T: NodeType, S: Store> ConsensusStore<T, S> {
             put_proposal(&mut batch, p)?;
         }
         if let Some(qc) = &import.locked_qc {
-            put_locked_qc(&mut batch, qc)?;
+            put_lock(&mut batch, qc)?;
         }
         if let Some(qc) = &import.boundary_qc {
             put_boundary_qc(&mut batch, qc)?;
@@ -575,12 +592,14 @@ pub(crate) fn put_pending_state_cert<T: NodeType>(
     Ok(())
 }
 
-/// Stores `qc` as the lock. The writer checks that it is later than the stored one.
-pub(crate) fn put_locked_qc<T: NodeType>(
-    batch: &mut Batch,
-    qc: &Certificate1<T>,
-) -> anyhow::Result<()> {
-    batch.put(&SAFETY, LOCKED_QC, encode(qc)?);
+/// Adds `qc` to the locks.
+pub(crate) fn put_lock<T: NodeType>(batch: &mut Batch, qc: &Certificate1<T>) -> anyhow::Result<()> {
+    let lock = LockView::of(qc);
+    batch.put(
+        &LOCKS,
+        key::u64_pair(*lock.view, *lock.epoch).to_vec(),
+        encode(qc)?,
+    );
     Ok(())
 }
 
@@ -684,10 +703,11 @@ pub(crate) fn put_anchor<T: NodeType>(batch: &mut Batch, anchor: &Anchor<T>) -> 
     Ok(())
 }
 
-/// Deletes the proposals of views before `view`.
+/// Deletes the proposals and locks of views before `view`, which is no later than the anchor's.
 pub(crate) fn collect_garbage(batch: &mut Batch, view: ViewNumber) {
     let before = || KeyRange::before(Bytes::copy_from_slice(&key::u64(*view)));
     batch.delete_range(&PROPOSALS, before());
+    batch.delete_range(&LOCKS, before());
 }
 
 /// Replaces the stored record of the record's signer in its epoch.
