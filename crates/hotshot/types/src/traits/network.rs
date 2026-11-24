@@ -137,13 +137,3 @@ pub enum ResponseMessage<TYPES: NodeType> {
     /// The Request was denied
     Denied,
 }
-
-/// Changes that can occur in the network
-#[derive(Debug)]
-pub enum NetworkChange<P: SignatureKey> {
-    /// A node is connected
-    NodeConnected(P),
-
-    /// A node is disconnected
-    NodeDisconnected(P),
-}

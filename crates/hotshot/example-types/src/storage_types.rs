@@ -17,8 +17,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare, ViewNumber,
+        DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
@@ -40,7 +40,6 @@ type VidShares<TYPES> = BTreeMap<
 #[derive(Clone, Debug)]
 pub struct TestStorageState<TYPES: NodeType> {
     vids: VidShares<TYPES>,
-    das: HashMap<ViewNumber, Proposal<TYPES, DaProposal<TYPES>>>,
     da2s: HashMap<ViewNumber, Proposal<TYPES, DaProposal2<TYPES>>>,
     pub proposals_wrapper: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc2: Option<QuorumCertificate2<TYPES>>,
@@ -63,7 +62,6 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
     fn default() -> Self {
         Self {
             vids: BTreeMap::new(),
-            das: HashMap::new(),
             da2s: HashMap::new(),
             proposals_wrapper: BTreeMap::new(),
             high_qc2: None,
@@ -259,22 +257,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             .entry(proposal.data.view_number())
             .or_default()
             .insert(proposal.data.recipient_key().clone(), proposal.clone());
-        Ok(())
-    }
-
-    async fn append_da(
-        &self,
-        proposal: &Proposal<TYPES, DaProposal<TYPES>>,
-        _vid_commit: VidCommitment,
-    ) -> Result<()> {
-        if self.should_return_err.load(Ordering::Relaxed) {
-            bail!("Failed to append DA proposal to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .das
-            .insert(proposal.data.view_number, proposal.clone());
         Ok(())
     }
 

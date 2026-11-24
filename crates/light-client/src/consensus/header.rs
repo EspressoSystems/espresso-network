@@ -38,6 +38,21 @@ impl HeaderProof {
         Ok(self.header)
     }
 
+    /// Like [`verify`](Self::verify), and also checks that the header is at `expected_height`.
+    pub fn verify_at_height(
+        self,
+        root: <BlockMerkleTree as MerkleTreeScheme>::Commitment,
+        expected_height: u64,
+    ) -> Result<Header> {
+        let header = self.verify(root)?;
+        ensure!(
+            header.height() == expected_height,
+            "header proof is for height {}, expected {expected_height}",
+            header.height()
+        );
+        Ok(header)
+    }
+
     /// Verify a [`HeaderProof`] and get a reference to the verified header if valid.
     ///
     /// This is the same as [`verify`](Self::verify), but returns the result as a reference rather
@@ -98,6 +113,12 @@ mod test {
                 let header = expected.header();
                 let proof = HeaderProof::new(header.clone(), proof);
                 assert_eq!(proof.verify_ref(mt.commitment()).unwrap(), header);
+                let at = height as u64;
+                proof.clone().verify_at_height(mt.commitment(), at).unwrap();
+                proof
+                    .clone()
+                    .verify_at_height(mt.commitment(), at + 1)
+                    .unwrap_err();
                 assert_eq!(proof.verify(mt.commitment()).unwrap(), *header);
             }
             mt.push(leaf.block_hash()).unwrap();
