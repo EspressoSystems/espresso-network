@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 #[cfg(feature = "node")]
 use std::{cmp::max, collections::BTreeMap};
-use std::{fmt::Debug, ops::Range, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, fmt::Debug, ops::Range, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
@@ -16,7 +16,7 @@ use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 #[cfg(feature = "node")]
 use hotshot_types::{
-    data::{DaProposal, DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
+    data::{DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::DrbInput,
     event::{HotShotAction, LeafInfo},
     initializer::{HotShotInitializer, InitializerEpochInfo},
@@ -48,8 +48,8 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Header, Leaf2, PubKey, SeqTypes,
+    AuthenticatedValidatorMap, BlockMerkleCommitment, BlockMerkleTree, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, Header, LcContractFinalizedState, Leaf2, PubKey, SeqTypes,
     v0::impls::StakeTableHash,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
@@ -303,6 +303,30 @@ pub trait StateCatchup: Send + Sync {
     fn with_local_timeout(&self, _local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
         None
     }
+
+    /// The block Merkle root of the header at `lc_contract_state.height`, accepted by
+    /// `LcContractFinalizedState::verify_header`. One attempt. An implementation returns a verified
+    /// value and the caller installs it without checking again. Default: unsupported error.
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        _retry: usize,
+        _lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        anyhow::bail!("{} does not serve LC contract seed requests", self.name())
+    }
+
+    /// The header at `height`, proven against `root`, the block Merkle root of the header at
+    /// `root_height`. One attempt. An implementation returns a verified header and the caller installs
+    /// it without checking again. Default: unsupported error.
+    async fn try_fetch_proven_header(
+        &self,
+        _retry: usize,
+        _root_height: u64,
+        _root: BlockMerkleCommitment,
+        _height: u64,
+    ) -> anyhow::Result<Header> {
+        anyhow::bail!("{} does not serve LC contract seed requests", self.name())
+    }
 }
 
 #[async_trait]
@@ -487,6 +511,28 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     fn with_local_timeout(&self, local_timeout: Duration) -> Option<Arc<dyn StateCatchup>> {
         (**self).with_local_timeout(local_timeout)
     }
+
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        (**self)
+            .try_fetch_lc_contract_block_merkle_root(retry, lc_contract_state)
+            .await
+    }
+
+    async fn try_fetch_proven_header(
+        &self,
+        retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        (**self)
+            .try_fetch_proven_header(retry, root_height, root, height)
+            .await
+    }
 }
 
 #[cfg(feature = "node")]
@@ -525,6 +571,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
+    /// The epochs that have a stored stake table.
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>>;
+
     /// Load the DRB result for `epoch`.
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>>;
 
@@ -538,7 +587,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         block_header: Header,
     ) -> anyhow::Result<()>;
 
-    /// Store stake table at `epoch` in the persistence layer
+    /// Store stake table at `epoch` in the persistence layer. A `None` reward or hash keeps the
+    /// stored value: the live path can store a table derived without a block reward after the
+    /// backfill stored it with one.
     async fn store_stake(
         &self,
         epoch: EpochNumber,
@@ -957,11 +1008,6 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()>;
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()>;
     async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()>;
 
     async fn append_quorum_proposal2(
@@ -1014,13 +1060,6 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
-    /// Update the current eQC in storage.
-    async fn store_eqc(
-        &self,
-        _high_qc: QuorumCertificate2<SeqTypes>,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()>;
-
     /// Load the current eQC from storage.
     async fn load_eqc(
         &self,
@@ -1039,13 +1078,6 @@ pub trait SequencerPersistence:
             Some((leaf, _)) => Ok(leaf.view_number()),
             None => Ok(ViewNumber::genesis()),
         }
-    }
-
-    async fn append_next_epoch_high_qc2(
-        &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn append_da2(
@@ -1102,14 +1134,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
         (**self).append_vid(proposal).await
-    }
-
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        (**self).append_da(proposal, vid_commit).await
     }
 
     async fn append_da2(

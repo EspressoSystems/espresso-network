@@ -690,13 +690,19 @@ theorem revotes (w : Nat) : ∃ j, j ≤ 16 * w + 12 ∧ Output.send (.revote (R
   refine Classical.byContradiction fun hneg => settled a (16 * w + 12) (.propose ⟨w + 1⟩ ⟨2 * w + 3⟩)
     ⟨Or.inr ⟨R w, ⟨rfl, ⟨?_, Or.inl ⟨rfl, ?_⟩, ?_⟩, Liveness.buildable_of_lockable hlk, fun _ => hlk,
       (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl,
-      R_epoch w⟩, ?_, not_timedOut, ?_⟩
+      R_epoch w, fun c2 hc hd => ?_⟩, ?_, not_timedOut, ?_⟩
   · show (certOf (blk (2 * w + 1))).view < ⟨2 * w + 3⟩
     rw [cert_view]; show 2 * w + 1 + 1 < 2 * w + 3; omega
   · show (certOf (blk (2 * w + 1))).view + 1 = ⟨2 * w + 3⟩; rw [cert_view]; rfl
   · exact (blk_last (2 * w + 1)).mpr (by omega)
   · rw [R_epoch]; show eAt (16 * w + 13) ≤ w + 1; rw [eAt_eq]; omega
   · exact ⟨_, (inView _).1, by show 2 * w + 3 ≤ vAt (16 * w + 13); rw [vAt_eq]; omega⟩
+  · -- The block's `Cert2` arrives only at the next step.
+    obtain ⟨x, rfl, hlt⟩ := hasCert2 hc
+    have h1 : (⟨x + 1⟩ : BlockNumber) = ⟨2 * w + 1 + 1⟩ :=
+      (cert_number x).symm.trans ((congrArg Vote2Data.blockNumber hd).trans (cert_number _))
+    have : x + 1 = 2 * w + 1 + 1 := congrArg BlockNumber.toNat h1
+    omega
   · rintro (⟨p, hs, hpv, hpe⟩ | ⟨r, hs, hrv, hre⟩)
     · obtain ⟨j, hj, hjp⟩ := sent_iff.mp hs
       obtain ⟨-, x, rfl, -⟩ := sent_proposal hv hjp
@@ -750,15 +756,15 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k (u / 2) = 0) : ∃ j, j ≤ 8 
         simp only [phase, hl, ite_true] at this; exact this, rfl, by rw [blk_view], rfl⟩, blk_wellFormed u, ?_, ?_,
       blk_safe u, hopen, notBehind ?_, not_timedOut, fun vote hs _ hvv => ?_, ?_⟩
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
-  · -- The parent is genesis, ends the epoch before, or is the epoch's first block, which the node holds.
+  · -- The parent is genesis, ends the epoch before, or is the epoch's first block, whose payload the node holds.
     cases u with
     | zero => exact Or.inl rfl
     | succ u =>
       rcases par u with hp | hp
       · rw [show (u + 1) / 2 = u / 2 by omega] at hl
-        exact Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
-          by rw [blk_parent]; rfl⟩
-      · exact Liveness.parentReady_of_opens ((enters_iff _).mpr ⟨by omega, by omega⟩) hopen
+        exact Or.inr (Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
+          by rw [blk_parent]; rfl, payload_of u hl (by omega)⟩)
+      · exact Or.inr (Or.inl ((enters_iff _).mpr ⟨by omega, by omega⟩))
   · rw [blk_epoch]; show eAt (8 * u + 3) ≤ u / 2 + 1; rw [eAt_eq]; omega
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -, -⟩ := sent_vote1 hv hjv

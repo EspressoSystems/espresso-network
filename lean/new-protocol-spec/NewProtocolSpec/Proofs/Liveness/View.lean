@@ -233,7 +233,7 @@ theorem late_vote1 {k : PubKey} {hk : C.Honest k} {i : Nat} {v : Vote1}
   have hE := late_inEpoch hs hst hkE (late_vote_time hi he hl)
   rcases hcase with ⟨sender, p, vid, hrec, hlead, hfor, hnb⟩ | ⟨sender, r, hrec, hlead, hfor, hnb⟩
   · -- The vote1 is for this proposal, which the signing rules checked.
-    rcases hjust with ⟨s0, p0, vid0, hrec0, hwf0, -, -, hopen0, hfor0⟩ | ⟨s0, r0, hrec0, hwf0, -, hfor0⟩
+    rcases hjust with ⟨s0, p0, vid0, hrec0, hwf0, -, -, hopen0, -, hfor0⟩ | ⟨s0, r0, hrec0, hwf0, -, hfor0⟩
     · have hpp : p = p0 := hcf p p0 (congrArg Vote1Data.blockHash (hfor.2.symm.trans hfor0.2))
       subst hpp
       have hpe := late_proposal_epoch hcfg hcf hs hst hkE hi he hl hrec0 hwf0 hopen0 hnb
@@ -1067,6 +1067,42 @@ theorem ready_of_tuple {r : Trace} {m n : Nat} (hmn : m ≤ n) {l : PubKey} {v :
       cases h
       exact ⟨by rw [hte, hnum], by show TimeoutLockAllows _ _ (epochOf hdr.blockNumber cfg.epochHeight); rw [hnum]; exact hallow⟩
 
+omit hcf hw hl hcfg in
+/--
+No honest node holds a `Cert2` over the last block of `E`.
+
+An honest signer of it held the block, and it gets the `Cert2` within `Δ`; then it
+holds both, which a stable epoch rules out.
+-/
+theorem stable_no_cert2_last {j : PubKey} {hj : C.Honest j} {n : Nat} {c2 : Cert2}
+    (hc2 : ((N.trace j hj).history n).HasCert2 c2)
+    (hlast : IsLastBlock c2.data.blockNumber cfg.epochHeight) (he : c2.data.epoch = E) : False := by
+  have hu := hs.timeUnbounded
+  obtain ⟨q, hq, hcast⟩ := cert2_held_backed N.toNetwork hc2
+  obtain ⟨k', hqk, -, hk'e⟩ := C.intersect _ q q hq hq
+  have hk' : C.Honest k' := .of hk'e
+  obtain ⟨i, hi⟩ := hcast k' hqk hk'e
+  obtain ⟨-, -, c, b, -, hb, hcert, -, hvv, hvd⟩ := (N.safe_at k' hk' i).vote2Justified i _ ⟨_, (Trace.history_getElem? _ (Nat.lt_succ_self i)), hi⟩ hk'e
+  rw [Trace.history_upTo _ (Nat.le_refl _)] at hb
+  have hcq : Commits c2 b := by
+    refine ⟨Nat.le_trans hcert.1 (by rw [show c2.view = c.view from hvv]; exact Nat.le_refl _), ?_⟩
+    rw [show c2.data = c.data.toVote2 from hvd, hcert.2]; rfl
+  cases n with
+  | zero =>
+    rcases hc2 with h | ⟨_, _, h⟩ <;>
+      · obtain ⟨_, hj', -⟩ := (Trace.received_history _).mp h; exact absurd hj' (Nat.not_lt_zero _)
+  | succ n =>
+    obtain ⟨m, -, hc2'⟩ := hs.cert2Spread c2 j hj n hc2 k' hk' (.of hk'e)
+    have hbe : b.epoch = E := by
+      have := congrArg Vote2Data.epoch hcq.2
+      simp only at this; rw [← this, he]
+    have hbl : IsLastBlock b.blockHeader.blockNumber cfg.epochHeight := by
+      have := congrArg Vote2Data.blockNumber hcq.2
+      simp only at this; rw [← this]; exact hlast
+    exact stable_no_commit hs hst
+      (hasProposal_grows (received_grows _ (Nat.le_max_left (i + 1) m)) hb)
+      (hasCert2_grows (received_grows _ (Nat.le_max_right (i + 1) m)) hc2') hcq hbl hbe
+
 omit hcfg hcf hs hst hw hl in
 /-- A view whose number is one less than `w`'s is `w - 1`. -/
 theorem view_pred {v : ViewNumber} (hv : v + 1 = w) : v = w - 1 :=
@@ -1177,7 +1213,10 @@ theorem leader_acts {δ : Nat} (hp : Prompt N δ) (hw3 : cfg.anchorView.toNat + 
     · exact Or.inl ⟨p, (hsi.proposalJustified p).mpr
         (proposalJustified_grows _ hle hpj (by rw [hpe]; exact hnbE _ (by omega))), hpv, hpe⟩
     · exact Or.inr ⟨r, (hsi.revoteJustified r).mpr
-        (revoteJustified_grows _ hle hrj (by rw [hre]; exact hnbE _ (by omega))), hrv, hre⟩
+        (revoteJustified_grows _ hle hrj (by rw [hre]; exact hnbE _ (by omega))), hrv, hre,
+        -- In a stable epoch nobody holds a `Cert2` over its last block.
+        fun c2 hc2 hd => stable_no_cert2_last hs hst ((hsi.hasCert2 _).mp hc2)
+          (by rw [hd]; exact hrj.wellFormed.2.2) (by rw [hd]; exact hre)⟩
   · rcases hprop with ⟨p', hs', hv', -⟩ | ⟨r', hs', hv', -⟩
     · obtain ⟨hs', he'⟩ := restrict_sent.mp hs'
       obtain ⟨j, hj, hjm⟩ := (Trace.sent_history _).mp hs'
@@ -1359,42 +1398,6 @@ theorem cert_held {l : PubKey} {hl' : C.Honest l} {jp : Nat} {c : Cert1} {ev : O
     · refine Or.inr (Or.inr ⟨hlast, c2, ?_, hc2d⟩)
       exact hasCert2_grows (received_grows _ (Nat.min_le_right _ _)) hc2
 
-omit hcf hw hl hcfg in
-/--
-No honest node holds a `Cert2` over the last block of `E`.
-
-An honest signer of it held the block, and it gets the `Cert2` within `Δ`; then it
-holds both, which a stable epoch rules out.
--/
-theorem stable_no_cert2_last {j : PubKey} {hj : C.Honest j} {n : Nat} {c2 : Cert2}
-    (hc2 : ((N.trace j hj).history n).HasCert2 c2)
-    (hlast : IsLastBlock c2.data.blockNumber cfg.epochHeight) (he : c2.data.epoch = E) : False := by
-  have hu := hs.timeUnbounded
-  obtain ⟨q, hq, hcast⟩ := cert2_held_backed N.toNetwork hc2
-  obtain ⟨k', hqk, -, hk'e⟩ := C.intersect _ q q hq hq
-  have hk' : C.Honest k' := .of hk'e
-  obtain ⟨i, hi⟩ := hcast k' hqk hk'e
-  obtain ⟨-, -, c, b, -, hb, hcert, -, hvv, hvd⟩ := (N.safe_at k' hk' i).vote2Justified i _ ⟨_, (Trace.history_getElem? _ (Nat.lt_succ_self i)), hi⟩ hk'e
-  rw [Trace.history_upTo _ (Nat.le_refl _)] at hb
-  have hcq : Commits c2 b := by
-    refine ⟨Nat.le_trans hcert.1 (by rw [show c2.view = c.view from hvv]; exact Nat.le_refl _), ?_⟩
-    rw [show c2.data = c.data.toVote2 from hvd, hcert.2]; rfl
-  cases n with
-  | zero =>
-    rcases hc2 with h | ⟨_, _, h⟩ <;>
-      · obtain ⟨_, hj', -⟩ := (Trace.received_history _).mp h; exact absurd hj' (Nat.not_lt_zero _)
-  | succ n =>
-    obtain ⟨m, -, hc2'⟩ := hs.cert2Spread c2 j hj n hc2 k' hk' (.of hk'e)
-    have hbe : b.epoch = E := by
-      have := congrArg Vote2Data.epoch hcq.2
-      simp only at this; rw [← this, he]
-    have hbl : IsLastBlock b.blockHeader.blockNumber cfg.epochHeight := by
-      have := congrArg Vote2Data.blockNumber hcq.2
-      simp only at this; rw [← this]; exact hlast
-    exact stable_no_commit hs hst
-      (hasProposal_grows (received_grows _ (Nat.le_max_left (i + 1) m)) hb)
-      (hasCert2_grows (received_grows _ (Nat.le_max_right (i + 1) m)) hc2') hcq hbl hbe
-
 omit hw hl in
 /--
 Within `Δ` of an honest node holding a certificate, after GST, every honest node
@@ -1517,9 +1520,27 @@ theorem member_ready {δ : Nat} (hex : ∃ T, ReachedBy N T w)
   have hn0c : n0 ≤ cut N hu k hk (firstReach N hex + Δ + 5 * Δ + 2 * δ) :=
     le_cut N hu fun i hi => by have := hn0 i hi; omega
   have hpcg := certJustified_genuine hjust.justified
-  have hopen : OpensEpochJustified cfg
-      ((N.trace k hk).history (cut N hu k hk (firstReach N hex + Δ + 5 * Δ + 2 * δ))) pw := by
-    intro hent
+  refine ⟨vid, hsm, received_grows _ hn0c _ hrec0, ?_, ?_, ?_⟩
+  · exact by_cut N hu (fun a b hab h => received_grows _ hab _ h)
+      (by_later (show max (N.time k hk j0) GST + Δ ≤ firstReach N hex + Δ + 5 * Δ + 2 * δ by omega)
+        (hs.validated k hk j0 l pw vid hin0 (hs.proposalValid l hl' jp pw hsend hpe) (by rw [hep]; exact hkE)))
+  · by_cases hent : EntersEpoch cfg pw
+    · exact Or.inr (Or.inl hent)
+    have hnl : ¬ IsLastBlock pw.parentCert.data.blockNumber cfg.epochHeight := fun hlast => hent (by
+      show IsLastBlock (pw.blockHeader.blockNumber - 1) cfg.epochHeight
+      rw [← hjust.wellFormed.height]; simpa using hlast)
+    have hpce : pw.parentCert.data.epoch = E := by
+      rw [cert1_epoch_of_height N.toNetwork hcfg hpcg, ← epochOf_next_same hnl, hjust.wellFormed.height,
+        ← hjust.wellFormed.epoch, hep]
+    rcases cert_held hjust.justified with hg | ⟨m, hm, L, hL, hLd⟩ | ⟨hlast, -⟩
+    · exact Or.inr (Or.inr ⟨cfg.anchorBlock, Or.inl rfl, anchor_view_le hcfg hpcg,
+        by rw [hg, hcfg.anchorCertBlock], Or.inl ⟨rfl, rfl⟩⟩)
+    · obtain ⟨b, hb, hbd, hbv, hpay⟩ := block_ready hcfg hcf hs hst hL hLd hpcg hpce
+          (Nat.le_trans (time_mono N l hl' (by omega : m ≤ jp)) hjt) hgstp k hk hmem hkE
+      exact Or.inr (Or.inr ⟨b, hasProposal_grows (received_grows _ hcut) hb, hbv,
+        congrArg Vote1Data.blockHash hbd, hasPayload_grows (received_grows _ hcut) hpay⟩)
+    · exact absurd hlast hnl
+  · intro hent
     obtain ⟨⟨q, hq, hqv, hqh⟩, c2, hc2, hc2v, hc2d⟩ := hjust.opens hent
     have hlastpc : IsLastBlock pw.parentCert.data.blockNumber cfg.epochHeight := by
       have h := hent
@@ -1575,26 +1596,6 @@ theorem member_ready {δ : Nat} (hex : ∃ T, ReachedBy N T w)
       le_cut N hu fun i hi => by have := hm i hi; omega
     exact ⟨⟨b, hasProposal_grows (received_grows _ hmc) (Or.inr (Or.inr ⟨c1', c2, htook.1⟩)),
       hqv, hqh⟩, c2, Or.inl (hasCert2_grows (received_grows _ hmc) (Or.inr ⟨c1', b, htook.1⟩)), hc2v, hc2d⟩
-  refine ⟨vid, hsm, received_grows _ hn0c _ hrec0, ?_, ?_, hopen⟩
-  · exact by_cut N hu (fun a b hab h => received_grows _ hab _ h)
-      (by_later (show max (N.time k hk j0) GST + Δ ≤ firstReach N hex + Δ + 5 * Δ + 2 * δ by omega)
-        (hs.validated k hk j0 l pw vid hin0 (hs.proposalValid l hl' jp pw hsend hpe) (by rw [hep]; exact hkE)))
-  · by_cases hent : EntersEpoch cfg pw
-    · exact parentReady_of_opens hent hopen
-    have hnl : ¬ IsLastBlock pw.parentCert.data.blockNumber cfg.epochHeight := fun hlast => hent (by
-      show IsLastBlock (pw.blockHeader.blockNumber - 1) cfg.epochHeight
-      rw [← hjust.wellFormed.height]; simpa using hlast)
-    have hpce : pw.parentCert.data.epoch = E := by
-      rw [cert1_epoch_of_height N.toNetwork hcfg hpcg, ← epochOf_next_same hnl, hjust.wellFormed.height,
-        ← hjust.wellFormed.epoch, hep]
-    rcases cert_held hjust.justified with hg | ⟨m, hm, L, hL, hLd⟩ | ⟨hlast, -⟩
-    · exact Or.inr ⟨cfg.anchorBlock, Or.inl rfl, anchor_view_le hcfg hpcg,
-        by rw [hg, hcfg.anchorCertBlock]⟩
-    · obtain ⟨b, hb, hbd, hbv, -⟩ := block_ready hcfg hcf hs hst hL hLd hpcg hpce
-          (Nat.le_trans (time_mono N l hl' (by omega : m ≤ jp)) hjt) hgstp k hk hmem hkE
-      exact Or.inr ⟨b, hasProposal_grows (received_grows _ hcut) hb, hbv,
-        congrArg Vote1Data.blockHash hbd⟩
-    · exact absurd hlast hnl
 
 /-- Every honest member of `E` votes1 on the honest leader's proposal for `w` within `2Δ + δ` of it. -/
 theorem members_vote1 {δ : Nat} (hp : Prompt N δ) (hex : ∃ T, ReachedBy N T w)
@@ -1719,7 +1720,11 @@ theorem members_vote1_revote {δ : Nat} (hp : Prompt N δ) (hex : ∃ T, Reached
     hj.wellFormed, hj.safe,
     ⟨b, (hsi.hasProposal _).mpr (hasProposal_grows hgr hb), hcert, (hsi.hasPayload _ _).mpr (hasPayload_grows hgr hpay)⟩,
     (hsi.notBehind _).mpr (by rw [hre]; exact stable_notBehind hst hu (.of hkE) ht0), fun ht => ?_,
-    fun vote hsv _ hvw => ?_, (hsi.inView _).mpr ?_⟩
+    fun vote hsv _ hvw => ?_,
+    -- In a stable epoch nobody holds a `Cert2` over its last block.
+    fun c2 hc2 hd => stable_no_cert2_last hs hst ((hsi.hasCert2 _).mp hc2)
+      (by rw [hd]; exact hj.wellFormed.2.2) (by rw [hd]; exact hre),
+    (hsi.inView _).mpr ?_⟩
   · refine not_past hcfg hs hw hex (n := m + 1) (fun i hi => ?_)
       (show w ≤ rw.view by rw [hrw]; exact Nat.le_refl w.toNat) (Or.inl ht)
     have := hbefore i hi; omega

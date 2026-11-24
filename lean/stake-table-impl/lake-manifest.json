@@ -1,0 +1,14 @@
+{"version": "1.3.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"type": "path",
+   "scope": "",
+   "name": "«stake-table-spec»",
+   "manifestFile": "lake-manifest.json",
+   "inherited": false,
+   "dir": "../stake-table-spec",
+   "copy": false,
+   "configFile": "lakefile.toml"}],
+ "name": "«stake-table-impl»",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}

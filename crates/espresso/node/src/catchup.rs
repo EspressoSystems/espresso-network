@@ -13,8 +13,8 @@ use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
-    ValidatedState,
+    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Header, LcContractFinalizedState, Leaf2,
+    NodeState, SeqTypes, ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
@@ -48,6 +48,7 @@ use hotshot_types::{
 use http_client::{Request, error::ClientErr};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
+use light_client::consensus::header::HeaderProof;
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
@@ -172,7 +173,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         let mut logs = vec!["Fetching failed.\n".to_string()];
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
-            tracing::info!("fetching from {}", client.url);
+            tracing::debug!("fetching from {}", client.url);
             match timeout(timeout_dur, TryFutureExt::into_future(f(client.clone()))).await {
                 Ok(Ok(t)) => {
                     requests.insert(id, true);
@@ -504,6 +505,41 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 ))
                 .send()
                 .await
+        })
+        .await
+    }
+
+    // Verified inside `fetch`: a rejected answer scores the peer and the next peer is asked.
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        let height = lc_contract_state.height;
+        self.fetch(retry, |client| async move {
+            let leaf_chain = client
+                .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
+                .send()
+                .await?;
+            let first = leaf_chain.first().context("empty leaf chain")?;
+            lc_contract_state.verify_header(first.block_header())
+        })
+        .await
+    }
+
+    async fn try_fetch_proven_header(
+        &self,
+        retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        self.fetch(retry, |client| async move {
+            let proof = client
+                .get::<HeaderProof>(&paths::lc_header_by_height(root_height, height))
+                .send()
+                .await?;
+            proof.verify_at_height(root, height)
         })
         .await
     }
@@ -1622,6 +1658,36 @@ impl StateCatchup for ParallelStateCatchup {
             ..self.clone()
         }))
     }
+
+    async fn try_fetch_lc_contract_block_merkle_root(
+        &self,
+        retry: usize,
+        lc_contract_state: &LcContractFinalizedState,
+    ) -> anyhow::Result<BlockMerkleCommitment> {
+        self.on_providers(clone! {(lc_contract_state) move |provider| {
+            clone! {(lc_contract_state) async move {
+                provider
+                    .try_fetch_lc_contract_block_merkle_root(retry, &lc_contract_state)
+                    .await
+            }}
+        }})
+        .await
+    }
+
+    async fn try_fetch_proven_header(
+        &self,
+        retry: usize,
+        root_height: u64,
+        root: BlockMerkleCommitment,
+        height: u64,
+    ) -> anyhow::Result<Header> {
+        self.on_providers(move |provider| async move {
+            provider
+                .try_fetch_proven_header(retry, root_height, root, height)
+                .await
+        })
+        .await
+    }
 }
 
 /// Add accounts to the in-memory consensus state.
@@ -2065,6 +2131,33 @@ mod test {
         .await
         .expect("local result should not wait for the remote provider")
         .unwrap();
+    }
+
+    /// A provider that keeps the trait defaults answers both seed requests with an error naming it.
+    #[tokio::test(start_paused = true)]
+    async fn test_unsupported_provider_fails() {
+        let provider = DelayedCatchup::provider(true, Duration::ZERO);
+        let catchup = ParallelStateCatchup::new(&[provider], Duration::from_secs(30));
+        let root = BlockMerkleTree::new(32).commitment();
+        let lc_contract_state = LcContractFinalizedState {
+            height: 1,
+            block_comm_root: Default::default(),
+        };
+
+        let root_err = catchup
+            .try_fetch_lc_contract_block_merkle_root(0, &lc_contract_state)
+            .await
+            .unwrap_err();
+        let header_err = catchup
+            .try_fetch_proven_header(0, 1, root, 0)
+            .await
+            .unwrap_err();
+
+        for err in [root_err, header_err] {
+            let err = format!("{err:#}");
+            let expected = "DelayedCatchup(local) does not serve LC contract seed requests";
+            assert!(err.contains(expected), "{err}");
+        }
     }
 
     #[tokio::test(start_paused = true)]

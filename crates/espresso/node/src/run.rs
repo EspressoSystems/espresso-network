@@ -1,3 +1,4 @@
+use ::light_client::LightClientMetrics;
 use anyhow::Context;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
@@ -128,6 +129,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
              (ESPRESSO_NODE_API_PEERS)"
         );
     }
+    warn_of_storage_changes(&modules);
 
     let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
 
@@ -185,6 +187,31 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         h.shutdown();
     }
     result
+}
+
+/// Error level, so that operators see these before the release that changes their node.
+fn warn_of_storage_changes(modules: &Modules) {
+    // The same order as `main`, which runs on the file system when both are set.
+    let Some(sql) = modules
+        .storage_sql
+        .as_ref()
+        .filter(|_| modules.storage_fs.is_none())
+    else {
+        tracing::error!(
+            "This node uses file-system storage. A future release will replace it with SQLite, \
+             and query nodes will then prune block data by default. Do not switch to SQLite by \
+             hand before that release: the node would start without its consensus state."
+        );
+        return;
+    };
+    if modules.query.is_some() && !sql.prune && !sql.archive {
+        tracing::error!(
+            "Neither --prune nor --archive is set, so this node keeps all block data. A future \
+             release will prune by default. To keep all block data after that release, set \
+             --archive (ESPRESSO_NODE_ARCHIVE=true). To prune now, set --prune \
+             (ESPRESSO_NODE_DATABASE_PRUNE=true)."
+        );
+    }
 }
 
 async fn run_with_storage<S>(
@@ -275,7 +302,6 @@ where
             local_timeout: opt.local_catchup_timeout,
             http_delay: opt.http_catchup_delay,
         },
-        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
@@ -294,7 +320,7 @@ where
         Some(http_opt) => {
             let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
             http_opt
-                .serve(move |metrics, consumer, storage| {
+                .serve(move |metrics, consumer, storage, _| {
                     async move {
                         init_node(
                             genesis,
@@ -357,9 +383,18 @@ where
     let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
     let persistence = storage_opt.create().await?;
     http_opt
-        .serve(move |metrics, sink, _storage| {
+        .serve(move |metrics, sink, _storage, registry| {
             async move {
-                init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                init_follower_node(
+                    genesis,
+                    params,
+                    metrics,
+                    LightClientMetrics::new(&*registry),
+                    persistence,
+                    l1_params,
+                    sink,
+                )
+                .await
             }
             .boxed()
         })

@@ -241,7 +241,7 @@ theorem safeMe (n : Nat) (hv : ∀ b, BlockValid b) :
       simp [script] at hmem; subst hmem
       exact ⟨rfl, Or.inl ⟨other, blk1, share1, (Trace.received_history _).mpr ⟨0, by omega, rfl⟩,
         ⟨by decide, Or.inl ⟨rfl, rfl⟩, rfl, rfl⟩, hv _, fun _ h => by simp [blk1] at h,
-        fun hent => absurd hent.1 (by decide), rfl, rfl⟩⟩
+        fun hent => absurd hent.1 (by decide), Or.inl rfl, rfl, rfl⟩⟩
     | 6, hmem =>
       simp [script] at hmem
       rcases hmem with rfl | rfl
@@ -335,7 +335,7 @@ theorem safeYou (P : EpochNumber → Prop) (n : Nat) (hv : ∀ b, BlockValid b) 
       ⟨by decide, Or.inl ⟨rfl, rfl⟩, rfl, rfl⟩, hv _, fun _ h => by simp [blk2] at h,
       fun _ => ⟨⟨blk1, Or.inr (Or.inl ⟨other, none, (Trace.received_history _).mpr ⟨0, by omega, rfl⟩⟩),
         rfl, rfl⟩, cert2₁, Or.inl (Or.inl ((Trace.received_history _).mpr ⟨1, by omega, rfl⟩)), by decide, rfl⟩,
-      rfl, rfl⟩⟩
+      Or.inr (Or.inl (by unfold EntersEpoch; decide)), rfl, rfl⟩⟩
   vote1Once v v' hs hs' _ _ _ := by
     obtain ⟨i, -, hi⟩ := (Trace.sent_history _).mp hs
     obtain ⟨j, -, hj⟩ := (Trace.sent_history _).mp hs'

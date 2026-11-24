@@ -98,7 +98,7 @@ theorem SameInputs.certJustified (c : Cert1) (ev : Option TimeoutCert) :
       (he.upTo _).hasCert2]
 
 theorem SameInputs.parentReady (p : Proposal) : ParentReady cfg h1 p ↔ ParentReady cfg h2 p := by
-  simp only [ParentReady, he.hasProposal]
+  simp only [ParentReady, he.hasProposal, he.hasPayload]
 
 theorem SameInputs.opens (p : Proposal) :
     OpensEpochJustified cfg h1 p ↔ OpensEpochJustified cfg h2 p := by
@@ -157,14 +157,16 @@ theorem owed_antitone {h1 h2 : History} (he : SameInputs h1 h2)
     refine ⟨⟨s, vid, (he.received _).mpr hr, hl, hsh⟩, hw, (he.received _).mpr hval, ?_,
       hsk, (he.opens _).mpr hop, (he.notBehind _).mpr hnb, hto _ ht,
       fun vote hsv => honce vote (hs _ hsv), (he.inView _).mpr hv⟩
-    rcases hpr with hg | ⟨parent, hb, hv, hh⟩
+    rcases hpr with hg | hen | ⟨parent, hb, hv, hh, hpay⟩
     · exact Or.inl hg
-    · exact Or.inr ⟨parent, (he.hasProposal _).mpr hb, hv, hh⟩
+    · exact Or.inr (Or.inl hen)
+    · exact Or.inr (Or.inr ⟨parent, (he.hasProposal _).mpr hb, hv, hh, (he.hasPayload _ _).mpr hpay⟩)
   | vote1Again r =>
-    obtain ⟨⟨s, hr, hl⟩, hw, hsk, ⟨b, hb, hcert, hpay⟩, hnb, ht, honce, hv⟩ := ho
+    obtain ⟨⟨s, hr, hl⟩, hw, hsk, ⟨b, hb, hcert, hpay⟩, hnb, ht, honce, hnc, hv⟩ := ho
     exact ⟨⟨s, (he.received _).mpr hr, hl⟩, hw, hsk,
       ⟨b, (he.hasProposal _).mpr hb, hcert, (he.hasPayload _ _).mpr hpay⟩, (he.notBehind _).mpr hnb,
-      hto _ ht, fun vote hsv => honce vote (hs _ hsv), (he.inView _).mpr hv⟩
+      hto _ ht, fun vote hsv => honce vote (hs _ hsv), fun c2 h => hnc c2 ((he.hasCert2 _).mp h),
+      (he.inView _).mpr hv⟩
   | vote2 c =>
     obtain ⟨⟨b, hc, hb, hcert, hpay⟩, hnb, honce, hc2, hpast, hgen, hdec⟩ := ho
     refine ⟨⟨b, (he.hasCert1 _).mpr hc, (he.hasProposal _).mpr hb, hcert, (he.hasPayload _ _).mpr hpay⟩,
@@ -181,9 +183,10 @@ theorem owed_antitone {h1 h2 : History} (he : SameInputs h1 h2)
   | propose e v =>
     obtain ⟨hj, honce, ht, hvw⟩ := ho
     refine ⟨?_, hpi _ _ honce, hto _ ht, (he.inView _).mpr hvw⟩
-    rcases hj with ⟨p, hj, hv⟩ | ⟨r, hj, hv⟩
+    rcases hj with ⟨p, hj, hv⟩ | ⟨r, hj, hv, hep, hnc⟩
     · exact Or.inl ⟨p, (he.proposalJustified p).mpr hj, hv⟩
-    · exact Or.inr ⟨r, (he.revoteJustified r).mpr hj, hv⟩
+    · exact Or.inr ⟨r, (he.revoteJustified r).mpr hj, hv, hep,
+        fun c2 h => hnc c2 ((he.hasCert2 _).mp h)⟩
 
 /-! ## The history for the epochs a node is honest in -/
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
@@ -26,7 +26,7 @@ use espresso_types::{
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, QuorumProposalWrapperLegacy,
+        DaProposal2, EpochNumber, QuorumProposalWrapper, QuorumProposalWrapperLegacy,
         VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
@@ -251,10 +251,6 @@ impl Inner {
         self.path.join("vid2")
     }
 
-    fn da_dir_path(&self) -> PathBuf {
-        self.path.join("da")
-    }
-
     fn drb_dir_path(&self) -> PathBuf {
         self.path.join("drb")
     }
@@ -273,10 +269,6 @@ impl Inner {
 
     fn stake_table_dir_path(&self) -> PathBuf {
         self.path.join("stake_table")
-    }
-
-    fn next_epoch_qc(&self) -> PathBuf {
-        self.path.join("next_epoch_quorum_certificate")
     }
 
     fn eqc(&self) -> PathBuf {
@@ -949,37 +941,6 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let view_number = proposal.data.view_number().u64();
-        let dir_path = inner.da_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create da dir")?;
-
-        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
-        inner.replace(
-            &file_path,
-            |_| {
-                // Don't overwrite an existing proposal, but warn about it as this is likely not
-                // intended behavior from HotShot.
-                tracing::warn!(view_number, "duplicate DA proposal");
-                Ok(false)
-            },
-            |mut file| {
-                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-                let now = Instant::now();
-                file.write_all(&proposal_bytes)?;
-                self.metrics
-                    .internal_append_da_duration
-                    .add_point(now.elapsed().as_secs_f64());
-                Ok(())
-            },
-        )
-    }
     async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
         //
@@ -1193,57 +1154,6 @@ impl SequencerPersistence for Persistence {
             |mut file| {
                 let bytes =
                     bincode::serialize(&certificate).context("serializing upgrade certificate")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
-
-    async fn append_next_epoch_high_qc2(
-        &self,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let path = &inner.next_epoch_qc();
-        let view = next_epoch_high_qc.view_number();
-        inner.replace(
-            path,
-            |mut file| {
-                // Overwrite only when the new QC is newer. The whole replace runs under the inner
-                // write lock, so this compare-and-set is atomic and a stale concurrent write cannot
-                // regress the stored view (mirrors `append_high_qc2`).
-                let mut bytes = vec![];
-                file.read_to_end(&mut bytes)?;
-                let existing: NextEpochQuorumCertificate2<SeqTypes> = bincode::deserialize(&bytes)
-                    .context("deserializing existing next epoch high_qc2")?;
-                Ok(existing.view_number() < view)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&next_epoch_high_qc)
-                    .context("serializing next epoch high_qc2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
-
-    async fn store_eqc(
-        &self,
-        high_qc: QuorumCertificate2<SeqTypes>,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let path = &inner.eqc();
-
-        inner.replace(
-            path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&(high_qc, next_epoch_high_qc))
-                    .context("serializing next epoch qc")?;
                 file.write_all(&bytes)?;
                 Ok(())
             },
@@ -1677,6 +1587,16 @@ impl MembershipPersistence for Persistence {
         Ok(Some(stake))
     }
 
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let inner = self.inner.read().await;
+        let path = inner.stake_table_dir_path();
+        // The directory is created by the first `store_stake`.
+        if !path.try_exists()? {
+            return Ok(BTreeSet::new());
+        }
+        Ok(epoch_files(path)?.map(|(epoch, _)| epoch).collect())
+    }
+
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         let inner = self.inner.read().await;
         let file_path = inner
@@ -1787,6 +1707,22 @@ impl MembershipPersistence for Persistence {
         fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        // A write without a reward or hash keeps the stored one. An unreadable file is overwritten.
+        let (block_reward, stake_table_hash) =
+            if block_reward.is_some() && stake_table_hash.is_some() || !file_path.is_file() {
+                (block_reward, stake_table_hash)
+            } else {
+                let (_, stored_reward, stored_hash) = fs::read(&file_path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| Ok(deserialize_stake_table(&bytes)?.0))
+                    .inspect_err(|err| tracing::warn!(%epoch, "unreadable stake file: {err:#}"))
+                    .unwrap_or_default();
+                (
+                    block_reward.or(stored_reward),
+                    stake_table_hash.or(stored_hash),
+                )
+            };
 
         inner.replace(
             &file_path,
@@ -2153,6 +2089,16 @@ mod test {
 
         async fn tmp_storage() -> Self::Storage {
             TempDir::new().unwrap()
+        }
+
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let inner = self.inner.read().await;
+            fs::write(inner.eqc(), bincode::serialize(&(high_qc, next_epoch_qc))?)?;
+            Ok(())
         }
 
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
@@ -2586,6 +2532,25 @@ mod test {
         let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
         assert!(epochs.contains(&EpochNumber::new(1)));
         assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    /// An unreadable stake file does not fail a write without a reward or hash.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_stake_replaces_unreadable_file() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::options(&tmp).create().await.unwrap();
+        let path = storage.inner.read().await.stake_table_dir_path();
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("5.txt"), b"not a stake table").unwrap();
+
+        let validator = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let mut stake = indexmap::IndexMap::new();
+        stake.insert(validator.account, validator);
+        let epoch = EpochNumber::new(5);
+        storage.store_stake(epoch, stake, None, None).await.unwrap();
+
+        let (loaded, reward, hash) = storage.load_stake(epoch).await.unwrap().unwrap();
+        assert_eq!((loaded.len(), reward, hash), (1, None, None));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

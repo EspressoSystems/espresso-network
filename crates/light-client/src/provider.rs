@@ -25,9 +25,11 @@ where
     S: Client,
 {
     async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<SeqTypes>> {
+        self.metrics.fetch_requested();
         match self.fetch_leaf(LeafId::Number(req.height as usize)).await {
             Ok(leaf) => Some(leaf),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch leaf: {err:#}");
                 None
             },
@@ -42,9 +44,11 @@ where
     S: Client,
 {
     async fn fetch(&self, req: PayloadRequest) -> Option<Payload> {
+        self.metrics.fetch_requested();
         match self.fetch_payload(BlockId::PayloadHash(req.0)).await {
             Ok(payload) => Some(payload.data),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch payload: {err:#}");
                 None
             },
@@ -59,9 +63,11 @@ where
     S: Client,
 {
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
+        self.metrics.fetch_requested();
         match self.fetch_vid_common(BlockId::PayloadHash(req.0)).await {
             Ok(vid) => Some(vid.common),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch VID common: {err:#}");
                 None
             },
@@ -76,12 +82,14 @@ where
     S: Client,
 {
     async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<SeqTypes>>> {
+        self.metrics.fetch_requested();
         let leaves = match self
             .fetch_leaves_in_range(req.start as usize, req.end as usize)
             .await
         {
             Ok(leaves) => leaves,
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch leaf: {err:#}");
                 return None;
             },
@@ -89,6 +97,7 @@ where
         match leaves.try_into() {
             Ok(leaves) => Some(leaves),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "received invalid leaf range: {err:#}");
                 None
             },
@@ -106,12 +115,14 @@ where
         &self,
         req: BlockRangeRequest,
     ) -> Option<NonEmptyRange<BlockQueryData<SeqTypes>>> {
+        self.metrics.fetch_requested();
         let blocks = match self
             .fetch_blocks_in_range(req.start as usize, req.end as usize)
             .await
         {
             Ok(blocks) => blocks,
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch block range: {err:#}");
                 return None;
             },
@@ -119,6 +130,7 @@ where
         match blocks.try_into() {
             Ok(blocks) => Some(blocks),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "received invalid block range: {err:#}");
                 None
             },
@@ -136,12 +148,14 @@ where
         &self,
         req: VidCommonRangeRequest,
     ) -> Option<NonEmptyRange<VidCommonQueryData<SeqTypes>>> {
+        self.metrics.fetch_requested();
         let vid_common = match self
             .fetch_vid_common_in_range(req.start as usize, req.end as usize)
             .await
         {
             Ok(vid_common) => vid_common,
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch VID common range: {err:#}");
                 return None;
             },
@@ -149,6 +163,7 @@ where
         match vid_common.try_into() {
             Ok(vid_common) => Some(vid_common),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "received invalid VID common range: {err:#}");
                 None
             },
@@ -163,9 +178,11 @@ where
     S: Client,
 {
     async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<SeqTypes>>> {
+        self.metrics.fetch_requested();
         match self.fetch_certificate2(req.height).await {
             Ok(cert2) => Some(cert2),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::info!(?req, %err, "failed to fetch cert2, will retry");
                 None
             },
@@ -186,9 +203,11 @@ where
     S: Client,
 {
     async fn fetch(&self, req: LeafRangesRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
+        self.metrics.fetch_requested();
         match self.fetch_leaves_for_ranges(&req.0).await {
             Ok(leaves) => Some(leaves),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch leaf ranges: {err:#}");
                 None
             },
@@ -203,6 +222,7 @@ where
     S: Client,
 {
     async fn fetch(&self, req: BlockRangesRequest) -> Option<BlockRangesResponse<SeqTypes>> {
+        self.metrics.fetch_requested();
         // One range is a range fetch, whose endpoints are cacheable GETs.
         let fetched = match req.0.as_slice() {
             [range] => {
@@ -217,6 +237,7 @@ where
                 Some(BlockRangesResponse { blocks, vid_common })
             },
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch block ranges: {err:#}");
                 None
             },
@@ -234,6 +255,7 @@ where
         &self,
         req: VidCommonRangesRequest,
     ) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
+        self.metrics.fetch_requested();
         let fetched = match req.0.as_slice() {
             [range] => {
                 self.fetch_blocks_and_vid_common_in_range(range.start as usize, range.end as usize)
@@ -244,6 +266,7 @@ where
         match fetched {
             Ok(fetched) => Some(fetched.into_iter().map(|(_, common)| common).collect()),
             Err(err) => {
+                self.metrics.fetch_failed();
                 tracing::warn!(?req, "failed to fetch VID common ranges: {err:#}");
                 None
             },
@@ -253,10 +276,34 @@ where
 
 #[cfg(test)]
 mod test {
-    use hotshot_query_service::types::HeightIndexed;
+    use hotshot_query_service::{metrics::PrometheusMetrics, types::HeightIndexed};
 
     use super::*;
-    use crate::{storage::SqlStorage, testing::TestClient};
+    use crate::{metrics::LightClientMetrics, storage::SqlStorage, testing::TestClient};
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_request_and_failure_metrics() {
+        let metrics = PrometheusMetrics::default();
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqlStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        )
+        .with_metrics(LightClientMetrics::new(&metrics));
+
+        client.forget_leaf(5).await;
+        let leaf = Provider::<SeqTypes, LeafRequest>::fetch(&lc, LeafRequest::new(5)).await;
+        assert!(leaf.is_none());
+
+        let leaf = Provider::<SeqTypes, LeafRequest>::fetch(&lc, LeafRequest::new(6)).await;
+        assert!(leaf.is_some());
+
+        let group = metrics.get_subgroup(["light_client"]).unwrap();
+        assert_eq!(group.get_counter("fetch_requests").unwrap().get(), 2);
+        assert_eq!(group.get_counter("fetch_failures").unwrap().get(), 1);
+    }
 
     #[tokio::test]
     #[test_log::test]

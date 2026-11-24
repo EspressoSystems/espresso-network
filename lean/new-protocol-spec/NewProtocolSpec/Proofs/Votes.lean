@@ -88,7 +88,7 @@ theorem vote1_signed {k : PubKey} {h : C.Honest k} {v : Vote1}
     (N.safe_at k h n).vote1Justified n v ⟨(N.trace k h n), (Trace.history_getElem? _ (Nat.lt_succ_self n)), hn⟩ he
   rw [Trace.history_upTo _ (Nat.le_refl _)] at hcase
   refine ⟨hsig, ?_⟩
-  rcases hcase with ⟨sender, p, vid, hrec, hwf, hval, -, hop, hfor⟩ | ⟨sender, r, hrec, hwf, -, hfor⟩
+  rcases hcase with ⟨sender, p, vid, hrec, hwf, hval, -, hop, -, hfor⟩ | ⟨sender, r, hrec, hwf, -, hfor⟩
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
     refine Or.inl ⟨m, sender, p, vid, hm, hwf, hval, fun hent => ?_, hfor⟩
     obtain ⟨-, bc, hbc, hbv, hbd⟩ := hop hent
@@ -137,7 +137,7 @@ theorem vote1_safe {k : PubKey} {h : C.Honest k} {v : Vote1}
   obtain ⟨-, hcase⟩ :=
     (N.safe_at k h n).vote1Justified n v ⟨(N.trace k h n), (Trace.history_getElem? _ (Nat.lt_succ_self n)), hn⟩ he
   rw [Trace.history_upTo _ (Nat.le_refl _)] at hcase
-  rcases hcase with ⟨sender, p, vid, hrec, hwf, -, hsafe, hopen, hfor⟩
+  rcases hcase with ⟨sender, p, vid, hrec, hwf, -, hsafe, hopen, -, hfor⟩
     | ⟨sender, r, hrec, hwf, hsafe, hfor⟩
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
     exact Or.inl ⟨m, sender, p, vid, hm, hwf, hsafe, ⟨n + 1, hopen⟩, hfor⟩

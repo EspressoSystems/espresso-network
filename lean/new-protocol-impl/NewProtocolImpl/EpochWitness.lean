@@ -21,8 +21,8 @@ a block:
   `Cert1`, the payload and the `Cert2`. A node outside the block's committee gets
   the proposal without a share, and no payload (`phase`);
 * the epoch change, with the block's `Cert1` and `Cert2`. A node outside the
-  committee locks on the block through it, and holds the parent of the next block
-  it votes for (`ParentReady`);
+  committee locks on the block through it, and votes for the next block without
+  the payload of its parent (`ParentReady`);
 * the re-vote request `a` sent once it could lock on the block, before the `Cert2`
   could arrive, in view `u + 2`. It arrives after the epoch change, so nobody votes
   on it (`NotBehind`).
@@ -736,12 +736,18 @@ theorem revotes (u : Nat) : ∃ j, j ≤ 8 * u + 4 ∧ Output.send (.revote (R u
   refine Classical.byContradiction fun hneg => settled a (8 * u + 4) (.propose ⟨u + 1⟩ ⟨u + 2⟩)
     ⟨Or.inr ⟨R u, ⟨rfl, ⟨?_, Or.inl ⟨rfl, ?_⟩, ?_⟩, Liveness.buildable_of_lockable hlk, fun _ => hlk,
       (fun _ h => by cases h), notBehind ?_, ?_⟩, rfl,
-      cert_epoch u⟩, ?_, not_timedOut, ?_⟩
+      cert_epoch u, fun c2 hc hd => ?_⟩, ?_, not_timedOut, ?_⟩
   · show (certOf (blk u)).view < ⟨u + 2⟩; rw [cert_view]; show u + 1 < u + 2; omega
   · show (certOf (blk u)).view + 1 = ⟨u + 2⟩; rw [cert_view]; rfl
   · show IsLastBlock (certOf (blk u)).data.blockNumber 1; rw [cert_number]; exact last_block (by omega)
   · rw [show (R u).cert.data.epoch = ⟨u + 1⟩ from cert_epoch u]; show eAt (8 * u + 5) ≤ u + 1; omega
   · exact ⟨_, (inView _).1, by show u + 2 ≤ vAt (8 * u + 5); omega⟩
+  · -- The block's `Cert2` arrives only at the next step.
+    obtain ⟨x, rfl, hlt⟩ := hasCert2 hc
+    have h1 : (⟨x + 1⟩ : EpochNumber) = ⟨u + 1⟩ :=
+      (cert_epoch x).symm.trans ((congrArg Vote2Data.epoch hd).trans (cert_epoch u))
+    have : x + 1 = u + 1 := congrArg EpochNumber.toNat h1
+    omega
   · rintro (⟨p, hs, hpv, hpe⟩ | ⟨r, hs, hrv, hre⟩)
     · obtain ⟨j, hj, hjp⟩ := sent_iff.mp hs
       obtain ⟨-, x, rfl, -⟩ := sent_proposal hv hjp
@@ -799,7 +805,7 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 8 * u + 
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
   · cases u with
     | zero => exact Or.inl rfl
-    | succ u => exact Liveness.parentReady_of_opens (blk_enters u) hopen
+    | succ u => exact Or.inr (Or.inl (blk_enters u))
   · rw [blk_epoch]; show eAt (8 * u + 3) ≤ u + 1; omega
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -, -⟩ := sent_vote1 hv hjv

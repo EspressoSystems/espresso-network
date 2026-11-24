@@ -27,7 +27,7 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     signature_key::BLSPubKey,
@@ -138,7 +138,7 @@ async fn build_coordinator(
     tracer: Option<LeaderTracerHandle>,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
-    let epoch_height = u64::MAX;
+    let epoch_length = membership.epoch_length();
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
@@ -159,7 +159,7 @@ async fn build_coordinator(
         cfg.total_nodes,
         upgrade_lock.clone(),
         genesis_leaf.clone(),
-        epoch_height,
+        epoch_length,
     );
     consensus.set_tracer(tracer.clone());
 
@@ -172,7 +172,7 @@ async fn build_coordinator(
         VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
-    let epoch_manager = EpochManager::new(epoch_height, membership.clone());
+    let epoch_manager = EpochManager::new(epoch_length, membership.clone());
 
     let mut vid_disperser = VidDisperser::new(
         membership.clone(),
@@ -220,12 +220,12 @@ async fn build_coordinator(
 
     let proposal_validator = ProposalValidator::new(
         membership.clone(),
-        epoch_height,
+        epoch_length,
         upgrade_lock.clone(),
         consensus.cert1_at(ViewNumber::genesis()),
     );
     let share_validator =
-        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        VidShareValidator::new(membership.clone(), epoch_length, upgrade_lock.clone());
 
     let timer = Timer::new(cfg.timeout_duration(), ViewNumber::genesis());
 
@@ -321,7 +321,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 let version = bench_upgrade_lock().version_infallible(req.view);
                 let header = TestBlockHeader::new::<TestTypes>(
                     &parent_leaf,
-                    block.payload_commitment,
+                    VidCommitment::V2(block.payload_commitment),
                     block.builder_commitment,
                     block.metadata,
                     version,
@@ -373,7 +373,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
 struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
-    payload_commitment: hotshot_types::data::VidCommitment,
+    payload_commitment: VidCommitment2,
     builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
@@ -389,12 +389,14 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
     };
     // Use the actual committee size so the commitment matches what
     // VidDisperse::calculate_vid_disperse will produce.
-    let payload_commitment = hotshot_types::data::vid_commitment(
+    let VidCommitment::V2(payload_commitment) = hotshot_types::data::vid_commitment(
         &block.encode(),
         &metadata.encode(),
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
-    );
+    ) else {
+        panic!("the new protocol commits with AvidmGf2");
+    };
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {

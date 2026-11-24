@@ -35,7 +35,8 @@ variable (cfg : Config) (node : PubKey) (h : History)
 def CheckVote1 : Prop :=
   ∀ i, (hi : i < h.length) → ∀ v ∈ vote1sOf h[i], v.signer = node ∧
     ((∃ st ∈ h.take (i + 1), ∃ x ∈ proposalsIn st, ProposalWellFormed cfg x.2.1 ∧ SafeParent x.2.1
-        ∧ NewProtocolImpl.OpensB cfg (h.take (i + 1)) x.2.1 ∧ Vote1For v x.2.1
+        ∧ NewProtocolImpl.OpensB cfg (h.take (i + 1)) x.2.1
+        ∧ NewProtocolImpl.ParentReadyB cfg (h.take (i + 1)) x.2.1 ∧ Vote1For v x.2.1
         ∧ ∃ st' ∈ h.take (i + 1), st'.input = .blockValidated x.2.1.viewNumber (blockHash x.2.1))
       ∨ ∃ x ∈ NewProtocolImpl.receivedRevotes (h.take (i + 1)), RevoteWellFormed cfg x.2
         ∧ SafeRevote x.2 ∧ Vote1Again v x.2)
@@ -122,11 +123,11 @@ theorem checkSafe_sound (hc : checkSafe cfg node h = true) (hvalid : ValidityTru
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rintro n vote ⟨st, hst, hmem⟩ _
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
-    obtain ⟨hsig, ⟨st', hst', x, hx, hwf, hsafe, hop, hfor, st'', hst'', hval⟩ | ⟨x, hx, hw, hs, hag⟩⟩ :=
+    obtain ⟨hsig, ⟨st', hst', x, hx, hwf, hsafe, hop, hpr, hfor, st'', hst'', hval⟩ | ⟨x, hx, hw, hs, hag⟩⟩ :=
       h1 n hn vote (mem_vote1sOf.mpr hmem)
     · have hin := mem_proposalsIn hx
       refine ⟨hsig, Or.inl ⟨x.1, x.2.1, x.2.2, ⟨st', hst', hin⟩, hwf, ?_, hsafe,
-        NewProtocolImpl.opensB_iff.mp hop, hfor⟩⟩
+        NewProtocolImpl.opensB_iff.mp hop, NewProtocolImpl.parentReadyB_iff.mp hpr, hfor⟩⟩
       exact hvalid _ _ ⟨st'', List.mem_of_mem_take hst'', hval⟩ x.2.1 rfl
     · exact ⟨hsig, Or.inr ⟨x.1, x.2, NewProtocolImpl.mem_receivedRevotes.mp hx, hw, hs, hag⟩⟩
   · intro v v' hs hs' _ he hv

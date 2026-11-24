@@ -11,19 +11,17 @@ use espresso_types::{Header, traits::SequencerPersistence};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     light_client::{
-        LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
-        StakeTableState, StateSignKey, StateVerKey,
+        LCV3StateSignatureRequestBody, LightClientState, StakeTableState, StateSignKey, StateVerKey,
     },
     new_protocol::CoordinatorEvent,
     signature_key::SchnorrPubKey,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
-        signature_key::{
-            LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
-            StakeTableEntryType,
-        },
+        election::Membership,
+        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
     },
     utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
@@ -109,24 +107,16 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = *consensus_handle.epoch_height();
 
-                let option_state_epoch = option_epoch_from_block_number(
-                    leaf.with_epoch,
-                    cur_block_height,
-                    blocks_per_epoch,
-                );
+                let option_state_epoch =
+                    option_epoch_from_block_number(true, cur_block_height, blocks_per_epoch);
 
                 if self.voting_stake_table_epoch != option_state_epoch {
-                    let Ok(membership) = consensus_handle
-                        .membership_coordinator()
-                        .stake_table_for_epoch(option_state_epoch)
-                    else {
-                        tracing::error!(
-                            "Failed to get membership for epoch: {:?}",
-                            option_state_epoch
-                        );
+                    let Some(stake_table) = voting_stake_table(
+                        &consensus_handle.membership_coordinator(),
+                        option_state_epoch,
+                    ) else {
                         return;
                     };
-                    let stake_table = HSStakeTable::from_iter(membership.stake_table());
                     match stake_table.commitment(self.stake_table_capacity) {
                         Ok(stake_table_state) => {
                             self.should_vote = should_vote(&stake_table, &self.ver_key);
@@ -150,7 +140,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 }
 
                 // The last few state updates are handled in the consensus, we do not sign them.
-                if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                if is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
                     tracing::debug!("Skipping epoch transition block {cur_block_height}");
                     return;
                 }
@@ -168,48 +158,15 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     return;
                 };
 
-                if let Some(client) = &self.relay_server_client {
-                    if let Err(error) = client
+                if let Some(client) = &self.relay_server_client
+                    && let Err(error) = client
                         .post::<()>("api/state")
                         .body_binary(&request_body)
                         .unwrap()
                         .send()
                         .await
-                    {
-                        tracing::error!("Error posting signature to the relay server: {:?}", error);
-                    }
-
-                    if !leaf.with_epoch {
-                        // Before epoch upgrade, we need to sign the state for the legacy light client
-                        let Ok(legacy_signature) =
-                            <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(
-                                &self.sign_key,
-                                &state,
-                            )
-                        else {
-                            tracing::error!("Failed to sign new state for legacy light client");
-                            return;
-                        };
-                        let legacy_request_body = LCV2StateSignatureRequestBody {
-                            key: self.ver_key.clone(),
-                            state,
-                            next_stake: StakeTableState::default(),
-                            signature: legacy_signature,
-                        };
-                        if let Err(error) = client
-                            .post::<()>("api/legacy-state")
-                            .body_binary(&legacy_request_body)
-                            .unwrap()
-                            .send()
-                            .await
-                        {
-                            tracing::error!(
-                                "Error posting signature for legacy light client to the relay \
-                                 server: {:?}",
-                                error
-                            );
-                        }
-                    }
+                {
+                    tracing::error!("Error posting signature to the relay server: {:?}", error);
                 }
             },
             Err(err) => {
@@ -259,7 +216,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 pub(crate) struct DecidedLeaf {
     header: Header,
     view: ViewNumber,
-    with_epoch: bool,
 }
 
 impl DecidedLeaf {
@@ -271,7 +227,6 @@ impl DecidedLeaf {
         Some(DecidedLeaf {
             header: leaf.block_header().clone(),
             view: leaf.view_number(),
-            with_epoch: leaf.with_epoch,
         })
     }
 }
@@ -295,6 +250,24 @@ impl StateSignatureMemStorage {
     pub fn get_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
+}
+
+/// The stake table that signs the states of `epoch`, or `None` if it is not
+/// available. States from before epochs were enabled have no epoch, and the
+/// genesis stake table signs them.
+fn voting_stake_table(
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    epoch: Option<EpochNumber>,
+) -> Option<HSStakeTable<SeqTypes>> {
+    let Some(epoch) = epoch else {
+        let genesis = coordinator.membership().genesis_stake_tables();
+        return Some(HSStakeTable::from_iter(genesis.stake_table()));
+    };
+    let Ok(membership) = coordinator.stake_table_for_epoch(epoch) else {
+        tracing::error!("Failed to get membership for epoch: {epoch}");
+        return None;
+    };
+    Some(HSStakeTable::from_iter(membership.stake_table()))
 }
 
 pub(crate) fn should_vote(stake_table: &HSStakeTable<SeqTypes>, ver_key: &SchnorrPubKey) -> bool {

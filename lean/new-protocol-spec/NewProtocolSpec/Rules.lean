@@ -79,6 +79,20 @@ def OpensEpochJustified (h : History) (p : Proposal) : Prop :=
       ∧ c2.data = p.parentCert.data.toVote2
 
 /--
+The node holds what a vote1 on `p` reads of its parent.
+
+The parent and its payload, unless the parent is the anchor or `p` opens an epoch.
+The exemption is there because VID shares go to the committee of a block's own
+epoch, so a node new to the incoming committee cannot rebuild the outgoing
+epoch's last block.
+-/
+def ParentReady (h : History) (p : Proposal) : Prop :=
+  p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+    ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
+        ∧ p.parentCert.data.blockHash = blockHash parent
+        ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
+
+/--
 When a node may sign, and what its decides show, for the epochs it is honest in.
 
 Every field is a permission. A node that never acts satisfies all of them.
@@ -91,13 +105,22 @@ epoch takes `fun _ => True`.
 structure SafeHistory (honestIn : EpochNumber → Prop) (h : History) : Prop where
   /--
   A vote1 is for a well-formed, valid proposal the node received, with a safe
-  parent, or answers a well-formed, safe re-vote request the node received.
+  parent that the node holds with its payload (`ParentReady`), or answers a
+  well-formed, safe re-vote request the node received.
+
+  The parent's payload is what makes a `Cert1` mean its parent is available. A
+  vote1 on a proposal says the signer had it. A vote1 answering a re-vote request
+  says nothing of the parent, but re-certifies a block that already has a `Cert1`.
+  So an honest node held the parent of a block with a backed `Cert1`, with its
+  payload, unless the parent is the anchor or the block opens an epoch
+  (`cert1_parent_ready`).
   -/
   vote1Justified : ∀ n vote, h.SentAt n (.vote1 vote) →
     honestIn vote.data.epoch → vote.signer = node
       ∧ ((∃ sender p vid, (h.upTo (n + 1)).Received (.proposal sender p (some vid))
           ∧ ProposalWellFormed cfg p ∧ BlockValid p ∧ SafeParent p
-          ∧ OpensEpochJustified cfg (h.upTo (n + 1)) p ∧ Vote1For vote p)
+          ∧ OpensEpochJustified cfg (h.upTo (n + 1)) p ∧ ParentReady cfg (h.upTo (n + 1)) p
+          ∧ Vote1For vote p)
         ∨ ∃ sender r, (h.upTo (n + 1)).Received (.revote sender r)
           ∧ RevoteWellFormed cfg r ∧ SafeRevote r ∧ Vote1Again vote r)
 
@@ -281,9 +304,9 @@ is well formed and safe, and the certificate is one it may vote on again
 (`CertJustified`).
 
 A request is justified as soon as the leader can lock on the block, whether or not
-its `Cert2` is on its way. It is owed from then (`Owed`), so an implementation
-may wait for the `Cert2` up to `δ` (`Prompt`), and propose the next epoch's first
-block instead if it arrives. Waiting longer is not allowed: asking for a timeout
+its `Cert2` is on its way. It is owed from then, until the leader holds a `Cert2`
+over the block (`Owed`), so an implementation may wait for the `Cert2` up to `δ`
+(`Prompt`), and propose the next epoch's first block instead if it arrives. Waiting longer is not allowed: asking for a timeout
 first admits a liveness attack at the boundary.
 -/
 structure RevoteJustified (h : History) (r : RevoteRequest) : Prop where
@@ -395,15 +418,6 @@ structure ProtocolHistory (honestIn : EpochNumber → Prop) (h : History) : Prop
 /-! ## What a node owes -/
 
 /--
-The node holds the parent of `p`, unless the parent is the anchor.
-
--/
-def ParentReady (h : History) (p : Proposal) : Prop :=
-  p.parentCert.view = cfg.anchorView
-    ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
-        ∧ p.parentCert.data.blockHash = blockHash parent
-
-/--
 The node owes a vote1 on `p`: it received `p` from the view's leader with its
 share, `p` is well formed, reported valid, its parent ready and safe, and the node
 has not yet voted1 for the epoch and view, nor timed it out, and is in it.
@@ -466,6 +480,15 @@ structure OwedVote1Again (h : History) (r : RevoteRequest) : Prop where
 
   /-- The node has not voted1 for the epoch and view. -/
   notVoted : ∀ vote : Vote1, h.Sent (.vote1 vote) → vote.data.epoch = r.cert.data.epoch → vote.view ≠ r.view
+
+  /--
+  The node holds no `Cert2` over the block.
+
+  A block with a `Cert2` is committed, at whatever view the certificate formed,
+  and voting on it again adds nothing. The node that holds the `Cert2` sends it
+  on with the epoch change.
+  -/
+  notCommitted : ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2
 
   /-- The node is in the view. -/
   inView : h.InView cfg r.view
@@ -554,7 +577,8 @@ def Owed (h : History) : Obligation → Prop
   | .decide c => OwedDecide cfg h c
   | .propose e v =>
       ((∃ p, ProposalJustified cfg leader node h p ∧ p.viewNumber = v ∧ p.epoch = e)
-        ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e)
+        ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e
+            ∧ ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2)
       ∧ ¬ ProposedIn h e v ∧ ¬ h.TimedOut v ∧ h.InView cfg v
 
 /-! ## For the epochs a node is honest in -/

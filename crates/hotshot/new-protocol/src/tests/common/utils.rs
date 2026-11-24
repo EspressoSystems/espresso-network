@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    num::NonZeroU64,
+    path::Path,
     sync::Arc,
 };
 
@@ -8,7 +10,8 @@ use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{
-        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+        TestableMembership, fetcher::ExternalMessage, static_committee::StaticStakeTable,
+        strict_membership::StrictMembership,
     },
     node_stake::{TestNodeStakes, gen_node_lists},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -19,10 +22,11 @@ use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
-        VidDisperseShare2, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
+        ViewNumber, vid_commitment,
         vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece, vid_total_weight},
     },
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::{Proposal as SignedProposal, UpgradeLock},
@@ -32,7 +36,7 @@ use hotshot_types::{
         UpgradeCertificate2,
     },
     simple_vote::{
-        LightClientStateUpdateVote2, LockView, QuorumVote2, TimeoutData2, TimeoutData3,
+        HasEpoch, LightClientStateUpdateVote2, LockView, QuorumVote2, TimeoutData2, TimeoutData3,
         TimeoutVote2, UpgradeProposalData, UpgradeVote, Vote2Data,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
@@ -44,10 +48,7 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
         },
     },
-    utils::{
-        BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
-        is_last_block,
-    },
+    utils::BuilderCommitment,
     vote::Vote,
 };
 use parking_lot::Mutex;
@@ -74,8 +75,13 @@ use crate::{
     upgrade::expected_upgrade_data,
 };
 
-/// DRB result used by `TestData` for epoch transition proposals.
+/// A placeholder DRB result, for a test that registers an epoch by hand. It is
+/// not the one `TestData`'s transition proposals carry, which is computed
+/// from the epoch root.
 pub const TEST_DRB_RESULT: hotshot_types::drb::DrbResult = [0u8; 32];
+
+pub(crate) type StateCert =
+    hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<TestTypes>;
 
 #[allow(dead_code)]
 pub struct TestView {
@@ -89,6 +95,9 @@ pub struct TestView {
     pub vid_disperse: VidDisperse2<TestTypes>,
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
     pub cert1: Certificate1<TestTypes>,
+    /// The light-client state certificate `cert1` arrives with, when this
+    /// view's block is an epoch root.
+    pub state_cert: Option<StateCert>,
     pub cert2: Certificate2<TestTypes>,
     pub timeout_cert: TimeoutEvidence<TestTypes>,
     pub epoch_height: u64,
@@ -180,9 +189,14 @@ impl TestView {
         }
     }
 
-    /// Build an Event for Certificate1.
+    /// Build an Event for Certificate1. Over an epoch root it arrives with the
+    /// state certificate, as the node's state-vote tally delivers the pair.
     pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate1(ValidCert::new(self.cert1.clone(), self.epoch_number))
+        let cert1 = ValidCert::new(self.cert1.clone(), self.epoch_number);
+        match self.state_cert.clone() {
+            Some(state_cert) => ConsensusInput::EpochRootCertificates { cert1, state_cert },
+            None => ConsensusInput::Certificate1(cert1),
+        }
     }
 
     /// Build an Event for Certificate2.
@@ -238,7 +252,10 @@ impl TestView {
         .expect("Failed to sign QuorumVote2");
 
         let block_number = BlockHeader::<TestTypes>::block_number(&self.proposal.data.block_header);
-        let state_vote = if self.epoch_height > 0 && is_epoch_root(block_number, self.epoch_height)
+        let state_vote = if self.epoch_height > 0
+            && epoch_length_or_single_epoch(self.epoch_height)
+                .position(block_number)
+                .is_root()
         {
             Some(build_state_vote_for_test(
                 &self.proposal.data.block_header,
@@ -444,8 +461,9 @@ impl TestData {
     }
 
     /// Create test data with epoch-aware proposals. When `epoch_height > 0`,
-    /// epoch transition views will have `next_drb_result` set to
-    /// [`TEST_DRB_RESULT`] and all downstream commitments (leaf, cert1, cert2,
+    /// epoch transition views of epoch 2 and later will have `next_drb_result`
+    /// set to the result computed from the epoch root two epochs before the
+    /// one it is for, and all downstream commitments (leaf, cert1, cert2,
     /// justify_qc chain) are kept consistent.
     pub async fn new_with_epoch_height(num_views: usize, epoch_height: u64) -> Self {
         Self::new_with_epoch_height_and_num_nodes(num_views, epoch_height, 10).await
@@ -471,6 +489,7 @@ impl TestData {
         let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         let (membership, _storage, _client) =
             mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
+        let length = epoch_length_or_single_epoch(epoch_height);
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
         // Must match `test_upgrade_lock()` so signature commitments are
@@ -482,7 +501,7 @@ impl TestData {
         let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
             if let Some((target_view, ref data)) = upgrade_at_view {
                 let epoch_membership = membership
-                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .membership_for_epoch(EpochNumber::genesis())
                     .unwrap();
                 let (leader_pk, leader_priv_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
@@ -520,9 +539,7 @@ impl TestData {
         let mut computed_drbs: HashMap<u64, hotshot_types::drb::DrbResult> = HashMap::new();
         // When the previous view's block is an epoch root, the current view's
         // proposal MUST carry a matching state_cert (new-protocol invariant).
-        let mut prev_state_cert: Option<
-            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<TestTypes>,
-        > = None;
+        let mut prev_state_cert: Option<StateCert> = None;
 
         for gen_view in &gen_views {
             let view_number = gen_view.view_number;
@@ -543,13 +560,13 @@ impl TestData {
             // Compute epoch from block number (generator doesn't know about
             // epoch boundaries, so all views get genesis epoch).
             let epoch = if epoch_height > 0 && block_number > 0 {
-                EpochNumber::new(epoch_from_block_number(block_number, epoch_height))
+                length.epoch_of(block_number)
             } else {
                 EpochNumber::genesis()
             };
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
-                .membership_for_epoch(Some(EpochNumber::genesis()))
+                .membership_for_epoch(EpochNumber::genesis())
                 .unwrap();
 
             // ---- epoch-aware patching ----
@@ -559,7 +576,7 @@ impl TestData {
             // `next_drb_result`.
             let needs_drb = epoch > EpochNumber::genesis()
                 && epoch_height > 0
-                && is_epoch_transition(block_number, epoch_height);
+                && length.position(block_number).is_epoch_transition();
 
             if let Some(new_cert1) = prev_new_cert1.take() {
                 proposal.justify_qc = new_cert1;
@@ -586,7 +603,7 @@ impl TestData {
                 share.target_epoch = Some(epoch);
             }
 
-            let needs_new_epoch = is_last_block(block_number.saturating_sub(1), epoch_height);
+            let needs_new_epoch = length.position(block_number.saturating_sub(1)).is_last();
             if needs_new_epoch {
                 proposal.next_epoch_justify_qc = prev_new_cert2.clone();
             }
@@ -608,18 +625,17 @@ impl TestData {
 
             // Compute DRB for epoch roots so transition-window proposals
             // carry next_drb_result, mirroring `EpochManager`.
-            if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
-                let target_epoch =
-                    EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
-                let _ = membership
+            if epoch_height > 0 && length.position(block_number).is_root() {
+                let target_epoch = length.epoch_of(block_number) + 2;
+                membership
                     .add_epoch_root(proposal.block_header.clone())
-                    .await;
-                if let Ok(drb) = membership
+                    .await
+                    .expect("an epoch root registers");
+                let drb = membership
                     .compute_drb_result(target_epoch, leaf.clone())
                     .await
-                {
-                    computed_drbs.insert(*target_epoch, drb);
-                }
+                    .expect("an epoch root's DRB result computes");
+                computed_drbs.insert(*target_epoch, drb);
             }
 
             // Re-sign the proposal when the leaf commitment changed due to patching.
@@ -665,7 +681,7 @@ impl TestData {
             // Set prev_new_cert2 on the last block of each epoch so the
             // first block of the next epoch can use it as
             // next_epoch_justify_qc.
-            if is_last_block(block_number, epoch_height) {
+            if length.position(block_number).is_last() {
                 prev_new_cert2 = Some(cert2.clone());
             }
             // Build a state_cert when this block is an epoch root, so the
@@ -673,7 +689,8 @@ impl TestData {
             // attach it. Propagate the cert1 too, since we always need to
             // rebuild it when this view is epoch root (state_cert.view must
             // match cert1.view, and the current cert1 already reflects that).
-            if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
+            let mut state_cert = None;
+            if epoch_height > 0 && length.position(block_number).is_root() {
                 // Compute next-epoch stake commitment (same committee in tests).
                 let next_epoch_membership = epoch_membership
                     .next_epoch_stake_table()
@@ -682,14 +699,15 @@ impl TestData {
                     HSStakeTable::from_iter(next_epoch_membership.stake_table())
                         .commitment(num_nodes)
                         .expect("stake table commitment");
-                let state_cert = build_state_cert_for_test(
+                let root_state_cert = build_state_cert_for_test(
                     &proposal.block_header,
                     view_number,
                     epoch,
                     &next_stake_table_state,
                     ((2 * num_nodes) / 3 + 1) as u64,
                 );
-                prev_state_cert = Some(state_cert);
+                prev_state_cert = Some(root_state_cert.clone());
+                state_cert = Some(root_state_cert);
                 // Always propagate cert1 at epoch root so next view's justify_qc
                 // matches — tests may have otherwise skipped the propagation.
                 prev_new_cert1 = Some(cert1.clone());
@@ -724,6 +742,7 @@ impl TestData {
                 vid_disperse,
                 vid_shares,
                 cert1,
+                state_cert,
                 cert2,
                 timeout_cert,
                 epoch_height,
@@ -736,6 +755,21 @@ impl TestData {
 
 /// The stake table capacity a harness's consensus commits to stake tables with.
 pub const STAKE_TABLE_CAPACITY: usize = 10;
+
+/// An [`EpochLength`] from a height the test knows is positive.
+pub fn epoch_length(epoch_height: u64) -> EpochLength {
+    NonZeroU64::new(epoch_height)
+        .expect("test epoch heights are positive")
+        .into()
+}
+
+/// Tests pass an epoch height of 0 for a chain that never changes epoch. An epoch that never ends
+/// has the same geometry: no root, no transition, no last block.
+pub fn epoch_length_or_single_epoch(epoch_height: u64) -> EpochLength {
+    NonZeroU64::new(epoch_height)
+        .unwrap_or(NonZeroU64::MAX)
+        .into()
+}
 
 pub fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
@@ -766,7 +800,7 @@ pub fn mock_membership_with_client(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
@@ -811,7 +845,7 @@ pub fn mock_membership_with_client_and_schedule(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
@@ -837,7 +871,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     mock_membership_core(
         num_nodes,
@@ -861,7 +895,7 @@ fn mock_membership_core(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+    async_broadcast::Sender<ExternalMessage>,
 ) {
     let mut members = gen_node_lists(
         num_nodes as u64,
@@ -910,11 +944,10 @@ fn mock_membership_core(
             membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
         }
     }
-    // Channel used by the Coordinator to forward ExternalMessageReceived
-    // events to the membership's Leaf2Fetcher (drives epoch catchup).
+    // Forward external messages to the membership's Leaf2Fetcher for epoch catchup.
     // Overflow is enabled so slow listeners don't stall the Coordinator.
     let (mut external_events_tx, mut external_events_rx) =
-        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
+        async_broadcast::broadcast::<ExternalMessage>(1024);
     external_events_tx.set_overflow(true);
     external_events_rx.set_overflow(true);
     membership.set_leaf_fetcher(
@@ -924,8 +957,11 @@ fn mock_membership_core(
         external_events_rx,
     );
 
-    let coordinator =
-        EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default());
+    let coordinator = EpochMembershipCoordinator::new(
+        membership,
+        epoch_length_or_single_epoch(epoch_height),
+        &TestStorage::default(),
+    );
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
@@ -1036,7 +1072,7 @@ pub fn build_state_vote_for_test(
 pub struct MockBlock {
     pub block: TestBlockPayload,
     pub metadata: TestMetadata,
-    pub payload_commitment: VidCommitment,
+    pub payload_commitment: VidCommitment2,
     pub builder_commitment: BuilderCommitment,
 }
 
@@ -1053,7 +1089,7 @@ impl MockBlock {
         membership: &EpochMembershipCoordinator<TestTypes>,
         epoch: EpochNumber,
     ) -> Self {
-        match membership.stake_table_for_epoch(Some(epoch)) {
+        match membership.stake_table_for_epoch(epoch) {
             Ok(committee) => Self::with_total_weight(vid_total_weight::<TestTypes, _>(
                 committee.stake_table(),
                 Some(epoch),
@@ -1067,12 +1103,14 @@ impl MockBlock {
         let metadata = TestMetadata {
             num_transactions: 0,
         };
-        let payload_commitment = vid_commitment(
+        let VidCommitment::V2(payload_commitment) = vid_commitment(
             &block.encode(),
             &metadata.encode(),
             total_weight,
             crate::helpers::test_version(),
-        );
+        ) else {
+            panic!("the new protocol commits with AvidmGf2");
+        };
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
         Self {
@@ -1138,9 +1176,7 @@ pub(crate) fn extract_vid_shares(
 fn extract_vid_disperse(
     gen_view: &GeneratedView,
 ) -> (VidDisperse2<TestTypes>, Vec<VidDisperseShare2<TestTypes>>) {
-    let hotshot_types::data::VidDisperse::V2(vid_disperse) = gen_view.vid_disperse.clone() else {
-        panic!("Expected V2 VID disperse");
-    };
+    let vid_disperse = gen_view.vid_disperse.clone();
     let vid_shares = extract_vid_shares(&vid_disperse);
     (vid_disperse, vid_shares)
 }
@@ -1197,8 +1233,10 @@ pub fn reconstructed_blocks(
 
 /// Lightweight consensus-only test harness. Wraps a single [`Consensus`]
 /// instance and auto-responds to outputs that consensus expects feedback for
-/// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`,
-/// `RequestDrbResult`).
+/// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`). It
+/// computes an epoch's DRB result when it sees the epoch's root decided, and
+/// gives it to consensus then, as the `EpochManager` does. It does not
+/// answer a `RequestDrbResult`.
 pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
@@ -1212,6 +1250,8 @@ pub(crate) struct ConsensusHarness {
     defer_action_for: BTreeSet<(ViewNumber, ActionKind)>,
     deferred_locks: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
     defer_lock_for: BTreeSet<ViewNumber>,
+    /// Epochs whose DRB result consensus has requested and not been given.
+    awaited_drbs: BTreeSet<EpochNumber>,
     trace: trace::Recorder,
 }
 
@@ -1226,14 +1266,16 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            *self.consensus.epoch_height,
+            self.consensus.epoch_length.get(),
         );
         record_leader(&mut self.trace, &self.consensus, &input);
         record_fallback_anchor(&mut self.trace, &self.consensus);
         let before = outbox.len();
+        let earlier = self.trace.before(&self.consensus, &input);
         self.consensus.apply(input.clone(), outbox);
         record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
-        self.trace.record(&input, outbox.iter().skip(before));
+        self.trace
+            .record(&self.consensus, earlier, &input, outbox.iter().skip(before));
     }
 }
 
@@ -1286,7 +1328,7 @@ impl ConsensusHarness {
             STAKE_TABLE_CAPACITY,
             lock,
             genesis_leaf,
-            epoch_height,
+            epoch_length(epoch_height),
         );
         Self {
             consensus,
@@ -1301,6 +1343,7 @@ impl ConsensusHarness {
             defer_action_for: BTreeSet::new(),
             deferred_locks: BTreeMap::new(),
             defer_lock_for: BTreeSet::new(),
+            awaited_drbs: BTreeSet::new(),
             trace: trace::Recorder::for_current_test(),
         }
     }
@@ -1334,7 +1377,7 @@ impl ConsensusHarness {
             10,
             test_upgrade_lock(),
             anchor_leaf,
-            epoch_height,
+            epoch_length(epoch_height),
         );
 
         let undecided_proposals: Vec<_> = undecided_proposals.into_iter().collect();
@@ -1360,6 +1403,7 @@ impl ConsensusHarness {
             defer_action_for: BTreeSet::new(),
             deferred_locks: BTreeMap::new(),
             defer_lock_for: BTreeSet::new(),
+            awaited_drbs: BTreeSet::new(),
             trace: trace::Recorder::for_current_test(),
         }
     }
@@ -1371,10 +1415,32 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            *self.consensus.epoch_height,
+            self.consensus.epoch_length.get(),
         );
         self.trace.placed(view, epoch);
         self.consensus.set_view(view, epoch);
+    }
+
+    /// Resume the node as after a restart, as `Consensus::resume_from_restart`
+    /// does, and note in the trace the last view that bars it from.
+    pub fn resume_from_restart(
+        &mut self,
+        anchor_view: ViewNumber,
+        restart_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+    ) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            self.consensus.epoch_length.get(),
+        );
+        let first_allowed = (anchor_view + 1)
+            .max(restart_view)
+            .max(last_actioned_view + 1);
+        self.trace.restarted(first_allowed - 1);
+        self.consensus
+            .resume_from_restart(anchor_view, restart_view, last_actioned_view);
     }
 
     /// Replace the node's proposal for `view`, as `Consensus::force_set_proposal`
@@ -1384,7 +1450,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            *self.consensus.epoch_height,
+            self.consensus.epoch_length.get(),
         );
         self.trace.forced(view);
         self.consensus.force_set_proposal(view, proposal);
@@ -1399,7 +1465,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            *self.consensus.epoch_height,
+            self.consensus.epoch_length.get(),
         );
         for proposal in &proposals {
             self.trace.held(proposal);
@@ -1407,11 +1473,46 @@ impl ConsensusHarness {
         self.consensus.seed_proposals(proposals);
     }
 
+    /// Restore a lock on `block` as a restart does: seed the block and the lock
+    /// `cert1` certifying it, and record the block, its payload and `cert1` as
+    /// held. The trace is marked as placed, since its steps do not show what
+    /// the node did on the lock before the restart.
+    pub fn seed_locked_block(
+        &mut self,
+        block: Proposal<TestTypes>,
+        cert1: Certificate1<TestTypes>,
+    ) {
+        self.seed_proposals([block.clone()]);
+        self.trace.payload_held(&block);
+        self.trace.cert1_held(&cert1);
+        self.trace.lock_restored(cert1.view_number);
+        self.consensus.seed_locked_cert(cert1);
+    }
+
     /// Record the run under `label` instead of the test's name, for a test that
     /// replays several runs.
     pub fn record_as(mut self, label: &str) -> Self {
         self.trace = trace::Recorder::new(label);
         self
+    }
+
+    /// Record the run to `path`, whether or not a trace directory is set. For
+    /// a harness that has taken no input yet: the trace starts here.
+    pub fn record_to(mut self, path: &Path) -> Self {
+        self.trace = trace::Recorder::writing_to(Some(path.to_path_buf()));
+        self
+    }
+
+    /// The trace of this run, read from the file it is written to as the
+    /// harness is dropped.
+    pub fn recorded(self) -> String {
+        let path = self
+            .trace
+            .path()
+            .expect("the run is recorded")
+            .to_path_buf();
+        drop(self);
+        std::fs::read_to_string(path).expect("the run recorded a trace")
     }
 
     /// Fail the state validation of the block with this leaf commitment, as for a
@@ -1433,7 +1534,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
             self.consensus.cert1_at(ViewNumber::genesis()),
-            *self.consensus.epoch_height,
+            self.consensus.epoch_length.get(),
         );
         let input = ConsensusInput::Proposal(sender, proposal);
         record_leader(&mut self.trace, &self.consensus, &input);
@@ -1634,7 +1735,7 @@ impl ConsensusHarness {
                 let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,
-                    mock_block.payload_commitment,
+                    VidCommitment::V2(mock_block.payload_commitment),
                     mock_block.builder_commitment,
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,
@@ -1667,54 +1768,93 @@ impl ConsensusHarness {
                 metadata,
                 payload_commitment: _,
             } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
+                let (vid, _) = VidDisperse2::calculate_vid_disperse(
                     payload,
                     &self.membership_coordinator,
                     *view,
-                    Some(*epoch),
+                    *epoch,
                     Some(*epoch),
                     metadata,
-                    &test_upgrade_lock(),
                 )
                 .await
                 .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
                 let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
                 self.apply_recorded(input, outbox);
             },
+            // Not answered here. The membership holds an epoch's result only
+            // once the epoch's root is decided, which gives it to consensus too
+            // (`on_leaf_decided`), and the harness has no peers to catch up
+            // from. A test whose node never decides the root supplies it.
             ConsensusOutput::RequestDrbResult(epoch) => {
-                self.consensus
-                    .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox);
+                self.awaited_drbs.insert(*epoch);
             },
             ConsensusOutput::LeafDecided { leaves, .. } => {
-                // Mirror the EpochManager: when an epoch-root block is decided,
-                // register the future epoch in the membership (add_epoch_root)
-                // and store a DRB result for it (compute_drb_result).
-                let epoch_height = self.consensus.epoch_height;
                 for leaf in leaves {
-                    let block_number = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(
-                        leaf.block_header(),
-                    );
-                    if !is_epoch_root(block_number, *epoch_height) {
-                        continue;
-                    }
-                    let header = leaf.block_header().clone();
-                    self.membership_coordinator
-                        .add_epoch_root(header)
-                        .await
-                        .expect("add_epoch_root should succeed in test harness");
-
-                    let epoch =
-                        hotshot_types::utils::epoch_from_block_number(block_number, *epoch_height);
-                    let target_epoch = EpochNumber::new(epoch + 2);
-                    self.membership_coordinator
-                        .membership()
-                        .add_drb_result(target_epoch, TEST_DRB_RESULT);
+                    self.on_leaf_decided(leaf, outbox).await;
                 }
             },
             _ => {},
+        }
+    }
+
+    /// Mirror the `EpochManager`: when an epoch-root block is decided, register
+    /// the epoch two after it in the membership, compute that epoch's DRB
+    /// result from the root, and hand it to consensus. `TestData` gives the
+    /// same result to the transition proposals of the epoch in between.
+    async fn on_leaf_decided(
+        &mut self,
+        leaf: &Leaf2<TestTypes>,
+        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
+    ) {
+        let epoch_length = self.consensus.epoch_length;
+        let block_number =
+            <TestBlockHeader as BlockHeader<TestTypes>>::block_number(leaf.block_header());
+        if !epoch_length.position(block_number).is_root() {
+            return;
+        }
+        self.membership_coordinator
+            .add_epoch_root(leaf.block_header().clone())
+            .await
+            .expect("add_epoch_root should succeed in test harness");
+
+        let target_epoch = epoch_length.epoch_of(block_number) + 2;
+        let drb = self
+            .membership_coordinator
+            .compute_drb_result(target_epoch, leaf.clone())
+            .await
+            .expect("compute_drb_result should succeed in test harness");
+        self.apply_drb_result(target_epoch, drb, outbox);
+    }
+
+    /// Give consensus the DRB result of `epoch`, recording it in the trace
+    /// only if the node was waiting on it: it had requested the result and
+    /// still lacks it, or the result releases outputs.
+    ///
+    /// The trace checker takes a recorded DRB result as a reason for the node
+    /// to be late from then on, since the specification has no DRB. A result
+    /// the node was not waiting on is no such reason.
+    fn apply_drb_result(
+        &mut self,
+        epoch: EpochNumber,
+        drb: hotshot_types::drb::DrbResult,
+        outbox: &mut Outbox<ConsensusOutput<TestTypes>>,
+    ) {
+        let input = ConsensusInput::DrbResult(epoch, drb);
+        if self.awaited_drbs.remove(&epoch) && !self.consensus.has_drb_result(epoch) {
+            return self.apply_recorded(input, outbox);
+        }
+        let before = outbox.len();
+        let earlier = self.trace.before(&self.consensus, &input);
+        self.consensus.apply(input.clone(), outbox);
+        // A request for another epoch's result is re-emitted on every input.
+        let released = outbox
+            .iter()
+            .skip(before)
+            .any(|o| !matches!(o, ConsensusOutput::RequestDrbResult(_)));
+        if released {
+            record_output_leaders(&mut self.trace, &self.consensus, outbox.iter().skip(before));
+            self.trace
+                .record(&self.consensus, earlier, &input, outbox.iter().skip(before));
         }
     }
 
@@ -1975,6 +2115,27 @@ pub(crate) fn build_timeout_cert3(
     ))
 }
 
+/// `proposal`, an input that delivers a proposal, with the proposal carrying
+/// `tc`. Consensus takes the proposal as already validated, so the signature
+/// need not cover the certificate.
+pub(crate) fn carrying_timeout_cert(
+    proposal: ConsensusInput<TestTypes>,
+    tc: TimeoutEvidence<TestTypes>,
+) -> ConsensusInput<TestTypes> {
+    let ConsensusInput::Proposal(leader, mut message) = proposal else {
+        panic!("not a proposal input");
+    };
+    message.proposal.data.view_change_evidence = Some(tc);
+    ConsensusInput::Proposal(leader, message)
+}
+
+/// How many steps of `trace` take an input of the kind `input`, as the
+/// recorder names it.
+pub(crate) fn trace_steps(trace: &str, input: &str) -> usize {
+    let step = format!("{{\"consensus\":{{\"input\":{{\"{input}\"");
+    trace.lines().filter(|l| l.starts_with(&step)).count()
+}
+
 /// Build a lock-carrying timeout certificate for `view_number` in `epoch`,
 /// signed by every member of `epoch_membership`, all holding `lock`.
 pub(crate) fn build_timeout_cert3_with_lock(
@@ -1986,6 +2147,43 @@ pub(crate) fn build_timeout_cert3_with_lock(
     let members = epoch_membership.stake_table().len() as u64;
     let signers: Vec<u64> = (0..members).collect();
     build_timeout_cert3_signed_by(view_number, epoch, lock, epoch_membership, &signers)
+}
+
+/// The timeout certificate of `epoch` for `timed_out`, its signers all locked
+/// on `lock`, as `harness`'s membership signs it.
+pub(crate) fn timeout_cert_of(
+    harness: &ConsensusHarness,
+    epoch: EpochNumber,
+    timed_out: ViewNumber,
+    lock: Option<Certificate1<TestTypes>>,
+) -> TimeoutEvidence<TestTypes> {
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(epoch)
+        .expect("the epoch resolves");
+    TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+        timed_out,
+        epoch,
+        lock,
+        &membership,
+    ))
+}
+
+/// `tc` as a timeout certificate received on its own.
+pub(crate) fn timeout_cert_input(tc: TimeoutEvidence<TestTypes>) -> ConsensusInput<TestTypes> {
+    let epoch = HasEpoch::epoch(&tc).expect("a lock-carrying certificate names its epoch");
+    ConsensusInput::TimeoutCertificate(ValidCert::new(tc, epoch))
+}
+
+/// How often the node asked for the payload of the block at `view`.
+pub(crate) fn payload_requests(harness: &ConsensusHarness, view: ViewNumber) -> usize {
+    harness
+        .outputs()
+        .iter()
+        .filter(
+            |o| matches!(o, ConsensusOutput::RequestMissingPayload { view: v, .. } if *v == view),
+        )
+        .count()
 }
 
 /// Build a lock-carrying timeout certificate for `view_number` in `epoch`,
@@ -2058,7 +2256,8 @@ pub(crate) fn record_leader(
     consensus: &Consensus<TestTypes>,
     input: &ConsensusInput<TestTypes>,
 ) {
-    if !trace.recording() {
+    // A DRB result is about no view.
+    if !trace.recording() || matches!(input, ConsensusInput::DrbResult(..)) {
         return;
     }
     let view = input.view_number();
