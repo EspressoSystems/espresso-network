@@ -9,6 +9,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "clap",
+ "espresso-types",
  "futures",
  "humantime",
  "reqwest 0.12.28",

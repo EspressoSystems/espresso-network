@@ -10,8 +10,8 @@ use chain_store::{
     ChainStore, Item, Lookup, Parts, PayloadInfo,
     tip::{Entry, Tip},
 };
-use espresso_api::{error::to_status, proto};
-use espresso_types::{NamespaceId, NsPayload, Payload, SeqTypes};
+use espresso_api::{NsPlace, error::to_status, proto};
+use espresso_types::{NamespaceId, Payload, SeqTypes};
 use futures::stream::{self, BoxStream, StreamExt};
 use hotshot_query_service_types::availability::{
     BlockQueryData, LeafQueryData, VidCommonQueryData,
@@ -176,7 +176,8 @@ impl Reader {
     }
 
     /// The proof of `namespace` in the block at `height`, empty if the block has no such
-    /// namespace.
+    /// namespace. A namespace too large to carry inline is referenced as a range of the payload,
+    /// and its bytes are not read.
     pub(crate) async fn namespace_proof(
         &self,
         height: u64,
@@ -194,37 +195,41 @@ impl Reader {
         let Some(index) = index.filter(|&index| common.ns_lens.get(index) > Some(&0)) else {
             return Ok(proto::NamespaceProofResponse::default());
         };
-        // Only the namespace's bytes are read; the proof needs the rest of the payload only
-        // through the namespace commitments in the VID common data.
+        // The proof needs the rest of the payload only through the namespace commitments in the
+        // VID common data, so at most the namespace's own bytes are read.
         let proving = |err| Status::internal(format!("proving the namespace failed: {err}"));
         let range = AvidmGf2Scheme::namespace_range(common, index).map_err(proving)?;
-        let range = range.start as u64..range.end as u64;
-        let ns_payload = self
-            .until_uploaded(height, wait, || {
-                self.store.payload_range(height, range.clone())
-            })
-            .await?;
-        // The proof holds a copy of the namespace's bytes, and the transactions a second one.
-        let proof = AvidmGf2Scheme::namespace_proof_of(common, ns_payload.to_vec(), index)
-            .map_err(proving)?;
-        let transactions = NsPayload::from_bytes_slice(&proof.ns_payload)
-            .export_all_txs(&namespace)
-            .into_iter()
-            .map(|tx| proto::Transaction {
-                namespace: namespace.0,
-                payload: tx.into_payload().into(),
-            })
-            .collect();
-        let proof = proto::NsProofPayload {
+        let place = NsPlace {
+            payload_commitment: entry
+                .item
+                .leaf
+                .block_header()
+                .payload_commitment()
+                .to_string(),
+            range: range.start as u64..range.end as u64,
+        };
+        let ns_payload = match place.is_large() {
+            true => Vec::new(),
+            false => self
+                .until_uploaded(height, wait, || {
+                    self.store.payload_range(height, place.range.clone())
+                })
+                .await?
+                .to_vec(),
+        };
+        let proof =
+            AvidmGf2Scheme::namespace_proof_of(common, ns_payload, index).map_err(proving)?;
+        let mut proof = proto::NsProofPayload {
             ns_index: proof.ns_index as u64,
             ns_proof: proof.ns_proof.to_string(),
             ns_payload: proof.ns_payload.into(),
+            ns_payload_ref: None,
         };
+        proof.reference_if_large(&place);
         Ok(proto::NamespaceProofResponse {
             proof: Some(proto::NsProof {
                 proof: Some(proto::ns_proof::Proof::V2(proof)),
             }),
-            transactions,
         })
     }
 
@@ -357,6 +362,7 @@ fn block(item: &Item, payload: &[u8]) -> BlockQueryData<SeqTypes> {
 #[cfg(test)]
 mod tests {
     use chain_store::{mem::MemBackend, tip};
+    use espresso_api::NS_PAYLOAD_INLINE_LIMIT;
     use espresso_types::{
         Leaf2, NamespaceProofQueryData, NodeState, NsProof, Transaction, ValidatedState,
     };
@@ -378,16 +384,23 @@ mod tests {
             chain_config: instance.chain_config.into(),
             ..Default::default()
         };
-        let transactions: Vec<_> = [(7u32, 3), (9, 1), (11, 2)]
+        // Namespace 15 is too large to carry inline.
+        let large = NS_PAYLOAD_INLINE_LIMIT as usize + 1;
+        let transactions: Vec<_> = [(7u32, 3, 10), (9, 1, 10), (11, 2, 10), (15, 1, large)]
             .into_iter()
-            .flat_map(|(namespace, count)| {
+            .flat_map(|(namespace, count, size)| {
                 (0..count).map(move |i| {
-                    Transaction::new(NamespaceId::from(namespace), vec![i as u8; 10 + i])
+                    Transaction::new(NamespaceId::from(namespace), vec![i as u8; size + i])
                 })
             })
             .collect();
+        // Blocks large enough for the large namespace.
+        let chain_config = espresso_types::v0_3::ChainConfig {
+            max_block_size: (1u64 << 20).into(),
+            ..instance.chain_config
+        };
         let (payload, ns_table) =
-            Payload::from_transactions_sync(&transactions, instance.chain_config).unwrap();
+            Payload::from_transactions_sync(&transactions, chain_config).unwrap();
         let bytes = payload.encode().to_vec();
         let ranges = parse_ns_table(bytes.len(), &ns_table.encode());
         let param = AvidmGf2Param::new(5, 10).unwrap();
@@ -420,28 +433,41 @@ mod tests {
             store.put(&item, &parts).await.unwrap();
             let (follower, tips) = tip::follower(store.clone());
             tasks.spawn(follower.run());
-            check_proofs(&Reader::new(store, tips), &payload, &ns_table, &common).await;
+            check_proofs(&Reader::new(store, tips), &item, &payload, &common).await;
         }
     }
 
-    async fn check_proofs(
-        reader: &Reader,
-        payload: &Payload,
-        ns_table: &espresso_types::NsTable,
-        common: &VidCommon,
-    ) {
-        for namespace in [7u32, 9, 11, 13].map(NamespaceId::from) {
+    /// Checks the proof of each namespace against the generic one, with the bytes of a large
+    /// namespace referenced in place of carried.
+    async fn check_proofs(reader: &Reader, item: &Item, payload: &Payload, common: &VidCommon) {
+        let header = item.leaf.block_header();
+        let ns_table = header.ns_table();
+        for namespace in [7u32, 9, 11, 13, 15].map(NamespaceId::from) {
             let expected = match ns_table.find_ns_id(&namespace) {
                 Some(index) => {
                     let proof = NsProof::new(payload, &index, common).unwrap();
+                    let range = ns_table
+                        .ns_range(&index, &payload.byte_len())
+                        .as_block_range();
+                    let place = NsPlace {
+                        payload_commitment: header.payload_commitment().to_string(),
+                        range: range.start as u64..range.end as u64,
+                    };
                     let data = NamespaceProofQueryData {
-                        transactions: proof.export_all_txs(&namespace),
+                        transactions: Vec::new(),
                         proof: Some(proof),
                     };
-                    proto::NamespaceProofResponse::try_from(&data).unwrap()
+                    proto::NamespaceProofResponse::of(&data, Some(&place)).unwrap()
                 },
                 None => proto::NamespaceProofResponse::default(),
             };
+            let referenced = match &expected.proof {
+                Some(proto::NsProof {
+                    proof: Some(proto::ns_proof::Proof::V2(proof)),
+                }) => proof.ns_payload_ref.is_some(),
+                _ => false,
+            };
+            assert_eq!(referenced, namespace == NamespaceId::from(15u32));
             let proof = reader
                 .namespace_proof(0, namespace, Wait::Forever)
                 .await

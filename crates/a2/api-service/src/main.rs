@@ -1,4 +1,5 @@
-//! An API instance: serves the v2 API from the chain store, and repairs the store if asked to.
+//! An API instance: serves the v2 API from the chain store, and repairs the store unless told not
+//! to.
 
 use std::net::SocketAddr;
 
@@ -30,13 +31,20 @@ struct Options {
     #[arg(long, env = "ESPRESSO_API_SERVICE_GENESIS_FILE")]
     genesis_file: GenesisSource,
 
-    /// Repair the store too: fill what it lacks from other API services, sharing the work with
-    /// the other instances that repair it. Needs `--l1-provider`.
-    #[arg(long, env = "ESPRESSO_API_SERVICE_REPAIR", requires = "l1_provider")]
-    repair: bool,
+    /// Do not repair the store. By default an instance fills what the store lacks from other API
+    /// services, sharing the work with the other instances that repair it, and writes the state
+    /// that state catchup is answered from; a deployment needs at least one instance that does.
+    #[arg(long, env = "ESPRESSO_API_SERVICE_NO_REPAIR")]
+    no_repair: bool,
 
-    /// L1 RPC URLs to read the stake table contract from, comma-separated; for repair.
-    #[arg(long, env = "ESPRESSO_API_SERVICE_L1_PROVIDER", value_delimiter = ',')]
+    /// L1 RPC URLs to read the stake table contract from, comma-separated; for repair, and
+    /// required unless `--no-repair` is given.
+    #[arg(
+        long,
+        env = "ESPRESSO_API_SERVICE_L1_PROVIDER",
+        value_delimiter = ',',
+        required_unless_present = "no_repair"
+    )]
     l1_provider: Vec<Url>,
 
     /// API services to learn the validators' API services from, and to repair from until then,
@@ -89,17 +97,15 @@ async fn main() -> anyhow::Result<()> {
         .with_compat(Compat::new(store.clone(), config))
         .with_catchup(Catchup::new(store.clone(), epoch_height));
     let repair = async {
-        match options.repair {
-            true => {
-                let repair = Repair {
-                    l1: options.l1_provider,
-                    bootstrap: options.bootstrap,
-                    public_url: options.public_url,
-                };
-                Err(repair.run(store, &genesis).await)
-            },
-            false => std::future::pending().await,
+        if options.no_repair {
+            return std::future::pending().await;
         }
+        let repair = Repair {
+            l1: options.l1_provider,
+            bootstrap: options.bootstrap,
+            public_url: options.public_url,
+        };
+        Err(repair.run(store, &genesis).await)
     };
     tokio::select! {
         served = api.serve(listener) => match served {

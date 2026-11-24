@@ -497,11 +497,27 @@ message NsProofPayload {
   // Position of the namespace in the namespace table
   uint64 ns_index = 1;
 
-  // The namespace's bytes, base64 in JSON
+  // The namespace's bytes, base64 in JSON; empty when ns_payload_ref says where they are instead
   bytes ns_payload = 2;
 
   // Merkle proof of those bytes, TaggedBase64 `MERKLE_PROOF~`
   string ns_proof = 3;
+
+  // Where the namespace's bytes are, for a namespace proof of a namespace too large to carry
+  // inline: the payload route serves them to a request with a `Range` header
+  NsPayloadRef ns_payload_ref = 4;
+}
+
+// A namespace's bytes as a byte range of its payload
+message NsPayloadRef {
+  // The payload's VID commitment, as `/v2/availability/payload-data/{commitment}` takes it
+  string payload_commitment = 1;
+
+  // The namespace's first byte in the payload
+  uint64 start = 2;
+
+  // The byte after the namespace's last
+  uint64 end = 3;
 }
 
 message AvidmTxProof {
@@ -723,12 +739,12 @@ message NsProof {
   }
 }
 
+// The namespace's transactions are in the proof's namespace bytes, in block order
 message NamespaceProofResponse {
+  reserved 2;
+
   // Absent when the block has no such namespace
   NsProof proof = 1;
-
-  // The namespace's transactions, in block order
-  repeated Transaction transactions = 2;
 }
 
 message GetNamespaceProofRequest {

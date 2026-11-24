@@ -179,7 +179,7 @@ start_api() {
   fi
   api-service --port "$5" --store "http://127.0.0.1:$((8070 + $2))" \
     --consensus-api "127.0.0.1:$((9978 + $2))" --genesis-file "$3" \
-    --repair --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
+    --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
     --payload-store "file://$1/objects-chain$2" \
     "${bootstrap[@]}" >"$1/$6.log" 2>&1 &
 }

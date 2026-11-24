@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use chrono::SecondsFormat;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
+    NsPlace,
     error::{AvailabilityError, SubmitError, to_status},
     proto,
     v1::{
@@ -435,26 +436,18 @@ where
     }
 }
 
-#[async_trait]
-impl<D> v1::AvailabilityApi for NodeApiStateImpl<D>
+impl<D> NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
-    // touch the reward merkle tree, so filesystem storage (which doesn't implement it) can serve
-    // this module too.
-    D::Target: hotshot_query_service::availability::AvailabilityDataSource<SeqTypes>
-        + hotshot_query_service::node::NodeDataSource<SeqTypes>
-        + RequestResponseDataSource<SeqTypes>
-        + StateCertDataSource
-        + StateCertFetchingDataSource<SeqTypes>
-        + Send
-        + Sync,
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<SeqTypes> + Send + Sync,
 {
-    async fn get_namespace_proof(
+    /// The proof of `namespace` in the block `block_id` names, with where the namespace's bytes
+    /// are in the payload.
+    async fn namespace_proof_at(
         &self,
         block_id: v1::availability::BlockId,
         namespace: u32,
-    ) -> anyhow::Result<espresso_types::NamespaceProofQueryData> {
+    ) -> anyhow::Result<(NamespaceProofQueryData, Option<NsPlace>)> {
         let ns_id = NamespaceId::from(namespace);
 
         // Convert v1 BlockId to hotshot BlockId
@@ -493,38 +486,17 @@ where
             ))
         })?;
 
-        // Namespace absent from the block: an empty result, not an error.
-        let ns_table = block.payload().ns_table();
-        let Some(ns_index) = ns_table.find_ns_id(&ns_id) else {
-            return Ok(espresso_types::NamespaceProofQueryData {
-                transactions: vec![],
-                proof: None,
-            });
-        };
-
-        // Generate namespace proof
-        let Some(proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) else {
-            // Failed to generate proof - namespace exists but proof generation failed
-            return Ok(espresso_types::NamespaceProofQueryData {
-                transactions: vec![],
-                proof: None,
-            });
-        };
-
-        let transactions = proof.export_all_txs(&ns_id);
-
-        Ok(espresso_types::NamespaceProofQueryData {
-            transactions,
-            proof: Some(proof),
-        })
+        Ok(namespace_proof_in(&block, vid_common.common(), ns_id))
     }
 
-    async fn get_namespace_proof_range(
+    /// The proofs of `namespace` in the blocks from `from` until `until`, each with where the
+    /// namespace's bytes are in the payload.
+    async fn namespace_proofs_in(
         &self,
         from: u64,
         until: u64,
         namespace: u32,
-    ) -> anyhow::Result<Vec<espresso_types::NamespaceProofQueryData>> {
+    ) -> anyhow::Result<Vec<(NamespaceProofQueryData, Option<NsPlace>)>> {
         let ns_id = NamespaceId::from(namespace);
 
         // Validate range
@@ -577,37 +549,98 @@ where
             ));
         }
 
-        // Generate proofs for each block
-        let mut proofs = Vec::new();
+        Ok(blocks
+            .iter()
+            .zip(&vids)
+            .map(|(block, vid)| namespace_proof_in(block, vid.common(), ns_id))
+            .collect())
+    }
 
-        for (block, vid) in blocks.into_iter().zip(vids) {
-            let ns_table = block.payload().ns_table();
+    /// The proofs of `namespace` in the blocks from `from` on, as they are decided, each with
+    /// where the namespace's bytes are in the payload.
+    async fn namespace_proofs_from(
+        &self,
+        from: usize,
+        namespace: u32,
+    ) -> anyhow::Result<BoxStream<'static, (NamespaceProofQueryData, Option<NsPlace>)>> {
+        let ns_id = NamespaceId::from(namespace);
+        let ds = self.data_source.clone();
+        let blocks = (*ds).subscribe_blocks(from).await;
+        let vids = (*ds).subscribe_vid_common(from).await;
 
-            // Check if namespace exists in this block
-            if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
-                    let transactions = proof.export_all_txs(&ns_id);
-                    proofs.push(espresso_types::NamespaceProofQueryData {
-                        transactions,
-                        proof: Some(proof),
-                    });
-                } else {
-                    // Failed to generate proof - return empty result for this block
-                    proofs.push(espresso_types::NamespaceProofQueryData {
-                        transactions: vec![],
-                        proof: None,
-                    });
-                }
-            } else {
-                // Namespace not present in this block
-                proofs.push(espresso_types::NamespaceProofQueryData {
-                    transactions: vec![],
-                    proof: None,
-                });
-            }
-        }
+        Ok(blocks
+            .zip(vids)
+            .map(move |(block, vid)| namespace_proof_in(&block, vid.common(), ns_id))
+            .boxed())
+    }
+}
 
-        Ok(proofs)
+/// The proof of namespace `ns_id` in `block`, whose VID common data is `common`, with where the
+/// namespace's bytes are in the payload, by which a v2 response references a large namespace.
+/// Empty if the block has no such namespace or the proof cannot be built.
+fn namespace_proof_in(
+    block: &BlockQueryData<SeqTypes>,
+    common: &hotshot_types::data::VidCommon,
+    ns_id: NamespaceId,
+) -> (NamespaceProofQueryData, Option<NsPlace>) {
+    let empty = NamespaceProofQueryData {
+        transactions: vec![],
+        proof: None,
+    };
+    let payload = block.payload();
+    let Some(ns_index) = payload.ns_table().find_ns_id(&ns_id) else {
+        return (empty, None);
+    };
+    let Some(proof) = NsProof::new(payload, &ns_index, common) else {
+        return (empty, None);
+    };
+    let range = payload
+        .ns_table()
+        .ns_range(&ns_index, &payload.byte_len())
+        .as_block_range();
+    let place = NsPlace {
+        payload_commitment: block.header().payload_commitment().to_string(),
+        range: range.start as u64..range.end as u64,
+    };
+    let transactions = proof.export_all_txs(&ns_id);
+    let data = NamespaceProofQueryData {
+        transactions,
+        proof: Some(proof),
+    };
+    (data, Some(place))
+}
+
+#[async_trait]
+impl<D> v1::AvailabilityApi for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
+    // touch the reward merkle tree, so filesystem storage (which doesn't implement it) can serve
+    // this module too.
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
+        + Send
+        + Sync,
+{
+    async fn get_namespace_proof(
+        &self,
+        block_id: v1::availability::BlockId,
+        namespace: u32,
+    ) -> anyhow::Result<espresso_types::NamespaceProofQueryData> {
+        Ok(self.namespace_proof_at(block_id, namespace).await?.0)
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        from: u64,
+        until: u64,
+        namespace: u32,
+    ) -> anyhow::Result<Vec<espresso_types::NamespaceProofQueryData>> {
+        let proofs = self.namespace_proofs_in(from, until, namespace).await?;
+        Ok(proofs.into_iter().map(|(proof, _)| proof).collect())
     }
 
     async fn stream_namespace_proofs(
@@ -615,38 +648,8 @@ where
         from: usize,
         namespace: u32,
     ) -> anyhow::Result<BoxStream<'static, espresso_types::NamespaceProofQueryData>> {
-        let ns_id = NamespaceId::from(namespace);
-        let ds = self.data_source.clone();
-        let blocks = (*ds).subscribe_blocks(from).await;
-        let vids = (*ds).subscribe_vid_common(from).await;
-
-        let stream = blocks
-            .zip(vids)
-            .map(move |(block, vid)| {
-                let ns_table = block.payload().ns_table();
-                if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                    if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
-                        let transactions = proof.export_all_txs(&ns_id);
-                        NamespaceProofQueryData {
-                            transactions,
-                            proof: Some(proof),
-                        }
-                    } else {
-                        NamespaceProofQueryData {
-                            transactions: vec![],
-                            proof: None,
-                        }
-                    }
-                } else {
-                    NamespaceProofQueryData {
-                        transactions: vec![],
-                        proof: None,
-                    }
-                }
-            })
-            .boxed();
-
-        Ok(stream)
+        let proofs = self.namespace_proofs_from(from, namespace).await?;
+        Ok(proofs.map(|(proof, _)| proof).boxed())
     }
 
     async fn get_incorrect_encoding_proof(
@@ -4372,12 +4375,14 @@ where
         let request = request.into_inner();
         let id = block_id_from_query(request.height, request.hash, request.payload_hash)?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
-        let proof = <Self as v1::AvailabilityApi>::get_namespace_proof(self, id, namespace)
+        let (proof, place) = self
+            .namespace_proof_at(id, namespace)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(
-            proto::NamespaceProofResponse::try_from(&proof)?,
-        ))
+        Ok(tonic::Response::new(proto::NamespaceProofResponse::of(
+            &proof,
+            place.as_ref(),
+        )?))
     }
 
     async fn get_namespace_proof_range(
@@ -4387,17 +4392,17 @@ where
         let request = request.into_inner();
         let range = range_from_query(request.from, request.until)?;
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
-        let proofs = <Self as v1::AvailabilityApi>::get_namespace_proof_range(
-            self,
-            range.start,
-            range.end,
-            namespace,
-        )
-        .await
-        .map_err(to_status)?;
-        Ok(tonic::Response::new(
-            proto::NamespaceProofRangeResponse::try_from(&*proofs)?,
-        ))
+        let proofs = self
+            .namespace_proofs_in(range.start, range.end, namespace)
+            .await
+            .map_err(to_status)?;
+        let proofs = proofs
+            .iter()
+            .map(|(proof, place)| proto::NamespaceProofResponse::of(proof, place.as_ref()))
+            .collect::<Result<_, _>>()?;
+        Ok(tonic::Response::new(proto::NamespaceProofRangeResponse {
+            proofs,
+        }))
     }
 
     async fn get_incorrect_encoding_proof(
@@ -4566,15 +4571,12 @@ where
     ) -> Result<tonic::Response<Self::StreamNamespaceProofsStream>, tonic::Status> {
         let request = request.into_inner();
         let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
-        let proofs = <Self as v1::AvailabilityApi>::stream_namespace_proofs(
-            self,
-            required(request.from, "from")? as usize,
-            namespace,
-        )
-        .await
-        .map_err(to_status)?;
+        let proofs = self
+            .namespace_proofs_from(required(request.from, "from")? as usize, namespace)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(end_at_first_error(proofs.map(
-            |proof| proto::NamespaceProofResponse::try_from(&proof),
+            |(proof, place)| proto::NamespaceProofResponse::of(&proof, place.as_ref()),
         ))))
     }
 }
@@ -4825,6 +4827,17 @@ mod tests {
         (header, fields)
     }
 
+    /// Fields in which v2 departs from v1 on purpose, by message: blocks and payloads carry the
+    /// BLAKE3 hash of the payload, which clients check what they fetch against, and a namespace
+    /// proof references the bytes of a large namespace rather than carrying them, and leaves out
+    /// the transactions, which its namespace bytes hold.
+    const ONLY_V2: &[(&str, &str)] = &[
+        ("BlockResponse", "payload_blake3"),
+        ("PayloadResponse", "blake3"),
+        ("NsProofPayload", "ns_payload_ref"),
+    ];
+    const ONLY_V1: &[(&str, &str)] = &[("NamespaceProofResponse", "transactions")];
+
     /// Fails when the proto message and the reference vector disagree about which fields exist,
     /// which value-by-value assertions cannot catch: they only check the fields already declared.
     /// The declared side is read from the descriptor, so a field the proto lacks fails too.
@@ -4850,6 +4863,7 @@ mod tests {
                 },
                 _ => field.name(),
             })
+            .filter(|name| !ONLY_V2.contains(&(message, *name)))
             .collect();
         let referenced: std::collections::BTreeSet<&str> = reference
             .as_object()
@@ -4859,6 +4873,7 @@ mod tests {
             // `_pd` is how v1 serializes a certificate's `PhantomData`, and carries nothing a
             // client can read, so no proto message mirrors it.
             .filter(|name| *name != "_pd")
+            .filter(|name| !ONLY_V1.contains(&(message, *name)))
             .collect();
         assert_eq!(
             declared, referenced,
@@ -5509,25 +5524,12 @@ mod tests {
         use proto::ns_proof::Proof;
         let b64 = base64::engine::general_purpose::STANDARD;
 
-        fn check_transactions(converted: &proto::NamespaceProofResponse, json: &serde_json::Value) {
-            let expected = json["transactions"].as_array().unwrap();
-            assert_eq!(converted.transactions.len(), expected.len());
-            for (tx, expected) in converted.transactions.iter().zip(expected) {
-                assert_eq!(tx.namespace, expected["namespace"].as_u64().unwrap());
-                assert_eq!(
-                    base64::engine::general_purpose::STANDARD.encode(&tx.payload),
-                    expected["payload"].as_str().unwrap()
-                );
-            }
-        }
-
         let (reference, json): (NamespaceProofQueryData, _) =
             load_vector("../../../data/v3/ns_proof_V0.json");
         assert_same_fields("NamespaceProofResponse", &json);
         let expected = &json["proof"]["V0"];
         assert_same_fields("AdvzNsProof", expected);
         let converted = proto::NamespaceProofResponse::try_from(&reference).unwrap();
-        check_transactions(&converted, &json);
         let Some(Proof::V0(advz)) = converted.proof.unwrap().proof else {
             panic!("the ADVZ vector must select the v0 arm");
         };
@@ -5558,7 +5560,6 @@ mod tests {
             let expected = &json["proof"][arm];
             assert_same_fields("NsProofPayload", expected);
             let converted = proto::NamespaceProofResponse::try_from(&reference).unwrap();
-            check_transactions(&converted, &json);
             let payload = match (arm, converted.proof.unwrap().proof) {
                 ("V1", Some(Proof::V1(payload))) | ("V2", Some(Proof::V2(payload))) => payload,
                 (arm, other) => panic!("the {arm} vector selected the wrong arm: {other:?}"),

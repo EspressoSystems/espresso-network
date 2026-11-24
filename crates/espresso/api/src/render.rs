@@ -1,6 +1,6 @@
 //! Consensus and query service types rendered as v2 proto messages.
 
-use std::{borrow::Borrow, collections::HashMap};
+use std::{borrow::Borrow, collections::HashMap, ops::Range};
 
 use ark_serialize::CanonicalSerialize;
 use bytes::Bytes;
@@ -1393,6 +1393,7 @@ impl From<&AvidMNsProof> for proto::NsProofPayload {
             ns_index: proof.0.ns_index as u64,
             ns_payload: Bytes::copy_from_slice(&proof.0.ns_payload),
             ns_proof: proof.0.ns_proof.to_string(),
+            ns_payload_ref: None,
         }
     }
 }
@@ -1403,6 +1404,7 @@ impl From<&AvidmGf2NsProof> for proto::NsProofPayload {
             ns_index: proof.0.ns_index as u64,
             ns_payload: Bytes::copy_from_slice(&proof.0.ns_payload),
             ns_proof: proof.0.ns_proof.to_string(),
+            ns_payload_ref: None,
         }
     }
 }
@@ -1569,11 +1571,74 @@ impl TryFrom<&NsProof> for proto::NsProof {
 impl TryFrom<&NamespaceProofQueryData> for proto::NamespaceProofResponse {
     type Error = tonic::Status;
 
+    /// The response carrying the namespace's bytes inline, whatever their size; see
+    /// [`proto::NamespaceProofResponse::of`] for one that references large namespaces.
     fn try_from(data: &NamespaceProofQueryData) -> Result<Self, Self::Error> {
         Ok(proto::NamespaceProofResponse {
             proof: data.proof.as_ref().map(TryInto::try_into).transpose()?,
-            transactions: data.transactions.iter().map(Into::into).collect(),
         })
+    }
+}
+
+/// The most bytes of a namespace that a namespace proof carries. The bytes of a larger namespace
+/// are referenced instead, and clients fetch them from the payload route with a range request, so
+/// that an API server does not carry them in every proof.
+pub const NS_PAYLOAD_INLINE_LIMIT: u64 = 64 << 10;
+
+/// Where a namespace's bytes are: the payload's VID commitment, as the payload route takes it, and
+/// the namespace's byte range in the payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NsPlace {
+    pub payload_commitment: String,
+    pub range: Range<u64>,
+}
+
+impl NsPlace {
+    /// Whether the namespace is too large to carry inline.
+    pub fn is_large(&self) -> bool {
+        self.range.end.saturating_sub(self.range.start) > NS_PAYLOAD_INLINE_LIMIT
+    }
+
+    fn reference(&self) -> proto::NsPayloadRef {
+        proto::NsPayloadRef {
+            payload_commitment: self.payload_commitment.clone(),
+            start: self.range.start,
+            end: self.range.end,
+        }
+    }
+}
+
+impl proto::NsProofPayload {
+    /// Replaces the namespace's bytes by a reference to `place`, where they are, if the namespace
+    /// is too large to carry inline.
+    pub fn reference_if_large(&mut self, place: &NsPlace) {
+        if place.is_large() {
+            self.ns_payload = Bytes::new();
+            self.ns_payload_ref = Some(place.reference());
+        }
+    }
+}
+
+impl proto::NamespaceProofResponse {
+    /// The response for `data`, whose namespace is at `place`, referencing the namespace's bytes
+    /// if it is too large to carry inline. A legacy ADVZ proof carries them whatever their size.
+    pub fn of(
+        data: &NamespaceProofQueryData,
+        place: Option<&NsPlace>,
+    ) -> Result<Self, tonic::Status> {
+        let mut response = Self::try_from(data)?;
+        if let (Some(place), Some(proto::NsProof { proof: Some(proof) })) =
+            (place, response.proof.as_mut())
+        {
+            match proof {
+                proto::ns_proof::Proof::V1(payload) | proto::ns_proof::Proof::V2(payload) => {
+                    payload.reference_if_large(place)
+                },
+                proto::ns_proof::Proof::V0(_) | proto::ns_proof::Proof::V1IncorrectEncoding(_) => {
+                },
+            }
+        }
+        Ok(response)
     }
 }
 

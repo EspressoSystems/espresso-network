@@ -6,12 +6,15 @@
 
 use std::{
     collections::BTreeMap,
+    ops::Range,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::Parser;
+use espresso_types::{NamespaceId, NsPayload};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use tokio::time::{MissedTickBehavior, interval};
@@ -169,15 +172,18 @@ async fn read(
     from: u64,
     until: Instant,
 ) -> Received {
-    let mut received = Received::default();
+    let received = Arc::new(Mutex::new(Received::default()));
     let deadline = tokio::time::Instant::from_std(until);
-    let reading = read_into(&mut received, http, api, namespace, from);
+    let reading = read_into(received.clone(), http, api, namespace, from);
     let _ = tokio::time::timeout_at(deadline, reading).await;
-    received
+    std::mem::take(&mut *received.lock().unwrap())
 }
 
+/// Reads the stream into `received`. A namespace too large for the stream to carry is fetched
+/// from the payload route by its byte range, beside reading on, and its transactions count as
+/// delivered once they are fetched.
 async fn read_into(
-    received: &mut Received,
+    received: Arc<Mutex<Received>>,
     http: reqwest::Client,
     api: Url,
     namespace: u64,
@@ -201,6 +207,7 @@ async fn read_into(
     // Where in `buffer` to look for the end of an event; everything before is searched already.
     let mut searched = 0;
     let mut height = from;
+    let mut fetches = tokio::task::JoinSet::new();
     while let Some(Ok(chunk)) = body.next().await {
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(end) = buffer[searched..].find("\n\n").map(|end| searched + end) {
@@ -209,9 +216,28 @@ async fn read_into(
             let Some(data) = event.lines().find_map(|line| line.strip_prefix("data:")) else {
                 continue;
             };
-            let arrived = Instant::now();
-            let latencies = latencies(data.trim(), now_micros());
-            received.blocks.insert(height, (arrived, latencies));
+            match namespace_bytes(data.trim()) {
+                NsBytes::Inline(bytes) => {
+                    let latencies = latencies(&bytes, namespace, now_micros());
+                    let mut received = received.lock().unwrap();
+                    received.blocks.insert(height, (Instant::now(), latencies));
+                },
+                NsBytes::At { payload, range } => {
+                    let (http, api, received) = (http.clone(), api.clone(), received.clone());
+                    fetches.spawn(async move {
+                        let Some(bytes) = fetch_range(&http, &api, &payload, range).await else {
+                            return;
+                        };
+                        let latencies = latencies(&bytes, namespace, now_micros());
+                        let mut received = received.lock().unwrap();
+                        received.blocks.insert(height, (Instant::now(), latencies));
+                    });
+                },
+                NsBytes::None => {
+                    let mut received = received.lock().unwrap();
+                    received.blocks.insert(height, (Instant::now(), Vec::new()));
+                },
+            }
             height += 1;
         }
         // The last byte can start an event's end that the next chunk completes.
@@ -220,18 +246,80 @@ async fn read_into(
             searched -= 1;
         }
     }
+    while fetches.join_next().await.is_some() {}
 }
 
-fn latencies(data: &str, now: u64) -> Vec<u64> {
+/// A namespace's bytes as a namespace proof gives them.
+enum NsBytes {
+    Inline(Vec<u8>),
+    At { payload: String, range: Range<u64> },
+    None,
+}
+
+/// The namespace's bytes in a namespace proof response, as protoJSON writes it.
+fn namespace_bytes(data: &str) -> NsBytes {
     let Ok(value) = serde_json::from_str::<Value>(data) else {
-        return Vec::new();
+        return NsBytes::None;
     };
-    let Some(transactions) = value["transactions"].as_array() else {
-        return Vec::new();
+    let proof = &value["proof"];
+    let Some(proof) = ["v2", "v1"].iter().find_map(|arm| proof.get(arm)) else {
+        return NsBytes::None;
     };
-    transactions
-        .iter()
-        .filter_map(|tx| STANDARD.decode(tx["payload"].as_str()?).ok())
+    let number = |value: &Value| match value {
+        Value::String(s) => s.parse().ok(),
+        value => value.as_u64(),
+    };
+    if let Some(at) = proof.get("nsPayloadRef") {
+        let (Some(payload), Some(start), Some(end)) = (
+            at["payloadCommitment"].as_str(),
+            number(&at["start"]),
+            number(&at["end"]),
+        ) else {
+            return NsBytes::None;
+        };
+        return NsBytes::At {
+            payload: payload.to_string(),
+            range: start..end,
+        };
+    }
+    match proof["nsPayload"].as_str().map(|b| STANDARD.decode(b)) {
+        Some(Ok(bytes)) => NsBytes::Inline(bytes),
+        _ => NsBytes::None,
+    }
+}
+
+/// Bytes `range` of the payload whose VID commitment is `payload`, from the payload route.
+async fn fetch_range(
+    http: &reqwest::Client,
+    api: &Url,
+    payload: &str,
+    range: Range<u64>,
+) -> Option<Vec<u8>> {
+    if range.is_empty() {
+        return Some(Vec::new());
+    }
+    let url = api
+        .join(&format!("v2/availability/payload-data/{payload}"))
+        .ok()?;
+    let response = http
+        .get(url)
+        .header("Range", format!("bytes={}-{}", range.start, range.end - 1))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    Some(response.bytes().await.ok()?.to_vec())
+}
+
+/// The latencies of the transactions in `ns_bytes`, the bytes of namespace `namespace`.
+fn latencies(ns_bytes: &[u8], namespace: u64, now: u64) -> Vec<u64> {
+    let namespace = NamespaceId::from(namespace as u32);
+    NsPayload::from_bytes_slice(ns_bytes)
+        .export_all_txs(&namespace)
+        .into_iter()
+        .map(|tx| tx.into_payload())
         .filter(|payload| payload.len() >= 16)
         .map(|payload| {
             let sent = u64::from_be_bytes(payload[8..16].try_into().unwrap());

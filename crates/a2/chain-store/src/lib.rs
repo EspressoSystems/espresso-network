@@ -551,6 +551,25 @@ impl ChainStore {
         payloads.get_range(&commitment, range).await
     }
 
+    /// The bytes in `range` of the payload whose VID commitment is `commitment`, read without the
+    /// rest of it, from the newest payloads or the object store, once uploaded. `None` also for a
+    /// store that keeps its payloads in the backend, by height only.
+    pub async fn payload_range_by_commitment(
+        &self,
+        commitment: &str,
+        range: Range<u64>,
+    ) -> anyhow::Result<Option<Bytes>> {
+        let Some(payloads) = &self.payloads else {
+            return Ok(None);
+        };
+        if let Some(payload) = self.recent.as_ref().and_then(|r| r.get(commitment)) {
+            let end = usize::try_from(range.end)?.min(payload.len());
+            let start = usize::try_from(range.start)?.min(end);
+            return Ok(Some(payload.slice(start..end)));
+        }
+        payloads.get_range(commitment, range).await
+    }
+
     /// The payload of `height`, from the object store for a store that keeps its payloads there,
     /// once it is uploaded.
     pub async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
