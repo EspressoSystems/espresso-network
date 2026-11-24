@@ -424,7 +424,12 @@ impl FeeAccountProof {
         root: &FeeMerkleCommitment,
     ) -> anyhow::Result<Vec<Self>> {
         ensure!(
-            is_tree_lookup_shaped(snapshot),
+            snapshot.height() == FEE_MERKLE_TREE_HEIGHT,
+            "snapshot has height {}, expected {FEE_MERKLE_TREE_HEIGHT}",
+            snapshot.height()
+        );
+        ensure!(
+            is_tree_lookup_shaped(snapshot)?,
             "snapshot is not shaped like a merkle tree"
         );
         accounts
@@ -485,16 +490,17 @@ where
 }
 
 /// Whether every branch of `tree` lies above the leaves and has `ARITY` children, which
-/// `universal_lookup` indexes without checking.
-pub(super) fn is_tree_lookup_shaped<T>(tree: &T) -> bool
+/// `universal_lookup` indexes without checking. Fails if `MerkleTreeWire` cannot decode `tree`.
+pub(super) fn is_tree_lookup_shaped<T>(tree: &T) -> anyhow::Result<bool>
 where
     T: MerkleTreeScheme<NodeValue = Sha3Node> + Serialize,
     T::Element: CanonicalSerialize + CanonicalDeserialize,
     T::Index: CanonicalSerialize + CanonicalDeserialize,
 {
-    bincode::serialize(tree)
-        .and_then(|bytes| bincode::deserialize::<MerkleTreeWire<T::Element, T::Index>>(&bytes))
-        .is_ok_and(|wire| is_subtree_lookup_shaped(&wire.root, wire.height, T::ARITY))
+    let wire: MerkleTreeWire<T::Element, T::Index> = bincode::serialize(tree)
+        .and_then(|bytes| bincode::deserialize(&bytes))
+        .context("MerkleTreeWire no longer matches the jellyfish merkle tree layout")?;
+    Ok(is_subtree_lookup_shaped(&wire.root, wire.height, T::ARITY))
 }
 
 /// `is_tree_lookup_shaped` for the subtree at `node`, `height` levels above the leaves.
@@ -563,7 +569,7 @@ pub fn retain_accounts(
 }
 
 #[cfg(test)]
-mod test {
+pub(super) mod test {
     use std::sync::Arc;
 
     use jf_merkle_tree_compat::{
@@ -571,9 +577,9 @@ mod test {
         prelude::{MerkleNode, Sha3Node},
     };
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
-    use super::{Address, IterableFeeInfo, MerkleTreeWire, is_tree_lookup_shaped};
+    use super::{Address, IterableFeeInfo, MerkleTreeWire, is_tree_lookup_shaped, retain_accounts};
     use crate::{
         FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleProof,
         FeeMerkleTree,
@@ -609,7 +615,21 @@ mod test {
             bincode::deserialize(&bincode::serialize(&wire).unwrap()).unwrap();
 
         assert_eq!(decoded, tree);
-        assert!(is_tree_lookup_shaped(&tree));
+        assert!(is_tree_lookup_shaped(&tree).unwrap());
+    }
+
+    #[test]
+    fn test_verify_snapshot_accepts_a_retained_snapshot() {
+        let [one, two, absent] = [1, 2, 3].map(|byte| FeeAccount(Address::repeat_byte(byte)));
+        let full = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(one, FeeAmount::from(1)), (two, FeeAmount::from(2))],
+        )
+        .unwrap();
+        let accounts = [one, two, absent];
+        let snapshot = retain_accounts(&full, accounts).unwrap();
+
+        FeeAccountProof::verify_snapshot(&snapshot, &accounts, &full.commitment()).unwrap();
     }
 
     #[rstest]
@@ -621,12 +641,7 @@ mod test {
             FeeMerkleTree::from_kv_set(FEE_MERKLE_TREE_HEIGHT, [(account, FeeAmount::from(1))])
                 .unwrap();
         let mut json = serde_json::to_value(&tree).unwrap();
-        let node = (0..depth).fold(&mut json["root"], |node, _| {
-            let children = node["Branch"]["children"].as_array_mut().unwrap();
-            children.iter_mut().find(|child| *child != "Empty").unwrap()
-        });
-        let value = node.as_object().unwrap().values().next().unwrap()["value"].clone();
-        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; arity] } });
+        replace_node_with_branch(&mut json, depth, arity);
         let snapshot: FeeMerkleTree = serde_json::from_value(json).unwrap();
 
         assert!(
@@ -751,5 +766,16 @@ mod test {
         // check accounts collector
         let accounts = fees.accounts();
         assert_eq!(vec![FeeAccount::from(Address::default())], accounts);
+    }
+
+    /// Replace the first non-empty node `depth` levels below the root of the serialized tree
+    /// `json` with a branch of `children` empty children that keeps the node's value.
+    pub(crate) fn replace_node_with_branch(json: &mut Value, depth: usize, children: usize) {
+        let node = (0..depth).fold(&mut json["root"], |node, _| {
+            let children = node["Branch"]["children"].as_array_mut().unwrap();
+            children.iter_mut().find(|child| *child != "Empty").unwrap()
+        });
+        let value = node.as_object().unwrap().values().next().unwrap()["value"].clone();
+        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; children] } });
     }
 }

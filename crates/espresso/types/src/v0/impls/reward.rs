@@ -585,7 +585,12 @@ impl RewardAccountProofV1 {
         root: &RewardMerkleCommitmentV1,
     ) -> anyhow::Result<Vec<Self>> {
         ensure!(
-            is_tree_lookup_shaped(snapshot),
+            snapshot.height() == REWARD_MERKLE_TREE_V1_HEIGHT,
+            "snapshot has height {}, expected {REWARD_MERKLE_TREE_V1_HEIGHT}",
+            snapshot.height()
+        );
+        ensure!(
+            is_tree_lookup_shaped(snapshot)?,
             "snapshot is not shaped like a merkle tree"
         );
         accounts
@@ -1481,9 +1486,9 @@ pub mod tests {
 
     use jf_merkle_tree_compat::prelude::Sha3Node;
     use rstest::rstest;
-    use serde_json::json;
 
     use super::*;
+    use crate::v0::impls::fee_info::test::replace_node_with_branch;
 
     #[rstest]
     #[case::shorter(7)]
@@ -1502,6 +1507,24 @@ pub mod tests {
         assert!(RewardAccountProofV1::prove(&tree, account).is_none());
     }
 
+    #[test]
+    fn test_verify_snapshot_v1_accepts_a_retained_snapshot() {
+        let [one, two, absent] = [1, 2, 3].map(|byte| RewardAccountV1(Address::repeat_byte(byte)));
+        let full = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            [(one, RewardAmount::from(1)), (two, RewardAmount::from(2))],
+        )
+        .unwrap();
+        let accounts = [one, two, absent];
+        let mut snapshot = RewardMerkleTreeV1::from_commitment(full.commitment());
+        for account in accounts {
+            let (proof, _) = RewardAccountProofV1::prove(&full, account.0).unwrap();
+            proof.remember(&mut snapshot).unwrap();
+        }
+
+        RewardAccountProofV1::verify_snapshot(&snapshot, &accounts, &full.commitment()).unwrap();
+    }
+
     #[rstest]
     #[case::root_without_children(0, 0)]
     #[case::branch_at_leaf_height(REWARD_MERKLE_TREE_V1_HEIGHT, RewardMerkleTreeV1::ARITY)]
@@ -1516,12 +1539,7 @@ pub mod tests {
         )
         .unwrap();
         let mut json = serde_json::to_value(&tree).unwrap();
-        let node = (0..depth).fold(&mut json["root"], |node, _| {
-            let children = node["Branch"]["children"].as_array_mut().unwrap();
-            children.iter_mut().find(|child| *child != "Empty").unwrap()
-        });
-        let value = node.as_object().unwrap().values().next().unwrap()["value"].clone();
-        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; arity] } });
+        replace_node_with_branch(&mut json, depth, arity);
         let snapshot: RewardMerkleTreeV1 = serde_json::from_value(json).unwrap();
 
         assert!(
