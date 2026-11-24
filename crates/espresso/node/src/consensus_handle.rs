@@ -458,6 +458,9 @@ async fn run_coordinator<T, S>(
 {
     let _exited = exited.drop_guard();
     coord.start();
+
+    let mut result = process_outputs(&mut coord, &tx).await;
+
     let _forward = AbortOnDropHandle::new(spawn({
         let tx = tx.clone();
         async move {
@@ -471,19 +474,20 @@ async fn run_coordinator<T, S>(
         }
     }));
 
-    loop {
+    while result.is_ok() {
         select! {
             () = shutdown.cancelled() => break,
             it = coord.next_consensus_input() => {
-                if let Err(err) = apply_input(&mut coord, &tx, it).await {
-                    error!(%err, "coordinator: critical error");
-                    break;
-                }
+                result = apply_input(&mut coord, &tx, it).await;
                 if let Some(m) = &queue_len {
                     m.set(tx.len())
                 }
             }
         }
+    }
+
+    if let Err(err) = result {
+        error!(%err, "coordinator: critical error");
     }
 
     // Leave the readers what the coordinator holds now. No request reaches it from here on, so
@@ -520,6 +524,18 @@ where
         },
     }
 
+    process_outputs(coord, tx).await
+}
+
+/// Processes what the coordinator's outbox holds, sending the events subscribers see.
+async fn process_outputs<T, S>(
+    coord: &mut Coordinator<T, S>,
+    tx: &Sender<CoordinatorEvent<T>>,
+) -> Result<(), CoordinatorError>
+where
+    T: NodeType,
+    S: NewProtocolStorage<T>,
+{
     while let Some(out) = coord.outbox_mut().pop_front() {
         if let Some(e) = consensus_event(coord, &out) {
             broadcast_event(tx, e).await;
