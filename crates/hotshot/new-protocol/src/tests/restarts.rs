@@ -26,7 +26,7 @@ use tokio::{
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use crate::{
-    consensus::ConsensusInput,
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::Coordinator,
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{Message, MessageType, Proposal, ProposalFetchMessage, Validated},
@@ -350,6 +350,33 @@ async fn late_start_f_nodes_with_epochs() {
         .run()
         .await
         .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// The view a restarted node starts in
+// ---------------------------------------------------------------------------
+
+/// A restarted node starts in the view consensus is in.
+///
+/// The view timer runs for the view of the first `ViewChanged`, and consensus
+/// answers a timeout only for a view it has reached.
+#[tokio::test]
+async fn restarted_node_starts_in_the_view_consensus_is_in() {
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    let mut restarted = restart(node, node_index).await;
+    restarted.start();
+
+    let started: Vec<ViewNumber> = restarted
+        .outbox()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::ViewChanged(view, _) => Some(*view),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, [restarted.current_view()]);
+    assert_eq!(restarted.current_view(), ViewNumber::new(1));
 }
 
 // ---------------------------------------------------------------------------

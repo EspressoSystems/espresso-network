@@ -316,9 +316,9 @@ where
         consensus.seed_signed_proposals(signed);
         consensus.seed_proposals(unsigned.into_iter().map(|p| p.data));
         // `seed_parent` sets the current epoch from the anchor proposal;
-        // `resume_from_restart` positions the view so the node never
-        // re-enters a view it may have voted or proposed in before it went
-        // down.
+        // `resume_from_restart` enters the view after the high QC and bars
+        // voting and proposing in every view the node may have acted in
+        // before it went down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         // Restore the persisted lock; it can be newer than the anchor QC, so
         // this must run after `seed_parent`.
@@ -468,14 +468,18 @@ where
             .build()
     }
 
-    /// Emit `ViewChanged(current_view + 1)` and, if leader, a
+    /// Emit `ViewChanged` for the view consensus is in and, if leader, a
     /// `RequestBlockAndHeader`.
+    ///
+    /// `Consensus::resume_from_restart` must have placed consensus in that
+    /// view: a new `Consensus` is in the genesis view, which is no view to
+    /// start in.
     pub fn start(&mut self) {
-        let cur_view = self.consensus.current_view();
-        let next_view = cur_view + 1;
+        let view = self.consensus.current_view();
+        let parent_view = ViewNumber::new(view.saturating_sub(1));
         // Client requests are served before the outbox reaches the builder, so it must know the
         // view before that first `ViewChanged`.
-        self.block_builder.start_at(next_view);
+        self.block_builder.start_at(view);
         let epoch = self.consensus.current_epoch();
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
@@ -504,18 +508,18 @@ where
         }
 
         self.outbox
-            .push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+            .push_back(ConsensusOutput::ViewChanged(view, epoch));
 
-        if let Some(leader) = self.leader(next_view, epoch)
+        if let Some(leader) = self.leader(view, epoch)
             && leader == self.public_key
         {
             // No parent proposal when restarting past the anchor view: the
             // node cannot propose off the anchor for a later view; the
             // timeout path takes over instead.
-            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
+            if let Some(parent_proposal) = self.consensus.proposal_at(parent_view).cloned() {
                 self.consensus.push_block_request(
                     BlockAndHeaderRequest {
-                        view: next_view,
+                        view,
                         epoch,
                         parent_proposal,
                     },
