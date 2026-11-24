@@ -461,8 +461,9 @@ impl FeeAccountProof {
 }
 
 /// Whether `remember` can adopt every node of `path` into a tree as it is: each sibling is a
-/// forgotten digest or empty, and a leaf stores its own digest. `MerkleTreeScheme::verify`
-/// checks neither, and `universal_lookup` builds only paths of this shape.
+/// non-default forgotten digest or empty, and a leaf stores its own digest.
+/// `MerkleTreeScheme::verify` checks neither, and `universal_lookup` builds only paths of this
+/// shape.
 pub(super) fn is_lookup_shaped<E, I>(path: &[MerkleNode<E, I, Sha3Node>]) -> bool
 where
     E: Element,
@@ -473,11 +474,11 @@ where
         MerkleNode::Leaf { value, pos, elem } => {
             Sha3Digest::digest_leaf(pos, elem).is_ok_and(|digest| digest == *value)
         },
-        MerkleNode::Branch { children, .. } => children.iter().all(|child| {
-            matches!(
-                **child,
-                MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. }
-            )
+        // The default digest hashes like `Empty`, but `remember` would store it as forgotten.
+        MerkleNode::Branch { children, .. } => children.iter().all(|child| match **child {
+            MerkleNode::Empty => true,
+            MerkleNode::ForgettenSubtree { value } => value != Sha3Node::default(),
+            MerkleNode::Leaf { .. } | MerkleNode::Branch { .. } => false,
         }),
         MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => true,
     })
@@ -706,6 +707,34 @@ mod test {
             panic!("expected a leaf");
         };
         *value = Sha3Node::default();
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_forgotten_empty_sibling() {
+        let account = Address::repeat_byte(1);
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(account), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, account).unwrap();
+        let FeeMerkleProof::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Branch { children, .. }) = path.proof.last_mut() else {
+            panic!("expected a branch at the root");
+        };
+        let Some(sibling) = children
+            .iter_mut()
+            .find(|child| matches!(***child, MerkleNode::Empty))
+        else {
+            panic!("expected an empty sibling");
+        };
+        *sibling = Arc::new(MerkleNode::ForgettenSubtree {
+            value: Sha3Node::default(),
+        });
 
         assert!(proof.verify(&tree.commitment()).is_err());
     }

@@ -1607,6 +1607,34 @@ pub mod tests {
         assert!(proof.verify(&tree.commitment()).is_err());
     }
 
+    #[test]
+    fn test_verify_v1_rejects_a_proof_with_a_forgotten_empty_sibling() {
+        let account = Address::repeat_byte(1);
+        let tree = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            [(RewardAccountV1(account), RewardAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = RewardAccountProofV1::prove(&tree, account).unwrap();
+        let RewardMerkleProofV1::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Branch { children, .. }) = path.proof.last_mut() else {
+            panic!("expected a branch at the root");
+        };
+        let Some(sibling) = children
+            .iter_mut()
+            .find(|child| matches!(***child, MerkleNode::Empty))
+        else {
+            panic!("expected an empty sibling");
+        };
+        *sibling = Arc::new(MerkleNode::ForgettenSubtree {
+            value: Sha3Node::default(),
+        });
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
     fn make_distributor(commission: u16) -> RewardDistributor {
         RewardDistributor::new(
             AuthenticatedValidator::mock_with_commission(commission),
