@@ -144,7 +144,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the stake table for a given epoch
     fn get_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the stake table for the current epoch if not provided
@@ -155,7 +155,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the DA stake table for a given epoch
     fn get_da_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the DA stake table for the current epoch if not provided
@@ -281,8 +281,10 @@ pub(crate) trait CatchupDataSource: Sync {
 
     fn get_leaf_chain(
         &self,
-        height: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
+        async { anyhow::bail!("leaf chain catchup is not supported for this data source") }
+    }
 
     /// Load the cert2 stored at exactly `height`, if one exists.
     ///
@@ -465,7 +467,7 @@ where
 {
     fn get_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>> {
         let this = self.clone();
         async move { (*this).get_stake_table(epoch).await }
@@ -480,7 +482,7 @@ where
 
     fn get_da_stake_table(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>> {
         let this = self.clone();
         async move { (*this).get_da_stake_table(epoch).await }

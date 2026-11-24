@@ -2,8 +2,8 @@
 
 ## What it does
 
-- Registers process-, runtime- and host-level Prometheus metrics on any binary that has a
-  `hotshot_types::traits::metrics::Metrics` registry.
+- Registers process-, runtime- and host-level Prometheus metrics on any binary that has a `hotshot_metrics::Metrics`
+  registry.
 - Samples them every 5s via a long-running async task.
 - Ships a CI soak harness (`scripts/`) that captures the gauges + `docker stats` for the whole docker demo and
   summarizes them as Markdown.
@@ -42,9 +42,8 @@ detected once at startup and logged at `info`.
 
 ### Tokio runtime
 
-Sampled from the runtime the sampling task itself runs on, via `tokio::runtime::Handle::current().metrics()`. The
-handle is resolved once at startup; if `run()` is somehow polled outside a runtime, a warning is logged and these stay
-at zero.
+Sampled from the runtime the sampling task itself runs on, via `tokio::runtime::Handle::current().metrics()`. The handle
+is resolved once at startup; if `run()` is somehow polled outside a runtime, a warning is logged and these stay at zero.
 
 `tokio_worker_busy_seconds_total` sums every worker, so the fraction of worker time spent polling is
 `rate(tokio_worker_busy_seconds_total) / tokio_workers`, where 1.0 means every worker was polling the whole time.

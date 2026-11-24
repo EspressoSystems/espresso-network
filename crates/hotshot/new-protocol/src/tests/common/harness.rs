@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     PeerConnectInfo,
@@ -18,7 +19,7 @@ use tokio::sync::mpsc;
 use super::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
     utils::{
-        mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
+        epoch_length, mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
         record_output_leaders,
     },
 };
@@ -55,6 +56,7 @@ pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     connect_info: PeerConnectInfo,
     membership: EpochMembershipCoordinator<TestTypes>,
+    storage: TestStorage<TestTypes>,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
     /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
     trace: trace::Recorder,
@@ -98,7 +100,7 @@ impl TestHarness {
         let (membership, storage, client) =
             mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
 
-        let epoch_manager = EpochManager::new(10, membership.clone());
+        let epoch_manager = EpochManager::new(epoch_length(10), membership.clone());
 
         let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -122,7 +124,7 @@ impl TestHarness {
             10,
             upgrade_lock.clone(),
             genesis_leaf.clone(),
-            epoch_height,
+            epoch_length(epoch_height),
         );
 
         let vid_reconstruction_task = VidReconstructor::new();
@@ -144,12 +146,15 @@ impl TestHarness {
 
         let proposal_validator = ProposalValidator::new(
             membership.clone(),
-            epoch_height,
+            epoch_length(epoch_height),
             upgrade_lock.clone(),
             Some(&genesis_qc),
         );
-        let share_validator =
-            VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let share_validator = VidShareValidator::new(
+            membership.clone(),
+            epoch_length(epoch_height),
+            upgrade_lock.clone(),
+        );
 
         let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
             .expect("keypair derivation should succeed");
@@ -181,6 +186,7 @@ impl TestHarness {
         );
 
         let membership_handle = membership.clone();
+        let storage_handle = storage.clone();
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
             .network(network)
@@ -222,6 +228,7 @@ impl TestHarness {
             coordinator,
             connect_info,
             membership: membership_handle,
+            storage: storage_handle,
             outputs: Outbox::new(),
             trace: trace::Recorder::for_current_test(),
         }
@@ -239,10 +246,11 @@ impl TestHarness {
             consensus.public_key(),
             consensus.last_decided_leaf(),
             consensus.cert1_at(ViewNumber::genesis()),
-            *consensus.epoch_height,
+            consensus.epoch_length.get(),
         );
         record_leader(&mut self.trace, consensus, &input);
         record_fallback_anchor(&mut self.trace, consensus);
+        let before = self.trace.before(consensus, &input);
         self.coordinator.apply_consensus(input.clone());
         record_output_leaders(
             &mut self.trace,
@@ -251,7 +259,12 @@ impl TestHarness {
         );
         // The outbox was drained at the end of the previous call, so it now holds
         // exactly what this input drew — which is what a trace step is.
-        self.trace.record(&input, self.coordinator.outbox().iter());
+        self.trace.record(
+            self.coordinator.consensus(),
+            before,
+            &input,
+            self.coordinator.outbox().iter(),
+        );
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
@@ -396,7 +409,7 @@ impl TestHarness {
             consensus.public_key(),
             consensus.last_decided_leaf(),
             consensus.cert1_at(ViewNumber::genesis()),
-            *consensus.epoch_height,
+            consensus.epoch_length.get(),
         );
         self.trace.placed(view, epoch);
         self.coordinator.consensus_mut().set_view(view, epoch);
@@ -429,5 +442,10 @@ impl TestHarness {
     /// buffered rather than judged, which hides the checks that judge it.
     pub fn membership(&self) -> &EpochMembershipCoordinator<TestTypes> {
         &self.membership
+    }
+
+    /// What this harness's coordinator has persisted, as a restart loads it.
+    pub fn storage(&self) -> &TestStorage<TestTypes> {
+        &self.storage
     }
 }

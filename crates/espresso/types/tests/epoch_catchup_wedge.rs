@@ -37,7 +37,7 @@
 //! actually involved — by making the storage bound too large to help.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -57,8 +57,11 @@ use espresso_types::{
 };
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
-    PeerConfig, ValidatorConfig, data::EpochNumber, drb::DrbResult,
-    epoch_membership::EpochMembershipCoordinator, signature_key::BLSPubKey,
+    PeerConfig, ValidatorConfig,
+    data::EpochNumber,
+    drb::DrbResult,
+    epoch_membership::{CatchupSeedFn, EpochMembershipCoordinator},
+    signature_key::BLSPubKey,
     traits::election::Membership,
 };
 use indexmap::IndexMap;
@@ -87,18 +90,30 @@ const OTHER_EPOCH: u64 = 8;
 /// catchup is making no progress. Far longer than any real catchup here.
 const RECOVERY_BUDGET: Duration = Duration::from_secs(3);
 
-/// Stands in for the node's Postgres. `load_stake` never returns, modelling a
-/// query that has stalled; every other method answers immediately.
+/// Stands in for the node's Postgres. `load_stake` never returns for epochs not in
+/// `served_epochs`, modelling a stalled query; every other method answers immediately.
 #[derive(Debug, Default)]
 struct StalledStakeStore {
     /// Epochs `load_stake` has been entered for, in call order.
     load_stake_epochs: Mutex<Vec<u64>>,
     load_stake_calls: AtomicUsize,
+    /// Epochs `load_stake` answers with an empty table instead of stalling.
+    served_epochs: Mutex<HashSet<u64>>,
 }
 
 impl StalledStakeStore {
+    /// Makes `load_stake` answer for `epoch`.
+    fn serve(&self, epoch: u64) {
+        self.served_epochs.lock().insert(epoch);
+    }
+
     fn calls(&self) -> usize {
         self.load_stake_calls.load(Ordering::SeqCst)
+    }
+
+    /// The first epoch `load_stake` was entered for.
+    fn first_loaded_epoch(&self) -> Option<u64> {
+        self.load_stake_epochs.lock().first().copied()
     }
 
     fn epochs_seen(&self) -> HashSet<u64> {
@@ -122,12 +137,19 @@ impl MembershipPersistence for StalledStakeStore {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
         self.load_stake_calls.fetch_add(1, Ordering::SeqCst);
         self.load_stake_epochs.lock().push(*epoch);
+        if self.served_epochs.lock().contains(&*epoch) {
+            return Ok(Some(Default::default()));
+        }
         tracing::info!(%epoch, "load_stake entered; stalling (models a hung DB query)");
         std::future::pending::<anyhow::Result<Option<StakeTuple>>>().await
     }
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        Ok(BTreeSet::new())
     }
 
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
@@ -243,11 +265,12 @@ fn setup_with(
         EPOCH_HEIGHT,
         EpochNumber::new(FIRST_EPOCH),
     )
+    .expect("genesis without duplicate keys")
     .with_storage_read_timeout(storage_read_timeout);
 
     let coordinator = EpochMembershipCoordinator::new(
         committees,
-        EPOCH_HEIGHT,
+        std::num::NonZeroU64::new(EPOCH_HEIGHT).unwrap(),
         &TestStorage::<SeqTypes>::default(),
     )
     .with_catchup_timeout(catchup_timeout);
@@ -267,6 +290,10 @@ impl MembershipPersistence for StoreHandle {
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         self.0.load_latest_stake(limit).await
     }
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        self.0.stored_stake_epochs().await
+    }
+
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         self.0.load_drb_result(epoch).await
     }
@@ -354,7 +381,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     let (store, coordinator) = setup();
     let target = EpochNumber::new(TARGET_EPOCH);
 
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} has no local snapshot, so this must not succeed")
     };
     assert!(
@@ -367,7 +394,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
     );
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} must still be unavailable")
     };
     assert!(
@@ -382,7 +409,7 @@ async fn catchup_retries_after_persistence_query_stalls() {
     // restarted and every view it leads times out.
     let stalled_epoch = WALK_EPOCH;
     let retried = wait_until(RECOVERY_BUDGET, || {
-        let _ = coordinator.stake_table_for_epoch(Some(target));
+        let _ = coordinator.stake_table_for_epoch(target);
         store.loads_of(stalled_epoch) >= 2
     })
     .await;
@@ -411,7 +438,7 @@ async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
     let target = EpochNumber::new(TARGET_EPOCH);
     let other = EpochNumber::new(OTHER_EPOCH);
 
-    assert!(coordinator.stake_table_for_epoch(Some(target)).is_err());
+    assert!(coordinator.stake_table_for_epoch(target).is_err());
     assert!(
         wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await,
         "catchup never reached the persistence layer"
@@ -456,7 +483,7 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
     let (store, coordinator) = setup_with(Duration::from_secs(3600), Duration::from_millis(500));
     let target = EpochNumber::new(TARGET_EPOCH);
 
-    let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+    let Err(err) = coordinator.stake_table_for_epoch(target) else {
         panic!("epoch {target} has no local snapshot, so this must not succeed")
     };
     assert!(
@@ -476,7 +503,7 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
     // fine — the wedge under test is the permanent map entry, not the locks.
     let recovered = wait_until(RECOVERY_BUDGET, || {
         matches!(
-            coordinator.stake_table_for_epoch(Some(target)),
+            coordinator.stake_table_for_epoch(target),
             Err(e) if format!("{e:?}").contains("Starting catchup")
         )
     })
@@ -485,5 +512,183 @@ async fn step_timeout_recovers_catchup_when_storage_bound_cannot() {
         recovered,
         "a step timeout never abandoned the parked attempt: with the storage reads effectively \
          unbounded no retry can ever be started, and the node stays wedged until restart"
+    );
+}
+
+/// Seed calls `(target, start)` in order.
+type SeedCalls = Arc<Mutex<Vec<(u64, u64)>>>;
+
+/// A seed hook that records its arguments and the peak number of concurrent calls, then answers
+/// `answer`.
+fn recording_seed(
+    answer: impl Fn(EpochNumber) -> anyhow::Result<EpochNumber> + Send + Sync + 'static,
+) -> (CatchupSeedFn<SeqTypes>, SeedCalls, Arc<AtomicUsize>) {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let running = Arc::new(AtomicUsize::new(0));
+    let answer = Arc::new(answer);
+    let seed: CatchupSeedFn<SeqTypes> = {
+        let (calls, peak) = (Arc::clone(&calls), Arc::clone(&peak));
+        Arc::new(move |target, start, _coordinator| {
+            let (calls, peak, running, answer) = (
+                Arc::clone(&calls),
+                Arc::clone(&peak),
+                Arc::clone(&running),
+                Arc::clone(&answer),
+            );
+            Box::pin(async move {
+                calls.lock().push((*target, *start));
+                let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                running.fetch_sub(1, Ordering::SeqCst);
+                answer(start)
+            })
+        })
+    };
+    (seed, calls, peak)
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn catchup_skips_seed_when_adjacent_ok() {
+    let (store, coordinator) = setup();
+    let (seed, calls, _) = recording_seed(Ok);
+    coordinator.set_catchup_seed(seed);
+
+    // Epoch 3 is one beyond the held pair; the walk starts, the seed does not.
+    assert!(
+        coordinator
+            .stake_table_for_epoch(EpochNumber::new(WALK_EPOCH))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await);
+    assert!(calls.lock().is_empty());
+}
+
+/// A seed error is followed by the walk from the held pair.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seed_error_is_followed_by_walk_ok() {
+    let (store, coordinator) = setup();
+    let (seed, calls, _) = recording_seed(|_| Err(anyhow::anyhow!("no peer answered")));
+    coordinator.set_catchup_seed(seed);
+
+    assert!(
+        coordinator
+            .stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.calls() >= 1).await);
+    assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
+    assert_eq!(
+        store.first_loaded_epoch(),
+        Some(WALK_EPOCH),
+        "the walk began at the held pair"
+    );
+}
+
+/// Catchups for different targets seed one after the other.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seeds_do_not_overlap_ok() {
+    let (_store, coordinator) = setup();
+    let (seed, calls, peak) = recording_seed(|_| Err(anyhow::anyhow!("not yet")));
+    coordinator.set_catchup_seed(seed);
+
+    for target in [TARGET_EPOCH, TARGET_EPOCH + 1, TARGET_EPOCH + 2] {
+        let _ = coordinator.stake_table_for_epoch(EpochNumber::new(target));
+    }
+
+    assert!(wait_until(RECOVERY_BUDGET, || calls.lock().len() >= 3).await);
+    assert_eq!(peak.load(Ordering::SeqCst), 1);
+}
+
+/// A target more than one epoch beyond the held pair (epochs 1 and 2) calls the seed, and the
+/// start it returns moves the walk: it starts above that start, not above the held pair.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn seeded_start_resumes_the_walk_ok() {
+    let (store, coordinator) = setup();
+    let seeded = EpochNumber::new(TARGET_EPOCH - 1);
+    let (seed, calls, _) = recording_seed(move |_| Ok(seeded));
+    coordinator.set_catchup_seed(seed);
+
+    assert!(
+        coordinator
+            .stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH))
+            .is_err()
+    );
+
+    assert!(wait_until(RECOVERY_BUDGET, || store.loads_of(TARGET_EPOCH) >= 1).await);
+    assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
+    assert_eq!(
+        store.first_loaded_epoch(),
+        Some(TARGET_EPOCH),
+        "the walk began at the held pair"
+    );
+}
+
+/// A catchup queued on `seed_lock` while a seed installs its pair does not call the seed again.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn queued_catchup_skips_seed_once_pair_is_held_ok() {
+    let (store, coordinator) = setup();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let loaded = Arc::new(Mutex::new(Vec::new()));
+    let seed: CatchupSeedFn<SeqTypes> = {
+        let (store, calls, loaded) = (Arc::clone(&store), Arc::clone(&calls), Arc::clone(&loaded));
+        Arc::new(move |target, start, coordinator| {
+            let (store, calls, loaded) =
+                (Arc::clone(&store), Arc::clone(&calls), Arc::clone(&loaded));
+            Box::pin(async move {
+                calls.lock().push((*target, *start));
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                for epoch in [TARGET_EPOCH - 2, TARGET_EPOCH - 1] {
+                    store.serve(epoch);
+                    let found = coordinator
+                        .membership()
+                        .load_stake_table(EpochNumber::new(epoch))
+                        .await;
+                    loaded.lock().push((epoch, found.is_some()));
+                }
+                Ok(EpochNumber::new(TARGET_EPOCH - 1))
+            })
+        })
+    };
+    coordinator.set_catchup_seed(seed);
+
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH));
+    assert!(wait_until(RECOVERY_BUDGET, || !calls.lock().is_empty()).await);
+    // Pair (TARGET_EPOCH - 3, TARGET_EPOCH - 2) is held once the first seed has installed.
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH - 1));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert_eq!(*calls.lock(), vec![(TARGET_EPOCH, FIRST_EPOCH + 1)]);
+    assert_eq!(
+        *loaded.lock(),
+        vec![(TARGET_EPOCH - 2, true), (TARGET_EPOCH - 1, true)],
+        "the seed did not install its pair"
+    );
+}
+
+/// A catchup whose pair is adjacent starts its walk while another catchup's seed holds `seed_lock`.
+#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn adjacent_catchup_does_not_wait_for_a_running_seed_ok() {
+    let (store, coordinator) = setup();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seed: CatchupSeedFn<SeqTypes> = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_, _, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        })
+    };
+    coordinator.set_catchup_seed(seed);
+
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(TARGET_EPOCH));
+    assert!(wait_until(RECOVERY_BUDGET, || calls.load(Ordering::SeqCst) == 1).await);
+    let _ = coordinator.stake_table_for_epoch(EpochNumber::new(WALK_EPOCH));
+
+    assert!(
+        wait_until(RECOVERY_BUDGET, || store.loads_of(WALK_EPOCH) >= 1).await,
+        "the adjacent catchup waited for the running seed"
     );
 }

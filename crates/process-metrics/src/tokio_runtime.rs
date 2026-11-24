@@ -1,6 +1,6 @@
 //! Metrics of the tokio runtime the node runs on.
 
-use hotshot_types::traits::metrics::{Counter, Gauge, Metrics};
+use hotshot_metrics::{Counter, Gauge, Metrics};
 use tokio::runtime::{Handle, RuntimeMetrics};
 
 use crate::accumulate::SecondsAccumulator;
@@ -122,7 +122,7 @@ fn busy_nanos(runtime: &RuntimeMetrics) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use hotshot_types::traits::metrics::NoMetrics;
+    use hotshot_metrics::NoMetrics;
 
     use super::*;
 

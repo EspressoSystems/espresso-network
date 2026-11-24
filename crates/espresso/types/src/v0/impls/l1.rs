@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, num::NonZeroU64, str::FromStr, sync::Arc};
 #[cfg(feature = "node")]
-use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
+use std::{num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -61,6 +61,7 @@ use super::{
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
+    v0_3::Fetcher,
 };
 use crate::L1ClientOptions;
 #[cfg(feature = "node")]
@@ -422,6 +423,11 @@ const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 /// ([alloy-transport-2.4.1/src/error.rs:266-272](https://github.com/alloy-rs/alloy/blob/v2.4.1/crates/transport/src/error.rs#L266-L272)).
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
+
+/// How long to wait for the L1 client to see a finalized block, and the bound on the LC contract
+/// reads together.
+#[cfg(feature = "node")]
+pub(super) const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
 
 /// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
@@ -981,6 +987,17 @@ impl L1Client {
         self.lock_once_finalized_reaches(number).await.1
     }
 
+    /// The number of the latest finalized block; waits up to `L1_FINALIZED_WAIT` for the first one.
+    pub async fn finalized_number_within_wait(&self) -> anyhow::Result<u64> {
+        let block = tokio::time::timeout(
+            L1_FINALIZED_WAIT,
+            self.wait_for_latest_finalized_at_least(0),
+        )
+        .await
+        .context("no L1 finalized block yet")?;
+        Ok(block.number)
+    }
+
     /// Wait until the finalized block number reaches at least `number`, returning the locked
     /// state and the latest finalized block.
     ///
@@ -1350,19 +1367,8 @@ impl L1Client {
 
         // Divide the range `prev_finalized..=new_finalized` into chunks of size
         // `events_max_block_range`.
-        let mut start = prev;
-        let end = new_finalized;
-        let chunk_size = opt.l1_events_max_block_range;
-        let chunks = std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
-        });
+        let chunks =
+            Fetcher::block_range_chunks(prev, new_finalized, opt.l1_events_max_block_range);
 
         // Fetch events for each chunk.
         let events = stream::iter(chunks).then(|(from, to)| {
@@ -1887,7 +1893,7 @@ mod test {
         f: impl FnOnce(&mut L1ClientOptions),
     ) -> L1Client {
         let mut opt = L1ClientOptions {
-            l1_events_max_block_range: 1,
+            l1_events_max_block_range: NonZeroU64::MIN,
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
             ..Default::default()
@@ -2192,6 +2198,23 @@ mod test {
         tokio::time::timeout(Duration::from_secs(3), l1_client.wait_for_block(head + 1))
             .await
             .expect("wait_for_block did not refresh from the RPC without the poller");
+    }
+
+    /// The wait for a finalized L1 block is bounded.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn finalized_number_wait_is_bounded() {
+        let l1_client = L1ClientOptions::default()
+            .connect(vec!["http://localhost:1".parse().unwrap()])
+            .unwrap();
+
+        let start = tokio::time::Instant::now();
+        let err = l1_client.finalized_number_within_wait().await.unwrap_err();
+
+        assert!(start.elapsed() >= L1_FINALIZED_WAIT);
+        assert!(
+            format!("{err:#}").contains("no L1 finalized block yet"),
+            "{err:#}"
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

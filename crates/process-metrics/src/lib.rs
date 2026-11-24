@@ -20,7 +20,7 @@ mod ext;
 /// [`ProcessMetrics`] still collects the portable subset; only these metrics are absent.
 #[cfg(not(target_os = "linux"))]
 mod ext {
-    use hotshot_types::traits::metrics::Metrics;
+    use hotshot_metrics::Metrics;
 
     pub struct LinuxMetrics;
 

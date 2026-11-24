@@ -16,6 +16,8 @@ mod txproof;
 mod utils;
 
 pub use header::Header;
+#[cfg(feature = "node")]
+pub use impls::StakeTableStoreOutcome;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 // export reward types for staking-ui-service
@@ -27,8 +29,9 @@ pub use impls::reward::{
 pub use impls::testing;
 pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
-    ProposalValidationError, RECENT_STAKE_TABLES_LIMIT, StateValidationError, ValidatorSet,
-    get_l1_deposits, retain_accounts, validators_from_l1_events,
+    LcContractFinalizedState, ProposalValidationError, RECENT_STAKE_TABLES_LIMIT,
+    StateValidationError, ValidatorSet, get_l1_deposits, preceding_root_height, retain_accounts,
+    validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;
@@ -167,8 +170,6 @@ pub type EpochRewardVersion = StaticVersion<0, 5>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
-
-pub type Event = hotshot_types::event::Event<SeqTypes>;
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;

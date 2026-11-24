@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    sync::Arc,
+    time::Instant,
+};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
@@ -32,7 +37,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
+        DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
         QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
@@ -1232,34 +1237,6 @@ impl SequencerPersistence for Persistence {
         res
     }
 
-    async fn append_da(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        let data = &proposal.data;
-        let view = data.view_number().u64();
-        let data_bytes = bincode::serialize(proposal).unwrap();
-
-        let now = Instant::now();
-        let res = serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "da_proposal",
-                ["view", "data", "payload_hash"],
-                ["view"],
-                [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await;
-        self.internal_metrics
-            .internal_append_da_duration
-            .add_point(now.elapsed().as_secs_f64());
-        res
-    }
-
     async fn record_action(&self, view: ViewNumber, action: HotShotAction) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
         //
@@ -1514,57 +1491,6 @@ impl SequencerPersistence for Persistence {
                 [(true, upgrade_certificate_bytes.clone())],
             )
             .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn append_next_epoch_high_qc2(
-        &self,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let view = next_epoch_high_qc.view_number();
-        let data =
-            bincode::serialize(&next_epoch_high_qc).context("serializing next epoch high_qc2")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            let stored_view =
-                query("SELECT data FROM next_epoch_quorum_certificate WHERE id = true")
-                    .fetch_optional(tx.as_mut())
-                    .await?
-                    .map(|row| {
-                        let bytes: Vec<u8> = row.get("data");
-                        bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)
-                            .context("deserializing existing next epoch high_qc2")
-                            .map(|qc| qc.view_number())
-                    })
-                    .transpose()?;
-            if stored_view.is_some_and(|stored| stored >= view) {
-                return Ok(());
-            }
-            tx.upsert(
-                "next_epoch_quorum_certificate",
-                ["id", "data"],
-                ["id"],
-                [(true, data.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn store_eqc(
-        &self,
-        high_qc: QuorumCertificate2<SeqTypes>,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let eqc_bytes =
-            bincode::serialize(&(high_qc, next_epoch_high_qc)).context("serializing eqc")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes.clone())])
-                .await?;
             tx.commit().await
         })
         .await
@@ -1943,6 +1869,19 @@ impl MembershipPersistence for Persistence {
             .transpose()
     }
 
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let mut tx = self.db.read().await?;
+        let epochs =
+            query_as::<(i64,)>("SELECT epoch FROM epoch_drb_and_root WHERE stake IS NOT NULL")
+                .fetch_all(tx.as_mut())
+                .await
+                .context("listing epochs with a stake table")?;
+        Ok(epochs
+            .into_iter()
+            .map(|(epoch,)| EpochNumber::new(epoch as u64))
+            .collect())
+    }
+
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         let result = self
             .db
@@ -2071,16 +2010,22 @@ impl MembershipPersistence for Persistence {
             .transpose()?;
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_drb_and_root",
-                ["epoch", "stake", "block_reward", "stake_table_hash"],
-                ["epoch"],
-                [(
-                    epoch_i64,
-                    stake_table_bytes.clone(),
-                    reward_bytes.clone(),
-                    stake_table_hash_bytes.clone(),
-                )],
+            // A write without a reward or hash keeps the stored one.
+            tx.execute(
+                query(
+                    "INSERT INTO epoch_drb_and_root (epoch, stake, block_reward, stake_table_hash)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (epoch) DO UPDATE SET
+                        stake = excluded.stake,
+                        block_reward = COALESCE(
+                            excluded.block_reward, epoch_drb_and_root.block_reward),
+                        stake_table_hash = COALESCE(
+                            excluded.stake_table_hash, epoch_drb_and_root.stake_table_hash)",
+                )
+                .bind(epoch_i64)
+                .bind(stake_table_bytes.clone())
+                .bind(reward_bytes.clone())
+                .bind(stake_table_hash_bytes.clone()),
             )
             .await?;
             tx.commit().await
@@ -2450,6 +2395,20 @@ mod testing {
 
         async fn tmp_storage() -> Self::Storage {
             Arc::new(TmpDb::init().await)
+        }
+
+        async fn insert_legacy_eqc(
+            &self,
+            high_qc: &QuorumCertificate2<SeqTypes>,
+            next_epoch_qc: &NextEpochQuorumCertificate2<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let mut tx = self.db.write().await?;
+            tx.execute(
+                query("INSERT INTO eqc (id, data) VALUES (true, $1)")
+                    .bind(bincode::serialize(&(high_qc, next_epoch_qc))?),
+            )
+            .await?;
+            tx.commit().await
         }
 
         #[allow(refining_impl_trait)]

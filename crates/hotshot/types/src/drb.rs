@@ -5,7 +5,6 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::BTreeMap,
     pin::pin,
     sync::{
         Arc,
@@ -25,7 +24,6 @@ use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
     HotShotConfig,
-    data::EpochNumber,
     traits::{
         node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
@@ -94,9 +92,6 @@ pub type DrbSeedInput = [u8; 32];
 
 /// Alias for DRB result from `compute_drb_result`.
 pub type DrbResult = [u8; 32];
-
-/// Number of previous results and seeds to keep
-pub const KEEP_PREVIOUS_RESULT_COUNT: u64 = 8;
 
 // TODO: Use `HASHES_PER_SECOND` * `VIEW_TIMEOUT` * `DRB_CALCULATION_NUM_VIEW` to calculate this
 // once we bench the hash time.
@@ -331,49 +326,6 @@ pub async fn compute_drb_result(
     Some(drb_result)
 }
 
-/// Seeds for DRB computation and computed results.
-#[derive(Clone, Debug)]
-pub struct DrbResults {
-    /// Stored results from computations
-    pub results: BTreeMap<EpochNumber, DrbResult>,
-}
-
-impl DrbResults {
-    #[must_use]
-    /// Constructor with initial values for epochs 1 and 2.
-    pub fn new() -> Self {
-        Self {
-            results: BTreeMap::from([
-                (EpochNumber::new(1), INITIAL_DRB_RESULT),
-                (EpochNumber::new(2), INITIAL_DRB_RESULT),
-            ]),
-        }
-    }
-
-    pub fn store_result(&mut self, epoch: EpochNumber, result: DrbResult) {
-        self.results.insert(epoch, result);
-    }
-
-    /// Garbage collects internal data structures
-    pub fn garbage_collect(&mut self, epoch: EpochNumber) {
-        if epoch.u64() < KEEP_PREVIOUS_RESULT_COUNT {
-            return;
-        }
-
-        let retain_epoch = epoch - KEEP_PREVIOUS_RESULT_COUNT;
-        // N.B. x.split_off(y) returns the part of the map where key >= y
-
-        // Remove result entries older than EPOCH
-        self.results = self.results.split_off(&retain_epoch);
-    }
-}
-
-impl Default for DrbResults {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Functions for leader selection based on the DRB.
 ///
 /// The algorithm we use is:
@@ -452,21 +404,11 @@ pub mod election {
         randomized_committee: &RandomizedCommittee<Entry>,
         view: u64,
     ) -> Entry {
-        let RandomizedCommittee {
-            cdf,
-            stake_table_hash,
-            drb,
-        } = randomized_committee;
-        // We hash the concatenated drb, view and stake table hash.
-        let mut hasher = Sha512::new();
-        hasher.update(drb);
-        hasher.update(view.to_le_bytes());
-        hasher.update(stake_table_hash);
-        let raw_breakpoint: [u8; 64] = hasher.finalize().into();
+        let cdf = &randomized_committee.cdf;
 
-        // then calculate the remainder modulo the total stake as a U512
+        // calculate the view's hash modulo the total stake as a U512
         let remainder: U512 =
-            U512::from_le_bytes(raw_breakpoint) % U512::from(cdf.last().unwrap().1);
+            randomized_committee.view_hash(view) % U512::from(cdf.last().unwrap().1);
 
         // and drop the top 32 bytes, downcasting to a U256
         let breakpoint: U256 = U256::from_le_slice(&remainder.to_le_bytes_vec()[0..32]);
@@ -495,6 +437,22 @@ pub mod election {
     impl<Entry> RandomizedCommittee<Entry> {
         pub fn drb_result(&self) -> [u8; 32] {
             self.drb
+        }
+
+        /// The committee in the order its stakes are laid end to end.
+        pub fn entries(&self) -> impl Iterator<Item = &Entry> {
+            self.cdf.iter().map(|(entry, _)| entry)
+        }
+
+        /// The hash a view's leader is drawn from: of the concatenated drb, view and stake
+        /// table hash.
+        pub fn view_hash(&self, view: u64) -> U512 {
+            let mut hasher = Sha512::new();
+            hasher.update(self.drb);
+            hasher.update(view.to_le_bytes());
+            hasher.update(self.stake_table_hash);
+            let raw: [u8; 64] = hasher.finalize().into();
+            U512::from_le_bytes(raw)
         }
     }
 }
