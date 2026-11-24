@@ -30,7 +30,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 
 use super::{
     Leaf2, NodeState, ValidatedState,
-    fee_info::is_lookup_shaped,
+    fee_info::{is_lookup_shaped, is_tree_lookup_shaped},
     v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, RewardAmount},
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
@@ -584,6 +584,10 @@ impl RewardAccountProofV1 {
         accounts: &[RewardAccountV1],
         root: &RewardMerkleCommitmentV1,
     ) -> anyhow::Result<Vec<Self>> {
+        ensure!(
+            is_tree_lookup_shaped(snapshot),
+            "snapshot is not shaped like a merkle tree"
+        );
         accounts
             .iter()
             .map(|account| {
@@ -1477,6 +1481,7 @@ pub mod tests {
 
     use jf_merkle_tree_compat::prelude::Sha3Node;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
 
@@ -1495,6 +1500,34 @@ pub mod tests {
         let tree: RewardMerkleTreeV1 = serde_json::from_value(json).unwrap();
 
         assert!(RewardAccountProofV1::prove(&tree, account).is_none());
+    }
+
+    #[rstest]
+    #[case::root_without_children(0, 0)]
+    #[case::branch_at_leaf_height(REWARD_MERKLE_TREE_V1_HEIGHT, RewardMerkleTreeV1::ARITY)]
+    fn test_verify_snapshot_v1_rejects_a_misshaped_branch(
+        #[case] depth: usize,
+        #[case] arity: usize,
+    ) {
+        let account = RewardAccountV1(Address::repeat_byte(1));
+        let tree = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            [(account, RewardAmount::from(1))],
+        )
+        .unwrap();
+        let mut json = serde_json::to_value(&tree).unwrap();
+        let node = (0..depth).fold(&mut json["root"], |node, _| {
+            let children = node["Branch"]["children"].as_array_mut().unwrap();
+            children.iter_mut().find(|child| *child != "Empty").unwrap()
+        });
+        let value = node.as_object().unwrap().values().next().unwrap()["value"].clone();
+        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; arity] } });
+        let snapshot: RewardMerkleTreeV1 = serde_json::from_value(json).unwrap();
+
+        assert!(
+            RewardAccountProofV1::verify_snapshot(&snapshot, &[account], &tree.commitment())
+                .is_err()
+        );
     }
 
     #[test]
