@@ -1626,7 +1626,7 @@ pub fn remember_blocks_frontier(
     // `remember` takes the path from its index argument and ignores `frontier.pos`.
     ensure!(
         frontier.pos == last,
-        "frontier is for leaf {}, expected leaf {last}",
+        "frontier claims leaf {}, expected leaf {last}",
         frontier.pos
     );
     let elem = frontier
@@ -1912,44 +1912,36 @@ mod test {
         assert_eq!(remembered.commitment(), tree.commitment());
     }
 
-    #[test]
-    fn test_remember_blocks_frontier_rejects_a_leaf_storing_another_digest() {
+    /// Edits the honest frontier of a 2-block tree and expects `reason` in the rejection.
+    #[rstest]
+    #[case::a_leaf_storing_another_digest(
+        Some(Sha3Node::default()),
+        1,
+        1,
+        "not shaped like a lookup"
+    )]
+    #[case::a_leaf_at_another_position(None, 0, 1, "not shaped like a lookup")]
+    #[case::a_frontier_claiming_another_leaf(None, 0, 0, "frontier claims leaf 0, expected leaf 1")]
+    fn test_remember_blocks_frontier_rejects(
+        #[case] leaf_digest: Option<Sha3Node>,
+        #[case] leaf_pos: u64,
+        #[case] claimed_pos: u64,
+        #[case] reason: &str,
+    ) {
         let tree = blocks_tree(2);
         let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
-        let Some(MerkleNode::Leaf { value, .. }) = frontier.proof.first_mut() else {
+        let Some(MerkleNode::Leaf { value, pos, .. }) = frontier.proof.first_mut() else {
             panic!("expected a leaf at the bottom of the frontier");
         };
-        *value = Sha3Node::default();
+        if let Some(digest) = leaf_digest {
+            *value = digest;
+        }
+        *pos = leaf_pos;
+        frontier.pos = claimed_pos;
 
         let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
-        assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
-    }
-
-    #[test]
-    fn test_remember_blocks_frontier_rejects_a_leaf_at_another_position() {
-        let tree = blocks_tree(2);
-        let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
-        let Some(MerkleNode::Leaf { pos, .. }) = frontier.proof.first_mut() else {
-            panic!("expected a leaf at the bottom of the frontier");
-        };
-        *pos = 0;
-
-        let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
-        assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
-    }
-
-    #[test]
-    fn test_remember_blocks_frontier_rejects_a_proof_of_another_leaf() {
-        let tree = blocks_tree(2);
-        let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
-        let Some(MerkleNode::Leaf { pos, .. }) = frontier.proof.first_mut() else {
-            panic!("expected a leaf at the bottom of the frontier");
-        };
-        *pos = 0;
-        frontier.pos = 0;
-
-        let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
-        assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
+        let err = remember_blocks_frontier(&mut remembered, &frontier).unwrap_err();
+        assert!(err.to_string().contains(reason), "{err:#}");
     }
 
     #[test]

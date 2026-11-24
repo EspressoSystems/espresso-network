@@ -11,7 +11,7 @@
 //! An honest response is decoded, its tree structure edited, and encoded
 //! again, so the input reaches the merkle code instead of stopping in the field
 //! element decoder. A response the node accepts must leave it holding the same
-//! accounts and roots an honest one would.
+//! accounts, proofs and roots an honest one would.
 //!
 //! Fee catchup runs only for headers below the new protocol, and v1 reward
 //! catchup only up to the epoch version. The v2 reward tree, which catchup
@@ -254,7 +254,11 @@ fuzz_target!(
         FEE.assert_honest_responses_accepted();
         REWARD_V1.assert_honest_responses_accepted();
         for frontier in FRONTIERS.iter() {
-            assert!(frontier.check(&FrontierResponse::default()));
+            assert!(
+                frontier.check(&FrontierResponse::default()),
+                "an honest frontier of {} leaves is rejected",
+                frontier.tree.num_leaves()
+            );
         }
     },
     |input: Input| {
@@ -447,8 +451,9 @@ impl Frontier {
         if espresso_types::remember_blocks_frontier(&mut local, &proof).is_err() {
             return false;
         }
-        assert!(
-            local.lookup(self.proof.pos).expect_ok().ok() == Some((self.last, self.proof.clone())),
+        assert_eq!(
+            local.lookup(self.proof.pos).expect_ok().ok(),
+            Some((self.last, self.proof.clone())),
             "remembered the frontier differently from the honest tree"
         );
         local
