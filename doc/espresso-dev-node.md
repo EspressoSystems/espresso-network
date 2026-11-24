@@ -35,7 +35,7 @@ customizing the node, depending on what type of testing you are trying to do.
 | `sequencer_api_max_connections` | `Option<usize>`  | `ESPRESSO_NODE_API_MAX_CONNECTIONS`          | None                                                          | Maximum concurrent connections allowed by the HTTP API server.                                                                                                                                 |
 | `prover_port`                   | `Option<u16>`    | `ESPRESSO_PROVER_PORT`                       | An unused port                                                | Port for connecting to the prover. If this is not provided, an available port will be selected.                                                                                                |
 | `dev_node_port`                 | `u16`            | `ESPRESSO_DEV_NODE_PORT`                     | `20000`                                                       | Port for the dev node. This is used to provide tools and information to facilitate developers debugging.                                                                                       |
-| `update_interval`               | `Duration`       | `ESPRESSO_STATE_PROVER_UPDATE_INTERVAL`      | `20s`                                                         | The frequency of updating the light client state                                                                                                                                               |
+| `update_interval`               | `Duration`       | `ESPRESSO_STATE_PROVER_UPDATE_INTERVAL`      | `10s`                                                         | The frequency of updating the light client state                                                                                                                                               |
 | `retry_interval`                | `Duration`       | `ESPRESSO_STATE_PROVER_RETRY_INTERVAL`       | `2s`                                                          | Interval between retries if a state update fails.                                                                                                                                              |
 | `version`                       | `DevNodeVersion` | `ESPRESSO_DEV_NODE_VERSION`                  | `0.6`                                                         | Protocol version to run: `0.6` or `0.7`.                                                                                                                                                       |
 | `alt_chain_providers`           | `Vec<Url>`       | `ESPRESSO_DEPLOYER_ALT_CHAIN_PROVIDERS`      | `None`                                                        | Optional list of URLs representing alternate chains where the dev node will deploy Light client contracts and submit Light contract state updates. Useful for test environments involving L3s. |
@@ -133,7 +133,10 @@ finalized:
 
 - Ask for `reward-state-v2/reward-claim-input/{height}/{address}` at the light client's `finalizedState().blockHeight`.
   Any height in the same epoch gives the same answer, as the node stores the proofs at the epoch boundary below it.
-- After the prover updates the light client (every `update_interval`, 20 s by default), the node stores the new proofs
-  at its next block whose height is a multiple of 30. Until then, a claim at the new height returns 404.
+- After the prover updates the light client (every `update_interval`, 10 s by default), the node stores the proofs for
+  the new height at its next block whose height is a multiple of 30. Until then, a claim at the new height returns 404
+  when that height is in a later epoch than the stored proofs.
+- The `latest` routes, `reward-state-v2/reward-balance/latest/{address}` and `reward-state-v2/proof/latest/{address}`,
+  return the newest stored proofs: the balance at the light client's epoch boundary, not at the chain tip.
 - The node deletes reward trees and proofs that are more than 5 epochs old, but keeps the ones the light client's height
   needs.
