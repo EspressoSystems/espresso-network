@@ -389,9 +389,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
                     return Err(anyhow::anyhow!("expected blocks frontier response"));
                 };
 
-                // Verify the block proof
-                espresso_types::remember_blocks_frontier(&mut block_merkle_tree, &blocks_frontier)
-                    .with_context(|| "merkle tree verification failed")?;
+                espresso_types::remember_blocks_frontier(&mut block_merkle_tree, &blocks_frontier)?;
 
                 // Return the verified merkle tree
                 Ok(block_merkle_tree)

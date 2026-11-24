@@ -413,8 +413,8 @@ impl FeeAccountProof {
     }
 
     /// Prove each of `accounts` out of `snapshot`, a partial tree from an untrusted peer, and
-    /// verify every proof against `root`. Fails if the snapshot lacks an account or any proof does
-    /// not verify.
+    /// verify every proof against `root`. Fails if the snapshot's height is not the tree height,
+    /// the snapshot lacks an account, or any proof does not verify.
     pub fn verify_snapshot(
         snapshot: &FeeMerkleTree,
         accounts: &[FeeAccount],
@@ -464,8 +464,8 @@ impl FeeAccountProof {
 
 /// Whether `remember` can adopt every node of `proof` into a tree as it is: each sibling is a
 /// non-default forgotten digest or empty, and a leaf stores its own digest and `proof.pos`.
-/// `MerkleTreeScheme::verify` checks none of these, and `universal_lookup` builds only proofs of
-/// this shape.
+/// `MerkleTreeScheme::verify` checks none of these, and `lookup` and `universal_lookup` build only
+/// proofs of this shape.
 pub(super) fn is_lookup_shaped<E, I, const ARITY: usize>(
     proof: &MerkleProof<E, I, Sha3Node, ARITY>,
 ) -> bool
@@ -789,13 +789,13 @@ pub(super) mod test {
     }
 
     /// Replace the first non-empty node `depth` levels below the root of the serialized tree
-    /// `json` with a branch of `children` empty children that keeps the node's value.
-    pub(crate) fn replace_node_with_branch(json: &mut Value, depth: usize, children: usize) {
+    /// `json` with a branch of `arity` empty children that keeps the node's value.
+    pub(crate) fn replace_node_with_branch(json: &mut Value, depth: usize, arity: usize) {
         let node = (0..depth).fold(&mut json["root"], |node, _| {
             let children = node["Branch"]["children"].as_array_mut().unwrap();
             children.iter_mut().find(|child| *child != "Empty").unwrap()
         });
         let value = node.as_object().unwrap().values().next().unwrap()["value"].clone();
-        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; children] } });
+        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; arity] } });
     }
 }

@@ -1517,35 +1517,6 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for BlockMerkleTree {
     }
 }
 
-/// Remember `frontier`, the proof of the last leaf of `tree`, so that blocks can be appended to
-/// `tree`.
-pub fn remember_blocks_frontier(
-    tree: &mut BlockMerkleTree,
-    frontier: &<BlockMerkleTree as MerkleTreeScheme>::MembershipProof,
-) -> anyhow::Result<()> {
-    let last = tree
-        .num_leaves()
-        .checked_sub(1)
-        .context("cannot remember a frontier into an empty tree")?;
-    // `remember` takes the path from its index argument and ignores `frontier.pos`.
-    ensure!(
-        frontier.pos == last,
-        "frontier is for leaf {}, expected leaf {last}",
-        frontier.pos
-    );
-    let elem = frontier
-        .elem()
-        .context("provided frontier is missing leaf element")?;
-    // `remember` keeps the leaf's stored digest, which the next `push` hashes.
-    ensure!(
-        fee_info::is_lookup_shaped(frontier),
-        "frontier is not shaped like a lookup"
-    );
-    tree.remember(last, elem, frontier)
-        .context("verifying block proof")?;
-    Ok(())
-}
-
 impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     type Key = Self::Index;
     type Entry = Self::Element;
@@ -1640,6 +1611,35 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV1 {
         }
         Ok(())
     }
+}
+
+/// Remember `frontier`, the proof of the last leaf of `tree`, so that blocks can be appended to
+/// `tree`.
+pub fn remember_blocks_frontier(
+    tree: &mut BlockMerkleTree,
+    frontier: &<BlockMerkleTree as MerkleTreeScheme>::MembershipProof,
+) -> anyhow::Result<()> {
+    let last = tree
+        .num_leaves()
+        .checked_sub(1)
+        .context("cannot remember a frontier into an empty tree")?;
+    // `remember` takes the path from its index argument and ignores `frontier.pos`.
+    ensure!(
+        frontier.pos == last,
+        "frontier is for leaf {}, expected leaf {last}",
+        frontier.pos
+    );
+    let elem = frontier
+        .elem()
+        .context("provided frontier is missing leaf element")?;
+    // `remember` keeps the leaf's stored digest, which the next `push` hashes.
+    ensure!(
+        fee_info::is_lookup_shaped(frontier),
+        "frontier is not shaped like a lookup"
+    );
+    tree.remember(last, elem, frontier)
+        .context("verifying block proof")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1957,7 +1957,8 @@ mod test {
         let tree = blocks_tree(1);
         let (_, frontier) = tree.lookup(0).expect_ok().unwrap();
         let mut empty = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
-        assert!(remember_blocks_frontier(&mut empty, &frontier).is_err());
+        let err = remember_blocks_frontier(&mut empty, &frontier).unwrap_err();
+        assert!(err.to_string().contains("empty tree"), "{err:#}");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

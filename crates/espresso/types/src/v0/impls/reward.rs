@@ -574,8 +574,8 @@ impl RewardAccountProofV1 {
     }
 
     /// Prove each of `accounts` out of `snapshot`, a partial tree from an untrusted peer, and
-    /// verify every proof against `root`. Fails if the snapshot lacks an account or any proof does
-    /// not verify.
+    /// verify every proof against `root`. Fails if the snapshot's height is not the tree height,
+    /// the snapshot lacks an account, or any proof does not verify.
     pub fn verify_snapshot(
         snapshot: &RewardMerkleTreeV1,
         accounts: &[RewardAccountV1],
