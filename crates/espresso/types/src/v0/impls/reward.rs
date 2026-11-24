@@ -540,10 +540,7 @@ impl RewardAccountProofV1 {
     pub fn verify(&self, comm: &RewardMerkleCommitmentV1) -> anyhow::Result<U256> {
         let (RewardMerkleProofV1::Presence(proof) | RewardMerkleProofV1::Absence(proof)) =
             &self.proof;
-        ensure!(
-            is_lookup_shaped(&proof.proof),
-            "proof is not shaped like a lookup"
-        );
+        ensure!(is_lookup_shaped(proof), "proof is not shaped like a lookup");
         let balance = match &self.proof {
             RewardMerkleProofV1::Presence(proof) => {
                 ensure!(
@@ -1621,6 +1618,29 @@ pub mod tests {
             panic!("expected a leaf");
         };
         *value = Sha3Node::default();
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_v1_rejects_a_proof_with_a_leaf_at_another_position() {
+        let [account, other] = [1, 2].map(|byte| RewardAccountV1(Address::repeat_byte(byte)));
+        let tree = RewardMerkleTreeV1::from_kv_set(
+            REWARD_MERKLE_TREE_V1_HEIGHT,
+            [
+                (account, RewardAmount::from(1)),
+                (other, RewardAmount::from(2)),
+            ],
+        )
+        .unwrap();
+        let (mut proof, _) = RewardAccountProofV1::prove(&tree, account.0).unwrap();
+        let RewardMerkleProofV1::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Leaf { pos, .. }) = path.proof.first_mut() else {
+            panic!("expected a leaf");
+        };
+        *pos = other;
 
         assert!(proof.verify(&tree.commitment()).is_err());
     }

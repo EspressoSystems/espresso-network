@@ -1532,7 +1532,7 @@ pub fn remember_blocks_frontier(
         .context("provided frontier is missing leaf element")?;
     // `remember` keeps the leaf's stored digest, which the next `push` hashes.
     ensure!(
-        fee_info::is_lookup_shaped(&frontier.proof),
+        fee_info::is_lookup_shaped(frontier),
         "frontier is not shaped like a lookup"
     );
     tree.remember(last, elem, frontier)
@@ -1914,6 +1914,19 @@ mod test {
             panic!("expected a leaf at the bottom of the frontier");
         };
         *value = Sha3Node::default();
+
+        let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
+        assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
+    }
+
+    #[test]
+    fn test_remember_blocks_frontier_rejects_a_leaf_at_another_position() {
+        let tree = blocks_tree(2);
+        let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
+        let Some(MerkleNode::Leaf { pos, .. }) = frontier.proof.first_mut() else {
+            panic!("expected a leaf at the bottom of the frontier");
+        };
+        *pos = 0;
 
         let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
         assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());

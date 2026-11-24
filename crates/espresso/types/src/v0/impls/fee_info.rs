@@ -20,7 +20,7 @@ use jf_merkle_tree_compat::{
     DigestAlgorithm, Element, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     Index, LookupResult, MerkleTreeError, MerkleTreeScheme, ToTraversalPath,
     UniversalMerkleTreeScheme,
-    prelude::{MerkleNode, Sha3Digest, Sha3Node},
+    prelude::{MerkleNode, MerkleProof, Sha3Digest, Sha3Node},
 };
 use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
@@ -379,10 +379,7 @@ impl FeeAccountProof {
     /// it without handling a failure.
     pub fn verify(&self, comm: &FeeMerkleCommitment) -> anyhow::Result<U256> {
         let (FeeMerkleProof::Presence(proof) | FeeMerkleProof::Absence(proof)) = &self.proof;
-        ensure!(
-            is_lookup_shaped(&proof.proof),
-            "proof is not shaped like a lookup"
-        );
+        ensure!(is_lookup_shaped(proof), "proof is not shaped like a lookup");
         let balance = match &self.proof {
             FeeMerkleProof::Presence(proof) => {
                 ensure!(
@@ -465,19 +462,22 @@ impl FeeAccountProof {
     }
 }
 
-/// Whether `remember` can adopt every node of `path` into a tree as it is: each sibling is a
-/// non-default forgotten digest or empty, and a leaf stores its own digest.
-/// `MerkleTreeScheme::verify` checks neither, and `universal_lookup` builds only paths of this
-/// shape.
-pub(super) fn is_lookup_shaped<E, I>(path: &[MerkleNode<E, I, Sha3Node>]) -> bool
+/// Whether `remember` can adopt every node of `proof` into a tree as it is: each sibling is a
+/// non-default forgotten digest or empty, and a leaf stores its own digest and `proof.pos`.
+/// `MerkleTreeScheme::verify` checks none of these, and `universal_lookup` builds only proofs of
+/// this shape.
+pub(super) fn is_lookup_shaped<E, I, const ARITY: usize>(
+    proof: &MerkleProof<E, I, Sha3Node, ARITY>,
+) -> bool
 where
     E: Element,
     I: Index,
     Sha3Digest: DigestAlgorithm<E, I, Sha3Node>,
 {
-    path.iter().all(|node| match node {
+    proof.proof.iter().all(|node| match node {
         MerkleNode::Leaf { value, pos, elem } => {
-            Sha3Digest::digest_leaf(pos, elem).is_ok_and(|digest| digest == *value)
+            *pos == proof.pos
+                && Sha3Digest::digest_leaf(pos, elem).is_ok_and(|digest| digest == *value)
         },
         // The default digest hashes like `Empty`, but `remember` would store it as forgotten.
         MerkleNode::Branch { children, .. } => children.iter().all(|child| match **child {
@@ -722,6 +722,26 @@ pub(super) mod test {
             panic!("expected a leaf");
         };
         *value = Sha3Node::default();
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_leaf_at_another_position() {
+        let [account, other] = [1, 2].map(|byte| FeeAccount(Address::repeat_byte(byte)));
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(account, FeeAmount::from(1)), (other, FeeAmount::from(2))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, account.0).unwrap();
+        let FeeMerkleProof::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Leaf { pos, .. }) = path.proof.first_mut() else {
+            panic!("expected a leaf");
+        };
+        *pos = other;
 
         assert!(proof.verify(&tree.commitment()).is_err());
     }
