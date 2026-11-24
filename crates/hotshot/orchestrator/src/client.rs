@@ -322,51 +322,6 @@ impl OrchestratorClient {
             .await
     }
 
-    /// Registers a builder URL with the orchestrator
-    ///
-    /// # Panics
-    /// if unable to serialize `address`
-    pub async fn post_builder_addresses(&self, addresses: Vec<Url>) {
-        let send_builder_f = |client: Client<ClientErr, OrchestratorVersion>| {
-            let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&addresses)
-                .expect("Failed to serialize request");
-
-            async move {
-                let result: Result<_, ClientErr> = client
-                    .post("api/builder")
-                    .body_binary(&request_body)
-                    .unwrap()
-                    .send()
-                    .await
-                    .inspect_err(|err| tracing::error!("{err}"));
-                result
-            }
-            .boxed()
-        };
-        self.wait_for_fn_from_orchestrator::<_, _, ()>(send_builder_f)
-            .await;
-    }
-
-    /// Requests a builder URL from orchestrator
-    pub async fn get_builder_addresses(&self) -> Vec<Url> {
-        // Define the request for post-register configurations
-        let get_builder = |client: Client<ClientErr, OrchestratorVersion>| {
-            async move {
-                let result = client.get("api/builders").send().await;
-
-                if let Err(ref err) = result {
-                    tracing::error!("{err}");
-                }
-
-                result
-            }
-            .boxed()
-        };
-
-        // Loop until successful
-        self.wait_for_fn_from_orchestrator(get_builder).await
-    }
-
     /// Sends my public key to the orchestrator so that it can collect all public keys
     /// And get the updated config
     /// Blocks until the orchestrator collects all peer's public keys/configs

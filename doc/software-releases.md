@@ -37,7 +37,8 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
   validation. CI builds docker images for them. Release automation ignores them.
 - Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
   backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
-  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Manual backports use
+  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Both need a squash-merged PR: the
+  workflow refuses a merge commit or a rebase merge, which then needs a manual backport. Manual backports use
   `git cherry-pick -x`.
 
 ## Tracker issue
@@ -140,20 +141,21 @@ operators for a release decaf already created.
 
 ## Workflows
 
-| Workflow                     | Trigger                                                      | Runs                                         |
-| ---------------------------- | ------------------------------------------------------------ | -------------------------------------------- |
-| `release-branch.yml`         | `workflow_dispatch`, branch `delete`                         | `scripts/release cut`, `teardown`            |
-| `tag-release.yml`            | `/tag`, `/backport`, `/publish` comment, `workflow_dispatch` | `scripts/release tag`, `backport`, `publish` |
-| `update-release-tracker.yml` | push to `main`/`release-*`, mark comments, dispatch          | `scripts/release refresh`                    |
-| `build.yml`                  | dispatched by `cut` and `tag` for the new tag                | docker images                                |
+| Workflow                     | Trigger                                                                | Runs                                         |
+| ---------------------------- | ---------------------------------------------------------------------- | -------------------------------------------- |
+| `release-branch.yml`         | `workflow_dispatch`, branch `delete`                                   | `scripts/release cut`, `teardown`            |
+| `tag-release.yml`            | `/tag`, `/backport`, `/publish` comment, `workflow_dispatch`           | `scripts/release tag`, `backport`, `publish` |
+| `update-release-tracker.yml` | push to `main`/`release-*`, PR on `release-*`, mark comments, dispatch | `scripts/release refresh`                    |
+| `build.yml`                  | dispatched by `cut` and `tag` for the new tag                          | docker images                                |
 
-Tags pushed by workflows do not fire `push` events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
-explicitly.
+Tags pushed and PRs opened by workflows fire no events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
+explicitly, and `backport.yml` dispatches one refresh of all open trackers after opening backport PRs.
 
-Tracker refreshes run only on `main`. A run on a release branch (push, backport PR, dispatch) re-dispatches
+Tracker refreshes run only on `main`. A run on a release branch (push, dispatch) re-dispatches
 `update-release-tracker.yml` on `main` with the original ref, so the refresh always uses `main`'s workflow and
-`scripts/release` and still targets that branch's tracker. Dispatching from a feature branch also runs `main`'s copy;
-test changes to `scripts/release` with the local commands below.
+`scripts/release` and still targets that branch's tracker. PR events need no re-dispatch: GitHub runs
+`pull_request_target` on the default branch. Dispatching from a feature branch also runs `main`'s copy; test changes to
+`scripts/release` with the local commands below.
 
 ## Local use
 

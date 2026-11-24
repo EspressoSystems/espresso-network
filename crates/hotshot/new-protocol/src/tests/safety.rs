@@ -160,7 +160,7 @@ async fn conflicting_quorums_cannot_both_reach_threshold() {
     let timeout_cert_5 = {
         let membership = mock_membership();
         let epoch_membership = membership
-            .membership_for_epoch(Some(EpochNumber::genesis()))
+            .membership_for_epoch(EpochNumber::genesis())
             .expect("genesis membership");
         build_timeout_cert_signed_by(
             ViewNumber::new(5),
@@ -353,7 +353,7 @@ async fn conflicting_quorums_cannot_both_reach_threshold() {
 
     let membership = mock_membership();
     let epoch_membership = membership
-        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .membership_for_epoch(EpochNumber::genesis())
         .expect("genesis membership");
     let entries = StakeTableEntries::from_iter(epoch_membership.stake_table()).0;
     let threshold = epoch_membership.success_threshold();

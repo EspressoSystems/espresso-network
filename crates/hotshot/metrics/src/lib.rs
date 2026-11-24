@@ -1,8 +1,5 @@
-// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
-// This file is part of the HotShot repository.
-
-// You should have received a copy of the MIT License
-// along with the HotShot repository. If not, see <https://mit-license.org/>.
+// Copyright (c) 2021-2026 Espresso Systems (espressosys.com)
+// This file is part of the Espresso Network repository.
 
 //! The [`Metrics`] trait is used to collect information from multiple components in the entire system.
 //!
@@ -15,6 +12,9 @@
 use std::fmt::Debug;
 
 use dyn_clone::DynClone;
+
+#[cfg(feature = "prometheus")]
+pub mod prometheus;
 
 /// The metrics type.
 pub trait Metrics: Send + Sync + DynClone + Debug {

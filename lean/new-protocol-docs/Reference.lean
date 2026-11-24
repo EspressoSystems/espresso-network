@@ -28,13 +28,18 @@ proposes one block on a parent, which it names by the parent's certificate. Ever
 member of the committee then votes on the proposal twice.
 
 A vote1 says the proposal is a fit extension: the block is valid and its parent
-is safe to build on, given what may have been committed. Beyond what safety needs,
-an honest node votes1 only on a proposal from the view's leader, and owes a vote1
-once it holds its own share of the payload and was told the block is valid. A
-quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`. With it, any node may enter
-the next view, and the next leader may build on the block. A node that also has the
-block's payload may lock on it. A node's _lock_ is the latest {name NewProtocol.Cert1}`Cert1`
-it could lock on.
+is safe to build on, given what may have been committed. It also says the node holds
+the parent and has its payload, unless the parent is the anchor or the proposal opens
+an epoch. A vote1 answering a re-vote request says neither, but re-certifies a block
+that already has a {name NewProtocol.Cert1}`Cert1`. So, outside those two cases, some
+honest node held the parent of every block with a {name NewProtocol.Cert1}`Cert1`, with
+its payload ({name NewProtocol.cert1_parent_ready}`cert1_parent_ready`): the parent is available.
+Beyond what safety needs, an honest node votes1 only on a proposal from the view's
+leader, and owes a vote1 once it holds its own share of the payload and the parent's
+payload, and was told the block is valid. A quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`.
+With it, any node may enter the next view, and the next leader may build on the block.
+A node that also has the block's payload may lock on it. A node's _lock_ is the latest
+{name NewProtocol.Cert1}`Cert1` it could lock on.
 
 A vote2 says the node holds the block's {name NewProtocol.Cert1}`Cert1` and has rebuilt its
 payload from the shares, so the payload is available. A quorum of vote2s is a
@@ -315,7 +320,10 @@ on it again ({name NewProtocol.RevoteRequest}`RevoteRequest`,
 block ({name NewProtocol.Commits}`Commits` allows a later view). The next epoch's first block
 still names the block's own {name NewProtocol.Cert1}`Cert1`, not the re-vote's: the outgoing
 committee can form re-vote certificates after the next epoch began, and building on one of those
-could start the epoch a second time.
+could start the epoch a second time. A node that holds a {name NewProtocol.Cert2}`Cert2` over the
+block owes no vote1 on it again, and its leader no request: the block is committed, and the node
+sends the {name NewProtocol.Cert2}`Cert2` on with the epoch change
+({name NewProtocol.OwedVote1Again.notCommitted}`OwedVote1Again.notCommitted`).
 
 *The epoch change.* The last block travels with its own {name NewProtocol.Cert1}`Cert1` and
 a {name NewProtocol.Cert2}`Cert2` as an epoch change
@@ -1143,6 +1151,28 @@ end Spec.OpensEpochJustified
 
 {includeDocstring NewProtocol.OpensEpochJustified}
 
+```lean -show
+namespace Spec.ParentReady
+open NewProtocol.History
+```
+
+:::spec NewProtocol.ParentReady
+  ```lean
+  def ParentReady (cfg : Config) (h : History) (p : Proposal) : Prop :=
+    p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+      ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
+          ∧ p.parentCert.data.blockHash = blockHash parent
+          ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
+  ```
+:::
+
+```lean -show
+example : @Spec.ParentReady.ParentReady = @NewProtocol.ParentReady := rfl
+end Spec.ParentReady
+```
+
+{includeDocstring NewProtocol.ParentReady}
+
 {docstring NewProtocol.SafeHistory}
 
 # The rest of the protocol
@@ -1294,27 +1324,6 @@ later one, or leaves its epoch, and a decide only after the decide floor.
 How long an obligation may stay owed is not said here. That is {name NewProtocol.Prompt}`Prompt`,
 below.
 
-```lean -show
-namespace Spec.ParentReady
-open NewProtocol.History
-```
-
-:::spec NewProtocol.ParentReady
-  ```lean
-  def ParentReady (cfg : Config) (h : History) (p : Proposal) : Prop :=
-    p.parentCert.view = cfg.anchorView
-      ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
-          ∧ p.parentCert.data.blockHash = blockHash parent
-  ```
-:::
-
-```lean -show
-example : @Spec.ParentReady.ParentReady = @NewProtocol.ParentReady := rfl
-end Spec.ParentReady
-```
-
-{includeDocstring NewProtocol.ParentReady}
-
 {docstring NewProtocol.Obligation}
 
 The vote and decide obligations have many conditions, so each is a structure with
@@ -1343,7 +1352,8 @@ open NewProtocol.History
     | .decide c => OwedDecide cfg h c
     | .propose e v =>
         ((∃ p, ProposalJustified cfg leader node h p ∧ p.viewNumber = v ∧ p.epoch = e)
-          ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e)
+          ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e
+              ∧ ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2)
         ∧ ¬ ProposedIn h e v ∧ ¬ h.TimedOut v ∧ h.InView cfg v
   ```
 :::
