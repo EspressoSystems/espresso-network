@@ -60,7 +60,10 @@ const LEAF_COUNTS: [u64; 7] = [1, 2, 3, 4, 9, 10, 28];
 enum Input {
     FeeAccounts(AccountsResponse),
     RewardAccountsV1(AccountsResponse),
-    Frontier { fixture: u8, edits: Vec<NodeEdit> },
+    Frontier {
+        fixture: u8,
+        response: FrontierResponse,
+    },
 }
 
 #[derive(Arbitrary, Debug)]
@@ -71,6 +74,15 @@ struct AccountsResponse {
     /// request.
     known: Option<u8>,
     height: Option<u64>,
+    edits: Vec<NodeEdit>,
+}
+
+#[derive(Arbitrary, Debug, Default)]
+struct FrontierResponse {
+    /// Replaces `MerkleProof::pos`.
+    pos: Option<u64>,
+    /// Replaces the position stored in the leaf, before `edits` run.
+    leaf_pos: Option<u64>,
     edits: Vec<NodeEdit>,
 }
 
@@ -242,15 +254,15 @@ fuzz_target!(
         FEE.assert_honest_responses_accepted();
         REWARD_V1.assert_honest_responses_accepted();
         for frontier in FRONTIERS.iter() {
-            assert!(frontier.check(&[]));
+            assert!(frontier.check(&FrontierResponse::default()));
         }
     },
     |input: Input| {
         match input {
             Input::FeeAccounts(response) => FEE.check(&response),
             Input::RewardAccountsV1(response) => REWARD_V1.check(&response),
-            Input::Frontier { fixture, edits } => {
-                FRONTIERS[usize::from(fixture) % FRONTIERS.len()].check(&edits)
+            Input::Frontier { fixture, response } => {
+                FRONTIERS[usize::from(fixture) % FRONTIERS.len()].check(&response)
             },
         };
     }
@@ -425,28 +437,20 @@ impl Frontier {
         }
     }
 
-    /// Run the frontier with `edits` through catchup as the node does. Returns
-    /// whether the node accepts it.
-    fn check(&self, edits: &[NodeEdit]) -> bool {
-        let mut proof = self.proof.clone();
-        let mut nodes: Vec<_> = proof.proof.into_iter().map(Arc::new).collect();
-        if !apply_node_edits(&mut nodes, edits) {
+    /// Run `response` through catchup as the node does. Returns whether the
+    /// node accepts it.
+    fn check(&self, response: &FrontierResponse) -> bool {
+        let Some(proof) = self.edit(response) else {
             return false;
-        }
-        proof.proof = nodes.into_iter().map(Arc::unwrap_or_clone).collect();
-        let proof: BlocksFrontier =
-            bincode::deserialize(&bincode::serialize(&proof).expect("a frontier encodes"))
-                .expect("a frontier decodes from its own encoding");
-
+        };
         let mut local = BlockMerkleTree::from_commitment(self.tree.commitment());
         if espresso_types::remember_blocks_frontier(&mut local, &proof).is_err() {
             return false;
         }
-        let (last, _) = local
-            .lookup(local.num_leaves() - 1)
-            .expect_ok()
-            .expect("the remembered frontier holds the last block");
-        assert_eq!(last, self.last, "remembered the wrong last block");
+        assert!(
+            local.lookup(self.proof.pos).expect_ok().ok() == Some((self.last, self.proof.clone())),
+            "remembered the frontier differently from the honest tree"
+        );
         local
             .push(next_block())
             .expect("a block is appended after the frontier");
@@ -455,6 +459,29 @@ impl Frontier {
             "appending after the frontier gives a different root"
         );
         true
+    }
+
+    /// The honest frontier with `response` applied, decoded as the node would.
+    /// Returns `None` if the edits grew it past [`MAX_NODES`].
+    fn edit(&self, response: &FrontierResponse) -> Option<BlocksFrontier> {
+        let mut proof = self.proof.clone();
+        if let Some(pos) = response.pos {
+            proof.pos = pos;
+        }
+        if let (Some(new), Some(MerkleNode::Leaf { pos, .. })) =
+            (response.leaf_pos, proof.proof.first_mut())
+        {
+            *pos = new;
+        }
+        let mut nodes: Vec<_> = proof.proof.into_iter().map(Arc::new).collect();
+        if !apply_node_edits(&mut nodes, &response.edits) {
+            return None;
+        }
+        proof.proof = nodes.into_iter().map(Arc::unwrap_or_clone).collect();
+        Some(
+            bincode::deserialize(&bincode::serialize(&proof).expect("a frontier encodes"))
+                .expect("a frontier decodes from its own encoding"),
+        )
     }
 }
 

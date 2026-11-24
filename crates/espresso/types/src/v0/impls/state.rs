@@ -1527,6 +1527,12 @@ pub fn remember_blocks_frontier(
         .num_leaves()
         .checked_sub(1)
         .context("cannot remember a frontier into an empty tree")?;
+    // `remember` takes the path from its index argument and ignores `frontier.pos`.
+    ensure!(
+        frontier.pos == last,
+        "frontier is for leaf {}, expected leaf {last}",
+        frontier.pos
+    );
     let elem = frontier
         .elem()
         .context("provided frontier is missing leaf element")?;
@@ -1927,6 +1933,20 @@ mod test {
             panic!("expected a leaf at the bottom of the frontier");
         };
         *pos = 0;
+
+        let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
+        assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
+    }
+
+    #[test]
+    fn test_remember_blocks_frontier_rejects_a_proof_of_another_leaf() {
+        let tree = blocks_tree(2);
+        let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
+        let Some(MerkleNode::Leaf { pos, .. }) = frontier.proof.first_mut() else {
+            panic!("expected a leaf at the bottom of the frontier");
+        };
+        *pos = 0;
+        frontier.pos = 0;
 
         let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
         assert!(remember_blocks_frontier(&mut remembered, &frontier).is_err());
