@@ -462,8 +462,9 @@ impl FeeAccountProof {
     }
 }
 
-/// Whether `remember` can adopt every node of `proof` into a tree as it is: each sibling is a
-/// non-default forgotten digest or empty, and a leaf stores its own digest and `proof.pos`.
+/// Whether `remember` can adopt every node of `proof` into a tree as it is: each branch has `ARITY`
+/// children, each sibling is a non-default forgotten digest or empty, and a leaf stores its own
+/// digest and `proof.pos`.
 /// `MerkleTreeScheme::verify` checks none of these, and `lookup` and `universal_lookup` build only
 /// proofs of this shape.
 pub(super) fn is_lookup_shaped<E, I, const ARITY: usize>(
@@ -480,11 +481,14 @@ where
                 && Sha3Digest::digest_leaf(pos, elem).is_ok_and(|digest| digest == *value)
         },
         // The default digest hashes like `Empty`, but `remember` would store it as forgotten.
-        MerkleNode::Branch { children, .. } => children.iter().all(|child| match **child {
-            MerkleNode::Empty => true,
-            MerkleNode::ForgettenSubtree { value } => value != Sha3Node::default(),
-            MerkleNode::Leaf { .. } | MerkleNode::Branch { .. } => false,
-        }),
+        MerkleNode::Branch { children, .. } => {
+            children.len() == ARITY
+                && children.iter().all(|child| match **child {
+                    MerkleNode::Empty => true,
+                    MerkleNode::ForgettenSubtree { value } => value != Sha3Node::default(),
+                    MerkleNode::Leaf { .. } | MerkleNode::Branch { .. } => false,
+                })
+        },
         MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => true,
     })
 }

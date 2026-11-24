@@ -1915,33 +1915,92 @@ mod test {
     /// Edits the honest frontier of a 2-block tree and expects `reason` in the rejection.
     #[rstest]
     #[case::a_leaf_storing_another_digest(
-        Some(Sha3Node::default()),
-        1,
-        1,
+        |f: &mut BlocksFrontier| *frontier_leaf(f).0 = Sha3Node::default(),
         "not shaped like a lookup"
     )]
-    #[case::a_leaf_at_another_position(None, 0, 1, "not shaped like a lookup")]
-    #[case::a_frontier_claiming_another_leaf(None, 0, 0, "frontier claims leaf 0, expected leaf 1")]
+    #[case::a_leaf_at_another_position(
+        |f: &mut BlocksFrontier| *frontier_leaf(f).1 = 0,
+        "not shaped like a lookup"
+    )]
+    #[case::a_frontier_claiming_another_leaf(
+        |f: &mut BlocksFrontier| {
+            *frontier_leaf(f).1 = 0;
+            f.pos = 0;
+        },
+        "frontier claims leaf 0, expected leaf 1"
+    )]
+    #[case::a_sibling_forgotten_as_the_default_digest(
+        |f: &mut BlocksFrontier| rebuild_bottom_child(f, 2, |value| {
+            MerkleNode::ForgettenSubtree { value }
+        }),
+        "not shaped like a lookup"
+    )]
+    #[case::a_sibling_holding_a_leaf(
+        |f: &mut BlocksFrontier| rebuild_bottom_child(f, 0, |value| MerkleNode::Leaf {
+            value,
+            pos: 0,
+            elem: Commitment::from_raw([0; 32]),
+        }),
+        "not shaped like a lookup"
+    )]
+    #[case::a_sibling_holding_a_branch(
+        |f: &mut BlocksFrontier| rebuild_bottom_child(f, 0, |value| MerkleNode::Branch {
+            value,
+            children: vec![MerkleNode::Empty; BlockMerkleTree::ARITY]
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
+        }),
+        "not shaped like a lookup"
+    )]
+    #[case::a_branch_missing_a_child(
+        |f: &mut BlocksFrontier| bottom_children(f).truncate(BlockMerkleTree::ARITY - 1),
+        "not shaped like a lookup"
+    )]
     fn test_remember_blocks_frontier_rejects(
-        #[case] leaf_digest: Option<Sha3Node>,
-        #[case] leaf_pos: u64,
-        #[case] claimed_pos: u64,
+        #[case] edit: fn(&mut BlocksFrontier),
         #[case] reason: &str,
     ) {
         let tree = blocks_tree(2);
         let (_, mut frontier) = tree.lookup(1).expect_ok().unwrap();
-        let Some(MerkleNode::Leaf { value, pos, .. }) = frontier.proof.first_mut() else {
-            panic!("expected a leaf at the bottom of the frontier");
-        };
-        if let Some(digest) = leaf_digest {
-            *value = digest;
-        }
-        *pos = leaf_pos;
-        frontier.pos = claimed_pos;
+        edit(&mut frontier);
 
         let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
         let err = remember_blocks_frontier(&mut remembered, &frontier).unwrap_err();
         assert!(err.to_string().contains(reason), "{err:#}");
+    }
+
+    /// The membership proof `lookup` returns for the last block.
+    type BlocksFrontier = <BlockMerkleTree as MerkleTreeScheme>::MembershipProof;
+
+    /// A node of a `BlocksFrontier`.
+    type BlocksFrontierNode = MerkleNode<Commitment<Header>, u64, Sha3Node>;
+
+    /// The stored digest and position of the frontier's leaf.
+    fn frontier_leaf(frontier: &mut BlocksFrontier) -> (&mut Sha3Node, &mut u64) {
+        let Some(MerkleNode::Leaf { value, pos, .. }) = frontier.proof.first_mut() else {
+            panic!("expected a leaf at the bottom of the frontier");
+        };
+        (value, pos)
+    }
+
+    /// The children of the branch above the leaf of a 2-block frontier: leaf 0, leaf 1, empty.
+    fn bottom_children(frontier: &mut BlocksFrontier) -> &mut Vec<Arc<BlocksFrontierNode>> {
+        let Some(MerkleNode::Branch { children, .. }) = frontier.proof.get_mut(1) else {
+            panic!("expected a branch above the leaf of the frontier");
+        };
+        children
+    }
+
+    /// Replaces child `index` of the branch above the leaf with a node of the same digest, which
+    /// keeps the proof's root.
+    fn rebuild_bottom_child(
+        frontier: &mut BlocksFrontier,
+        index: usize,
+        rebuild: fn(Sha3Node) -> BlocksFrontierNode,
+    ) {
+        let child = &mut bottom_children(frontier)[index];
+        *child = Arc::new(rebuild(child.value()));
     }
 
     #[test]
