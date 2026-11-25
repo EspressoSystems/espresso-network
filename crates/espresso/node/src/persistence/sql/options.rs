@@ -161,9 +161,8 @@ pub struct Options {
     /// - interval: 1 hour
     ///
     /// A pruned node with no merklized state starts it from a recent epoch boundary. Its trees then
-    /// lack block proofs below that boundary, and fee accounts that no block after it touched. They
-    /// stay incomplete after a switch to `--archive`: complete trees need a replay from genesis,
-    /// which runs only on a database with no merklized state.
+    /// lack block proofs below that boundary, and fee accounts that no block after it touched, so
+    /// the node cannot switch to `--archive` without a storage reset.
     ///
     /// A pruned node keeps no transaction or payload totals, which count from genesis: it does not
     /// run the aggregator, and the routes that serve the totals return 404. At startup it deletes
@@ -236,6 +235,12 @@ pub struct Options {
     /// Historical merklized state older than the light client contract history is garbage collected,
     /// but never less than ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION heights behind the head. Use
     /// ESPRESSO_NODE_ARCHIVE_FULL_STATE to retain all of it.
+    ///
+    /// Archive mode needs merklized state from genesis. A node whose state started from a recent
+    /// epoch boundary, as with `--prune`, refuses to start in this mode: complete trees need a
+    /// replay from genesis, which runs only on a database with no merklized state. Reset the
+    /// storage first. On a node with stake, run a separate archive node instead, because a reset
+    /// also deletes the consensus state.
     #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
 
