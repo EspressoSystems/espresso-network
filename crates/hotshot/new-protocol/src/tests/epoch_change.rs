@@ -389,7 +389,7 @@ async fn test_epoch_change_certificates_for_another_block_not_well_formed() {
     // remain internally consistent.
     let other_boundary = 2 * EPOCH_HEIGHT;
     cert1.data.block_number = Some(other_boundary);
-    cert1.data.epoch = Some(EpochNumber::new(2));
+    cert1.data.epoch = EpochNumber::new(2);
     cert2.data.block_number = other_boundary;
     cert2.data.epoch = EpochNumber::new(2);
 
@@ -442,7 +442,7 @@ async fn test_epoch_change_proposal_justify_qc_mismatch_not_well_formed() {
     let epoch_view = &test_data.views[9];
     let mut proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
     // The parent is block 9, which falls in epoch 1.
-    proposal.justify_qc.data.epoch = Some(EpochNumber::new(2));
+    proposal.justify_qc.data.epoch = EpochNumber::new(2);
     let leaf_commit = proposal_commitment(&proposal);
     let mut cert1 = epoch_view.cert1.clone();
     let mut cert2 = epoch_view.cert2.clone();

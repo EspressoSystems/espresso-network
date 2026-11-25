@@ -5406,7 +5406,7 @@ mod tests {
         let timeout = TimeoutCertificate2::<SeqTypes>::new(
             TimeoutData2 {
                 view: ViewNumber::new(9),
-                epoch: Some(EpochNumber::new(2)),
+                epoch: EpochNumber::new(2),
             },
             Commitment::from_raw([1; 32]),
             ViewNumber::new(9),
@@ -5439,7 +5439,7 @@ mod tests {
             ViewSyncFinalizeData2 {
                 relay: 3,
                 round: ViewNumber::new(10),
-                epoch: None,
+                epoch: EpochNumber::new(4),
             },
             Commitment::from_raw([2; 32]),
             ViewNumber::new(10),
@@ -5452,7 +5452,7 @@ mod tests {
             panic!("a view sync certificate must select the view_sync arm");
         };
         let data = converted.data.unwrap();
-        assert_eq!((data.relay, data.round, data.epoch), (3, 10, None));
+        assert_eq!((data.relay, data.round, data.epoch), (3, 10, Some(4)));
         assert!(converted.signatures.is_none());
 
         let upgrade = UpgradeCertificate::<SeqTypes>::new(

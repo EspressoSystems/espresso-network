@@ -355,7 +355,7 @@ async fn test_unsigned_view_zero_high_qc_does_not_move_the_epoch() {
     // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(forged),
+        epoch: forged,
         block_number: Some(11),
     };
     let cert = Certificate1::<TestTypes>::new(
@@ -448,7 +448,7 @@ async fn test_forged_view_zero_high_qc_does_not_shadow_the_genesis_qc() {
     // Well formed, in the genesis epoch, and not the genesis QC.
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(epoch),
+        epoch,
         block_number: Some(5),
     };
     let forged = Certificate1::<TestTypes>::new(
@@ -500,7 +500,7 @@ fn view_one_proposal_on_forged_genesis_parent(
     }
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(epoch),
+        epoch,
         block_number: Some(23),
     };
     let mut proposal = honest.proposal.data.clone();
@@ -2201,7 +2201,7 @@ async fn test_view_zero_certificate1_is_not_delivered() {
     // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(forged_epoch),
+        epoch: forged_epoch,
         block_number: Some(11),
     };
     let forged = Certificate1::<TestTypes>::new(

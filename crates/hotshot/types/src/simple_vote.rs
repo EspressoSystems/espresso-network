@@ -51,20 +51,18 @@ pub struct QuorumData2<TYPES: NodeType> {
     /// Commitment to the leaf
     pub leaf_commit: Commitment<Leaf2<TYPES>>,
     /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
     pub block_number: Option<u64>,
 }
 
 impl<T: NodeType> QuorumData2<T> {
     pub fn is_well_formed(&self, epoch_length: EpochLength) -> bool {
-        let Some(epoch) = self.epoch else {
-            return false;
-        };
         let Some(block) = self.block_number else {
             return false;
         };
-        epoch == epoch_length.epoch_of(block)
+        self.epoch == epoch_length.epoch_of(block)
     }
 }
 
@@ -93,7 +91,8 @@ pub struct TimeoutData2 {
     /// View the timeout is for
     pub view: ViewNumber,
     /// Epoch number
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 }
 
 /// Data used for a timeout vote, binding the epoch the vote was cast in and
@@ -123,7 +122,7 @@ impl LockView {
     /// The position of the lock a `Certificate1` (`QuorumCertificate2`) gives.
     pub fn of<T: NodeType>(cert: &crate::simple_certificate::QuorumCertificate2<T>) -> Self {
         Self {
-            epoch: cert.data.epoch.unwrap_or_else(EpochNumber::genesis),
+            epoch: cert.data.epoch,
             view: cert.view_number(),
         }
     }
@@ -221,7 +220,8 @@ pub struct ViewSyncFinalizeData2 {
     /// The view number we are trying to sync on
     pub round: ViewNumber,
     /// Epoch number
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 }
 
 /// Data used for a Upgrade vote.
@@ -494,14 +494,14 @@ impl<TYPES: NodeType> Committable for QuorumData<TYPES> {
 
 impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        quorum_data_commit(&self.leaf_commit, self.epoch, self.block_number)
+        quorum_data_commit(&self.leaf_commit, Some(self.epoch), self.block_number)
     }
 }
 
 impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
         let NextEpochQuorumData2(data) = self;
-        quorum_data_commit(&data.leaf_commit, data.epoch, data.block_number)
+        quorum_data_commit(&data.leaf_commit, Some(data.epoch), data.block_number)
     }
 }
 
@@ -639,7 +639,7 @@ impl Committable for ViewSyncFinalizeData2 {
             epoch,
         } = self;
 
-        view_and_relay_commit(*round, *relay, *epoch, "View Sync Finalize")
+        view_and_relay_commit(*round, *relay, Some(*epoch), "View Sync Finalize")
     }
 }
 
@@ -671,13 +671,25 @@ macro_rules! impl_has_epoch {
 
 impl<NODE: NodeType> HasEpoch for QuorumData2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for NextEpochQuorumData2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.0.epoch
+        Some(self.0.epoch)
+    }
+}
+
+impl HasEpoch for TimeoutData2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl HasEpoch for ViewSyncFinalizeData2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
     }
 }
 
@@ -692,8 +704,6 @@ impl HasEpoch for UpgradeProposalData2 {
         Some(self.epoch)
     }
 }
-
-impl_has_epoch!(TimeoutData2, ViewSyncFinalizeData2);
 
 /// Helper macro for trivial implementation of the `HasEpoch` trait for types that have no epoch
 #[macro_export]

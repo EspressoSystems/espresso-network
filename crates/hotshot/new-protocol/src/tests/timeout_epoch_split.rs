@@ -263,11 +263,11 @@ async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
 
     let (cert1_only, epoch_changed) = votes.split_at(CERT1_ONLY_NODES as usize);
     assert!(
-        cert1_only.iter().all(|v| v.data.epoch == Some(epoch(1))),
+        cert1_only.iter().all(|v| v.data.epoch == epoch(1)),
         "a node that saw only Cert1 labels its V2 vote with epoch 1"
     );
     assert!(
-        epoch_changed.iter().all(|v| v.data.epoch == Some(epoch(2))),
+        epoch_changed.iter().all(|v| v.data.epoch == epoch(2)),
         "a node that saw the EpochChange labels its V2 vote with epoch 2"
     );
     assert_eq!(
@@ -293,7 +293,7 @@ async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
     // verify because the commitment never covered it.
     let mut relabelled = TimeoutCollector2::new(mock_membership(), lock);
     for mut vote in votes {
-        vote.data.epoch = Some(epoch(2));
+        vote.data.epoch = epoch(2);
         relabelled.accumulate_vote(vote);
     }
     let cert = tokio::time::timeout(CERT_TIMEOUT, relabelled.next())

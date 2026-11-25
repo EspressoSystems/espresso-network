@@ -470,7 +470,7 @@ async fn reference_new_protocol_messages(
     // the vector pins the `Some((signature, signers))` encoding rather than the `None` case.
     let quorum_data = QuorumData2::<SeqTypes> {
         leaf_commit,
-        epoch: Some(epoch),
+        epoch,
         block_number: Some(0),
     };
     let cert1: Certificate1<SeqTypes> = SimpleCertificate::new(
@@ -500,10 +500,7 @@ async fn reference_new_protocol_messages(
         )),
         Default::default(),
     );
-    let timeout_data = TimeoutData2 {
-        view,
-        epoch: Some(epoch),
-    };
+    let timeout_data = TimeoutData2 { view, epoch };
     let timeout_cert: TimeoutCertificate2<SeqTypes> = SimpleCertificate::new(
         timeout_data.clone(),
         timeout_data.commit(),

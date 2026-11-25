@@ -6,9 +6,12 @@
 //! [`CertificatePair`], so stored data and other nodes stay compatible. The era comes from the
 //! fields:
 //!
-//! * a QC is pre-epoch when its data has neither an epoch nor a block number;
+//! * a QC is pre-epoch when its data has neither an epoch nor a block number, and an epoch QC
+//!   when it has an epoch. A QC with a block number but no epoch fits neither, and does not decode;
 //! * a leaf is pre-epoch when its justify QC is pre-epoch. These are the leaves before the epoch
 //!   upgrade and the first leaf after it.
+//!
+//! A pre-epoch QC never comes with a next-epoch QC, so such a pair does not decode either.
 
 use std::marker::PhantomData;
 
@@ -495,13 +498,9 @@ impl<TYPES: NodeType> HistoricCertificatePair<TYPES> {
     }
 }
 
-/// A QC without an epoch and block number becomes [`HistoricQuorumCertificate::PreEpoch`].
 impl<TYPES: NodeType> From<QuorumCertificate2<TYPES>> for HistoricQuorumCertificate<TYPES> {
     fn from(qc: QuorumCertificate2<TYPES>) -> Self {
-        match pre_epoch_qc(&qc) {
-            Some(pre_epoch) => Self::PreEpoch(pre_epoch),
-            None => Self::Epoch(qc),
-        }
+        Self::Epoch(qc)
     }
 }
 
@@ -511,36 +510,9 @@ impl<TYPES: NodeType> From<PreEpochQuorumCertificate<TYPES>> for HistoricQuorumC
     }
 }
 
-/// A leaf whose justify QC has no epoch and block number becomes [`HistoricLeaf::PreEpoch`].
 impl<TYPES: NodeType> From<Leaf2<TYPES>> for HistoricLeaf<TYPES> {
     fn from(leaf: Leaf2<TYPES>) -> Self {
-        let Some(justify_qc) = pre_epoch_qc(&leaf.justify_qc) else {
-            return Self::Epoch(leaf);
-        };
-        let Leaf2 {
-            view_number,
-            justify_qc: _,
-            next_epoch_justify_qc,
-            parent_commitment,
-            block_header,
-            upgrade_certificate,
-            block_payload,
-            view_change_evidence,
-            next_drb_result,
-            with_epoch,
-        } = leaf;
-        Self::PreEpoch(PreEpochLeaf {
-            view_number,
-            justify_qc,
-            next_epoch_justify_qc,
-            parent_commitment,
-            block_header,
-            upgrade_certificate,
-            block_payload,
-            view_change_evidence: view_change_evidence.map(pre_epoch_evidence),
-            next_drb_result,
-            with_epoch,
-        })
+        Self::Epoch(leaf)
     }
 }
 
@@ -580,14 +552,9 @@ impl<TYPES: NodeType> From<QuorumCertificate<TYPES>> for PreEpochQuorumCertifica
     }
 }
 
-/// A pair whose QC has no epoch and block number, and which has no next-epoch QC, becomes
-/// [`HistoricCertificatePair::PreEpoch`].
 impl<TYPES: NodeType> From<CertificatePair<TYPES>> for HistoricCertificatePair<TYPES> {
     fn from(pair: CertificatePair<TYPES>) -> Self {
-        match pre_epoch_qc(pair.qc()) {
-            Some(qc) if pair.next_epoch_qc().is_none() => Self::PreEpoch(qc),
-            _ => Self::Epoch(pair),
-        }
+        Self::Epoch(pair)
     }
 }
 
@@ -733,7 +700,8 @@ impl<TYPES: NodeType> Serialize for HistoricQuorumCertificate<TYPES> {
 
 impl<'de, TYPES: NodeType> Deserialize<'de> for HistoricQuorumCertificate<TYPES> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        QuorumCertificateRaw::deserialize(deserializer).map(historic_qc)
+        let qc = QuorumCertificateRaw::deserialize(deserializer)?;
+        historic_qc(qc).map_err(D::Error::custom)
     }
 }
 
@@ -748,7 +716,8 @@ impl<TYPES: NodeType> Serialize for HistoricLeaf<TYPES> {
 
 impl<'de, TYPES: NodeType> Deserialize<'de> for HistoricLeaf<TYPES> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        LeafRaw::deserialize(deserializer).map(LeafRaw::into_historic)
+        let leaf = LeafRaw::deserialize(deserializer)?;
+        leaf.into_historic().map_err(D::Error::custom)
     }
 }
 
@@ -772,7 +741,7 @@ struct LeafRaw<TYPES: NodeType> {
 
 impl<TYPES: NodeType> LeafRaw<TYPES> {
     /// The leaf, in the era of its justify QC.
-    fn into_historic(self) -> HistoricLeaf<TYPES> {
+    fn into_historic(self) -> Result<HistoricLeaf<TYPES>, &'static str> {
         let Self {
             view_number,
             justify_qc,
@@ -785,7 +754,7 @@ impl<TYPES: NodeType> LeafRaw<TYPES> {
             next_drb_result,
             with_epoch,
         } = self;
-        match historic_qc(justify_qc) {
+        Ok(match historic_qc(justify_qc)? {
             HistoricQuorumCertificate::PreEpoch(justify_qc) => {
                 HistoricLeaf::PreEpoch(PreEpochLeaf {
                     view_number,
@@ -808,11 +777,11 @@ impl<TYPES: NodeType> LeafRaw<TYPES> {
                 block_header,
                 upgrade_certificate,
                 block_payload,
-                view_change_evidence: view_change_evidence.map(evidence2),
+                view_change_evidence: view_change_evidence.map(evidence2).transpose()?,
                 next_drb_result,
                 with_epoch,
             }),
-        }
+        })
     }
 }
 
@@ -839,7 +808,8 @@ impl<TYPES: NodeType> Serialize for HistoricCertificatePair<TYPES> {
 
 impl<'de, TYPES: NodeType> Deserialize<'de> for HistoricCertificatePair<TYPES> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        CertificatePairRaw::deserialize(deserializer).map(CertificatePairRaw::into_historic)
+        let pair = CertificatePairRaw::deserialize(deserializer)?;
+        pair.into_historic().map_err(D::Error::custom)
     }
 }
 
@@ -853,59 +823,68 @@ struct CertificatePairRaw<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> CertificatePairRaw<TYPES> {
-    /// The QCs, in the era of `qc`.
-    fn into_historic(self) -> HistoricCertificatePair<TYPES> {
-        match self.next_epoch_qc {
-            None => historic_qc(self.qc).into(),
+    /// The QCs, in the era of `qc`. A pre-epoch QC with a next-epoch QC fails, because it has no
+    /// epoch.
+    fn into_historic(self) -> Result<HistoricCertificatePair<TYPES>, &'static str> {
+        Ok(match self.next_epoch_qc {
+            None => historic_qc(self.qc)?.into(),
             Some(next_epoch_qc) => HistoricCertificatePair::Epoch(CertificatePair::new(
-                qc2(self.qc),
+                qc2(self.qc)?,
                 Some(next_epoch_qc),
             )),
-        }
+        })
     }
 }
 
 /// `qc` in the era its data shows: pre-epoch when it has neither an epoch nor a block number.
 fn historic_qc<TYPES: NodeType>(
     qc: QuorumCertificateRaw<TYPES>,
-) -> HistoricQuorumCertificate<TYPES> {
+) -> Result<HistoricQuorumCertificate<TYPES>, &'static str> {
     let QuorumDataRaw {
         leaf_commit,
         epoch: None,
         block_number: None,
     } = qc.data
     else {
-        return HistoricQuorumCertificate::Epoch(qc2(qc));
+        return qc2(qc).map(HistoricQuorumCertificate::Epoch);
     };
-    HistoricQuorumCertificate::PreEpoch(with_data(qc, PreEpochQuorumData { leaf_commit }))
+    Ok(HistoricQuorumCertificate::PreEpoch(with_data(
+        qc,
+        PreEpochQuorumData { leaf_commit },
+    )))
 }
 
-/// `qc` as a [`QuorumCertificate2`].
-fn qc2<TYPES: NodeType>(qc: QuorumCertificateRaw<TYPES>) -> QuorumCertificate2<TYPES> {
+/// `qc` as a [`QuorumCertificate2`], which needs an epoch.
+fn qc2<TYPES: NodeType>(
+    qc: QuorumCertificateRaw<TYPES>,
+) -> Result<QuorumCertificate2<TYPES>, &'static str> {
     let QuorumDataRaw {
         leaf_commit,
         epoch,
         block_number,
     } = qc.data;
-    with_data(
+    let epoch = epoch.ok_or("a quorum certificate with a block number has no epoch")?;
+    Ok(with_data(
         qc,
         QuorumData2 {
             leaf_commit,
             epoch,
             block_number,
         },
-    )
+    ))
 }
 
-/// `evidence` as a [`ViewChangeEvidence2`].
+/// `evidence` as a [`ViewChangeEvidence2`], which needs an epoch in a timeout or view sync
+/// certificate.
 fn evidence2<TYPES: NodeType>(
     evidence: PreEpochViewChangeEvidence<TYPES>,
-) -> ViewChangeEvidence2<TYPES> {
-    match evidence {
+) -> Result<ViewChangeEvidence2<TYPES>, &'static str> {
+    const NO_EPOCH: &str = "the view change evidence of a leaf with an epoch has no epoch";
+    Ok(match evidence {
         PreEpochViewChangeEvidence::Timeout(cert) => {
             let data = TimeoutData2 {
                 view: cert.data.view,
-                epoch: cert.data.epoch,
+                epoch: cert.data.epoch.ok_or(NO_EPOCH)?,
             };
             ViewChangeEvidence2::Timeout(with_data(cert, data))
         },
@@ -913,36 +892,12 @@ fn evidence2<TYPES: NodeType>(
             let data = ViewSyncFinalizeData2 {
                 relay: cert.data.relay,
                 round: cert.data.round,
-                epoch: cert.data.epoch,
+                epoch: cert.data.epoch.ok_or(NO_EPOCH)?,
             };
             ViewChangeEvidence2::ViewSync(with_data(cert, data))
         },
         PreEpochViewChangeEvidence::Timeout3(cert) => ViewChangeEvidence2::Timeout3(cert),
-    }
-}
-
-/// `evidence` as a [`PreEpochViewChangeEvidence`].
-fn pre_epoch_evidence<TYPES: NodeType>(
-    evidence: ViewChangeEvidence2<TYPES>,
-) -> PreEpochViewChangeEvidence<TYPES> {
-    match evidence {
-        ViewChangeEvidence2::Timeout(cert) => {
-            let data = PreEpochTimeoutData {
-                view: cert.data.view,
-                epoch: cert.data.epoch,
-            };
-            PreEpochViewChangeEvidence::Timeout(with_data(cert, data))
-        },
-        ViewChangeEvidence2::ViewSync(cert) => {
-            let data = PreEpochViewSyncFinalizeData {
-                relay: cert.data.relay,
-                round: cert.data.round,
-                epoch: cert.data.epoch,
-            };
-            PreEpochViewChangeEvidence::ViewSync(with_data(cert, data))
-        },
-        ViewChangeEvidence2::Timeout3(cert) => PreEpochViewChangeEvidence::Timeout3(cert),
-    }
+    })
 }
 
 /// `cert` over `data`, with the same vote commitment, view and signatures. `data` must have the
@@ -959,26 +914,4 @@ fn with_data<TYPES: NodeType, V: Voteable<TYPES>, W: Voteable<TYPES>, T: Thresho
         cert.signatures,
         PhantomData,
     )
-}
-
-/// `qc` as a pre-epoch QC, if it has neither an epoch nor a block number.
-fn pre_epoch_qc<TYPES: NodeType>(
-    qc: &QuorumCertificate2<TYPES>,
-) -> Option<PreEpochQuorumCertificate<TYPES>> {
-    let QuorumData2 {
-        leaf_commit,
-        epoch: None,
-        block_number: None,
-    } = qc.data
-    else {
-        return None;
-    };
-    let vote_commitment: [u8; 32] = qc.vote_commitment().into();
-    Some(SimpleCertificate::new(
-        PreEpochQuorumData { leaf_commit },
-        Commitment::from_raw(vote_commitment),
-        qc.view_number,
-        qc.signatures.clone(),
-        PhantomData,
-    ))
 }

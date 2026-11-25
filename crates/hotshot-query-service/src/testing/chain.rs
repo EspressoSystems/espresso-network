@@ -364,10 +364,7 @@ fn qc_for(leaf: &Leaf2<MockTypes>, epoch_height: u64) -> QuorumCertificate2<Mock
     let height = leaf.block_header().block_number;
     let data = QuorumData2 {
         leaf_commit: leaf.commit(),
-        epoch: Some(EpochNumber::new(epoch_from_block_number(
-            height,
-            epoch_height,
-        ))),
+        epoch: EpochNumber::new(epoch_from_block_number(height, epoch_height)),
         block_number: Some(height),
     };
     QuorumCertificate2::new(data, data.commit(), leaf.view_number(), None, PhantomData)

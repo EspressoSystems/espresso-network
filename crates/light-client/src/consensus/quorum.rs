@@ -521,9 +521,14 @@ mod test {
     use espresso_types::PrivKey;
     use hotshot_query_service_types::availability::LeafQueryData;
     use hotshot_types::{
-        data::{EpochNumber, ViewNumber},
-        simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
-        simple_vote::{NextEpochQuorumData2, QuorumData2, VersionedVoteData, Vote2Data},
+        data::{
+            EpochNumber, ViewNumber,
+            history::{PreEpochQuorumCertificate, PreEpochQuorumData},
+        },
+        simple_certificate::{NextEpochQuorumCertificate2, SimpleCertificate, SuccessThreshold},
+        simple_vote::{
+            NextEpochQuorumData2, QuorumData2, QuorumMarker, VersionedVoteData, Vote2Data, Voteable,
+        },
         traits::signature_key::SignatureKey,
         vote::Certificate as _,
     };
@@ -748,12 +753,12 @@ mod test {
         )
     }
 
-    fn boundary_signed_qc(
-        data: QuorumData2<SeqTypes>,
+    fn boundary_signed_qc<D: Voteable<SeqTypes> + QuorumMarker + Copy + 'static>(
+        data: D,
         view: ViewNumber,
         quorum: &QuorumKeys,
         version: Version,
-    ) -> QuorumCertificate2<SeqTypes> {
+    ) -> SimpleCertificate<SeqTypes, D, SuccessThreshold> {
         let commit = VersionedVoteData::new_infallible(
             data,
             view,
@@ -761,7 +766,7 @@ mod test {
         )
         .commit();
         let sig = boundary_signature(commit.as_ref(), quorum);
-        QuorumCertificate2::create_signed_certificate(commit, data, sig, view)
+        SimpleCertificate::create_signed_certificate(commit, data, sig, view)
     }
 
     fn boundary_signed_next_epoch_qc(
@@ -807,7 +812,7 @@ mod test {
         // Block 10 is an epoch transition block, so its QC is dual-signed by both quorums.
         let committing_data = QuorumData2 {
             leaf_commit: leaves[1].leaf().commit(),
-            epoch: Some(EpochNumber::new(1)),
+            epoch: EpochNumber::new(1),
             block_number: Some(10),
         };
         let committing_qc = Certificate::from(CertificatePair::new(
@@ -832,7 +837,7 @@ mod test {
         let deciding_qc = Certificate::from(CertificatePair::non_epoch_change(boundary_signed_qc(
             QuorumData2 {
                 leaf_commit: leaves[2].leaf().commit(),
-                epoch: Some(EpochNumber::new(2)),
+                epoch: EpochNumber::new(2),
                 block_number: Some(11),
             },
             ViewNumber::new(11),
@@ -894,7 +899,7 @@ mod test {
 
         let committing_data = QuorumData2 {
             leaf_commit: leaves[1].leaf().commit(),
-            epoch: Some(EpochNumber::new(1)),
+            epoch: EpochNumber::new(1),
             block_number: Some(5),
         };
         let committing_qc = Certificate::from(CertificatePair::new(
@@ -906,7 +911,7 @@ mod test {
         let deciding_qc = Certificate::from(CertificatePair::non_epoch_change(boundary_signed_qc(
             QuorumData2 {
                 leaf_commit: leaves[2].leaf().commit(),
-                epoch: Some(EpochNumber::new(2)),
+                epoch: EpochNumber::new(2),
                 block_number: Some(6),
             },
             ViewNumber::new(6),
@@ -990,30 +995,26 @@ mod test {
         let quorum = StakeTableQuorum::new((stake_table.clone(), stake_table), 10);
 
         let leaf = &leaf_chain(1..=1, LEGACY_VERSION).await[0];
-        let unsigned = QuorumData2 {
+        let unsigned = PreEpochQuorumData {
             leaf_commit: leaf.leaf().commit(),
-            epoch: None,
-            block_number: None,
         };
-        let forged = Certificate::from(CertificatePair::non_epoch_change(QuorumCertificate2::new(
+        let forged = Certificate::PreEpoch(PreEpochQuorumCertificate::new(
             unsigned,
             unsigned.commit(),
             ViewNumber::genesis(),
             None,
             PhantomData,
-        )));
+        ));
         let [real_1, real_2] = [1, 2].map(|view| {
-            let data = QuorumData2 {
+            let data = PreEpochQuorumData {
                 leaf_commit: Commitment::from_raw([view as u8; 32]),
-                epoch: None,
-                block_number: None,
             };
-            Certificate::from(CertificatePair::non_epoch_change(boundary_signed_qc(
+            Certificate::PreEpoch(boundary_signed_qc(
                 data,
                 ViewNumber::new(view),
                 &keys,
                 LEGACY_VERSION,
-            )))
+            ))
         });
 
         let err = quorum

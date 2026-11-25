@@ -2045,7 +2045,7 @@ mod test {
     use std::marker::PhantomData;
 
     use committable::Committable;
-    use espresso_types::{Leaf, NodeState, PubKey};
+    use espresso_types::{NodeState, PubKey};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{
@@ -2278,9 +2278,7 @@ mod test {
         let storage = Persistence::connect(&tmp).await;
 
         // Generate a valid quorum proposal.
-        let leaf: Leaf2 = Leaf::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base)
-            .await
-            .into();
+        let leaf = Leaf2::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base).await;
         let privkey = PubKey::generated_from_seed_indexed([0; 32], 1).1;
         let signature = PubKey::sign(&privkey, &[]).unwrap();
         let quorum_proposal = Proposal {

@@ -1101,9 +1101,8 @@ where
                     "send vote1"
                 );
                 self.record_voted_view(view);
-                if let Some(epoch) = vote1.vote.data.epoch
-                    && let Some(leader) = self.leader(view, epoch)
-                {
+                let epoch = vote1.vote.data.epoch;
+                if let Some(leader) = self.leader(view, epoch) {
                     self.participation.leader_proposed(leader, epoch);
                 }
                 crate::trace_leader_event!(
@@ -1647,7 +1646,7 @@ where
                     debug!(
                         %node, %sender,
                         view = %tc.view_number(),
-                        epoch = ?tc.data.epoch.map(|e| *e),
+                        epoch = %tc.data.epoch,
                         "recv timeout certificate"
                     );
                     if let Some(epoch) = self.verify_timeout_cert(&message.sender, tc) {
@@ -2478,7 +2477,7 @@ where
         // re-signs and re-sends its timeout vote on every re-arm of the timer,
         // so the new tally fills from the next round.
         if let TimeoutVote::V2(vote) = &mut vote {
-            vote.data.epoch = Some(self.consensus.current_epoch());
+            vote.data.epoch = self.consensus.current_epoch();
         }
 
         if !self.is_vote_epoch_admissible(vote.epoch()) {

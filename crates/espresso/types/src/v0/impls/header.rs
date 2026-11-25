@@ -1636,7 +1636,7 @@ mod test_headers {
 
     use super::*;
     use crate::{
-        EpochCommittees, Leaf,
+        EpochCommittees,
         eth_signature_key::EthKeyPair,
         mock::MockStateCatchup,
         v0_3::{Fetcher, REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountV1, RewardAmount},
@@ -1916,9 +1916,7 @@ mod test_headers {
         async fn default() -> Self {
             let instance_state = NodeState::mock();
             let validated_state = ValidatedState::genesis(&instance_state).0;
-            let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
-                .await
-                .into();
+            let leaf = Leaf2::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
             let header = leaf.block_header().clone();
             let ns_table = leaf.block_payload().unwrap().ns_table().clone();
             Self {

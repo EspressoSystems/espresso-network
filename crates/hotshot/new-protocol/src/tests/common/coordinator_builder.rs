@@ -313,7 +313,7 @@ pub async fn build_test_coordinator(
 pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
-        epoch: Some(EpochNumber::genesis()),
+        epoch: EpochNumber::genesis(),
         block_number: Some(0),
     };
     Certificate1::new(

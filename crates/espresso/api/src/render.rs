@@ -870,7 +870,7 @@ impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
     fn from(data: &QuorumData2<SeqTypes>) -> Self {
         proto::QuorumData2 {
             leaf_commit: data.leaf_commit.to_string(),
-            epoch: data.epoch.map(|epoch| epoch.u64()),
+            epoch: Some(data.epoch.u64()),
             block_number: data.block_number,
         }
     }
@@ -997,7 +997,7 @@ impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
         proto::TimeoutCertificate2 {
             data: Some(proto::TimeoutData2 {
                 view: cert.data.view.u64(),
-                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                epoch: Some(cert.data.epoch.u64()),
             }),
             vote_commitment: cert.vote_commitment().to_string(),
             view_number: cert.view_number.u64(),
@@ -1035,7 +1035,7 @@ impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCe
             data: Some(proto::ViewSyncFinalizeData2 {
                 relay: cert.data.relay,
                 round: cert.data.round.u64(),
-                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                epoch: Some(cert.data.epoch.u64()),
             }),
             vote_commitment: cert.vote_commitment().to_string(),
             view_number: cert.view_number.u64(),

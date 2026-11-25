@@ -827,7 +827,7 @@ mod tests {
             leaf_commit: committable::RawCommitmentBuilder::new("FakeLeaf")
                 .u64(42)
                 .finalize(),
-            epoch: Some(epoch),
+            epoch,
             block_number: Some(1),
         };
         SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &test_upgrade_lock())
@@ -991,7 +991,7 @@ mod tests {
             leaf_commit: committable::RawCommitmentBuilder::new("FakeLeaf")
                 .u64(42)
                 .finalize(),
-            epoch: Some(epoch),
+            epoch,
             block_number: Some(1),
         };
 
@@ -1017,7 +1017,7 @@ mod tests {
             leaf_commit: committable::RawCommitmentBuilder::new("FakeLeaf")
                 .u64(42)
                 .finalize(),
-            epoch: Some(epoch),
+            epoch,
             block_number: Some(1),
         };
 
@@ -1537,7 +1537,7 @@ mod tests {
                 leaf_commit: committable::RawCommitmentBuilder::new("FakeLeaf")
                     .u64(*view)
                     .finalize(),
-                epoch: Some(epoch),
+                epoch,
                 block_number: Some(*view),
             };
             let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
@@ -1702,7 +1702,7 @@ mod tests {
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
         assert_eq!(cert.epoch(), voted);
-        assert_eq!(cert.data.epoch, Some(voted));
+        assert_eq!(cert.data.epoch, voted);
         // The forged epoch holds a single vote and certifies nothing.
         assert_no_certs(&mut task).await;
     }
@@ -1945,10 +1945,7 @@ mod tests {
 
         for i in 0..NUM_NODES {
             let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
-            let data = TimeoutData2 {
-                view,
-                epoch: Some(epoch),
-            };
+            let data = TimeoutData2 { view, epoch };
             let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
                 .expect("failed to sign timeout vote");
             if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
@@ -2055,7 +2052,7 @@ mod tests {
         let lock = test_upgrade_lock();
 
         let mut cert = timeout_cert_v2(ViewNumber::new(1), epoch, &lock, &membership);
-        cert.data.epoch = Some(epoch + 1);
+        cert.data.epoch = epoch + 1;
         assert!(
             verifies(&TimeoutEvidence::V2(cert), &membership, &lock),
             "the old form does not cover the epoch"

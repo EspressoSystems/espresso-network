@@ -47,10 +47,7 @@ use crate::{
         signature_key::SignatureKey,
         states::TestableState,
     },
-    utils::{
-        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
-        option_epoch_from_block_number,
-    },
+    utils::{EpochTransitionIndicator, bincode_opts, option_epoch_from_block_number},
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
@@ -1027,25 +1024,6 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2<TYP
     }
 }
 
-impl<TYPES: NodeType> From<Leaf<TYPES>> for Leaf2<TYPES> {
-    fn from(leaf: Leaf<TYPES>) -> Self {
-        let bytes: [u8; 32] = leaf.parent_commitment.into();
-
-        Self {
-            view_number: leaf.view_number,
-            justify_qc: leaf.justify_qc.to_qc2(),
-            next_epoch_justify_qc: None,
-            parent_commitment: Commitment::from_raw(bytes),
-            block_header: leaf.block_header,
-            upgrade_certificate: leaf.upgrade_certificate,
-            block_payload: leaf.block_payload,
-            view_change_evidence: None,
-            next_drb_result: None,
-            with_epoch: false,
-        }
-    }
-}
-
 impl<TYPES: NodeType> HasViewNumber for DaProposal<TYPES> {
     fn view_number(&self) -> ViewNumber {
         self.view_number
@@ -1259,7 +1237,9 @@ pub struct Leaf2<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> Leaf2<TYPES> {
-    /// Create a new leaf from its components.
+    /// The genesis leaf of a chain with epochs: its justify QC is in the first epoch. `version` is
+    /// passed to the block header. A chain that started before epochs has
+    /// [`history::PreEpochLeaf::genesis`].
     ///
     /// # Panics
     ///
@@ -1271,21 +1251,14 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         instance_state: &TYPES::InstanceState,
         version: Version,
     ) -> Self {
-        let epoch = genesis_epoch_from_version(version);
         let (block_header, payload) =
             genesis_block::<TYPES>(validated_state, instance_state, version).await;
         let genesis_view = ViewNumber::genesis();
 
-        let block_number = if version < EPOCH_VERSION {
-            None
-        } else {
-            Some(0u64)
-        };
-
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
-            epoch,
-            block_number,
+            epoch: EpochNumber::genesis(),
+            block_number: Some(0),
         };
 
         let justify_qc = QuorumCertificate2::new(
@@ -1306,7 +1279,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             block_payload: Some(payload),
             view_change_evidence: None,
             next_drb_result: None,
-            with_epoch: epoch.is_some(),
+            with_epoch: true,
         }
     }
     /// Time when this leaf was created.
@@ -1645,7 +1618,8 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
-    /// Create the Genesis certificate
+    /// The QC on the genesis leaf of a chain with epochs, see [`Leaf2::genesis`]. A chain that
+    /// started before epochs has [`history::PreEpochQuorumCertificate::genesis`].
     #[must_use]
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
@@ -1658,15 +1632,10 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
-        let block_number = if upgrade_lock.epochs_enabled(genesis_view) {
-            Some(genesis_leaf.height())
-        } else {
-            None
-        };
         let data = QuorumData2 {
             leaf_commit: genesis_leaf.commit(),
-            epoch: genesis_epoch_from_version(upgrade.base), // #3967 make sure this is enough of a gate for epochs
-            block_number,
+            epoch: EpochNumber::genesis(),
+            block_number: Some(genesis_leaf.height()),
         };
 
         let versioned_data =

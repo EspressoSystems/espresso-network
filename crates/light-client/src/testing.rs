@@ -3,6 +3,7 @@
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
+    marker::PhantomData,
     ops::Range,
     sync::Arc,
 };
@@ -26,8 +27,12 @@ use hotshot_query_service_types::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
-        history::HistoricLeaf, vid_commitment,
+        EpochNumber, Leaf, QuorumProposal, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        VidCommon, ViewNumber,
+        history::{
+            HistoricLeaf, HistoricQuorumCertificate, PreEpochLeaf, PreEpochQuorumCertificate,
+        },
+        vid_commitment,
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
@@ -192,6 +197,10 @@ impl UpgradeStep {
 }
 
 /// Construct a customized leaf chain for the given height range.
+///
+/// A QC is from before epochs when the leaf it signs has a version below [`EPOCH_VERSION`], and a
+/// leaf is when its justify QC is. Those leaves and QCs are built as the first protocol versions
+/// built them. `map` sees every proposal as a [`QuorumProposal2`].
 pub async fn custom_leaf_chain(
     upgrade: Upgrade,
     range: impl IntoIterator<Item = u64>,
@@ -200,15 +209,16 @@ pub async fn custom_leaf_chain(
     let node_state = NodeState::mock()
         .with_genesis_version(upgrade.base)
         .with_current_version(upgrade.base);
-    let genesis_leaf: Leaf2 = Leaf2::genesis(&Default::default(), &node_state, upgrade.base).await;
-    tracing::info!(?genesis_leaf, "leaf chain");
+    let genesis = LeafQueryData::genesis(&Default::default(), &node_state, upgrade).await;
+    tracing::info!(genesis_leaf = ?genesis.leaf(), "leaf chain");
 
-    let mut qc = QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade).await;
+    let mut pre_epoch = matches!(genesis.qc(), HistoricQuorumCertificate::PreEpoch(_));
+    let mut qc = proposal_qc(genesis.qc());
     let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
         proposal: QuorumProposal2::<SeqTypes> {
             epoch: EpochNumber::new(1),
-            block_header: genesis_leaf.block_header().clone(),
-            view_number: genesis_leaf.view_number(),
+            block_header: genesis.header().clone(),
+            view_number: genesis.leaf().view_number(),
             justify_qc: qc.clone(),
             upgrade_certificate: None,
             view_change_evidence: None,
@@ -228,26 +238,65 @@ pub async fn custom_leaf_chain(
             .block_merkle_tree_root_mut() = block_merkle_tree.commitment();
         quorum_proposal.proposal.view_number = ViewNumber::new(height);
         map(&mut quorum_proposal.proposal);
-        let mut leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
-        leaf.with_epoch = false;
+        let leaf: HistoricLeaf<SeqTypes> = if pre_epoch {
+            pre_epoch_leaf(&quorum_proposal.proposal).into()
+        } else {
+            let mut leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            leaf.with_epoch = false;
+            leaf.into()
+        };
 
         qc.view_number = leaf.view_number();
-        qc.data.leaf_commit = Committable::commit(&leaf);
-        if leaf.block_header().version() >= EPOCH_VERSION {
+        qc.data.leaf_commit = leaf.commit();
+        pre_epoch = leaf.block_header().version() < EPOCH_VERSION;
+        if !pre_epoch {
             qc.data.block_number = Some(height);
-            // Only the QC gets an epoch, pinned at 1 since these chains are indexed by view; the
-            // proposal's `epoch` stays `None`, so the leaves carry none.
-            qc.data.epoch.get_or_insert(EpochNumber::new(1));
         }
+        let leaf_qc: HistoricQuorumCertificate<SeqTypes> = if pre_epoch {
+            PreEpochQuorumCertificate::from(qc.clone().to_qc()).into()
+        } else {
+            qc.clone().into()
+        };
 
         block_merkle_tree
             .push(leaf.block_header().commit())
             .unwrap();
-        leaves.push(LeafQueryData::new(leaf, qc.clone()).unwrap());
+        leaves.push(LeafQueryData::new(leaf, leaf_qc).unwrap());
         quorum_proposal.proposal.justify_qc = qc.clone();
     }
 
     leaves
+}
+
+/// `qc` as the justify QC of a [`QuorumProposal2`]. A QC from before epochs gets epoch 1, like
+/// every QC of these chains, and no block number; [`pre_epoch_leaf`] drops both again.
+fn proposal_qc(qc: &HistoricQuorumCertificate<SeqTypes>) -> QuorumCertificate2<SeqTypes> {
+    match qc {
+        HistoricQuorumCertificate::Epoch(qc) => qc.clone(),
+        HistoricQuorumCertificate::PreEpoch(qc) => QuorumCertificate2::new(
+            QuorumData2 {
+                leaf_commit: qc.data.leaf_commit,
+                epoch: EpochNumber::new(1),
+                block_number: None,
+            },
+            Commitment::from_raw(qc.vote_commitment().into()),
+            qc.view_number,
+            qc.signatures.clone(),
+            PhantomData,
+        ),
+    }
+}
+
+/// The leaf of `proposal`, built as the first protocol versions built it.
+fn pre_epoch_leaf(proposal: &QuorumProposal2<SeqTypes>) -> PreEpochLeaf<SeqTypes> {
+    Leaf::from_quorum_proposal(&QuorumProposal {
+        block_header: proposal.block_header.clone(),
+        view_number: proposal.view_number,
+        justify_qc: proposal.justify_qc.clone().to_qc(),
+        upgrade_certificate: proposal.upgrade_certificate.clone(),
+        proposal_certificate: None,
+    })
+    .into()
 }
 
 /// Construct a valid leaf chain during which the epoch advances.
@@ -698,7 +747,7 @@ impl InnerTestClient {
             let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
             let quorum_data = QuorumData2 {
                 leaf_commit: leaf.commit(),
-                epoch: Some(epoch),
+                epoch,
                 block_number: Some(i as u64),
             };
             let quorum_data_comm = VersionedVoteData::new_infallible(

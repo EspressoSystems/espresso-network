@@ -1038,37 +1038,33 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
 fn test_quorum_data_well_formedness() {
     let height = 10;
     let leaf_commit = Commitment::default_commitment_no_preimage();
-    let vote1 = |epoch: Option<u64>, block_number: Option<u64>| QuorumData2::<TestTypes> {
+    let vote1 = |epoch: u64, block_number: Option<u64>| QuorumData2::<TestTypes> {
         leaf_commit,
-        epoch: epoch.map(EpochNumber::new),
+        epoch: EpochNumber::new(epoch),
         block_number,
     };
     assert!(
-        vote1(Some(1), Some(0)).is_well_formed(epoch_length(height)),
+        vote1(1, Some(0)).is_well_formed(epoch_length(height)),
         "genesis"
     );
     assert!(
-        vote1(Some(1), Some(10)).is_well_formed(epoch_length(height)),
+        vote1(1, Some(10)).is_well_formed(epoch_length(height)),
         "an epoch's last block"
     );
     assert!(
-        vote1(Some(2), Some(11)).is_well_formed(epoch_length(height)),
+        vote1(2, Some(11)).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote1(Some(2), Some(10)).is_well_formed(epoch_length(height)),
+        !vote1(2, Some(10)).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
     assert!(
-        !vote1(Some(1), Some(11)).is_well_formed(epoch_length(height)),
+        !vote1(1, Some(11)).is_well_formed(epoch_length(height)),
         "an epoch its height has left"
     );
     assert!(
-        !vote1(None, Some(10)).is_well_formed(epoch_length(height)),
-        "no epoch"
-    );
-    assert!(
-        !vote1(Some(1), None).is_well_formed(epoch_length(height)),
+        !vote1(1, None).is_well_formed(epoch_length(height)),
         "no block number"
     );
 
@@ -1106,10 +1102,7 @@ fn test_timeout_vote_naming_another_view_is_not_well_formed() {
     let unbound = |named: ViewNumber| {
         TimeoutVote::V2(
             SimpleVote::<TestTypes, TimeoutData2>::create_signed_vote(
-                TimeoutData2 {
-                    view: named,
-                    epoch: Some(epoch),
-                },
+                TimeoutData2 { view: named, epoch },
                 view,
                 &public_key,
                 &private_key,

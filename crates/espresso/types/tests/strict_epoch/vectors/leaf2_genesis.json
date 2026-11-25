@@ -1,0 +1,55 @@
+{
+  "view_number": 0,
+  "justify_qc": {
+    "data": {
+      "leaf_commit": "COMMIT~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+      "epoch": 1,
+      "block_number": 0
+    },
+    "vote_commitment": "COMMIT~ICIyMVU8nrX_jUzLTL9qGtl5h5fKPPU587wBLHeqG2O2",
+    "view_number": 0,
+    "signatures": null,
+    "_pd": null
+  },
+  "next_epoch_justify_qc": null,
+  "parent_commitment": "COMMIT~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+  "block_header": {
+    "chain_config": {
+      "chain_config": {
+        "Left": {
+          "chain_id": "35353",
+          "max_block_size": "30720",
+          "base_fee": "0",
+          "fee_contract": null,
+          "fee_recipient": "0x0000000000000000000000000000000000000000"
+        }
+      }
+    },
+    "height": 0,
+    "timestamp": 0,
+    "l1_head": 0,
+    "l1_finalized": null,
+    "payload_commitment": "HASH~AazstQer_ho1SqgGT0r10_Gs0BnjfbPBHJdSO3HHbp29",
+    "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
+    "ns_table": {
+      "bytes": "AAAAAA=="
+    },
+    "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
+    "fee_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
+    "fee_info": {
+      "account": "0x0000000000000000000000000000000000000000",
+      "amount": "0"
+    },
+    "builder_signature": null
+  },
+  "upgrade_certificate": null,
+  "block_payload": {
+    "raw_payload": "",
+    "ns_table": {
+      "bytes": "AAAAAA=="
+    }
+  },
+  "view_change_evidence": null,
+  "next_drb_result": null,
+  "with_epoch": true
+}

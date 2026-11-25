@@ -954,7 +954,7 @@ async fn first_block_naming_a_revotes_certificate_gets_no_vote1() {
         !harness.outputs().iter().any(|o| matches!(
             o,
             ConsensusOutput::SendVote1(vote)
-                if vote.vote.view_number() == view(12) && vote.vote.data.epoch == Some(epoch(2))
+                if vote.vote.view_number() == view(12) && vote.vote.data.epoch == epoch(2)
         )),
         "no vote1 on a first block whose parent is not named at its own view"
     );
@@ -1307,7 +1307,7 @@ async fn revote_and_first_block_share_a_view() {
         .iter()
         .filter_map(|o| match o {
             ConsensusOutput::SendVote1(vote) if vote.vote.view_number() == view(11) => {
-                Some(vote.vote.data.epoch.expect("an epoch"))
+                Some(vote.vote.data.epoch)
             },
             _ => None,
         })

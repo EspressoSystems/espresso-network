@@ -118,7 +118,7 @@ impl TestViewGenerator {
         >(
             QuorumData2 {
                 leaf_commit: last.leaf.commit(),
-                epoch: Some(EpochNumber::genesis()),
+                epoch: EpochNumber::genesis(),
                 block_number: Some(last.leaf.height()),
             },
             &membership,

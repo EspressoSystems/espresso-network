@@ -94,9 +94,8 @@ pub(crate) fn tmp_options(db: &qs::testing::TmpDb) -> SqlOptions {
 mod test {
     use std::sync::Arc;
 
-    use committable::Committable as _;
     use espresso_types::{
-        Header, Leaf, Leaf2, NodeState, Payload, Transaction as Tx,
+        Header, Leaf, NodeState, Payload, Transaction as Tx,
         traits::{PersistenceOptions as _, SequencerPersistence as _},
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -107,7 +106,10 @@ mod test {
         },
     };
     use hotshot_types::{
-        data::{QuorumProposal, ViewNumber},
+        data::{
+            QuorumProposal, ViewNumber,
+            history::{PreEpochLeaf, PreEpochQuorumCertificate},
+        },
         event::HotShotAction,
         simple_certificate::QuorumCertificate,
         traits::block_contents::{BlockHeader, BlockPayload as _},
@@ -182,8 +184,8 @@ mod test {
             upgrade_certificate: None,
             proposal_certificate: None,
         };
-        let leaf: Leaf2 = Leaf::from_quorum_proposal(&proposal).into();
-        let mut qc = justify_qc.to_qc2();
+        let leaf = PreEpochLeaf::from(Leaf::from_quorum_proposal(&proposal));
+        let mut qc = PreEpochQuorumCertificate::from(justify_qc);
         qc.data.leaf_commit = leaf.commit();
         qc.view_number = view_number;
 

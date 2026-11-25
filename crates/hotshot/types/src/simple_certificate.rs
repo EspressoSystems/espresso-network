@@ -360,29 +360,6 @@ impl<TYPES: NodeType> Display for QuorumCertificate<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> QuorumCertificate<TYPES> {
-    /// Convert a `QuorumCertificate` into a `QuorumCertificate2`
-    pub fn to_qc2(self) -> QuorumCertificate2<TYPES> {
-        let bytes: [u8; 32] = self.data.leaf_commit.into();
-        let data = QuorumData2 {
-            leaf_commit: Commitment::from_raw(bytes),
-            epoch: None,
-            block_number: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
 impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
     /// Convert a `QuorumCertificate2` into a `QuorumCertificate`
     pub fn to_qc(self) -> QuorumCertificate<TYPES> {
@@ -486,7 +463,7 @@ impl<T: NodeType> HasViewNumber for TimeoutEvidence<T> {
 impl<T: NodeType> HasEpoch for TimeoutEvidence<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         match self {
-            Self::V2(cert) => cert.data.epoch,
+            Self::V2(cert) => Some(cert.data.epoch),
             Self::V3(cert) => Some(cert.epoch),
         }
     }
@@ -884,10 +861,8 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     }
 
     /// The epoch number this certificate belongs to.
-    ///
-    /// [`None`] if this certificate originated before epochs were enabled.
     pub fn epoch(&self) -> Option<EpochNumber> {
-        self.qc.data.epoch
+        Some(self.qc.data.epoch)
     }
 
     /// The block number attached to this certificate.

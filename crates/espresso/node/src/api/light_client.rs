@@ -804,7 +804,7 @@ mod test {
     fn cert2_for_leaf(leaf: &LeafQueryData<SeqTypes>) -> espresso_types::Certificate2<SeqTypes> {
         let data = Vote2Data {
             leaf_commit: leaf.leaf().commit(),
-            epoch: leaf.qc().as_qc2().unwrap().data.epoch.unwrap(),
+            epoch: leaf.qc().as_qc2().unwrap().data.epoch,
             block_number: leaf.height(),
         };
         espresso_types::Certificate2::new(

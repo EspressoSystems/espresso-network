@@ -1670,7 +1670,7 @@ mod test {
 
     use super::*;
     use crate::{
-        BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
+        BlockSize, FeeAccountProof, FeeMerkleProof, Payload, TimestampMillis, Transaction,
         UpgradeMode, UpgradeType, ViewBasedUpgrade,
         eth_signature_key::{BuilderSignature, EthKeyPair},
         mock::MockStateCatchup,
@@ -2447,13 +2447,12 @@ mod test {
             ..validated_state.chain_config.resolve().unwrap()
         });
 
-        let parent: Leaf2 = Leaf::genesis(
+        let parent = Leaf2::genesis(
             &instance_state.genesis_state,
             &instance_state,
             MOCK_UPGRADE.base,
         )
-        .await
-        .into();
+        .await;
         let header = parent.block_header().clone();
         let metadata = parent.block_header().metadata();
 
@@ -2648,8 +2647,7 @@ mod test {
             .unwrap();
         instance.genesis_state = genesis_state.clone();
 
-        let genesis = Leaf::genesis(&genesis_state, &instance, MOCK_UPGRADE.base).await;
-        let parent_leaf: Leaf2 = genesis.into();
+        let parent_leaf = Leaf2::genesis(&genesis_state, &instance, MOCK_UPGRADE.base).await;
         let parent_header = parent_leaf.block_header().clone();
 
         let mut expected_block_tree = genesis_state.block_merkle_tree.clone();

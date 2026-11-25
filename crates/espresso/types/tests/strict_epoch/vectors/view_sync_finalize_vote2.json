@@ -1,0 +1,12 @@
+{
+  "signature": [
+    "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+    "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+  ],
+  "data": {
+    "relay": 0,
+    "round": 5,
+    "epoch": 1
+  },
+  "view_number": 5
+}

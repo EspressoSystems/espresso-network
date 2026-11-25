@@ -2453,10 +2453,7 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let vote = SimpleVote::create_signed_vote(
-            TimeoutData2 {
-                view,
-                epoch: Some(epoch),
-            },
+            TimeoutData2 { view, epoch },
             view,
             &self.public_key,
             &self.private_key,
@@ -3186,7 +3183,7 @@ impl<T: NodeType> Consensus<T> {
             _ => return,
         };
         let leaf_commit = proposal_commitment(block);
-        if cert1.data.leaf_commit != leaf_commit || cert1.data.epoch != Some(epoch) {
+        if cert1.data.leaf_commit != leaf_commit || cert1.data.epoch != epoch {
             debug!(%block_view, "the certificate built on is not over the last block of its epoch");
             return;
         }
@@ -3781,7 +3778,7 @@ impl<T: NodeType> Consensus<T> {
         let inner_vote = match SimpleVote::create_signed_vote(
             QuorumData2 {
                 leaf_commit: proposal_commit,
-                epoch: proposal.epoch(),
+                epoch: proposal.epoch,
                 block_number: Some(proposal.block_header.block_number()),
             },
             view,
