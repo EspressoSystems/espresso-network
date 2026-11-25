@@ -1957,6 +1957,12 @@ mod test {
         |f: &mut BlocksFrontier| bottom_children(f).truncate(BlockMerkleTree::ARITY - 1),
         "not shaped like a lookup"
     )]
+    #[case::a_frontier_missing_a_level(
+        |f: &mut BlocksFrontier| {
+            f.proof.pop();
+        },
+        "p_height"
+    )]
     fn test_remember_blocks_frontier_rejects(
         #[case] edit: fn(&mut BlocksFrontier),
         #[case] reason: &str,
@@ -1967,7 +1973,7 @@ mod test {
 
         let mut remembered = BlockMerkleTree::from_commitment(tree.commitment());
         let err = remember_blocks_frontier(&mut remembered, &frontier).unwrap_err();
-        assert!(err.to_string().contains(reason), "{err:#}");
+        assert!(format!("{err:#}").contains(reason), "{err:#}");
     }
 
     /// The membership proof `lookup` returns for the last block.
