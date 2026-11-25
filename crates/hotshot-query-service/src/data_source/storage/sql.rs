@@ -622,6 +622,7 @@ impl SqlStorage {
         }
 
         if config.archive {
+            refuse_state_started_from_snapshot(conn.as_mut()).await?;
             // If running in archive mode, ensure the pruned height is set to 0, so the fetcher will
             // reconstruct previously pruned data.
             query("DELETE FROM pruned_height WHERE id = $1")
@@ -645,6 +646,26 @@ impl SqlStorage {
         // have to come under a pruning batch again. The pruner's first run is an interval away.
         storage.state_prune_start().await?;
         Ok(storage)
+    }
+}
+
+/// Archive mode needs merklized state from genesis. State that started from a snapshot, as on a
+/// node that pruned before, has no trees below its start, and nothing ever fills them in. So refuse
+/// before archive mode changes anything: a refused start must leave the pruned height in place.
+async fn refuse_state_started_from_snapshot(
+    conn: &mut <Db as Database>::Connection,
+) -> Result<(), Error> {
+    let start = query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1")
+        .bind(Transaction::<Write>::STATE_START_HEIGHT_ID)
+        .fetch_optional(conn)
+        .await?;
+    match start {
+        Some((start,)) => Err(Error::msg(format!(
+            "archive mode needs merklized state from genesis, but the state in this database \
+             started from a snapshot at height {start}. Reset the database to rebuild it from \
+             genesis, or start without archive mode."
+        ))),
+        None => Ok(()),
     }
 }
 
@@ -2518,6 +2539,67 @@ mod test {
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
+    }
+
+    /// State that started from a snapshot has no trees below its start, and archive mode never
+    /// fills them, so archive mode refuses to start on it. The refusal names the start height and
+    /// leaves the database as it was.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_refuses_state_started_from_snapshot() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        tx.save_pruned_height(10).await.unwrap();
+        UpdateStateData::<_, MockMerkleTree, 8>::set_state_start_height(&mut tx, 40)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        let Err(err) =
+            SqlStorage::connect(db.config().archive(), StorageConnectionType::Query).await
+        else {
+            panic!("archive mode started on state that started from a snapshot");
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.split(|c: char| !c.is_ascii_digit()).any(|n| n == "40"),
+            "the error does not name the state start height 40: {msg}"
+        );
+
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), Some(10));
+        assert_eq!(tx.load_state_start_height().await.unwrap(), Some(40));
+    }
+
+    /// Resetting the schema drops the state that started from a snapshot, so archive mode starts
+    /// on the fresh database.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_after_reset_accepts_state_started_from_snapshot() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<_, MockMerkleTree, 8>::set_state_start_height(&mut tx, 40)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        let storage = SqlStorage::connect(
+            db.config().reset_schema().archive(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_start_height().await.unwrap(), None);
     }
 
     fn pruned_height_gauge(storage: &SqlStorage, name: &str) -> usize {

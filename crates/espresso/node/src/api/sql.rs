@@ -2583,6 +2583,47 @@ mod tests {
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
     }
 
+    /// A node whose state started from a boundary snapshot refuses to start with `--archive`, as
+    /// archive mode never completes its trees. It still starts with `--prune`.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_node_refuses_state_started_from_snapshot() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&tmp_options(&db)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_state_start_height(
+            &mut tx, 40,
+        )
+        .await
+        .unwrap();
+        Transaction::commit(tx).await.unwrap();
+        drop(storage);
+
+        let mut opt = tmp_options(&db);
+        opt.archive = true;
+        let Err(err) =
+            super::DataSource::create(opt.try_into().unwrap(), super::Provider::default(), false)
+                .await
+        else {
+            panic!("the archive node started on state that started from a snapshot");
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.split(|c: char| !c.is_ascii_digit()).any(|n| n == "40"),
+            "the error does not name the state start height 40: {msg}"
+        );
+
+        let mut opt = tmp_options(&db);
+        opt.prune = true;
+        super::DataSource::create(opt.try_into().unwrap(), super::Provider::default(), false)
+            .await
+            .unwrap();
+    }
+
     /// The data pruner deletes the leaf and header at the state head and keeps the ones above it,
     /// while the state pruner keeps the head's snapshot. The local catchup still reads that
     /// snapshot, by the root it is given.
