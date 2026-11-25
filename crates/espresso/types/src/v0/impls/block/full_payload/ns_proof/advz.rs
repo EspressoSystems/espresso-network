@@ -181,8 +181,8 @@ mod tests {
     use jf_advz::{VidDisperse, VidScheme};
 
     use crate::{
-        NamespaceId, NsIndex, NsTableBuilder, Payload, v0::impls::block::test::ValidTest,
-        v0_1::ADVZNsProof,
+        NamespaceId, NsIndex, NsTableBuilder, Payload, Transaction,
+        v0::impls::block::test::ValidTest, v0_1::ADVZNsProof,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -379,6 +379,36 @@ mod tests {
                 .unwrap()
                 .ns_payload,
             ..empty_ns_proof
+        };
+        assert!(
+            forged
+                .verify(block.ns_table(), &commit, &disperse.common)
+                .is_none()
+        );
+    }
+
+    /// Both namespaces have the same byte length and lie in the same
+    /// polynomial. jf-advz 0.2.4 accepted the honest proof's prefix and suffix
+    /// at the other namespace's range (jellyfish-compat#56).
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn ns_proof_rejects_payload_moved_to_another_namespace() {
+        let txs = [(10u32, b"abc"), (20, b"xyz")]
+            .map(|(ns, bytes)| Transaction::new(NamespaceId::from(ns), bytes.to_vec()));
+        let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
+            .await
+            .unwrap()
+            .0;
+        let disperse = advz_scheme(10).disperse(block.encode()).unwrap();
+        let commit = VidCommitment::V0(disperse.commit);
+
+        let honest = ADVZNsProof::new(&block, &NsIndex(0), &disperse.common).unwrap();
+        honest
+            .verify(block.ns_table(), &commit, &disperse.common)
+            .expect("sanity: correct proof should succeed");
+
+        let forged = ADVZNsProof {
+            ns_index: NsIndex(1),
+            ..honest
         };
         assert!(
             forged
