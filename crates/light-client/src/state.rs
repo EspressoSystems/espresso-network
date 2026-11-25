@@ -1327,7 +1327,7 @@ mod test {
         NsIndex, PrivKey, RegisteredValidatorMap, StakeTableState, ValidatorSet,
         v0_3::{AuthenticatedValidator, RegisteredValidator},
     };
-    use hotshot_query_service::metrics::PrometheusMetrics;
+    use hotshot_metrics::prometheus::PrometheusMetrics;
     use hotshot_query_service_types::availability::TransactionIndex;
     use hotshot_types::{
         addr::NetAddr,

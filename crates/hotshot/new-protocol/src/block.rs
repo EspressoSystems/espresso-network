@@ -7,6 +7,7 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
+use hotshot_metrics::Histogram;
 use hotshot_types::{
     PeerConfig,
     consensus::PayloadWithMetadata,
@@ -16,7 +17,6 @@ use hotshot_types::{
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BuilderFee, Transaction},
-        metrics::Histogram,
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },

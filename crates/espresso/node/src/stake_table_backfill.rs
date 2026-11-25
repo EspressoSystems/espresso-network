@@ -12,11 +12,9 @@ use espresso_types::{
     BlockMerkleCommitment, EpochCommittees, Header, LcContractFinalizedState, SeqTypes,
     StakeTableStoreOutcome, preceding_root_height, traits::StateCatchup,
 };
+use hotshot_metrics::{Counter, Gauge, Metrics};
 use hotshot_types::{
-    data::EpochNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    traits::metrics::{Counter, Gauge, Metrics},
-    utils::root_block_in_epoch,
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, utils::root_block_in_epoch,
 };
 use tokio::{
     sync::Notify,
@@ -410,7 +408,7 @@ fn missing_epochs(layout: EpochLayout, stored: &BTreeSet<EpochNumber>) -> Vec<Ep
 mod tests {
     use committable::Commitment;
     use futures::FutureExt;
-    use hotshot_query_service::metrics::PrometheusMetrics;
+    use hotshot_metrics::prometheus::PrometheusMetrics;
     use hotshot_types::utils::epoch_from_block_number;
     use parking_lot::Mutex;
     use rstest::rstest;

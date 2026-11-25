@@ -19,6 +19,7 @@ use espresso_types::{
     v0_6::RewardAccountQueryDataV2,
 };
 use futures::future::Future;
+use hotshot_metrics::Metrics;
 use hotshot_query_service::{
     Resolvable,
     availability::LeafId,
@@ -35,7 +36,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    traits::{ValidatedState as _, election::MembershipSnapshot, metrics::Metrics},
+    traits::{ValidatedState as _, election::MembershipSnapshot},
     utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };

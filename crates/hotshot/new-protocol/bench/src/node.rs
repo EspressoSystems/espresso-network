@@ -7,6 +7,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
+use hotshot_metrics::NoMetrics;
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -31,10 +32,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     signature_key::BLSPubKey,
-    traits::{
-        BlockPayload, metrics::NoMetrics, node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{BlockPayload, node_implementation::NodeType, signature_key::SignatureKey},
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };

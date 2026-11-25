@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use hotshot_types::traits::metrics::Metrics;
+use hotshot_metrics::Metrics;
 use rand::Rng;
 use tempfile::Builder;
 
@@ -479,7 +479,7 @@ fn fsync_probe(dir: &Path, page_size: Option<u64>) -> io::Result<FsyncStats> {
 
 #[cfg(test)]
 mod test {
-    use hotshot_query_service::metrics::PrometheusMetrics;
+    use hotshot_metrics::prometheus::PrometheusMetrics;
     use tempfile::TempDir;
 
     use super::*;

@@ -12,12 +12,12 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use hotshot_types::traits::metrics::Metrics;
-
-use crate::{
-    QueryError, QueryResult,
-    metrics::{MetricsError, PrometheusMetrics},
+use hotshot_metrics::{
+    Metrics,
+    prometheus::{MetricsError, PrometheusMetrics},
 };
+
+use crate::{QueryError, QueryResult};
 
 pub trait HasMetrics {
     fn metrics(&self) -> &PrometheusMetrics;

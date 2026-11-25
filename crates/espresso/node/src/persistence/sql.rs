@@ -23,6 +23,7 @@ use espresso_types::{
     },
 };
 use futures::stream::StreamExt;
+use hotshot_metrics::Metrics;
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     data_source::{
@@ -50,10 +51,7 @@ use hotshot_types::{
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::LockView,
-    traits::{
-        block_contents::{BlockHeader, BlockPayload},
-        metrics::Metrics,
-    },
+    traits::block_contents::{BlockHeader, BlockPayload},
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;

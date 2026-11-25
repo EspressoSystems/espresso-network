@@ -27,13 +27,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder};
 use chrono::Utc;
-use hotshot_types::{
-    data::VidShare,
-    traits::{
-        metrics::{Gauge, Metrics},
-        node_implementation::NodeType,
-    },
-};
+use hotshot_metrics::{Gauge, Metrics, prometheus::PrometheusMetrics};
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use itertools::Itertools;
 use log::LevelFilter;
 use sqlx::{
@@ -54,7 +49,6 @@ use crate::{
         },
         update::Transaction as _,
     },
-    metrics::PrometheusMetrics,
     node::BlockId,
     status::HasMetrics,
 };

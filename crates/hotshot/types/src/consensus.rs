@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use alloy_primitives::U256;
 use committable::Commitment;
+use hotshot_metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics};
 use hotshot_utils::anytrace::*;
 
 pub use crate::utils::{View, ViewInner};
@@ -23,7 +24,6 @@ use crate::{
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         BlockPayload,
-        metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },

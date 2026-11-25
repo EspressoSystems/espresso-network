@@ -35,7 +35,7 @@ use futures::{
 };
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::FeeContract;
-use hotshot_types::traits::metrics::Metrics;
+use hotshot_metrics::Metrics;
 #[cfg(feature = "node")]
 use lru::LruCache;
 #[cfg(feature = "node")]
@@ -1588,7 +1588,7 @@ mod test {
         providers::{ext::AnvilApi, layers::AnvilProvider},
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
-    use hotshot_types::traits::metrics::NoMetrics;
+    use hotshot_metrics::NoMetrics;
     use serde_json::{Value, json};
     use time::OffsetDateTime;
     use warp::Filter;

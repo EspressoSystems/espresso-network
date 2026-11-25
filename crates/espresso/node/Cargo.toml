@@ -58,6 +58,7 @@ espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
+hotshot-metrics = { workspace = true, features = ["prometheus"] }
 hotshot-new-protocol = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }

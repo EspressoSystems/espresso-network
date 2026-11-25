@@ -5,13 +5,14 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
     PeerConnectInfo,
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     signature_key::BLSPubKey,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    traits::signature_key::SignatureKey,
     upgrade_config::UpgradeConfig,
 };
 use tokio::sync::mpsc;

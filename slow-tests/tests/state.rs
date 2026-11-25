@@ -19,8 +19,8 @@ use espresso_node::{
 use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
 use futures::{StreamExt, TryStreamExt, future::join_all};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_metrics::NoMetrics;
 use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
-use hotshot_types::traits::metrics::NoMetrics;
 use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
 use staking_cli::demo::DelegationConfig;

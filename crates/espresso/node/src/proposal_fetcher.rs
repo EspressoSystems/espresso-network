@@ -7,14 +7,12 @@ use committable::Commitment;
 use derivative::Derivative;
 use espresso_types::{ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
+use hotshot_metrics::{Counter, Gauge, Metrics};
 use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     new_protocol::CoordinatorEvent,
-    traits::{
-        ValidatedState as _,
-        metrics::{Counter, Gauge, Metrics},
-    },
+    traits::ValidatedState as _,
 };
 use serde::Serialize;
 use tokio::time::{sleep, timeout};

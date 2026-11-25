@@ -46,6 +46,7 @@ use espresso_types::{
 };
 use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_metrics::Metrics;
 use hotshot_query_service::{
     availability::VidCommonQueryData,
     data_source::ExtensibleDataSource,
@@ -58,10 +59,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::{
-        election::{GenesisStakeTables, Membership, MembershipSnapshot},
-        metrics::Metrics,
-    },
+    traits::election::{GenesisStakeTables, Membership, MembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
 };
@@ -1818,9 +1816,10 @@ pub mod test_helpers {
         stream::{Stream, StreamExt},
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_metrics::NoMetrics;
     use hotshot_types::{
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
-        new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
+        new_protocol::CoordinatorEvent,
     };
     use http_client::{Client, error::ClientErr};
     use itertools::izip;
@@ -3580,6 +3579,7 @@ mod test {
         sol_types::{EspToken, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
+    use hotshot_metrics::{NoMetrics, prometheus::PrometheusMetrics};
     use hotshot_query_service::{
         availability::{
             BlockQueryData, BlockSummaryQueryData, LeafQueryData, TransactionQueryData,
@@ -3590,7 +3590,6 @@ mod test {
             storage::{StorageConnectionType, UpdateAvailabilityStorage},
         },
         explorer::TransactionSummariesResponse,
-        metrics::PrometheusMetrics,
         node::{SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
@@ -3603,7 +3602,7 @@ mod test {
         new_protocol::CoordinatorEvent,
         simple_certificate::UpgradeCertificate,
         simple_vote::UpgradeProposalData,
-        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
+        traits::{block_contents::BlockHeader, election::Membership},
         utils::epoch_from_block_number,
         x25519,
     };

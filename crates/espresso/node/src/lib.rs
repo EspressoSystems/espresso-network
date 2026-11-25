@@ -59,6 +59,7 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
 pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
+use hotshot_metrics::{Metrics, NoMetrics};
 use hotshot_new_protocol::network::{Cliquenet, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
@@ -69,12 +70,7 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateSignKey},
     network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
-    traits::{
-        metrics::{Metrics, NoMetrics},
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
-        storage::Storage,
-    },
+    traits::{node_implementation::NodeType, signature_key::SignatureKey, storage::Storage},
     x25519,
 };
 use moka::future::Cache;
@@ -858,6 +854,7 @@ pub mod testing {
         sol_types::{LightClientStateSol, LightClientV3Mock},
         stake_table::StakeTableContractVersion,
     };
+    use hotshot_metrics::NoMetrics;
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
@@ -865,7 +862,7 @@ pub mod testing {
         light_client::StateKeyPair,
         new_protocol::CoordinatorEvent,
         traits::{
-            BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
+            BlockPayload, EncodeBytes, block_contents::BlockHeader,
             signature_key::BuilderSignatureKey,
         },
         utils::epoch_from_block_number,

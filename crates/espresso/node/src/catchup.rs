@@ -31,19 +31,13 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
+use hotshot_metrics::{Counter, CounterFamily, Metrics};
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
-    ValidatorConfig,
-    data::ViewNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    message::UpgradeLock,
-    network::NetworkConfig,
+    ValidatorConfig, data::ViewNumber, epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock, network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{
-        ValidatedState as ValidatedStateTrait,
-        metrics::{Counter, CounterFamily, Metrics},
-    },
-    utils::verify_leaf_chain,
+    traits::ValidatedState as ValidatedStateTrait, utils::verify_leaf_chain,
 };
 use http_client::{Request, error::ClientErr};
 use itertools::Itertools;
@@ -1884,7 +1878,7 @@ mod test {
     };
 
     use espresso_types::v0::mock::MockStateCatchup;
-    use hotshot_types::traits::metrics::NoMetrics;
+    use hotshot_metrics::NoMetrics;
     use test_utils::reserve_tcp_port;
 
     use super::*;

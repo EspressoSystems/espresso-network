@@ -12,11 +12,8 @@ use espresso_types::{
     BackoffParams, ChainConfig, Header, LcContractFinalizedState, SeqTypes, traits::StateCatchup,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
-use hotshot_types::{
-    data::EpochNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    traits::metrics::{Counter, Metrics},
-};
+use hotshot_metrics::{Counter, Metrics};
+use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 
 use crate::{
     lc_contract_headers::{fetch_anchor_root, fetch_proven_header},
@@ -181,7 +178,7 @@ mod tests {
     use alloy::primitives::Address;
     use espresso_types::{EpochCommittees, v0_3::Fetcher};
     use hotshot_example_types::storage_types::TestStorage;
-    use hotshot_types::traits::metrics::NoMetrics;
+    use hotshot_metrics::NoMetrics;
     use light_client::testing::TestClient;
 
     use super::*;

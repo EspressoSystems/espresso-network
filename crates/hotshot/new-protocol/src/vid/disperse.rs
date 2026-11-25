@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use hotshot_metrics::Histogram;
 use hotshot_types::{
     PeerConfig,
     data::{
@@ -18,10 +19,7 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
-    traits::{
-        BlockPayload, metrics::Histogram, node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{BlockPayload, node_implementation::NodeType, signature_key::SignatureKey},
     vid::avidm_gf2::{AvidmGf2NsDispersal, AvidmGf2Scheme},
 };
 use hotshot_utils::anytrace::{self, Wrap};

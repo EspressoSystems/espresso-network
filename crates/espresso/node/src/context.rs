@@ -19,6 +19,7 @@ use futures::{
     future::join_all,
     stream::{BoxStream, Stream, StreamExt},
 };
+use hotshot_metrics::{Counter, Gauge, Histogram, Metrics};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
     leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
@@ -37,10 +38,7 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
-    traits::{
-        election::Membership,
-        metrics::{Counter, Gauge, Histogram, Metrics},
-    },
+    traits::election::Membership,
     upgrade_config::UpgradeConfig,
     x25519,
 };

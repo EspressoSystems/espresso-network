@@ -31,6 +31,7 @@ use espresso_types::{
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
+use hotshot_metrics::Metrics;
 use hotshot_query_service::{
     availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
     types::HeightIndexed,
@@ -44,7 +45,6 @@ use hotshot_types::{
     traits::{
         ValidatedState as _,
         election::{Membership, MembershipSnapshot},
-        metrics::Metrics,
         storage::Storage,
     },
     utils::{

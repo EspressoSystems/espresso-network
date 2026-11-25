@@ -6,6 +6,7 @@ use hotshot_example_types::{
     state_types::TestInstanceState,
     storage_types::TestStorage,
 };
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
     addr::NetAddr,
     consensus::ConsensusMetricsValue,
@@ -15,7 +16,7 @@ use hotshot_types::{
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey, storage::Storage as _},
+    traits::{signature_key::SignatureKey, storage::Storage as _},
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
