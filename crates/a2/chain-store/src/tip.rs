@@ -7,12 +7,14 @@
 //! what it holds as an immutable [`Tip`] on a `watch`, so readers take no lock.
 //!
 //! A tip holds no payloads, only what describes them ([`Parts::payload_info`]), so it stays small
-//! whatever the size of the blocks. Over a backend that keeps a tip itself, such as the store
-//! service, the follower takes the backend's updates instead of reading the store: the store
-//! service reads each height once for all of its readers.
+//! whatever the size of the blocks. A reader in another process follows a tip kept where the store
+//! is: [`updates_of`] sends what a tip holds and what changes in it, and a follower made with
+//! [`follower_of`] takes those updates instead of reading the store, so the store is read once per
+//! height for all of its readers.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use tokio::{sync::watch, time::sleep};
 
@@ -73,33 +75,69 @@ pub fn complete(parts: &Parts) -> bool {
     parts.payload_info.is_some() && parts.vid_common.is_some()
 }
 
-/// The follower of `store`, and the tips it publishes.
+/// The updates of a tip, as [`updates_of`] sends them.
+pub type Updates = BoxStream<'static, anyhow::Result<TipUpdate>>;
+
+/// Where a follower takes the updates of a tip kept elsewhere.
+#[async_trait]
+pub trait UpdateSource: Send + Sync + 'static {
+    /// The updates of the tip from `from` on, as [`updates_of`] sends them.
+    async fn updates(&self, from: u64) -> anyhow::Result<Updates>;
+}
+
+/// The follower of `store`, which reads it, and the tips it publishes.
 pub fn follower(store: ChainStore) -> (Follower, watch::Receiver<Arc<Tip>>) {
+    follower_from(Source::Store(store))
+}
+
+/// The follower of the tip whose updates `source` sends, and the tips it publishes.
+pub fn follower_of(source: Arc<dyn UpdateSource>) -> (Follower, watch::Receiver<Arc<Tip>>) {
+    follower_from(Source::Updates(source))
+}
+
+fn follower_from(source: Source) -> (Follower, watch::Receiver<Arc<Tip>>) {
     let (tip, tips) = watch::channel(Arc::new(Tip::default()));
-    (Follower { store, tip }, tips)
+    (Follower { source, tip }, tips)
 }
 
 /// Keeps the newest heights of a store, and publishes them whenever they change.
-#[derive(Debug)]
 pub struct Follower {
-    store: ChainStore,
+    source: Source,
     tip: watch::Sender<Arc<Tip>>,
 }
 
+/// What a follower learns the newest heights from.
+enum Source {
+    /// The store itself.
+    Store(ChainStore),
+
+    /// The updates of a tip kept elsewhere.
+    Updates(Arc<dyn UpdateSource>),
+}
+
+impl fmt::Debug for Follower {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Follower").finish_non_exhaustive()
+    }
+}
+
 impl Follower {
-    /// Follows the store until its changes end: by the backend's updates if it sends them, else
-    /// by reading the store whenever the chain in it changes.
+    /// Follows the store until its changes end, reading it whenever the chain in it changes; or
+    /// follows the updates of a tip kept elsewhere for as long as it runs, asking for them again
+    /// whenever they end.
     pub async fn run(self) {
+        let source = match &self.source {
+            Source::Store(store) => return self.read_on_changes(store).await,
+            Source::Updates(source) => source.clone(),
+        };
         loop {
             let from = self.tip.borrow().start().unwrap_or(0);
-            match self.store.tip_updates(from).await {
-                Ok(Some(updates)) => {
-                    if let Err(err) = self.take(updates).await {
-                        tracing::warn!("following the store's tip failed: {err:#}");
-                    }
+            match source.updates(from).await {
+                Ok(updates) => match self.take(updates).await {
+                    Ok(()) => tracing::warn!("the tip's updates ended; asking for them again"),
+                    Err(err) => tracing::warn!("following the tip failed: {err:#}"),
                 },
-                Ok(None) => return self.read_on_changes().await,
-                Err(err) => tracing::warn!("asking for the store's tip failed: {err:#}"),
+                Err(err) => tracing::warn!("asking for the tip's updates failed: {err:#}"),
             }
             sleep(RETRY_DELAY).await;
         }
@@ -147,13 +185,13 @@ impl Follower {
         Ok(())
     }
 
-    /// Reads the newest heights whenever the chain in the store changes.
-    async fn read_on_changes(self) {
-        let mut changes = self.store.changes();
+    /// Reads the newest heights of `store` whenever the chain in it changes.
+    async fn read_on_changes(&self, store: &ChainStore) {
+        let mut changes = store.changes();
         loop {
             // Marked seen before reading, so a write after the read is not missed.
             changes.borrow_and_update();
-            if let Err(err) = self.read().await {
+            if let Err(err) = self.read(store).await {
                 tracing::warn!("reading the tip of the store failed: {err:#}");
                 sleep(RETRY_DELAY).await;
                 continue;
@@ -168,14 +206,11 @@ impl Follower {
     /// waits for is taken as it is; the others, new or not yet complete, are read again. The
     /// height after the newest kept is read together with the newest and the floor, since it is
     /// almost always the one the change brought.
-    async fn read(&self) -> anyhow::Result<()> {
+    async fn read(&self, store: &ChainStore) -> anyhow::Result<()> {
         let current = self.tip.borrow().clone();
         let next = current.newest.map_or(0, |newest| newest + 1);
-        let (newest, floor, next_record) = tokio::try_join!(
-            self.store.newest(),
-            self.store.floor(),
-            self.store.summary(next),
-        )?;
+        let (newest, floor, next_record) =
+            tokio::try_join!(store.newest(), store.floor(), store.summary(next),)?;
         let mut tip = Tip {
             read: true,
             newest,
@@ -193,7 +228,7 @@ impl Follower {
                 }
                 let record = match height == next {
                     true => next_record.take().flatten(),
-                    false => self.store.summary(height).await?,
+                    false => store.summary(height).await?,
                 };
                 if let Some(record) = record {
                     tip.heights.insert(height, Arc::new(Entry::of(record)?));
@@ -203,6 +238,27 @@ impl Follower {
         self.tip.send_replace(Arc::new(tip));
         Ok(())
     }
+}
+
+/// What the tips of `tips` hold from `from` on, then what changes in them, as updates, until the
+/// follower that publishes them stops.
+pub fn updates_of(tips: watch::Receiver<Arc<Tip>>, from: u64) -> Updates {
+    let updates = futures::stream::unfold(
+        (tips, BTreeMap::new(), true),
+        move |(mut tips, mut sent, first)| async move {
+            if !first && tips.changed().await.is_err() {
+                return None;
+            }
+            let tip = tips.borrow_and_update().clone();
+            let updates = match tip.read {
+                true => updates(&tip, from, &mut sent),
+                false => Vec::new(),
+            };
+            let updates = futures::stream::iter(updates.into_iter().map(Ok));
+            Some((updates, (tips, sent, false)))
+        },
+    );
+    updates.flatten().boxed()
 }
 
 /// The updates that bring a reader that holds `sent` up to `tip`: each height from `from` on that
@@ -269,8 +325,13 @@ mod tests {
 
     #[async_trait]
     impl Backend for Counting {
-        async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
-            self.inner.put(row, parts).await
+        async fn put_with(
+            &self,
+            row: Row,
+            parts: Vec<(Part, Bytes)>,
+            writes: Vec<AppWrite>,
+        ) -> anyhow::Result<()> {
+            self.inner.put_with(row, parts, writes).await
         }
 
         async fn put_parts(&self, height: u64, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
@@ -449,25 +510,25 @@ mod tests {
         assert_eq!(reads(&counts, 0), height_0 + 1, "read once more, complete");
     }
 
-    /// Over the store service, a follower takes the service's updates: new heights, and heights
-    /// that get their parts later, without their payloads.
+    /// The tip's updates as a follower of the store sends them.
+    struct Local(watch::Receiver<Arc<Tip>>);
+
+    #[async_trait]
+    impl UpdateSource for Local {
+        async fn updates(&self, from: u64) -> anyhow::Result<Updates> {
+            Ok(updates_of(self.0.clone(), from))
+        }
+    }
+
+    /// A follower of another's updates takes new heights, and heights that get their parts later,
+    /// without their payloads.
     #[tokio::test]
-    async fn follows_the_store_service() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let backend: Arc<dyn Backend> = Arc::new(MemBackend::default());
-        let (service, service_follower) = crate::service::server(backend.clone());
+    async fn follows_the_updates_of_another_tip() {
+        let writer = ChainStore::new(MemBackend::default());
+        let (store_follower, store_tips) = follower(writer.clone());
+        let (follower, mut tips) = follower_of(Arc::new(Local(store_tips)));
         let mut tasks = JoinSet::new();
-        tasks.spawn(service_follower);
-        tasks.spawn(async move {
-            let _ = tonic::transport::Server::builder()
-                .add_service(service)
-                .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener))
-                .await;
-        });
-        let writer = ChainStore::shared(backend);
-        let remote = ChainStore::new(crate::remote::RemoteBackend::connect(&url).await.unwrap());
-        let (follower, mut tips) = follower(remote);
+        tasks.spawn(store_follower.run());
         tasks.spawn(follower.run());
 
         let (item, _) = block(0, false).await;

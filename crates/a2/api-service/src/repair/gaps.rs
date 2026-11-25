@@ -19,6 +19,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
+    sync::Arc,
     time::Duration,
 };
 
@@ -27,7 +28,7 @@ use chain_api::{
     proto::{GetRecordsRequest, chain_service_client::ChainServiceClient},
     records::{RECORD_RANGE_LIMIT, from_proto},
 };
-use chain_store::{ChainStore, Item, Part, Parts, Record};
+use chain_store::{Item, Part, Parts, Record};
 use committable::Committable;
 use consensus_api::FINALITY_VIEWS;
 use espresso_types::{Header, Payload};
@@ -39,6 +40,7 @@ use hotshot_types::{
     },
 };
 use light_client::consensus::payload::PayloadProof;
+use store_api::Store;
 use tokio::{
     task::spawn_blocking,
     time::{Instant, sleep, sleep_until, timeout},
@@ -79,7 +81,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(600);
 const WORK_LEASE: Duration = Duration::from_secs(300);
 
 pub struct GapFiller {
-    pub(crate) store: ChainStore,
+    pub(crate) store: Arc<dyn Store>,
     pub(crate) peers: Peers,
 
     /// The stake tables to check certificates against; without them certificates are not
@@ -120,7 +122,7 @@ pub struct GapFiller {
 }
 
 impl GapFiller {
-    pub fn new(store: ChainStore, peers: Peers, membership: Option<Membership>) -> Self {
+    pub fn new(store: Arc<dyn Store>, peers: Peers, membership: Option<Membership>) -> Self {
         Self {
             store,
             peers,
@@ -138,10 +140,10 @@ impl GapFiller {
         }
     }
 
-    /// Fills gaps whenever the store changes, at most once per [`PASS_INTERVAL`]. Returns when
-    /// the store's changes end.
+    /// Fills gaps whenever the store changes, at most once per [`PASS_INTERVAL`], for as long as
+    /// it runs.
     pub async fn run(mut self) {
-        let mut changes = self.store.changes();
+        let mut changes = store_api::changes(self.store.clone());
         loop {
             let started = Instant::now();
             changes.borrow_and_update();
@@ -411,7 +413,7 @@ impl GapFiller {
             // The genesis block has no certificates to check, and belongs to no epoch whose
             // certificates are checked.
             parts.certs_known = record.height == 0;
-            self.store.put(&item, &parts).await?;
+            self.store.put_block(&item, &parts).await?;
             (end, child) = (record.height, item);
         }
         Ok((end, child))
@@ -642,7 +644,7 @@ pub(crate) fn runs(heights: &BTreeSet<u64>) -> Vec<Range<u64>> {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use chain_store::mem::MemBackend;
+    use chain_store::{ChainStore, mem::MemBackend};
     use espresso_types::{BlockMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState};
     use hotshot_query_service_types::availability::VidCommonQueryData;
     use hotshot_types::{
@@ -650,6 +652,7 @@ mod tests {
         simple_certificate::QuorumCertificate2,
     };
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleTreeScheme};
+    use store_api::LocalStore;
     use tokio::net::TcpListener;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -706,7 +709,7 @@ mod tests {
     async fn serve(store: ChainStore) -> Url {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap(), 10);
+        let service = ApiService::new(LocalStore::spawn(store), "127.0.0.1:1".parse().unwrap(), 10);
         tokio::spawn(service.serve(listener));
         url.parse().unwrap()
     }
@@ -720,8 +723,8 @@ mod tests {
     /// behind the newest final.
     fn filling_with(item1: &Item, peer: Url, finality: u64) -> ChainStore {
         let store = ChainStore::new(MemBackend::default());
-        let peers = Peers::new(chain_api::Tables::new(store.clone()), vec![peer], None);
-        let mut filler = GapFiller::new(store.clone(), peers, None);
+        let peers = Peers::new(LocalStore::spawn(store.clone()), vec![peer], None);
+        let mut filler = GapFiller::new(LocalStore::spawn(store.clone()), peers, None);
         filler.finality = finality;
         let item1 = item1.clone();
         let writer = store.clone();
@@ -746,8 +749,9 @@ mod tests {
         let held = Duration::from_secs(1);
         assert!(store.lease("repair/items/0", "other", held).await.unwrap());
 
-        let peers = Peers::new(chain_api::Tables::new(store.clone()), vec![url], None);
-        let mut filler = GapFiller::new(store.clone(), peers, None).with_leases("this".into());
+        let peers = Peers::new(LocalStore::spawn(store.clone()), vec![url], None);
+        let mut filler = GapFiller::new(LocalStore::spawn(store.clone()), peers, None)
+            .with_leases("this".into());
         filler.finality = 0;
         tokio::spawn(filler.run());
         sleep(held / 2).await;
@@ -829,8 +833,8 @@ mod tests {
         let (_, item1) = chain().await;
         let store = ChainStore::new(MemBackend::default());
         store.put(&item1, &Parts::default()).await.unwrap();
-        let peers = Peers::new(chain_api::Tables::new(store.clone()), Vec::new(), None);
-        let mut filler = GapFiller::new(store, peers, None);
+        let peers = Peers::new(LocalStore::spawn(store.clone()), Vec::new(), None);
+        let mut filler = GapFiller::new(LocalStore::spawn(store), peers, None);
         filler.finality = 2;
 
         filler.fill_gaps().await.unwrap();

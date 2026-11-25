@@ -1,16 +1,18 @@
 //! The catchup service: leaves from the store, and the state of the newest heights as the store
 //! keeps it, for consensus nodes that are behind. They check every answer themselves.
 
+use std::sync::Arc;
+
 use catchup_api::proto::{
     AccountsRequest, ChainConfigRequest, Encoded, EpochRequest, HasPayloadResponse, HeightRequest,
     LeafChainResponse, PayloadRequest, catchup_service_server::CatchupService,
 };
-use chain_api::{StateRow, Tables};
-use chain_store::ChainStore;
+use chain_api::StateRow;
 use espresso_api::error::to_status;
 use espresso_types::{FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeMerkleTree};
 use hotshot_types::{data::EpochNumber, utils::root_block_in_epoch};
 use serde::Serialize;
+use store_api::{PayloadAt, Store};
 use tokio::sync::OnceCell;
 use tonic::{Request, Response, Status};
 
@@ -19,9 +21,11 @@ const MAX_CHAIN: u64 = 64;
 
 /// What the catchup service answers from.
 pub struct Catchup {
-    store: ChainStore,
-    tables: Tables,
+    store: Arc<dyn Store>,
     epoch_height: u64,
+
+    /// For payloads the store answers with where they are.
+    http: reqwest::Client,
 
     /// The fee tree, which does not change under the new protocol, built on first use from the
     /// accounts the store holds.
@@ -29,11 +33,11 @@ pub struct Catchup {
 }
 
 impl Catchup {
-    pub fn new(store: ChainStore, epoch_height: u64) -> Self {
+    pub fn new(store: Arc<dyn Store>, epoch_height: u64) -> Self {
         Self {
-            tables: Tables::new(store.clone()),
             store,
             epoch_height,
+            http: crate::payload::client(),
             fees: OnceCell::new(),
         }
     }
@@ -41,7 +45,7 @@ impl Catchup {
     /// What the state after `height` holds besides its header's roots, which the store keeps
     /// for the newest heights only.
     async fn state(&self, height: u64) -> Result<StateRow, Status> {
-        self.tables
+        self.store
             .state(height)
             .await
             .map_err(to_status)?
@@ -52,7 +56,7 @@ impl Catchup {
         self.fees
             .get_or_try_init(|| async {
                 let accounts = self
-                    .tables
+                    .store
                     .fee_accounts()
                     .await
                     .map_err(to_status)?
@@ -144,7 +148,7 @@ impl CatchupService for Catchup {
         let height = request.into_inner().height;
         let at = self.state(height).await?.rewards_at;
         let balances = self
-            .tables
+            .store
             .rewards(at)
             .await
             .map_err(to_status)?
@@ -159,7 +163,7 @@ impl CatchupService for Catchup {
     ) -> Result<Response<Encoded>, Status> {
         let commitment = request.into_inner().commitment;
         match self
-            .tables
+            .store
             .chain_config(&commitment)
             .await
             .map_err(to_status)?
@@ -189,9 +193,8 @@ impl CatchupService for Catchup {
         request: Request<PayloadRequest>,
     ) -> Result<Response<Encoded>, Status> {
         let commitment = request.into_inner().commitment;
-        match self
-            .store
-            .payload_by_commitment(&commitment)
+        let at = PayloadAt::Commitment(commitment.clone());
+        match crate::payload::read(&*self.store, &self.http, &at, None)
             .await
             .map_err(to_status)?
         {
@@ -205,24 +208,23 @@ impl CatchupService for Catchup {
         request: Request<PayloadRequest>,
     ) -> Result<Response<HasPayloadResponse>, Status> {
         let commitment = request.into_inner().commitment;
-        let has = self
+        let status = self
             .store
-            .has_payload(&commitment)
+            .payload_status(&commitment)
             .await
             .map_err(to_status)?;
-        let held = has
-            || self
-                .store
-                .holds_payload(&commitment)
-                .await
-                .map_err(to_status)?;
-        Ok(Response::new(HasPayloadResponse { has, held }))
+        Ok(Response::new(HasPayloadResponse {
+            has: status.has,
+            held: status.held,
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chain_store::mem::MemBackend;
+    use chain_api::Tables;
+    use chain_store::{ChainStore, mem::MemBackend};
+    use store_api::LocalStore;
 
     use super::*;
 
@@ -230,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn a_leaf_chain_at_the_last_height_is_not_found() {
         let store = ChainStore::new(MemBackend::default());
-        let catchup = Catchup::new(store, 10);
+        let catchup = Catchup::new(LocalStore::spawn(store), 10);
 
         let status = catchup
             .get_leaf_chain(Request::new(HeightRequest { height: u64::MAX }))
@@ -253,7 +255,7 @@ mod tests {
             .put_payload("C~1", bytes::Bytes::from_static(b"payload"), None)
             .await
             .unwrap();
-        let catchup = Catchup::new(store, 10);
+        let catchup = Catchup::new(LocalStore::spawn(store), 10);
         let request = |commitment: &str| {
             Request::new(PayloadRequest {
                 commitment: commitment.into(),
@@ -290,7 +292,7 @@ mod tests {
         );
         assert!(tables.put_state(5, None, config, None).await.unwrap());
         tables.put_fee_accounts(&[]).await.unwrap();
-        let catchup = Catchup::new(store, 10);
+        let catchup = Catchup::new(LocalStore::spawn(store), 10);
         let height = |height| Request::new(HeightRequest { height });
 
         let balances = catchup.get_reward_balances_v2(height(5)).await.unwrap();

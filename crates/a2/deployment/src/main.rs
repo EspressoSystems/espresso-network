@@ -4,13 +4,14 @@
 //! The parts talk as they do across processes, except where a payload passes: the storage instance
 //! takes each payload from consensus's payload queue, sharing the buffer consensus holds, writes it
 //! to its staging directory once, and keeps it in memory, where the API instance reads it from. The
-//! decide log too is called directly rather than over the consensus API. Submissions still reach
+//! decide log too is called directly rather than over the consensus API, and the API instance
+//! reaches the store through a `LocalStore` rather than the store service. Submissions still reach
 //! consensus through its API, which also serves storage instances in other processes.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, anyhow, ensure};
-use api_service::{ApiService, catchup::Catchup, compat::Compat, repair::Repair};
+use api_service::{ApiService, Store, catchup::Catchup, compat::Compat, repair::Repair};
 use chain_store::{Backend, ChainStore, payloads::PayloadStore, postgres::PostgresBackend};
 use clap::Parser;
 use consensus::storage::DEFAULT_DECIDE_LOG_LIMIT;
@@ -19,6 +20,7 @@ use espresso_genesis::{Genesis, GenesisSource};
 use espresso_keyset::{KeySet, KeySetOptions};
 use espresso_types::SeqTypes;
 use hotshot_types::{addr::NetAddr, traits::metrics::NoMetrics};
+use store_api::LocalStore;
 use store_service::{MIN_KEEP_HEIGHTS, ingest};
 use tokio::{net::TcpListener, runtime::Handle, task::JoinSet};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
@@ -273,6 +275,11 @@ async fn serve_api(
         Err(err) => return err.context("reading the genesis file's network config"),
     };
     let epoch_height = config.config.epoch_height;
+    // Repair's payloads are uploaded at once; see `LocalStore::writing_through`.
+    let writer = store.unstaged();
+    let (local, follower) = LocalStore::new(store);
+    let local = local.writing_through(writer);
+    let store: Arc<dyn Store> = Arc::new(local);
     let api = ApiService::new(store.clone(), consensus_api, epoch_height)
         .with_compat(Compat::new(store.clone(), config))
         .with_catchup(Catchup::new(store.clone(), epoch_height));
@@ -282,6 +289,7 @@ async fn serve_api(
             Err(err) => err.context("serving the API"),
         },
         repaired = repair.run(store, &genesis) => repaired,
+        () = follower.run() => anyhow!("following the store's tip stopped"),
     }
 }
 

@@ -1,26 +1,24 @@
 //! An API instance: serves the v2 API, over HTTP and gRPC on one port, from the chain store.
 //!
-//! It holds no state but the newest heights. It reads only the store, which the storage instances
-//! of its deployment fill from consensus: with the blocks, and with the stake tables, discovery
-//! records and recent state consensus derives (`chain_api::Tables`). Consensus is reached only to
-//! submit transactions. An instance asked to [`repair`] also fills what the store lacks from other
-//! API services. A read of a height the store lacks waits a moment for
-//! it, and a stream waits at a missing height until the store has it, so a client following the
-//! chain sees every height in order.
+//! It holds no state but the newest heights. It reaches the store only through a [`Store`], which
+//! the storage instances of its deployment serve: the blocks, and the stake tables, discovery
+//! records and recent state kept besides them, which the storage instances fill from consensus.
+//! Consensus is reached only to submit transactions. An instance asked to [`repair`] also fills
+//! what the store lacks from other API services. A read of a height the store lacks waits a moment
+//! for it, and a stream waits at a missing height until the store has it, so a client following
+//! the chain sees every height in order.
 //!
 //! Besides the v2 services of `espresso-api`, it serves services of its own over gRPC only: the
 //! chain service, which other API services repair their stores from, and the discovery service.
 
 use std::{net::SocketAddr, sync::Arc};
 
+use async_trait::async_trait;
 use catchup_api::proto::catchup_service_server::CatchupServiceServer;
-use chain_api::{
-    Tables,
-    proto::{
-        chain_service_server::ChainServiceServer, discovery_service_server::DiscoveryServiceServer,
-    },
+use chain_api::proto::{
+    chain_service_server::ChainServiceServer, discovery_service_server::DiscoveryServiceServer,
 };
-use chain_store::ChainStore;
+use chain_store::tip::{self, UpdateSource, Updates};
 use espresso_api::{
     proto::{
         availability_service_server::AvailabilityServiceServer,
@@ -29,7 +27,9 @@ use espresso_api::{
     },
     rest,
 };
-use membership::MembershipStore;
+use membership::Persistence;
+pub use store_api::Store;
+use store_api::StoreMembership;
 use tokio::net::TcpListener;
 use tonic::transport::Channel;
 
@@ -39,6 +39,7 @@ mod chain;
 pub mod compat;
 mod discovery;
 mod node;
+mod payload;
 mod payload_route;
 mod reader;
 pub mod repair;
@@ -54,13 +55,13 @@ pub struct ApiService {
     reader: Reader,
 
     /// The follower of the store's tip, which `serve` runs.
-    follower: Option<chain_store::tip::Follower>,
-
-    /// What the store holds besides blocks.
-    tables: Tables,
+    follower: Option<tip::Follower>,
 
     /// The validators and rewards of recent epochs, which repair keeps in the store.
-    membership: MembershipStore<ChainStore>,
+    membership: Persistence<StoreMembership>,
+
+    /// For payloads the store answers with where they are.
+    http: reqwest::Client,
 
     /// How many blocks an epoch has, from the chain's genesis file.
     epoch_height: u64,
@@ -76,13 +77,13 @@ pub struct ApiService {
 }
 
 impl ApiService {
-    /// The API over `store`, for a chain whose epochs have `epoch_height` blocks, submitting
-    /// transactions to the consensus API at `consensus_api`.
-    pub fn new(store: ChainStore, consensus_api: SocketAddr, epoch_height: u64) -> Self {
-        let (follower, tip) = chain_store::tip::follower(store.clone());
+    /// The API over the store `store` reads, for a chain whose epochs have `epoch_height`
+    /// blocks, submitting transactions to the consensus API at `consensus_api`.
+    pub fn new(store: Arc<dyn Store>, consensus_api: SocketAddr, epoch_height: u64) -> Self {
+        let (follower, tip) = tip::follower_of(Arc::new(TipOf(store.clone())));
         Self {
-            tables: Tables::new(store.clone()),
-            membership: MembershipStore::new(store.clone()),
+            membership: Persistence(StoreMembership(store.clone())),
+            http: payload::client(),
             epoch_height,
             reader: Reader::new(store, tip),
             follower: Some(follower),
@@ -139,17 +140,29 @@ impl ApiService {
     }
 }
 
+/// The updates of the tip a reader follows.
+struct TipOf(Arc<dyn Store>);
+
+#[async_trait]
+impl UpdateSource for TipOf {
+    async fn updates(&self, from: u64) -> anyhow::Result<Updates> {
+        self.0.tip_updates(from).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use chain_store::{Item, Parts, mem::MemBackend};
+    use chain_api::Tables;
+    use chain_store::{ChainStore, Item, Parts, mem::MemBackend};
     use committable::Committable;
     use espresso_types::{Leaf2, NodeState, Payload, ValidatedState};
     use hotshot_types::{
         simple_certificate::QuorumCertificate2,
         traits::{BlockPayload, EncodeBytes},
     };
+    use membership::MembershipStore;
     use serde_json::Value;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -180,7 +193,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         // Nothing here reaches consensus.
-        let service = ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap(), 10);
+        let reader = store_api::LocalStore::spawn(store.clone());
+        let service = ApiService::new(reader, "127.0.0.1:1".parse().unwrap(), 10);
         tokio::spawn(service.serve(listener));
         (store, url)
     }
@@ -302,9 +316,9 @@ mod tests {
         assert_eq!(block["size"], Value::from(bytes.len().to_string()));
     }
 
-    /// With payloads in an object store that clients reach, the payload route redirects to the
-    /// payload's object, whose URL follows from its commitment; without a URL for clients, the
-    /// API instance serves the payload from the object store itself.
+    /// With payloads in an object store that clients reach, the payload route redirects to a
+    /// large payload's object, whose URL follows from its commitment, and serves a small one
+    /// itself; without a URL for clients, the API instance serves every payload itself.
     #[tokio::test]
     async fn the_payload_route_redirects_to_the_object_store() {
         use chain_store::payloads::PayloadStore;
@@ -314,7 +328,7 @@ mod tests {
         let (store, url) =
             serve_store(ChainStore::new(MemBackend::default()).with_payloads(reachable)).await;
         let (item, _) = genesis().await;
-        let payload = vec![9u8; 100];
+        let payload = vec![9u8; store_api::INLINE_LIMIT as usize + 1];
         store
             .put(
                 &item,
@@ -578,7 +592,7 @@ mod tests {
                 .into_iter()
                 .collect();
         let registered: RegisteredValidatorMap = [(account, validator)].into_iter().collect();
-        let membership = MembershipStore::new(store.clone());
+        let membership = Persistence(MembershipStore::new(store.clone()));
         membership
             .store_stake(epoch, eligible, Some(RewardAmount(U256::from(5))), None)
             .await

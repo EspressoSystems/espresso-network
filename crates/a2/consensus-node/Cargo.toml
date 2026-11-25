@@ -43,6 +43,7 @@ versions              = { workspace = true }
 
 [dev-dependencies]
 api-service    = { path = "../api-service" }
+store-api      = { workspace = true }
 axum           = { workspace = true }
 chain-store    = { workspace = true }
 espresso-types = { workspace = true, features = ["testing"] }

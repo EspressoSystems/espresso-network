@@ -25,6 +25,7 @@
 
 use std::{
     collections::{BTreeSet, HashMap},
+    sync::Arc,
     time::Duration,
 };
 
@@ -32,8 +33,7 @@ use anyhow::{Context, bail, ensure};
 use catchup_api::proto::{
     ChainConfigRequest, HeightRequest, catchup_service_client::CatchupServiceClient,
 };
-use chain_api::{BlocksFrontier, RewardSet, StateRow, Tables};
-use chain_store::ChainStore;
+use chain_api::{BlocksFrontier, RewardSet, StateRow};
 use committable::{Commitment, Committable};
 use either::Either;
 use espresso_types::{
@@ -51,6 +51,7 @@ use hotshot_types::{
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use membership::null_catchup::NullStateCatchup;
 use serde::de::DeserializeOwned;
+use store_api::Store;
 use tokio::time::sleep;
 
 use crate::repair::{
@@ -67,8 +68,7 @@ const MAX_ANSWER_SIZE: usize = 256 << 20;
 
 /// Applies the blocks of the store in height order, and stores what the newest states hold.
 pub struct ChainFollower {
-    store: ChainStore,
-    tables: Tables,
+    store: Arc<dyn Store>,
     node: NodeState,
 
     /// The API services to take the state from when the follower has no row of its own.
@@ -79,9 +79,8 @@ pub struct ChainFollower {
 }
 
 impl ChainFollower {
-    pub fn new(store: ChainStore, node: NodeState, peers: Peers) -> Self {
+    pub fn new(store: Arc<dyn Store>, node: NodeState, peers: Peers) -> Self {
         Self {
-            tables: Tables::new(store.clone()),
             store,
             node,
             peers,
@@ -90,11 +89,11 @@ impl ChainFollower {
     }
 
     /// Follows the store, once it holds a height, from the newest stored row, else from a peer's
-    /// state, else from genesis. Returns when the store's changes end, or fails if the store no
-    /// longer holds the heights to start from.
+    /// state, else from genesis, for as long as it runs; fails if the store no longer holds the
+    /// heights to start from.
     pub async fn run(mut self) -> anyhow::Result<()> {
         self.store_genesis().await?;
-        let mut changes = self.store.changes();
+        let mut changes = store_api::changes(self.store.clone());
         // Where to start depends on what the store holds: an empty store gives no height to take
         // the state of from a peer, and would leave only genesis.
         while self.store.newest().await?.is_none() {
@@ -153,7 +152,7 @@ impl ChainFollower {
         height: u64,
         leaf: Leaf2,
     ) -> anyhow::Result<Parent> {
-        if self.tables.state(height).await?.is_some() || self.store_sent_state(&leaf).await? {
+        if self.store.state(height).await?.is_some() || self.store_sent_state(&leaf).await? {
             track_epoch(&self.node, &leaf)
                 .await
                 .context("membership did not take the block")?;
@@ -185,50 +184,49 @@ impl ChainFollower {
     /// Returns whether it stored it; changes that do not check out leave the block to be applied.
     async fn store_sent_state(&mut self, leaf: &Leaf2) -> anyhow::Result<bool> {
         let height = leaf.height();
-        let Some(sent) = self.tables.sent_state(height).await? else {
+        let Some(sent) = self.store.sent_state(height).await? else {
             return Ok(false);
         };
         let Some(parent) = height.checked_sub(1) else {
             return Ok(false);
         };
-        let Some(row) = self.tables.state(parent).await? else {
+        let Some(row) = self.store.state(parent).await? else {
             return Ok(false);
         };
         let root = leaf.block_header().reward_merkle_tree_root().right();
-        let rewards = if sent.reward_changes.is_empty() {
-            // The balances are the parent's, so the root must be too.
-            let parent_root = self
-                .store
-                .item(parent)
-                .await?
-                .and_then(|item| item.leaf.block_header().reward_merkle_tree_root().right());
-            if parent_root != root {
-                tracing::warn!(height, "no reward changes, but the reward root changed");
-                return Ok(false);
-            }
-            None
-        } else {
-            let parent_balances = self
-                .tables
-                .rewards(row.rewards_at)
-                .await?
-                .with_context(|| format!("no reward balances at height {}", row.rewards_at))?;
-            let mut balances: HashMap<_, _> = parent_balances.into_iter().collect();
-            balances.extend(sent.reward_changes);
-            let balances: RewardSet = balances.into_iter().collect();
-            let tree = RewardMerkleTreeV2::from_kv_set(
-                REWARD_MERKLE_TREE_V2_HEIGHT,
-                balances.iter().copied(),
-            )
-            .context("rebuilding the reward tree")?;
-            if Some(tree.commitment()) != root {
-                tracing::warn!(height, "the reward changes do not make up the reward root");
-                return Ok(false);
-            }
-            Some(balances)
-        };
-        self.tables
-            .put_state(height, sent.frontier, sent.chain_config, rewards.as_ref())
+        let rewards =
+            if sent.reward_changes.is_empty() {
+                // The balances are the parent's, so the root must be too.
+                let parent_root =
+                    self.store.item(parent).await?.and_then(|item| {
+                        item.leaf.block_header().reward_merkle_tree_root().right()
+                    });
+                if parent_root != root {
+                    tracing::warn!(height, "no reward changes, but the reward root changed");
+                    return Ok(false);
+                }
+                None
+            } else {
+                let parent_balances =
+                    self.store.rewards(row.rewards_at).await?.with_context(|| {
+                        format!("no reward balances at height {}", row.rewards_at)
+                    })?;
+                let mut balances: HashMap<_, _> = parent_balances.into_iter().collect();
+                balances.extend(sent.reward_changes);
+                let balances: RewardSet = balances.into_iter().collect();
+                let tree = RewardMerkleTreeV2::from_kv_set(
+                    REWARD_MERKLE_TREE_V2_HEIGHT,
+                    balances.iter().copied(),
+                )
+                .context("rebuilding the reward tree")?;
+                if Some(tree.commitment()) != root {
+                    tracing::warn!(height, "the reward changes do not make up the reward root");
+                    return Ok(false);
+                }
+                Some(balances)
+            };
+        self.store
+            .put_state(height, sent.frontier, sent.chain_config, rewards)
             .await
     }
 
@@ -236,11 +234,11 @@ impl ChainFollower {
     async fn stored_state(&self, leaf: &Leaf2) -> anyhow::Result<ValidatedState> {
         let height = leaf.height();
         let row = self
-            .tables
+            .store
             .state(height)
             .await?
             .with_context(|| format!("no state stored for height {height}"))?;
-        let balances = self.tables.rewards(row.rewards_at).await?;
+        let balances = self.store.rewards(row.rewards_at).await?;
         self.rebuild(leaf, &row, balances)
     }
 
@@ -256,7 +254,7 @@ impl ChainFollower {
             accounts.len() as u64 == fees.num_leaves(),
             "the genesis fee tree is missing accounts"
         );
-        self.tables.put_fee_accounts(&accounts).await?;
+        self.store.put_fee_accounts(&accounts).await?;
         let upgrades = self
             .node
             .upgrades
@@ -275,7 +273,7 @@ impl ChainFollower {
     async fn store_chain_config(&mut self, config: &ChainConfig) -> anyhow::Result<()> {
         let commitment = config.commit();
         if !self.configs.contains(&commitment) {
-            self.tables.put_chain_config(config).await?;
+            self.store.put_chain_config(config).await?;
             self.configs.insert(commitment);
         }
         Ok(())
@@ -285,10 +283,10 @@ impl ChainFollower {
     /// start at genesis. A failed read is an error, to be tried again; a row that does not check
     /// out is ignored.
     async fn start(&mut self) -> anyhow::Result<Option<(Leaf2, ValidatedState)>> {
-        let rows = self.tables.states().await?;
+        let rows = self.store.states().await?;
         if let Some((height, row)) = rows.last().cloned() {
             let item = self.store.item(height).await?;
-            let balances = self.tables.rewards(row.rewards_at).await?;
+            let balances = self.store.rewards(row.rewards_at).await?;
             let resumed = item
                 .with_context(|| format!("height {height} is not stored"))
                 .and_then(|item| {
@@ -383,7 +381,7 @@ impl ChainFollower {
             Either::Left(_) => None,
         };
         let commitment = header.chain_config().commit().to_string();
-        let chain_config = match self.tables.chain_config(&commitment).await? {
+        let chain_config = match self.store.chain_config(&commitment).await? {
             Some(config) => config,
             None => decoded(
                 client
@@ -550,8 +548,8 @@ impl ChainFollower {
             },
         };
         let stored = self
-            .tables
-            .put_state(height, frontier, chain_config, rewards.as_ref())
+            .store
+            .put_state(height, frontier, chain_config, rewards)
             .await?;
         ensure!(stored, "the state of height {} is not stored", height - 1);
         Ok(())
@@ -661,8 +659,8 @@ mod tests {
 
     use alloy::primitives::{Address, U256};
     use async_lock::Mutex as AsyncMutex;
-    use chain_api::SentState;
-    use chain_store::{Item, Parts, mem::MemBackend};
+    use chain_api::{SentState, Tables};
+    use chain_store::{ChainStore, Item, Parts, mem::MemBackend};
     use espresso_types::{
         AuthenticatedValidatorMap, EpochCommittees, FeeAccount, Header, L1ClientOptions, Payload,
         SeqTypes,
@@ -680,7 +678,8 @@ mod tests {
         utils::BuilderCommitment,
     };
     use jf_merkle_tree_compat::AppendableMerkleTreeScheme;
-    use membership::MembershipStore;
+    use membership::{MembershipStore, Persistence};
+    use store_api::LocalStore;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
@@ -691,8 +690,8 @@ mod tests {
 
     /// A follower of `store` without peers to take the state from.
     fn follower(store: ChainStore, node: NodeState) -> ChainFollower {
-        let peers = Peers::new(Tables::new(store.clone()), Vec::new(), None);
-        ChainFollower::new(store, node, peers)
+        let peers = Peers::new(LocalStore::spawn(store.clone()), Vec::new(), None);
+        ChainFollower::new(LocalStore::spawn(store), node, peers)
     }
 
     /// A store holding the genesis block, and the state after it.
@@ -827,8 +826,15 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap())
             .parse()
             .unwrap();
-        let service = crate::ApiService::new(store.clone(), "127.0.0.1:1".parse().unwrap(), 10)
-            .with_catchup(crate::catchup::Catchup::new(store.clone(), 10));
+        let service = crate::ApiService::new(
+            LocalStore::spawn(store.clone()),
+            "127.0.0.1:1".parse().unwrap(),
+            10,
+        )
+        .with_catchup(crate::catchup::Catchup::new(
+            LocalStore::spawn(store.clone()),
+            10,
+        ));
         tokio::spawn(service.serve(listener));
         url
     }
@@ -850,8 +856,8 @@ mod tests {
         let store = ChainStore::new(MemBackend::default());
         let item = peer_store.item(0).await.unwrap().unwrap();
         store.put(&item, &Parts::default()).await.unwrap();
-        let peers = Peers::new(Tables::new(store.clone()), vec![url], None);
-        let mut follower = ChainFollower::new(store.clone(), node, peers);
+        let peers = Peers::new(LocalStore::spawn(store.clone()), vec![url], None);
+        let mut follower = ChainFollower::new(LocalStore::spawn(store.clone()), node, peers);
 
         let (leaf, taken) = follower.start().await.unwrap().expect("the peer's state");
         assert_eq!(leaf.height(), 0);
@@ -881,8 +887,8 @@ mod tests {
         let url = serve_catchup(&peer_store).await;
         // A different block at the same height, whose block tree is not empty.
         let (store, _) = after_a_block(&node).await;
-        let peers = Peers::new(Tables::new(store.clone()), vec![url], None);
-        let mut follower = ChainFollower::new(store.clone(), node, peers);
+        let peers = Peers::new(LocalStore::spawn(store.clone()), vec![url], None);
+        let mut follower = ChainFollower::new(LocalStore::spawn(store.clone()), node, peers);
 
         assert!(
             follower.start().await.unwrap().is_none(),
@@ -1088,7 +1094,7 @@ mod tests {
             })
             .collect();
         let block_reward = RewardAmount(U256::from(1_000_000_000u64));
-        let membership_store = MembershipStore::new(store.clone());
+        let membership_store = Persistence(MembershipStore::new(store.clone()));
         for epoch in FIRST_EPOCH + 2..FIRST_EPOCH + 8 {
             let epoch = EpochNumber::new(epoch);
             membership_store
@@ -1102,7 +1108,7 @@ mod tests {
                 .unwrap();
         }
 
-        let catchup = Arc::new(StoreCatchup::new(store.clone()));
+        let catchup = Arc::new(StoreCatchup::new(LocalStore::spawn(store.clone())));
         // Never reached: every stake table is stored.
         let l1 = L1ClientOptions::default()
             .connect(vec!["http://127.0.0.1:1".parse().unwrap()])

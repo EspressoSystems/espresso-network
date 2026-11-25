@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use chain_store::ChainStore;
 use committable::Commitment;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, ChainConfig, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
@@ -19,6 +18,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
 };
 use membership::null_catchup::NullStateCatchup;
+use store_api::Store;
 
 /// Catchup for an API instance that follows the chain in its store: a leaf comes from the store,
 /// everything else is refused.
@@ -31,12 +31,12 @@ use membership::null_catchup::NullStateCatchup;
 /// checks their certificates.
 #[derive(Clone, Debug)]
 pub struct StoreCatchup {
-    store: ChainStore,
+    store: Arc<dyn Store>,
     refused: NullStateCatchup,
 }
 
 impl StoreCatchup {
-    pub fn new(store: ChainStore) -> Self {
+    pub fn new(store: Arc<dyn Store>) -> Self {
         Self {
             store,
             refused: NullStateCatchup::default(),
@@ -159,11 +159,12 @@ impl StateCatchup for StoreCatchup {
 
 #[cfg(test)]
 mod tests {
-    use chain_store::{Item, Parts, mem::MemBackend};
+    use chain_store::{ChainStore, Item, Parts, mem::MemBackend};
     use espresso_types::ValidatedState;
     use hotshot_types::{
         simple_certificate::QuorumCertificate2, traits::states::ValidatedState as _,
     };
+    use store_api::LocalStore;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
@@ -186,7 +187,7 @@ mod tests {
         };
         let store = ChainStore::new(MemBackend::default());
         store.put(&item, &Parts::default()).await.unwrap();
-        let catchup = StoreCatchup::new(store);
+        let catchup = StoreCatchup::new(LocalStore::spawn(store));
 
         let fetched = catchup
             .fetch_leaf(node.coordinator.clone(), 0)

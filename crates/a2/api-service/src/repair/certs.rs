@@ -224,6 +224,7 @@ mod tests {
 
     use chain_store::{ChainStore, mem::MemBackend};
     use hotshot_types::simple_certificate::QuorumCertificate2;
+    use store_api::LocalStore;
     use tokio::net::TcpListener;
     use url::Url;
 
@@ -283,19 +284,15 @@ mod tests {
         }
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap(), 10);
+        let service = ApiService::new(LocalStore::spawn(store), "127.0.0.1:1".parse().unwrap(), 10);
         tokio::spawn(service.serve(listener));
         url.parse().unwrap()
     }
 
     /// A filler over `store`, asking `peer`, that has looked for gaps and found none.
     async fn filler(store: &ChainStore, peer: &Url) -> GapFiller {
-        let peers = Peers::new(
-            chain_api::Tables::new(store.clone()),
-            vec![peer.clone()],
-            None,
-        );
-        let mut filler = GapFiller::new(store.clone(), peers, None);
+        let peers = Peers::new(LocalStore::spawn(store.clone()), vec![peer.clone()], None);
+        let mut filler = GapFiller::new(LocalStore::spawn(store.clone()), peers, None);
         let newest = store.newest().await.unwrap().unwrap();
         (filler.newest, filler.items_from) = (Some(newest), newest + 1);
         filler

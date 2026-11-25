@@ -34,7 +34,7 @@ use hotshot_types::{
     upgrade_config::UpgradeConfig,
     x25519,
 };
-use membership::{MembershipStore, node_state::node_state};
+use membership::{MembershipStore, Persistence, node_state::node_state};
 use tokio::{
     sync::{broadcast, mpsc::unbounded_channel},
     task::JoinSet,
@@ -150,7 +150,7 @@ pub async fn run_with(
         &genesis,
         &network_config,
         l1,
-        membership_store.clone(),
+        Persistence(membership_store.clone()),
         catchup,
         &*metrics,
     )

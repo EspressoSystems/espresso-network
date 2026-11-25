@@ -265,7 +265,10 @@ fn namespace_bytes(data: &str) -> NsBytes {
     let Some(proof) = ["v2", "v1"].iter().find_map(|arm| proof.get(arm)) else {
         return NsBytes::None;
     };
+    // Protobuf JSON leaves out a field that has its default value, so a missing number is 0: a
+    // namespace at the start of its payload has no `start`.
     let number = |value: &Value| match value {
+        Value::Null => Some(0),
         Value::String(s) => s.parse().ok(),
         value => value.as_u64(),
     };

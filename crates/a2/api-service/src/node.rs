@@ -172,7 +172,8 @@ impl NodeService for ApiService {
             },
         };
         let stake_table = self
-            .tables
+            .reader
+            .store()
             .stake_table(epoch)
             .await
             .map_err(to_status)?

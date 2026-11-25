@@ -11,7 +11,6 @@
 use std::{ops::Range, sync::Arc};
 
 use anyhow::{Context, bail, ensure};
-use chain_store::ChainStore;
 use committable::Committable;
 use espresso_genesis::Genesis;
 use espresso_types::{Header, Leaf2, NodeState, SeqTypes};
@@ -28,7 +27,8 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_epoch_root, root_block_in_epoch},
 };
 use light_client::consensus::quorum::{Quorum, StakeTable, StakeTableQuorum};
-use membership::MembershipStore;
+use membership::Persistence;
+use store_api::{Store, StoreMembership};
 use url::Url;
 use versions::Upgrade;
 
@@ -41,14 +41,14 @@ use crate::repair::{state_cert::validate_state_cert, store_catchup::StoreCatchup
 pub async fn node_state(
     genesis: &Genesis,
     l1: Vec<Url>,
-    store: ChainStore,
+    store: Arc<dyn Store>,
 ) -> anyhow::Result<NodeState> {
     let network_config = genesis.unstaked_network_config()?;
     membership::node_state::node_state(
         genesis,
         &network_config,
         l1,
-        MembershipStore::new(store.clone()),
+        Persistence(StoreMembership(store.clone())),
         Arc::new(StoreCatchup::new(store)),
         &NoMetrics,
     )
@@ -185,7 +185,7 @@ pub(crate) mod testing {
     use alloy::primitives::{FixedBytes, U256};
     use async_lock::Mutex as AsyncMutex;
     use bitvec::vec::BitVec;
-    use chain_store::mem::MemBackend;
+    use chain_store::{ChainStore, mem::MemBackend};
     use espresso_types::{
         EpochCommittees, L1ClientOptions, NodeState, PubKey, ValidatedState,
         v0_3::{ChainConfig, Fetcher},
@@ -201,7 +201,7 @@ pub(crate) mod testing {
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
         vote::Certificate,
     };
-    use membership::null_catchup::NullStateCatchup;
+    use membership::{MembershipStore, null_catchup::NullStateCatchup};
     use versions::NEW_PROTOCOL_VERSION;
 
     use super::*;
@@ -236,7 +236,7 @@ pub(crate) mod testing {
         let l1 = L1ClientOptions::default()
             .connect(vec!["http://127.0.0.1:1".parse().unwrap()])
             .unwrap();
-        let store = MembershipStore::new(ChainStore::new(MemBackend::default()));
+        let store = Persistence(MembershipStore::new(ChainStore::new(MemBackend::default())));
         let fetcher = Fetcher::new(
             Arc::new(NullStateCatchup::default()),
             Arc::new(AsyncMutex::new(store.clone())),

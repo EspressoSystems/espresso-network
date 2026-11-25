@@ -20,7 +20,8 @@ impl DiscoveryService for ApiService {
     ) -> Result<Response<proto::PeersResponse>, Status> {
         let epoch = request.into_inner().epoch.map(EpochNumber::new);
         let (epoch, records) = self
-            .tables
+            .reader
+            .store()
             .service_records(epoch)
             .await
             .map_err(to_status)?
@@ -59,7 +60,8 @@ mod tests {
             .put_service_records(EpochNumber::new(3), &[record], EpochNumber::new(1))
             .await
             .unwrap();
-        let service = ApiService::new(store, "127.0.0.1:1".parse().unwrap(), 10);
+        let reader = store_api::LocalStore::spawn(store);
+        let service = ApiService::new(reader, "127.0.0.1:1".parse().unwrap(), 10);
 
         for epoch in [Some(3), None] {
             let peers = service

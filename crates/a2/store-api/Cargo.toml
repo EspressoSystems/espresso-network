@@ -1,0 +1,42 @@
+[package]
+name        = "store-api"
+description = "What an API instance reads from its deployment's store: the reader, in process or as a client of the storage instances"
+version     = { workspace = true }
+authors     = { workspace = true }
+edition     = { workspace = true }
+
+[dependencies]
+anyhow         = { workspace = true }
+async-trait    = { workspace = true }
+bincode        = { workspace = true }
+bytes          = { workspace = true }
+chain-api      = { workspace = true }
+chain-store    = { workspace = true }
+consensus-api  = { workspace = true }
+espresso-types = { workspace = true }
+futures        = { workspace = true }
+hotshot-types  = { workspace = true }
+membership     = { workspace = true }
+prost          = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+tokio          = { workspace = true, features = ["sync", "time", "rt"] }
+tonic          = { workspace = true }
+tonic-prost    = { workspace = true }
+tracing        = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
+[dev-dependencies]
+alloy          = { workspace = true }
+committable    = { workspace = true }
+object_store   = { workspace = true }
+tempfile       = { workspace = true }
+chain-store    = { workspace = true, features = ["testing"] }
+espresso-types = { workspace = true, features = ["testing"] }
+tokio          = { workspace = true, features = ["full"] }
+versions       = { workspace = true }
+
+[lints]
+workspace = true

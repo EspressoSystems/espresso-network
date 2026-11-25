@@ -214,13 +214,18 @@ impl Tables {
     /// Stores the state consensus sent for `height`, for the follower, and forgets those of
     /// heights no longer among the newest [`KEPT_STATES`].
     pub async fn put_sent_state(&self, height: u64, state: &SentState) -> anyhow::Result<()> {
-        let keep_from = (height + 1).saturating_sub(KEPT_STATES);
         self.store
-            .app_write(vec![
-                put(&SENT_STATES, &height.to_be_bytes(), state)?,
-                delete_before(&SENT_STATES, keep_from),
-            ])
+            .app_write(Self::sent_state_writes(height, state)?)
             .await
+    }
+
+    /// The writes of [`Self::put_sent_state`], for a writer that commits them with others.
+    pub fn sent_state_writes(height: u64, state: &SentState) -> anyhow::Result<Vec<AppWrite>> {
+        let keep_from = (height + 1).saturating_sub(KEPT_STATES);
+        Ok(vec![
+            put(&SENT_STATES, &height.to_be_bytes(), state)?,
+            delete_before(&SENT_STATES, keep_from),
+        ])
     }
 
     pub async fn put_chain_config(&self, config: &ChainConfig) -> anyhow::Result<()> {

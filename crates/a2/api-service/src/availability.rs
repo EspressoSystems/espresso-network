@@ -2,11 +2,14 @@
 
 use std::{future::Future, ops::Range};
 
+use committable::Commitment;
 use espresso_api::{
     error::to_status,
     proto::{self, availability_service_server::AvailabilityService},
 };
-use espresso_types::{NamespaceId, SeqTypes, StateCertQueryDataV1, StateCertQueryDataV2};
+use espresso_types::{
+    NamespaceId, SeqTypes, StateCertQueryDataV1, StateCertQueryDataV2, Transaction,
+};
 use futures::stream::{self, BoxStream, StreamExt};
 use hotshot_query_service_types::{
     HeightIndexed,
@@ -75,7 +78,7 @@ impl ApiService {
             (None, None, Some(hash)) => self
                 .reader
                 .store()
-                .transaction_position(&parse(&hash, "hash")?)
+                .transaction_position(&parse::<Commitment<Transaction>>(&hash, "hash")?.to_string())
                 .await
                 .map_err(to_status)?
                 .ok_or_else(|| Status::not_found(format!("no stored block holds {hash}"))),

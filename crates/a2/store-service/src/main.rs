@@ -1,16 +1,15 @@
-//! A storage instance: serves the chain store over gRPC, and takes its share of the decide log of
-//! the deployment's consensus node into the store. Storage instances are the only processes that
-//! write to the store's database; the API service reaches the store through them. Any number of
-//! them can share one database.
+//! A storage instance: serves the chain store to the deployment's API instances, by its domain
+//! entities, and takes its share of the decide log of the deployment's consensus node into the
+//! store. Storage instances are the only processes that reach the store's database and its object
+//! store; the API instances get and put through them. Any number of them can share one database.
 
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, anyhow, ensure};
-use chain_store::{
-    Backend, ChainStore, payloads::PayloadStore, postgres::PostgresBackend, service,
-};
+use chain_store::{Backend, ChainStore, payloads::PayloadStore, postgres::PostgresBackend};
 use clap::Parser;
 use espresso_types::SeqTypes;
+use store_api::{LocalStore, server};
 use store_service::MIN_KEEP_HEIGHTS;
 use tokio::{net::TcpListener, task::JoinSet};
 use tonic::transport::{Server, server::TcpIncoming};
@@ -59,6 +58,24 @@ struct Options {
     /// instance.
     #[arg(long, env = "ESPRESSO_STORE_SERVICE_PAYLOAD_DIR")]
     payload_dir: Option<std::path::PathBuf>,
+
+    /// The URL clients fetch the payload store's objects from, if they can reach it. The store
+    /// then answers a read of a large payload with where it is rather than with its bytes.
+    #[arg(
+        long,
+        env = "ESPRESSO_STORE_SERVICE_PAYLOAD_URL",
+        requires = "payload_store"
+    )]
+    payload_url: Option<String>,
+
+    /// The largest payload, or range of one, in bytes, the store answers with its bytes rather
+    /// than with its URL, when it has a `--payload-url`.
+    #[arg(
+        long,
+        env = "ESPRESSO_STORE_SERVICE_INLINE_LIMIT",
+        default_value_t = store_api::INLINE_LIMIT
+    )]
+    inline_limit: u64,
 }
 
 #[tokio::main]
@@ -90,39 +107,47 @@ async fn main() -> anyhow::Result<()> {
             anyhow!("pruning stopped")
         });
     }
+    // The payloads of the decide log are staged; those the API instances write, as repair fills
+    // them, are uploaded at once.
+    let mut store = ChainStore::shared(backend.clone());
+    if let (Some(url), Some(dir)) = (&options.payload_store, &options.payload_dir) {
+        let payloads = PayloadStore::from_url(url, options.payload_url.clone())
+            .context("opening the payload store")?;
+        let (staged, uploader) = store
+            .with_staged_payloads(payloads, dir.clone())
+            .await
+            .context("staging payloads")?;
+        store = staged;
+        tasks.spawn(async move {
+            uploader.run().await;
+            anyhow!("the payload uploader stopped")
+        });
+    }
     if let Some(consensus_api) = options.consensus_api {
-        let mut store = ChainStore::shared(backend.clone());
-        if let (Some(url), Some(dir)) = (&options.payload_store, &options.payload_dir) {
-            let payloads =
-                PayloadStore::from_url(url, None).context("opening the payload store")?;
-            let (staged, uploader) = store
-                .with_staged_payloads(payloads, dir.clone())
-                .await
-                .context("staging payloads")?;
-            store = staged;
-            tasks.spawn(async move {
-                uploader.run().await;
-                anyhow!("the payload uploader stopped")
-            });
-            let payload_store = store.clone();
-            tasks.spawn(async move {
-                store_service::ingest::payloads::run(consensus_api, &payload_store).await
-            });
-        }
+        let payload_store = store.clone();
+        tasks.spawn(async move {
+            store_service::ingest::payloads::run(consensus_api, &payload_store).await
+        });
         tracing::info!(%consensus_api, "taking a share of the decide log");
+        let ingester = store.clone();
         tasks.spawn(async move {
             // Returns only when the decide log does not continue the chain in the store.
-            store_service::ingest::run::<SeqTypes>(consensus_api, &store)
+            store_service::ingest::run::<SeqTypes>(consensus_api, &ingester)
                 .await
                 .context("ingesting the decide log")
         });
     }
-    let (store_service, follower) = service::server(backend);
+    let writer = store.unstaged();
+    let (local, follower) = LocalStore::new(store);
+    let local = local
+        .writing_through(writer)
+        .with_inline_limit(options.inline_limit);
     tasks.spawn(async move {
         // Ends only with the store's changes.
-        follower.await;
+        follower.run().await;
         anyhow!("following the store's tip stopped")
     });
+    let store_service = server::server(Arc::new(local));
     tasks.spawn(async move {
         // Without TCP_NODELAY a small answer waits for the client's delayed acknowledgement.
         let served = Server::builder()

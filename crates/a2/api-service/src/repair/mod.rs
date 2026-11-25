@@ -11,13 +11,12 @@
 //! its lease, and one instance at a time follows the state. A lease whose holder stops runs out,
 //! and another instance takes the work over.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, anyhow};
-use chain_api::Tables;
-use chain_store::ChainStore;
 use espresso_genesis::Genesis;
 use espresso_types::NodeState;
+use store_api::Store;
 use tokio::{task::JoinSet, time::sleep};
 use url::Url;
 
@@ -59,7 +58,7 @@ pub struct Repair {
 
 impl Repair {
     /// Repairs `store`, of the chain of `genesis`, as long as its parts run.
-    pub async fn run(self, store: ChainStore, genesis: &Genesis) -> anyhow::Error {
+    pub async fn run(self, store: Arc<dyn Store>, genesis: &Genesis) -> anyhow::Error {
         match self.start(store, genesis).await {
             Ok(mut tasks) => match tasks.join_next().await {
                 Some(stopped) => {
@@ -73,7 +72,7 @@ impl Repair {
 
     async fn start(
         self,
-        store: ChainStore,
+        store: Arc<dyn Store>,
         genesis: &Genesis,
     ) -> anyhow::Result<JoinSet<anyhow::Error>> {
         let state = node_state(genesis, self.l1.clone(), store.clone())
@@ -93,9 +92,9 @@ impl Repair {
         Ok(tasks)
     }
 
-    fn peers(&self, store: &ChainStore) -> Peers {
+    fn peers(&self, store: &Arc<dyn Store>) -> Peers {
         Peers::new(
-            Tables::new(store.clone()),
+            store.clone(),
             self.bootstrap.clone(),
             self.public_url.clone(),
         )
@@ -104,7 +103,12 @@ impl Repair {
     /// Follows the state whenever this instance holds the lease on it. A failing follower holds
     /// up only the state of heights consensus sent none for, so it is started again rather than
     /// stopping repair.
-    async fn follow(self, store: ChainStore, state: NodeState, holder: String) -> anyhow::Error {
+    async fn follow(
+        self,
+        store: Arc<dyn Store>,
+        state: NodeState,
+        holder: String,
+    ) -> anyhow::Error {
         loop {
             match store.lease(STATE_LEASE, &holder, STATE_LEASE_TTL).await {
                 Ok(true) => {},
@@ -137,7 +141,7 @@ impl Repair {
 }
 
 /// Renews the lease on the state until it is lost, or cannot be renewed.
-async fn keep_lease(store: &ChainStore, holder: &str) {
+async fn keep_lease(store: &Arc<dyn Store>, holder: &str) {
     loop {
         sleep(STATE_LEASE_RENEWAL).await;
         match store.lease(STATE_LEASE, holder, STATE_LEASE_TTL).await {

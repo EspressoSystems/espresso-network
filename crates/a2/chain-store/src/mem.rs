@@ -62,9 +62,29 @@ impl MemBackend {
     }
 }
 
+/// Applies `writes` to the application tables of `state`.
+fn apply(state: &mut State, writes: Vec<AppWrite>) {
+    for write in writes {
+        match write {
+            AppWrite::Put { table, key, value } => {
+                state.app.insert((table, key), value);
+            },
+            AppWrite::DeleteBefore { table, key } => {
+                state.app.retain(|(t, k), _| *t != table || *k >= key);
+            },
+            AppWrite::Clear { table } => state.app.retain(|(t, _), _| *t != table),
+        }
+    }
+}
+
 #[async_trait]
 impl Backend for MemBackend {
-    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
+    async fn put_with(
+        &self,
+        row: Row,
+        parts: Vec<(Part, Bytes)>,
+        writes: Vec<AppWrite>,
+    ) -> anyhow::Result<()> {
         self.write(|state| {
             if row.height < state.floor {
                 return;
@@ -74,6 +94,7 @@ impl Backend for MemBackend {
             for (part, data) in parts {
                 state.parts.entry((height, part)).or_insert(data);
             }
+            apply(state, writes);
         });
         Ok(())
     }
@@ -239,18 +260,7 @@ impl Backend for MemBackend {
 
     async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
         // Not a write to the chain, so not announced.
-        let mut state = self.state.lock().unwrap();
-        for write in writes {
-            match write {
-                AppWrite::Put { table, key, value } => {
-                    state.app.insert((table, key), value);
-                },
-                AppWrite::DeleteBefore { table, key } => {
-                    state.app.retain(|(t, k), _| *t != table || *k >= key);
-                },
-                AppWrite::Clear { table } => state.app.retain(|(t, _), _| *t != table),
-            }
-        }
+        apply(&mut self.state.lock().unwrap(), writes);
         Ok(())
     }
 

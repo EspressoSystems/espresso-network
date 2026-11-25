@@ -27,6 +27,8 @@ The API services serve on http://127.0.0.1:24000 to http://127.0.0.1:24004, one 
 ENVIRONMENT:
   GENESIS_FILE   The genesis file, data/genesis/demo-ff.toml by default
   PROFILE        The cargo profile whose binaries to run, debug by default
+  PAYLOAD_INLINE_LIMIT
+                 The largest payload, in bytes, a store answers inline rather than by its file
   EMPTY_BLOCK_DELAY
                  How long a leader without transactions waits before proposing an empty
                  block, e.g. 3ms; the consensus node's default if unset
@@ -180,16 +182,17 @@ start_api() {
   api-service --port "$5" --store "http://127.0.0.1:$((8070 + $2))" \
     --consensus-api "127.0.0.1:$((9978 + $2))" --genesis-file "$3" \
     --l1-provider "$4" --public-url "http://127.0.0.1:$((24000 + $2))" \
-    --payload-store "file://$1/objects-chain$2" \
     "${bootstrap[@]}" >"$1/$6.log" 2>&1 &
 }
 
 # The options of a storage instance named $3 whose database is $2 that keep its deployment's
 # payloads in a directory of RUNDIR $1, as the deployment's object store, and stage them in a
-# directory of its own.
+# directory of its own. The API instances share the host, so the store names large payloads by
+# their files; PAYLOAD_INLINE_LIMIT sets how large, 64 KiB by default.
 payloads() {
   mkdir -p "$1/objects-$2"
-  echo "--payload-store file://$1/objects-$2 --payload-dir $1/staging-$3"
+  echo "--payload-store file://$1/objects-$2 --payload-dir $1/staging-$3 --payload-url file://localhost" \
+    "${PAYLOAD_INLINE_LIMIT:+--inline-limit $PAYLOAD_INLINE_LIMIT}"
 }
 
 # Stops every process and removes the Postgres data, which lives outside RUNDIR.

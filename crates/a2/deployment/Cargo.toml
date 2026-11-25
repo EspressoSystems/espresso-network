@@ -17,6 +17,7 @@ espresso-keyset    = { workspace = true }
 espresso-types     = { workspace = true }
 hotshot-types      = { workspace = true }
 humantime          = { workspace = true }
+store-api          = { workspace = true }
 store-service      = { path = "../store-service" }
 tokio              = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
 tracing            = { workspace = true }

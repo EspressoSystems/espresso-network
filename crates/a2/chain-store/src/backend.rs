@@ -6,7 +6,6 @@ use std::{
 use app_tables::{AppWrite, TableName};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use tokio::sync::watch;
 
 /// Where a [`ChainStore`](crate::ChainStore) keeps its data: bytes by height, with the
@@ -17,7 +16,18 @@ use tokio::sync::watch;
 pub trait Backend: Send + Sync + 'static {
     /// Stores `row` and `parts` in one commit. A row or part already stored is kept, and nothing
     /// is written before the floor.
-    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()>;
+    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
+        self.put_with(row, parts, Vec::new()).await
+    }
+
+    /// Stores `row` and `parts`, as [`Self::put`] does, and applies `writes` to the application
+    /// tables, in one commit; nothing at all before the floor.
+    async fn put_with(
+        &self,
+        row: Row,
+        parts: Vec<(Part, Bytes)>,
+        writes: Vec<AppWrite>,
+    ) -> anyhow::Result<()>;
 
     /// Stores `parts` of `height` in one commit, each unless the height has it or is before the
     /// floor.
@@ -85,17 +95,6 @@ pub trait Backend: Send + Sync + 'static {
     /// processes sharing the store which of them does a piece of work; they are not part of the
     /// chain and change nothing readers see.
     async fn lease(&self, name: &str, holder: &str, ttl: Duration) -> anyhow::Result<bool>;
-
-    /// The updates of the newest heights from `from` on, as a backend that keeps them itself
-    /// sends them; see [`tip`](crate::tip). `None` from a backend that does not, whose readers
-    /// follow the store by reading it.
-    async fn tip_updates(
-        &self,
-        from: u64,
-    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<TipUpdate>>>> {
-        let _ = from;
-        Ok(None)
-    }
 
     /// A value that changes after each committed write to the chain by any writer: items,
     /// parts and pruning. Writes to the application tables do not change it.

@@ -1,0 +1,359 @@
+syntax = "proto3";
+
+package espresso.a2.store.v1;
+
+// A deployment's store, by its domain entities, served by the storage instances to the API
+// instances. Only the storage instances reach the store's database and its object store; they own
+// how the entities are kept and which writes commit together. Values of types the deployment's
+// processes share are sent encoded: bincode, or JSON for membership, as each message says.
+service Store {
+  // The newest height with an item.
+  rpc Newest(Empty) returns (MaybeHeight);
+
+  // The first height the store keeps; everything before it is pruned.
+  rpc Floor(Empty) returns (Height);
+
+  // The newest heights from `from` on, without their payloads: each new height, and each height
+  // with new parts, then the bounds, once now and again whenever they change.
+  rpc FollowTip(FollowTipRequest) returns (stream TipEvent);
+
+  // The item of a height with the parts it has, read together; the payload only if asked for.
+  rpc GetRecord(RecordRequest) returns (MaybeRecord);
+
+  // The item of a height, a bincode `chain_store::Item`.
+  rpc GetItem(HeightRequest) returns (MaybeEncoded);
+
+  // The certificate that decided the block at a height directly, if one did; bincode.
+  rpc GetCert2(HeightRequest) returns (MaybeEncoded);
+
+  // The light client state certificate of the epoch whose root is the block at a height; bincode.
+  rpc GetStateCert(HeightRequest) returns (MaybeEncoded);
+
+  // The height of the block a commitment names; by a payload commitment, the earliest of the
+  // blocks with that payload.
+  rpc Locate(LocateRequest) returns (MaybeHeight);
+
+  // A payload, or a range of its bytes, by the height of its block or by its VID commitment: the
+  // bytes, or where to fetch them.
+  rpc GetPayload(PayloadRequest) returns (PayloadResponse);
+
+  // Whether the store can serve a payload now, and whether it holds it durably at all.
+  rpc PayloadStatus(CommitmentRequest) returns (PayloadStatusResponse);
+
+  // The height and position in its block of a transaction, by hash; the earliest if several
+  // blocks hold it.
+  rpc TransactionPosition(TransactionPositionRequest) returns (MaybePosition);
+
+  // The transactions and payload bytes of a range of heights, of one namespace if given.
+  rpc Totals(TotalsRequest) returns (TotalsResponse);
+
+  // Ranges of heights without an item, from `from` or the floor on, up to the newest height with
+  // one.
+  rpc MissingItems(MissingRequest) returns (RangesResponse);
+
+  // The newest range of heights without an item, before the newest height with one.
+  rpc NewestGap(Empty) returns (MaybeRange);
+
+  // Heights from `from` on that have an item but not `part`.
+  rpc MissingParts(MissingPartsRequest) returns (HeightsResponse);
+
+  // Stores a block: its item with parts. What is stored already is kept.
+  rpc PutBlock(PutBlockRequest) returns (Done);
+
+  // Stores parts of a stored height.
+  rpc PutParts(PutPartsRequest) returns (Done);
+
+  // Takes or renews a lease, and says whether the holder holds it now.
+  rpc Lease(LeaseRequest) returns (LeaseResponse);
+
+  // What the state after a height holds besides its header's roots, a bincode
+  // `chain_api::StateRow`.
+  rpc GetState(HeightRequest) returns (MaybeEncoded);
+
+  // Every kept state row with its height, bincode.
+  rpc GetStates(Empty) returns (Encoded);
+
+  // The reward balances kept under a height, a bincode `chain_api::RewardSet`.
+  rpc GetRewards(HeightRequest) returns (MaybeEncoded);
+
+  // The state consensus sent for a height, a bincode `chain_api::SentState`.
+  rpc GetSentState(HeightRequest) returns (MaybeEncoded);
+
+  // Stores the state after a height, in one commit with forgetting what it makes obsolete.
+  rpc PutState(PutStateRequest) returns (PutStateResponse);
+
+  // A chain config, by its commitment; bincode.
+  rpc GetChainConfig(CommitmentRequest) returns (MaybeEncoded);
+
+  rpc PutChainConfig(Encoded) returns (Done);
+
+  // The accounts of the fee tree; bincode.
+  rpc GetFeeAccounts(Empty) returns (MaybeEncoded);
+
+  rpc PutFeeAccounts(Encoded) returns (Done);
+
+  // The stake table of an epoch; bincode.
+  rpc GetStakeTable(EpochRequest) returns (MaybeEncoded);
+
+  // The discovery records of an epoch, or of the latest epoch with records, with that epoch;
+  // bincode.
+  rpc GetServiceRecords(MaybeEpochRequest) returns (MaybeEncoded);
+
+  // What the store keeps of the membership of an epoch, a JSON `membership::EpochMembership`.
+  rpc GetEpoch(EpochRequest) returns (Encoded);
+
+  // The latest epochs the store keeps membership of, latest first; JSON.
+  rpc GetEpochs(EpochsRequest) returns (Encoded);
+
+  // The stake tables of the latest epochs the store keeps one of, latest first; JSON.
+  rpc GetLatestStakes(EpochsRequest) returns (Encoded);
+
+  // Stores parts of the membership of an epoch, in one commit.
+  rpc PutEpoch(PutEpochRequest) returns (Done);
+
+  // The L1 stake-table events of a range of L1 blocks, a JSON `membership::StakeEvents`.
+  rpc GetEvents(EventsRequest) returns (Encoded);
+
+  // Stores L1 stake-table events, and the L1 block up to which every event is stored.
+  rpc PutEvents(PutEventsRequest) returns (Done);
+
+  // Forgets the events and every epoch's validators, DRB result and root.
+  rpc ClearStakeTables(Empty) returns (Done);
+
+  // The progress of the DRB computation of an epoch; bincode.
+  rpc GetDrbInput(EpochRequest) returns (MaybeEncoded);
+
+  // Stores the progress of a DRB computation, unless older than the progress stored.
+  rpc PutDrbInput(Encoded) returns (Done);
+}
+
+message Empty {}
+
+message Done {}
+
+message Height {
+  uint64 height = 1;
+}
+
+message MaybeHeight {
+  optional uint64 height = 1;
+}
+
+message HeightRequest {
+  uint64 height = 1;
+}
+
+message EpochRequest {
+  uint64 epoch = 1;
+}
+
+message MaybeEpochRequest {
+  optional uint64 epoch = 1;
+}
+
+message CommitmentRequest {
+  string commitment = 1;
+}
+
+message Encoded {
+  bytes data = 1;
+}
+
+message MaybeEncoded {
+  optional bytes data = 1;
+}
+
+message PartData {
+  // A `chain_store::Part`, by its id.
+  int32 part = 1;
+  bytes data = 2;
+}
+
+message FollowTipRequest {
+  uint64 from = 1;
+}
+
+message TipHeight {
+  uint64 height = 1;
+  bytes item = 2;
+  repeated PartData parts = 3;
+}
+
+message TipBounds {
+  optional uint64 newest = 1;
+  uint64 floor = 2;
+}
+
+message TipEvent {
+  oneof event {
+    TipHeight height = 1;
+    TipBounds bounds = 2;
+  }
+}
+
+message RecordRequest {
+  uint64 height = 1;
+  bool payload = 2;
+}
+
+message MaybeRecord {
+  optional bytes item = 1;
+  repeated PartData parts = 2;
+}
+
+message LocateRequest {
+  oneof commitment {
+    string leaf = 1;
+    string block = 2;
+    string payload = 3;
+  }
+}
+
+message PayloadRequest {
+  oneof at {
+    uint64 height = 1;
+    string commitment = 2;
+  }
+  // Only these bytes, from `start` and before `end`, if set.
+  optional ByteRange range = 3;
+}
+
+message ByteRange {
+  uint64 start = 1;
+  uint64 end = 2;
+}
+
+message PayloadResponse {
+  // Neither if the store cannot serve the payload.
+  oneof data {
+    bytes inline = 1;
+    // Where the whole payload is; a range request takes the range from there.
+    string url = 2;
+  }
+}
+
+message PayloadStatusResponse {
+  // The store can serve the payload now.
+  bool has = 1;
+  // The store holds the payload durably, uploaded or still staged.
+  bool held = 2;
+}
+
+message TransactionPositionRequest {
+  string hash = 1;
+}
+
+message MaybePosition {
+  optional uint64 height = 1;
+  uint64 position = 2;
+}
+
+message TotalsRequest {
+  uint64 from = 1;
+  // Inclusive.
+  uint64 to = 2;
+  optional uint32 namespace = 3;
+}
+
+message TotalsResponse {
+  uint64 transactions = 1;
+  uint64 bytes = 2;
+}
+
+message MissingRequest {
+  uint64 from = 1;
+  uint32 limit = 2;
+}
+
+message MissingPartsRequest {
+  int32 part = 1;
+  uint64 from = 2;
+  uint32 limit = 3;
+}
+
+message HeightRange {
+  uint64 start = 1;
+  uint64 end = 2;
+}
+
+message MaybeRange {
+  optional HeightRange range = 1;
+}
+
+message RangesResponse {
+  repeated HeightRange ranges = 1;
+}
+
+message HeightsResponse {
+  repeated uint64 heights = 1;
+}
+
+// The parts of a block a writer gives; the store computes what describes a payload.
+message BlockParts {
+  optional bytes payload = 1;
+  // Bincode.
+  optional bytes vid_common = 2;
+  // Bincode.
+  optional bytes cert2 = 3;
+  // Bincode.
+  optional bytes state_cert = 4;
+  // The certificates are as complete as consensus made them.
+  bool certs_known = 5;
+}
+
+message PutBlockRequest {
+  // A bincode `chain_store::Item`.
+  bytes item = 1;
+  BlockParts parts = 2;
+}
+
+message PutPartsRequest {
+  uint64 height = 1;
+  BlockParts parts = 2;
+}
+
+message LeaseRequest {
+  string name = 1;
+  string holder = 2;
+  uint64 ttl_ms = 3;
+}
+
+message LeaseResponse {
+  bool held = 1;
+}
+
+message PutStateRequest {
+  uint64 height = 1;
+  // A bincode `Option<chain_api::BlocksFrontier>`.
+  bytes frontier = 2;
+  // A bincode `ChainConfig`.
+  bytes chain_config = 3;
+  // A bincode `chain_api::RewardSet`, or none if the balances are those of the height before.
+  optional bytes rewards = 4;
+}
+
+message PutStateResponse {
+  bool stored = 1;
+}
+
+message EpochsRequest {
+  uint64 limit = 1;
+}
+
+message PutEpochRequest {
+  uint64 epoch = 1;
+  // A JSON `membership::EpochMembership`.
+  bytes update = 2;
+}
+
+message EventsRequest {
+  uint64 from = 1;
+  // Inclusive.
+  uint64 to = 2;
+}
+
+message PutEventsRequest {
+  uint64 l1_finalized = 1;
+  // JSON events with their keys.
+  bytes events = 2;
+}

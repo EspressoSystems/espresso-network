@@ -1,13 +1,13 @@
 //! An API instance: serves the v2 API from the chain store, and repairs the store unless told not
 //! to.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, anyhow};
-use api_service::{ApiService, catchup::Catchup, compat::Compat, repair::Repair};
-use chain_store::{ChainStore, payloads::PayloadStore, remote::RemoteBackend};
+use api_service::{ApiService, Store, catchup::Catchup, compat::Compat, repair::Repair};
 use clap::Parser;
 use espresso_genesis::{Genesis, GenesisSource};
+use store_api::RemoteStore;
 use tokio::net::TcpListener;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use url::Url;
@@ -18,7 +18,8 @@ struct Options {
     #[arg(long, env = "ESPRESSO_API_SERVICE_PORT", default_value_t = 8080)]
     port: u16,
 
-    /// The store service to read through, as a URL.
+    /// The store service of a storage instance of the deployment, as a URL. The instance reaches
+    /// the store only through it.
     #[arg(long, env = "ESPRESSO_API_SERVICE_STORE")]
     store: String,
 
@@ -56,38 +57,20 @@ struct Options {
     /// it. It is never asked for repairs.
     #[arg(long, env = "ESPRESSO_API_SERVICE_PUBLIC_URL")]
     public_url: Option<Url>,
-
-    /// The object store the deployment's payloads live in, as its storage instances have it; see
-    /// their `--payload-store`. Without it, payloads are in the store's database.
-    #[arg(long, env = "ESPRESSO_API_SERVICE_PAYLOAD_STORE")]
-    payload_store: Option<String>,
-
-    /// The URL clients fetch the payload store's objects from, if they can reach it; the payload
-    /// route then redirects there. Without it, the API instance serves payloads itself.
-    #[arg(
-        long,
-        env = "ESPRESSO_API_SERVICE_PAYLOAD_URL",
-        requires = "payload_store"
-    )]
-    payload_url: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let options = Options::parse();
     init_logging();
-    let backend = RemoteBackend::connect(&options.store)
-        .await
-        .context("connecting to the store")?;
+    let store: Arc<dyn Store> = Arc::new(
+        RemoteStore::connect(&options.store)
+            .await
+            .context("connecting to the store")?,
+    );
     let listener = TcpListener::bind(("0.0.0.0", options.port))
         .await
         .with_context(|| format!("binding port {}", options.port))?;
-    let mut store = ChainStore::new(backend);
-    if let Some(url) = &options.payload_store {
-        let payloads = PayloadStore::from_url(url, options.payload_url.clone())
-            .context("opening the payload store")?;
-        store = store.with_payloads(payloads);
-    }
     let genesis = Genesis::load(&options.genesis_file)
         .await
         .context("loading the genesis file")?;

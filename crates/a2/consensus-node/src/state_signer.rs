@@ -199,7 +199,7 @@ mod tests {
         v0_3::{ChainConfig, Fetcher},
     };
     use hotshot_types::{PeerConfig, traits::signature_key::SignatureKey};
-    use membership::{MembershipStore, null_catchup::NullStateCatchup};
+    use membership::{MembershipStore, Persistence, null_catchup::NullStateCatchup};
     use tokio::{net::TcpListener, sync::mpsc};
     use vbs::{BinarySerializer, Serializer};
     use versions::NEW_PROTOCOL_VERSION;
@@ -226,7 +226,7 @@ mod tests {
             .collect();
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = crate::store::open(dir.path().join("store")).await.unwrap();
-        let store = MembershipStore::new(store);
+        let store = Persistence(MembershipStore::new(store));
         let l1 = L1ClientOptions::default()
             .connect(vec!["http://127.0.0.1:1".parse().unwrap()])
             .unwrap();

@@ -21,6 +21,7 @@ members = [
     "crates/a2/deployment",
     "crates/a2/genesis",
     "crates/a2/membership",
+    "crates/a2/store-api",
     "crates/a2/store-service",
     "crates/alloy-compat",
     "crates/client",
@@ -88,6 +89,7 @@ default-members = [
     "crates/a2/deployment",
     "crates/a2/genesis",
     "crates/a2/membership",
+    "crates/a2/store-api",
     "crates/a2/store-service",
     "crates/alloy-compat",
     "crates/client",
@@ -202,6 +204,7 @@ consensus-api = { path = "crates/a2/consensus-api" }
 consensus-store = { path = "crates/a2/consensus-store" }
 consensus-store-redb = { path = "crates/a2/consensus-store-redb" }
 membership = { path = "crates/a2/membership" }
+store-api = { path = "crates/a2/store-api" }
 criterion = "0.8.1"
 csv = "1"
 custom_debug = "0.6"

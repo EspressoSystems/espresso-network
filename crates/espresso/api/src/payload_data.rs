@@ -135,6 +135,11 @@ where
         .data
         .map(|data| data.raw_payload)
         .unwrap_or_default();
+    answer(raw, range)
+}
+
+/// The answer with the payload `raw`, or with `range` of it.
+pub fn answer(raw: Bytes, range: Option<ByteRange>) -> Response {
     let len = raw.len() as u64;
     if let Some(range) = range {
         return match range.within(len) {

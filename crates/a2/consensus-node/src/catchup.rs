@@ -671,7 +671,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap())
             .parse()
             .unwrap();
-        let catchup = api_service::catchup::Catchup::new(store, 10);
+        let catchup = api_service::catchup::Catchup::new(store_api::LocalStore::spawn(store), 10);
         tokio::spawn(
             tonic::transport::Server::builder()
                 .add_service(

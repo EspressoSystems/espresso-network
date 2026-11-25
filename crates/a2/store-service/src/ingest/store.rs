@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use chain_api::{SentState, Tables};
-use chain_store::{ChainStore, Item, Parts};
+use chain_store::{AppWrite, ChainStore, Item, Parts};
 use consensus_api::{discovery::SignedServiceRecord, proto::State};
 use espresso_types::{Leaf2, SeqTypes};
 use hotshot_types::{PeerConfig, data::EpochNumber};
@@ -14,10 +14,12 @@ use super::{Block, Sink};
 #[async_trait]
 impl Sink<SeqTypes> for ChainStore {
     async fn append(&self, block: Block<SeqTypes>) -> anyhow::Result<()> {
-        // The state goes first, so that the follower, which wakes on the item, finds it there.
-        if let Some(state) = &block.state {
-            put_state(self, block.leaf.height(), state).await?;
-        }
+        // The state commits with the item, so that the follower, which wakes on the item, finds
+        // it there.
+        let writes = match &block.state {
+            Some(state) => state_writes(block.leaf.height(), state)?,
+            None => Vec::new(),
+        };
         let item = Item {
             leaf: block.leaf,
             cert1: block.cert1,
@@ -34,7 +36,7 @@ impl Sink<SeqTypes> for ChainStore {
             payload_index: None,
             payload_stored: false,
         };
-        self.put(&item, &parts).await
+        self.put_with(&item, &parts, writes).await
     }
 
     async fn newest_leaf(&self) -> anyhow::Result<Option<Leaf2>> {
@@ -87,9 +89,9 @@ impl Sink<SeqTypes> for ChainStore {
     }
 }
 
-/// Stores the state after `height` as consensus sent it, for the follower. A state that does
-/// not decode is left out, and the follower applies the block instead.
-async fn put_state(store: &ChainStore, height: u64, state: &State) -> anyhow::Result<()> {
+/// The writes that store the state after `height` as consensus sent it, for the follower. A
+/// state that does not decode is left out, and the follower applies the block instead.
+fn state_writes(height: u64, state: &State) -> anyhow::Result<Vec<AppWrite>> {
     let decoded = (|| {
         let frontier = match state.frontier.is_empty() {
             true => None,
@@ -102,14 +104,10 @@ async fn put_state(store: &ChainStore, height: u64, state: &State) -> anyhow::Re
         })
     })();
     match decoded {
-        Ok(sent) => {
-            Tables::new(store.clone())
-                .put_sent_state(height, &sent)
-                .await
-        },
+        Ok(sent) => Tables::sent_state_writes(height, &sent),
         Err(err) => {
             tracing::warn!(height, "ignoring a state that does not decode: {err:#}");
-            Ok(())
+            Ok(Vec::new())
         },
     }
 }

@@ -294,6 +294,36 @@ pub async fn conformance(backend: &dyn Backend) {
     assert_eq!(backend.newest_gap().await.unwrap(), None);
 
     index(backend).await;
+    writes_with_item(backend).await;
+}
+
+/// Application writes made with an item land with it, and not at all for a height before the
+/// floor; heights after those used before.
+async fn writes_with_item(backend: &dyn Backend) {
+    let table = TableName::of("with-item");
+    let put = |key: &str| AppWrite::Put {
+        table: table.clone(),
+        key: bytes(key),
+        value: bytes("v"),
+    };
+    backend
+        .put_with(row(100, "w"), Vec::new(), vec![put("a")])
+        .await
+        .unwrap();
+    assert!(backend.item(100).await.unwrap().is_some());
+    assert_eq!(
+        backend.app_get(&table, b"a").await.unwrap(),
+        Some(bytes("v"))
+    );
+
+    let floor = backend.floor().await.unwrap();
+    assert!(floor > 0, "the checks before raised the floor");
+    backend
+        .put_with(row(floor - 1, "w"), Vec::new(), vec![put("b")])
+        .await
+        .unwrap();
+    assert_eq!(backend.item(floor - 1).await.unwrap(), None);
+    assert_eq!(backend.app_get(&table, b"b").await.unwrap(), None);
 }
 
 /// The transaction index and the counts, at heights after those [`conformance`] used before.

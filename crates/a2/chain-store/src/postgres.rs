@@ -1,10 +1,15 @@
 //! A backend in Postgres, which several processes can share.
 //!
-//! Each write commits with a `NOTIFY`, and every backend `LISTEN`s, so a write by any process
-//! reaches the [`changes`](Backend::changes) of all of them.
+//! Every backend `LISTEN`s, and announces its writes with a `NOTIFY`, so a write by any process
+//! reaches the [`changes`](Backend::changes) of all of them. The announcement is not part of the
+//! write: a transaction that notifies holds a lock of the whole server while its commit is
+//! flushed, so every notifying commit on the server would wait for the others. A task sends one
+//! announcement after the writes that happened meanwhile, without waiting for the flush, so a
+//! reader learns of a write a moment after it is committed, never before.
 
 use std::{
     ops::{Range, RangeInclusive},
+    sync::Arc,
     time::Duration,
 };
 
@@ -14,7 +19,11 @@ use sqlx::{
     PgPool, Postgres, Row as _, Transaction,
     postgres::{PgListener, PgPoolOptions},
 };
-use tokio::{sync::watch, task::JoinSet};
+use tokio::{
+    sync::{Notify, watch},
+    task::JoinSet,
+    time::sleep,
+};
 
 use crate::{AppWrite, Backend, Column, KeyBounds, Part, PayloadIndex, Row, TableName, Totals};
 
@@ -23,6 +32,12 @@ const CHANNEL: &str = "chain_store";
 
 /// How long the listener waits before listening again after its connection failed.
 const RELISTEN_DELAY: Duration = Duration::from_secs(1);
+
+/// How long the notifier gathers writes into one announcement.
+const NOTIFY_DELAY: Duration = Duration::from_millis(5);
+
+/// How long the notifier waits before announcing again after an announcement failed.
+const RENOTIFY_DELAY: Duration = Duration::from_millis(500);
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS chain_items (
@@ -79,8 +94,12 @@ pub struct PostgresBackend {
     pool: PgPool,
     changes: watch::Sender<u64>,
 
-    /// The task that turns announcements into changes, which ends with the backend.
-    _listener: JoinSet<()>,
+    /// Woken after each write, to announce it.
+    written: Arc<Notify>,
+
+    /// The tasks that turn announcements into changes and announce writes, which end with the
+    /// backend.
+    _tasks: JoinSet<()>,
 }
 
 impl PostgresBackend {
@@ -91,24 +110,24 @@ impl PostgresBackend {
         let mut listener = PgListener::connect_with(&pool).await?;
         listener.listen(CHANNEL).await?;
         let changes = watch::channel(0).0;
+        let written = Arc::new(Notify::new());
         let mut tasks = JoinSet::new();
         tasks.spawn(listen(listener, changes.clone()));
+        tasks.spawn(notify(pool.clone(), written.clone()));
         Ok(Self {
             pool,
             changes,
-            _listener: tasks,
+            written,
+            _tasks: tasks,
         })
     }
 
-    /// Commits `tx` with an announcement of the write.
-    async fn commit(&self, mut tx: Transaction<'_, Postgres>) -> anyhow::Result<()> {
-        sqlx::query("SELECT pg_notify($1, '')")
-            .bind(CHANNEL)
-            .execute(&mut *tx)
-            .await?;
+    /// Commits `tx`, a write to the chain, and has the [`notify`] task announce it.
+    async fn commit(&self, tx: Transaction<'_, Postgres>) -> anyhow::Result<()> {
         tx.commit().await?;
         // The announcement reaches this backend too, later; readers here need not wait for it.
         self.changes.send_modify(|n| *n += 1);
+        self.written.notify_one();
         Ok(())
     }
 }
@@ -137,6 +156,66 @@ async fn listen(mut listener: PgListener, changes: watch::Sender<u64>) {
             },
         }
     }
+}
+
+/// Announces the writes `written` tells of: once per [`NOTIFY_DELAY`] at most, for every write
+/// before it, in a transaction of its own that does not wait for its commit to be flushed. A lost
+/// announcement only delays readers, which take a lost connection for a change too.
+async fn notify(pool: PgPool, written: Arc<Notify>) {
+    loop {
+        written.notified().await;
+        sleep(NOTIFY_DELAY).await;
+        while let Err(err) = announce(&pool).await {
+            tracing::warn!("announcing chain store writes failed; trying again: {err:#}");
+            sleep(RENOTIFY_DELAY).await;
+        }
+    }
+}
+
+async fn announce(pool: &PgPool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL synchronous_commit = off")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT pg_notify($1, '')")
+        .bind(CHANNEL)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Applies `writes` to the application tables in `tx`.
+async fn apply(tx: &mut Transaction<'_, Postgres>, writes: Vec<AppWrite>) -> anyhow::Result<()> {
+    for write in writes {
+        match write {
+            AppWrite::Put { table, key, value } => {
+                sqlx::query(
+                    "INSERT INTO chain_app (tbl, key, value) VALUES ($1, $2, $3) ON CONFLICT \
+                     (tbl, key) DO UPDATE SET value = EXCLUDED.value",
+                )
+                .bind(table.as_str())
+                .bind(&key[..])
+                .bind(&value[..])
+                .execute(&mut **tx)
+                .await?;
+            },
+            AppWrite::DeleteBefore { table, key } => {
+                sqlx::query("DELETE FROM chain_app WHERE tbl = $1 AND key < $2")
+                    .bind(table.as_str())
+                    .bind(&key[..])
+                    .execute(&mut **tx)
+                    .await?;
+            },
+            AppWrite::Clear { table } => {
+                sqlx::query("DELETE FROM chain_app WHERE tbl = $1")
+                    .bind(table.as_str())
+                    .execute(&mut **tx)
+                    .await?;
+            },
+        }
+    }
+    Ok(())
 }
 
 /// The floor, locked against pruning until `tx` ends.
@@ -224,7 +303,12 @@ async fn insert_index(
 
 #[async_trait]
 impl Backend for PostgresBackend {
-    async fn put(&self, row: Row, parts: Vec<(Part, Bytes)>) -> anyhow::Result<()> {
+    async fn put_with(
+        &self,
+        row: Row,
+        parts: Vec<(Part, Bytes)>,
+        writes: Vec<AppWrite>,
+    ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         if row.height < lock_floor(&mut tx).await? {
             return Ok(());
@@ -243,6 +327,7 @@ impl Backend for PostgresBackend {
         for (part, data) in parts {
             insert_part(&mut tx, row.height, part, &data).await?;
         }
+        apply(&mut tx, writes).await?;
         self.commit(tx).await
     }
 
@@ -472,34 +557,7 @@ impl Backend for PostgresBackend {
 
     async fn app_write(&self, writes: Vec<AppWrite>) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
-        for write in writes {
-            match write {
-                AppWrite::Put { table, key, value } => {
-                    sqlx::query(
-                        "INSERT INTO chain_app (tbl, key, value) VALUES ($1, $2, $3) ON CONFLICT \
-                         (tbl, key) DO UPDATE SET value = EXCLUDED.value",
-                    )
-                    .bind(table.as_str())
-                    .bind(&key[..])
-                    .bind(&value[..])
-                    .execute(&mut *tx)
-                    .await?;
-                },
-                AppWrite::DeleteBefore { table, key } => {
-                    sqlx::query("DELETE FROM chain_app WHERE tbl = $1 AND key < $2")
-                        .bind(table.as_str())
-                        .bind(&key[..])
-                        .execute(&mut *tx)
-                        .await?;
-                },
-                AppWrite::Clear { table } => {
-                    sqlx::query("DELETE FROM chain_app WHERE tbl = $1")
-                        .bind(table.as_str())
-                        .execute(&mut *tx)
-                        .await?;
-                },
-            }
-        }
+        apply(&mut tx, writes).await?;
         // Not a write to the chain, so not announced.
         tx.commit().await?;
         Ok(())

@@ -8,10 +8,9 @@
 //! sent it. Until the cache holds records, the bootstrap URLs are the peers. The deployment's own
 //! URL is never a peer.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use chain_api::{
-    Tables,
     discovery::from_listed,
     proto::{GetPeersRequest, discovery_service_client::DiscoveryServiceClient},
 };
@@ -19,6 +18,7 @@ use consensus_api::discovery::SignedServiceRecord;
 use espresso_types::SeqTypes;
 use hotshot_types::data::EpochNumber;
 use rand::seq::SliceRandom;
+use store_api::Store;
 use tonic::transport::Channel;
 use url::Url;
 
@@ -26,7 +26,7 @@ use crate::repair::{gaps::endpoint, membership::Membership};
 
 pub struct Peers {
     /// Where the records of the deployment's consensus node are stored.
-    tables: Tables,
+    store: Arc<dyn Store>,
 
     bootstrap: Vec<Peer>,
 
@@ -60,7 +60,7 @@ impl fmt::Display for Peer {
 }
 
 impl Peers {
-    pub fn new(tables: Tables, bootstrap: Vec<Url>, own: Option<Url>) -> Self {
+    pub fn new(store: Arc<dyn Store>, bootstrap: Vec<Url>, own: Option<Url>) -> Self {
         let bootstrap = bootstrap
             .into_iter()
             .filter(|url| Some(url) != own.as_ref())
@@ -71,7 +71,7 @@ impl Peers {
             })
             .collect();
         Self {
-            tables,
+            store,
             bootstrap,
             own,
             peers: Vec::new(),
@@ -94,7 +94,7 @@ impl Peers {
     /// while none are stored. Keeps the cache as it is if nobody has valid records of `epoch` yet,
     /// to be asked again on the next call.
     pub async fn refresh(&mut self, epoch: EpochNumber, membership: &Membership) {
-        let stored = match self.tables.service_records(Some(epoch)).await {
+        let stored = match self.store.service_records(Some(epoch)).await {
             Ok(Some((_, records))) => self.urls(&valid_records(records, epoch, membership)),
             Ok(None) => Vec::new(),
             Err(err) => {
@@ -215,9 +215,10 @@ pub(crate) fn valid_records(
 mod tests {
     use std::collections::BTreeSet;
 
-    use chain_api::discovery::listed;
+    use chain_api::{Tables, discovery::listed};
     use chain_store::{ChainStore, mem::MemBackend};
     use consensus_api::discovery::ServiceRecord;
+    use store_api::LocalStore;
 
     use super::*;
     use crate::repair::membership::testing::*;
@@ -243,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn uses_the_bootstrap_urls_but_not_its_own() {
         let peers = Peers::new(
-            Tables::new(ChainStore::new(MemBackend::default())),
+            LocalStore::spawn(ChainStore::new(MemBackend::default())),
             vec![url(1), url(2), url(3)],
             Some(url(3)),
         );
@@ -253,8 +254,8 @@ mod tests {
 
     /// Only records of the epoch, signed by a validator staked in it, name peers, however they
     /// were listed.
-    #[test]
-    fn takes_only_valid_records_of_the_epoch() {
+    #[tokio::test]
+    async fn takes_only_valid_records_of_the_epoch() {
         let membership = membership();
         let epoch = FIRST_EPOCH + 1;
         let mut forged = record(1, epoch, &url(11));
@@ -270,7 +271,7 @@ mod tests {
         .map(|record| from_listed(listed(record)).unwrap())
         .collect();
         let peers = Peers::new(
-            Tables::new(ChainStore::new(MemBackend::default())),
+            LocalStore::spawn(ChainStore::new(MemBackend::default())),
             Vec::new(),
             None,
         );
@@ -288,8 +289,9 @@ mod tests {
     async fn takes_records_stored_later_in_the_epoch() {
         let membership = membership();
         let epoch = EpochNumber::new(FIRST_EPOCH + 1);
-        let tables = Tables::new(ChainStore::new(MemBackend::default()));
-        let mut peers = Peers::new(tables.clone(), Vec::new(), Some(url(12)));
+        let chain = ChainStore::new(MemBackend::default());
+        let tables = Tables::new(chain.clone());
+        let mut peers = Peers::new(LocalStore::spawn(chain), Vec::new(), Some(url(12)));
         let store = |signers: &[u64]| {
             let records: Vec<_> = signers
                 .iter()

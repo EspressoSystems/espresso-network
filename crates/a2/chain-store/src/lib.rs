@@ -1,4 +1,4 @@
-//! The record of the chain an API service keeps.
+//! The record of the chain a deployment keeps.
 //!
 //! The store holds one [`Item`] per block height: the leaf and the certificate that certifies it,
 //! which the hash chain fixes. Everything else about a height is kept apart, as [`Parts`]: the
@@ -7,9 +7,10 @@
 //! they are filled in later, each when it can be checked. The store also finds the height of a
 //! leaf, a block or a payload by its commitment.
 //!
-//! The storage instances write to the store, copying the decide log of their consensus node, and
-//! repairing API instances write the heights they fill from other API services. Writes are idempotent by height, so
-//! writers need not coordinate. Every committed write is announced through
+//! The storage instances write to the store: copying the decide log of their consensus node, and
+//! the heights repairing API instances fill from other API services, which reach the store only
+//! through the storage instances. Writes are idempotent by height, so writers need not
+//! coordinate. Every committed write is announced through
 //! [`ChainStore::changes`], whichever process made it, so readers learn about new heights from the
 //! store alone and need no connection to the writers.
 //!
@@ -37,15 +38,9 @@ pub mod payloads;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 mod recent;
-#[cfg(feature = "remote")]
-pub mod remote;
-#[cfg(feature = "service")]
-pub mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod tip;
-#[cfg(any(feature = "remote", feature = "service"))]
-pub mod wire;
 
 pub use app_tables::{AppTables, AppWrite, TableName};
 pub use backend::{Backend, Column, KeyBounds, Part, PayloadIndex, Row, TipUpdate, Totals};
@@ -339,6 +334,14 @@ impl ChainStore {
         Ok((self, uploader))
     }
 
+    /// The store, uploading the payloads written through it at once rather than staging them.
+    pub fn unstaged(&self) -> Self {
+        Self {
+            staging: None,
+            ..self.clone()
+        }
+    }
+
     /// The store, keeping the newest payloads written through it in memory, up to `bytes` of
     /// them, for its clones to read without reading the object store. For a process that both
     /// writes payloads and serves them.
@@ -458,10 +461,21 @@ impl ChainStore {
     /// Stores `item` with `parts`. An item or part already stored is kept, so a write fills only
     /// what is missing. Heights the store has pruned are not written.
     pub async fn put(&self, item: &Item, parts: &Parts) -> anyhow::Result<()> {
+        self.put_with(item, parts, Vec::new()).await
+    }
+
+    /// Stores `item` with `parts`, as [`Self::put`] does, and applies `writes` to the application
+    /// tables, in one commit, so that a reader that learns of the item finds what `writes` hold.
+    pub async fn put_with(
+        &self,
+        item: &Item,
+        parts: &Parts,
+        writes: Vec<AppWrite>,
+    ) -> anyhow::Result<()> {
         let header = item.leaf.block_header();
         let kept = self.externalize(header, parts).await?;
         self.backend
-            .put(row(item)?, kept.encode(Some(header))?)
+            .put_with(row(item)?, kept.encode(Some(header))?, writes)
             .await?;
         // A payload whose record or index was written after this item read it, but before the
         // item was stored, would leave the item without its payload's info or index for good:
@@ -570,6 +584,14 @@ impl ChainStore {
         payloads.get_range(commitment, range).await
     }
 
+    /// Whether the payload whose VID commitment is `commitment` is among the newest kept in
+    /// memory.
+    pub fn is_recent(&self, commitment: &str) -> bool {
+        self.recent
+            .as_ref()
+            .is_some_and(|recent| recent.get(commitment).is_some())
+    }
+
     /// The payload of `height`, from the object store for a store that keeps its payloads there,
     /// once it is uploaded.
     pub async fn payload(&self, height: u64) -> anyhow::Result<Option<Bytes>> {
@@ -622,6 +644,16 @@ impl ChainStore {
         Ok(payloads::record(self.backend.as_ref(), commitment)
             .await?
             .is_some())
+    }
+
+    /// What the store records of the payload whose VID commitment is `commitment`, for a store
+    /// that keeps its payloads in the object store: what describes it, and whether it is
+    /// uploaded.
+    pub async fn payload_record(
+        &self,
+        commitment: &str,
+    ) -> anyhow::Result<Option<payloads::PayloadRecord>> {
+        payloads::record(self.backend.as_ref(), commitment).await
     }
 
     pub async fn vid_common(&self, height: u64) -> anyhow::Result<Option<VidCommon>> {
@@ -799,15 +831,6 @@ impl ChainStore {
     /// Deletes everything before `height` and stops accepting writes there.
     pub async fn prune_below(&self, height: u64) -> anyhow::Result<()> {
         self.backend.prune_below(height).await
-    }
-
-    /// The backend's updates of the newest heights from `from` on, if it sends them.
-    pub(crate) async fn tip_updates(
-        &self,
-        from: u64,
-    ) -> anyhow::Result<Option<futures::stream::BoxStream<'static, anyhow::Result<TipUpdate>>>>
-    {
-        self.backend.tip_updates(from).await
     }
 
     /// Takes or renews the lease `name` for `holder` for `ttl`; see [`Backend::lease`].

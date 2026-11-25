@@ -1022,6 +1022,8 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "store-api",
+ "tempfile",
  "test-utils",
  "tokio",
  "tonic",
@@ -2399,14 +2401,10 @@ dependencies = [
  "hotshot-query-service-types",
  "hotshot-types",
  "object_store",
- "prost",
  "serde",
  "sqlx",
  "test-utils",
  "tokio",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
  "tracing",
  "url",
  "versions",
@@ -2853,6 +2851,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "store-api",
  "tempfile",
  "tokio",
  "tonic",
@@ -3412,6 +3411,7 @@ dependencies = [
  "espresso-types",
  "hotshot-types",
  "humantime",
+ "store-api",
  "store-service",
  "tokio",
  "tracing",
@@ -10070,6 +10070,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "store-api"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "chain-api",
+ "chain-store",
+ "committable",
+ "consensus-api",
+ "espresso-types",
+ "futures",
+ "hotshot-types",
+ "membership",
+ "object_store",
+ "prost",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "versions",
+]
+
+[[package]]
 name = "store-service"
 version = "0.1.0"
 dependencies = [
@@ -10090,6 +10120,7 @@ dependencies = [
  "membership",
  "object_store",
  "serde",
+ "store-api",
  "test-utils",
  "thiserror 2.0.18",
  "tokio",

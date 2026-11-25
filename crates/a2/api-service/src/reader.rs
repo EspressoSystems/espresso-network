@@ -7,7 +7,7 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use chain_store::{
-    ChainStore, Item, Lookup, Parts, PayloadInfo,
+    Item, Lookup, Parts, PayloadInfo,
     tip::{Entry, Tip},
 };
 use espresso_api::{NsPlace, error::to_status, proto};
@@ -21,6 +21,7 @@ use hotshot_types::{
     traits::block_contents::{BlockHeader, BlockPayload},
     vid::avidm_gf2::AvidmGf2Scheme,
 };
+use store_api::{PayloadAt, Store};
 use tokio::{
     sync::watch,
     time::{Instant, timeout_at},
@@ -32,18 +33,25 @@ use crate::request::BlockKey;
 /// How long a single read waits for a height the store lacks.
 const READ_TIMEOUT: Duration = Duration::from_millis(500);
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct Reader {
-    store: ChainStore,
+    store: Arc<dyn Store>,
     tip: watch::Receiver<Arc<Tip>>,
+
+    /// For payloads the store answers with where they are.
+    http: reqwest::Client,
 }
 
 impl Reader {
-    pub(crate) fn new(store: ChainStore, tip: watch::Receiver<Arc<Tip>>) -> Self {
-        Self { store, tip }
+    pub(crate) fn new(store: Arc<dyn Store>, tip: watch::Receiver<Arc<Tip>>) -> Self {
+        Self {
+            store,
+            tip,
+            http: crate::payload::client(),
+        }
     }
 
-    pub(crate) fn store(&self) -> &ChainStore {
+    pub(crate) fn store(&self) -> &Arc<dyn Store> {
         &self.store
     }
 
@@ -66,7 +74,7 @@ impl Reader {
             BlockKey::Leaf(commit) => Lookup::Leaf(*commit),
         };
         self.store
-            .height_of(&lookup)
+            .locate(&lookup)
             .await
             .map_err(to_status)?
             .ok_or_else(|| Status::not_found(format!("no block with {key:?}")))
@@ -124,8 +132,11 @@ impl Reader {
 
     /// The payload of `height`, which the tip says the store has.
     async fn payload(&self, height: u64, wait: Wait) -> Result<bytes::Bytes, Status> {
-        self.until_uploaded(height, wait, || self.store.payload(height))
-            .await
+        let at = PayloadAt::Height(height);
+        self.until_uploaded(height, wait, || {
+            crate::payload::read(&*self.store, &self.http, &at, None)
+        })
+        .await
     }
 
     /// What `read` gives, once it gives something: a payload the store describes can still be on
@@ -208,11 +219,13 @@ impl Reader {
                 .to_string(),
             range: range.start as u64..range.end as u64,
         };
+        let at = PayloadAt::Height(height);
         let ns_payload = match place.is_large() {
             true => Vec::new(),
             false => self
                 .until_uploaded(height, wait, || {
-                    self.store.payload_range(height, place.range.clone())
+                    let range = Some(place.range.clone());
+                    crate::payload::read(&*self.store, &self.http, &at, range)
                 })
                 .await?
                 .to_vec(),
@@ -322,7 +335,7 @@ impl Reader {
         height: u64,
         complete: &impl Fn(&Parts) -> bool,
     ) -> Result<Option<Arc<Entry>>, Status> {
-        let Some(record) = self.store.summary(height).await.map_err(to_status)? else {
+        let Some(record) = self.store.record(height, false).await.map_err(to_status)? else {
             return Ok(None);
         };
         let parts = record.parts().map_err(to_status)?;
@@ -361,7 +374,7 @@ fn block(item: &Item, payload: &[u8]) -> BlockQueryData<SeqTypes> {
 
 #[cfg(test)]
 mod tests {
-    use chain_store::{mem::MemBackend, tip};
+    use chain_store::{ChainStore, mem::MemBackend, tip};
     use espresso_api::NS_PAYLOAD_INLINE_LIMIT;
     use espresso_types::{
         Leaf2, NamespaceProofQueryData, NodeState, NsProof, Transaction, ValidatedState,
@@ -370,6 +383,7 @@ mod tests {
         data::ns_table::parse_ns_table, simple_certificate::QuorumCertificate2,
         traits::EncodeBytes, vid::avidm_gf2::AvidmGf2Param,
     };
+    use store_api::LocalStore;
     use tokio::task::JoinSet;
     use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -433,7 +447,8 @@ mod tests {
             store.put(&item, &parts).await.unwrap();
             let (follower, tips) = tip::follower(store.clone());
             tasks.spawn(follower.run());
-            check_proofs(&Reader::new(store, tips), &item, &payload, &common).await;
+            let reader = Reader::new(LocalStore::spawn(store), tips);
+            check_proofs(&reader, &item, &payload, &common).await;
         }
     }
 

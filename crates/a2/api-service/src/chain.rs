@@ -27,7 +27,7 @@ impl ChainService for ApiService {
         let records = stream::iter(heights)
             .then(move |height| {
                 let store = store.clone();
-                async move { store.record(height).await.map_err(to_status) }
+                async move { store.record(height, true).await.map_err(to_status) }
             })
             .filter_map(move |record| async move {
                 match record {

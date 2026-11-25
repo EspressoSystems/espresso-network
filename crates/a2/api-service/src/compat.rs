@@ -14,30 +14,22 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chain_api::Tables;
-use chain_store::ChainStore;
 use espresso_types::{SeqTypes, v0_4::StateCertQueryDataV2};
 use hotshot_types::{data::EpochNumber, network::NetworkConfig, utils::root_block_in_epoch};
 use serde_json::json;
+use store_api::Store;
 
 /// What the v1 paths answer from.
 pub struct Compat {
-    store: ChainStore,
-
-    /// The stake tables, which the store gets from consensus.
-    tables: Tables,
+    store: Arc<dyn Store>,
 
     /// The chain's configuration from its genesis file: its epochs and genesis stake table.
     config: NetworkConfig<SeqTypes>,
 }
 
 impl Compat {
-    pub fn new(store: ChainStore, config: NetworkConfig<SeqTypes>) -> Self {
-        Self {
-            tables: Tables::new(store.clone()),
-            store,
-            config,
-        }
+    pub fn new(store: Arc<dyn Store>, config: NetworkConfig<SeqTypes>) -> Self {
+        Self { store, config }
     }
 
     /// The v1 paths, both with the `/v1` prefix and without, as main's API serves them.
@@ -52,7 +44,7 @@ impl Compat {
 }
 
 async fn stake_table(State(compat): State<Arc<Compat>>, Path(epoch): Path<u64>) -> Response {
-    match compat.tables.stake_table(EpochNumber::new(epoch)).await {
+    match compat.store.stake_table(EpochNumber::new(epoch)).await {
         Ok(Some(table)) => Json(table).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -94,7 +86,8 @@ async fn state_cert(State(compat): State<Arc<Compat>>, Path(epoch): Path<u64>) -
 #[cfg(test)]
 mod tests {
     use alloy::primitives::U256;
-    use chain_store::{Parts, mem::MemBackend};
+    use chain_api::Tables;
+    use chain_store::{ChainStore, Parts, mem::MemBackend};
     use espresso_contract_deployer::network_config::{
         fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
     };
@@ -106,6 +99,7 @@ mod tests {
         traits::signature_key::SignatureKey,
     };
     use http_client::{Client, error::ClientErr};
+    use store_api::LocalStore;
     use tokio::net::TcpListener;
     use url::Url;
     use vbs::version::StaticVersion;
@@ -129,6 +123,7 @@ mod tests {
 
     /// Serves the v1 paths over `store`, returning the API's URL as the relay server is given it.
     async fn serve(store: ChainStore) -> Url {
+        let store = LocalStore::spawn(store);
         let mut config = NetworkConfig::<SeqTypes>::default();
         config.config.known_nodes_with_stake = committee();
         config.config.known_da_nodes = committee();
