@@ -494,47 +494,14 @@ impl<TYPES: NodeType> Committable for QuorumData<TYPES> {
 
 impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        let QuorumData2 {
-            leaf_commit,
-            epoch,
-            block_number,
-        } = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
-            .var_size_bytes(leaf_commit.as_ref());
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        if let Some(ref block_number) = *block_number {
-            cb = cb.u64_field("block number", *block_number);
-        }
-
-        cb.finalize()
+        quorum_data_commit(&self.leaf_commit, self.epoch, self.block_number)
     }
 }
 
 impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        let NextEpochQuorumData2(QuorumData2 {
-            leaf_commit,
-            epoch,
-            block_number,
-        }) = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
-            .var_size_bytes(leaf_commit.as_ref());
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        if let Some(ref block_number) = *block_number {
-            cb = cb.u64_field("block number", *block_number);
-        }
-
-        cb.finalize()
+        let NextEpochQuorumData2(data) = self;
+        quorum_data_commit(&data.leaf_commit, data.epoch, data.block_number)
     }
 }
 
@@ -616,7 +583,27 @@ impl Committable for UpgradeProposalData2 {
 }
 
 /// This implements commit for all the types which contain a view and relay public key.
-fn view_and_relay_commit<T: Committable>(
+/// The commitment of quorum data: the leaf, then the epoch and the block number when present.
+///
+/// The pre-epoch types in [`crate::data::history`] commit through it too, so a QC read from
+/// history keeps the commitment its signers signed.
+pub(crate) fn quorum_data_commit<T: Committable, TYPES: NodeType>(
+    leaf_commit: &Commitment<Leaf2<TYPES>>,
+    epoch: Option<EpochNumber>,
+    block_number: Option<u64>,
+) -> Commitment<T> {
+    let mut cb =
+        committable::RawCommitmentBuilder::new("Quorum data").var_size_bytes(leaf_commit.as_ref());
+    if let Some(epoch) = epoch {
+        cb = cb.u64_field("epoch number", *epoch);
+    }
+    if let Some(block_number) = block_number {
+        cb = cb.u64_field("block number", block_number);
+    }
+    cb.finalize()
+}
+
+pub(crate) fn view_and_relay_commit<T: Committable>(
     view: ViewNumber,
     relay: u64,
     epoch: Option<EpochNumber>,

@@ -37,7 +37,8 @@ use hotshot_types::{
         Leaf2, VidCommon, VidShare, ViewChangeEvidence2,
         history::{
             HistoricCertificatePair, HistoricLeaf, HistoricQuorumCertificate, PreEpochLeaf,
-            PreEpochQuorumCertificate,
+            PreEpochQuorumCertificate, PreEpochTimeoutCertificate, PreEpochViewChangeEvidence,
+            PreEpochViewSyncFinalizeCertificate,
         },
     },
     light_client::LCV3StateSignatureRequestBody,
@@ -1030,6 +1031,50 @@ impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
 
 impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
     fn from(cert: &ViewSyncFinalizeCertificate2<SeqTypes>) -> Self {
+        proto::ViewSyncFinalizeCertificate2 {
+            data: Some(proto::ViewSyncFinalizeData2 {
+                relay: cert.data.relay,
+                round: cert.data.round.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&PreEpochViewChangeEvidence<SeqTypes>> for proto::ViewChangeEvidence2 {
+    fn from(evidence: &PreEpochViewChangeEvidence<SeqTypes>) -> Self {
+        use proto::view_change_evidence2::Evidence;
+
+        let evidence = match evidence {
+            PreEpochViewChangeEvidence::Timeout(cert) => Evidence::Timeout(cert.into()),
+            PreEpochViewChangeEvidence::Timeout3(cert) => Evidence::Timeout3(cert.into()),
+            PreEpochViewChangeEvidence::ViewSync(cert) => Evidence::ViewSync(cert.into()),
+        };
+        proto::ViewChangeEvidence2 {
+            evidence: Some(evidence),
+        }
+    }
+}
+
+impl From<&PreEpochTimeoutCertificate<SeqTypes>> for proto::TimeoutCertificate2 {
+    fn from(cert: &PreEpochTimeoutCertificate<SeqTypes>) -> Self {
+        proto::TimeoutCertificate2 {
+            data: Some(proto::TimeoutData2 {
+                view: cert.data.view.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&PreEpochViewSyncFinalizeCertificate<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
+    fn from(cert: &PreEpochViewSyncFinalizeCertificate<SeqTypes>) -> Self {
         proto::ViewSyncFinalizeCertificate2 {
             data: Some(proto::ViewSyncFinalizeData2 {
                 relay: cert.data.relay,

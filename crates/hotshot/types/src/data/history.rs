@@ -12,18 +12,27 @@
 
 use std::marker::PhantomData;
 
-use committable::{Commitment, Committable, RawCommitmentBuilder};
+use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use vbs::version::Version;
+use versions::Upgrade;
 
-use super::{Leaf2, LeafCommitment, VidCommitment, ViewChangeEvidence2, ViewNumber};
+use super::{
+    Leaf, Leaf2, LeafCommitment, LeafEvidence, VidCommitment, ViewChangeEvidence2, ViewNumber,
+    genesis_block,
+};
 use crate::{
     data::EpochNumber,
     drb::DrbResult,
+    message::UpgradeLock,
     simple_certificate::{
-        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate2, SimpleCertificate,
-        SuccessThreshold, UpgradeCertificate,
+        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
+        SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate3, UpgradeCertificate,
     },
-    simple_vote::{QuorumData2, QuorumMarker},
+    simple_vote::{
+        QuorumData2, QuorumMarker, TimeoutData2, VersionedVoteData, ViewSyncFinalizeData2,
+        Voteable, quorum_data_commit, view_and_relay_commit,
+    },
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::option_epoch_from_block_number,
 };
@@ -65,7 +74,7 @@ pub struct PreEpochLeaf<TYPES: NodeType> {
     block_header: TYPES::BlockHeader,
     upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     block_payload: Option<TYPES::BlockPayload>,
-    view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
+    view_change_evidence: Option<PreEpochViewChangeEvidence<TYPES>>,
     #[serde(with = "serde_bytes")]
     next_drb_result: Option<DrbResult>,
     with_epoch: bool,
@@ -87,6 +96,52 @@ pub enum HistoricCertificatePair<TYPES: NodeType> {
     Epoch(CertificatePair<TYPES>),
     /// A QC formed before epochs. There is never a next-epoch QC with it.
     PreEpoch(PreEpochQuorumCertificate<TYPES>),
+}
+
+/// The timeout or view sync certificate on a pre-epoch leaf.
+///
+/// It encodes like [`ViewChangeEvidence2`] and has the same commitment, but the data of a timeout
+/// or view sync certificate may lack an epoch, as it did before the epoch upgrade.
+#[derive(derive_more::Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(bound(deserialize = ""))]
+pub enum PreEpochViewChangeEvidence<TYPES: NodeType> {
+    /// Holds a timeout certificate.
+    Timeout(PreEpochTimeoutCertificate<TYPES>),
+    /// Holds a view sync finalize certificate.
+    ViewSync(PreEpochViewSyncFinalizeCertificate<TYPES>),
+    /// Holds a [`TimeoutCertificate3`]. The layout of [`ViewChangeEvidence2`] has it, although no
+    /// pre-epoch leaf carries one.
+    Timeout3(TimeoutCertificate3<TYPES>),
+}
+
+/// A timeout certificate whose data may lack an epoch.
+pub type PreEpochTimeoutCertificate<TYPES> =
+    SimpleCertificate<TYPES, PreEpochTimeoutData, SuccessThreshold>;
+
+/// A view sync finalize certificate whose data may lack an epoch.
+pub type PreEpochViewSyncFinalizeCertificate<TYPES> =
+    SimpleCertificate<TYPES, PreEpochViewSyncFinalizeData, SuccessThreshold>;
+
+/// The data of a [`PreEpochTimeoutCertificate`]. It encodes like [`TimeoutData2`] and has the same
+/// commitment, but the epoch may be missing.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PreEpochTimeoutData {
+    /// View the timeout is for.
+    pub view: ViewNumber,
+    /// The epoch, if the signers had one.
+    pub epoch: Option<EpochNumber>,
+}
+
+/// The data of a [`PreEpochViewSyncFinalizeCertificate`]. It encodes like
+/// [`ViewSyncFinalizeData2`] and has the same commitment, but the epoch may be missing.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PreEpochViewSyncFinalizeData {
+    /// The relay this vote is intended for.
+    pub relay: u64,
+    /// The view number we are trying to sync on.
+    pub round: ViewNumber,
+    /// The epoch, if the signers had one.
+    pub epoch: Option<EpochNumber>,
 }
 
 impl<TYPES: NodeType> HistoricQuorumCertificate<TYPES> {
@@ -124,6 +179,39 @@ impl<TYPES: NodeType> HistoricQuorumCertificate<TYPES> {
 }
 
 impl<TYPES: NodeType> PreEpochLeaf<TYPES> {
+    /// The genesis leaf of a chain that started before epochs. `version` is passed to the block
+    /// header, as in [`Leaf2::genesis`].
+    pub async fn genesis(
+        validated_state: &TYPES::ValidatedState,
+        instance_state: &TYPES::InstanceState,
+        version: Version,
+    ) -> Self {
+        let (block_header, payload) =
+            genesis_block::<TYPES>(validated_state, instance_state, version).await;
+        let genesis_view = ViewNumber::genesis();
+        let null_data = PreEpochQuorumData {
+            leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
+        };
+        Self {
+            view_number: genesis_view,
+            justify_qc: SimpleCertificate::new(
+                null_data,
+                null_data.commit(),
+                genesis_view,
+                None,
+                PhantomData,
+            ),
+            next_epoch_justify_qc: None,
+            parent_commitment: null_data.leaf_commit,
+            block_header,
+            upgrade_certificate: None,
+            block_payload: Some(payload),
+            view_change_evidence: None,
+            next_drb_result: None,
+            with_epoch: false,
+        }
+    }
+
     /// The view this leaf was proposed in.
     pub fn view_number(&self) -> ViewNumber {
         self.view_number
@@ -160,7 +248,7 @@ impl<TYPES: NodeType> PreEpochLeaf<TYPES> {
     }
 
     /// The timeout or view sync certificate attached to this leaf's proposal, if any.
-    pub fn view_change_evidence(&self) -> Option<&ViewChangeEvidence2<TYPES>> {
+    pub fn view_change_evidence(&self) -> Option<&PreEpochViewChangeEvidence<TYPES>> {
         self.view_change_evidence.as_ref()
     }
 
@@ -208,6 +296,33 @@ impl<TYPES: NodeType> PreEpochLeaf<TYPES> {
             view_change_evidence: &self.view_change_evidence,
         }
         .commit()
+    }
+}
+
+impl<TYPES: NodeType> PreEpochQuorumCertificate<TYPES> {
+    /// The QC on the genesis leaf of a chain that started before epochs.
+    pub async fn genesis(
+        validated_state: &TYPES::ValidatedState,
+        instance_state: &TYPES::InstanceState,
+        version: Version,
+    ) -> Self {
+        let leaf = PreEpochLeaf::genesis(validated_state, instance_state, version).await;
+        let data = PreEpochQuorumData {
+            leaf_commit: leaf.commit(),
+        };
+        let genesis_view = ViewNumber::genesis();
+        let upgrade_lock = UpgradeLock::<TYPES>::new(Upgrade::trivial(version));
+        let vote_commitment: [u8; 32] =
+            VersionedVoteData::new_infallible(data, genesis_view, &upgrade_lock)
+                .commit()
+                .into();
+        Self::new(
+            data,
+            Commitment::from_raw(vote_commitment),
+            genesis_view,
+            None,
+            PhantomData,
+        )
     }
 }
 
@@ -422,7 +537,7 @@ impl<TYPES: NodeType> From<Leaf2<TYPES>> for HistoricLeaf<TYPES> {
             block_header,
             upgrade_certificate,
             block_payload,
-            view_change_evidence,
+            view_change_evidence: view_change_evidence.map(pre_epoch_evidence),
             next_drb_result,
             with_epoch,
         })
@@ -432,6 +547,36 @@ impl<TYPES: NodeType> From<Leaf2<TYPES>> for HistoricLeaf<TYPES> {
 impl<TYPES: NodeType> From<PreEpochLeaf<TYPES>> for HistoricLeaf<TYPES> {
     fn from(leaf: PreEpochLeaf<TYPES>) -> Self {
         Self::PreEpoch(leaf)
+    }
+}
+
+/// A leaf from the first protocol versions, which had no epochs.
+impl<TYPES: NodeType> From<Leaf<TYPES>> for PreEpochLeaf<TYPES> {
+    fn from(leaf: Leaf<TYPES>) -> Self {
+        let parent_commitment: [u8; 32] = leaf.parent_commitment.into();
+        Self {
+            view_number: leaf.view_number,
+            justify_qc: leaf.justify_qc.into(),
+            next_epoch_justify_qc: None,
+            parent_commitment: Commitment::from_raw(parent_commitment),
+            block_header: leaf.block_header,
+            upgrade_certificate: leaf.upgrade_certificate,
+            block_payload: leaf.block_payload,
+            view_change_evidence: None,
+            next_drb_result: None,
+            with_epoch: false,
+        }
+    }
+}
+
+/// A QC from the first protocol versions, which had no epochs.
+impl<TYPES: NodeType> From<QuorumCertificate<TYPES>> for PreEpochQuorumCertificate<TYPES> {
+    fn from(qc: QuorumCertificate<TYPES>) -> Self {
+        let leaf_commit: [u8; 32] = qc.data.leaf_commit.into();
+        let data = PreEpochQuorumData {
+            leaf_commit: Commitment::from_raw(leaf_commit),
+        };
+        with_data(qc, data)
     }
 }
 
@@ -461,13 +606,45 @@ impl<TYPES: NodeType> From<HistoricQuorumCertificate<TYPES>> for HistoricCertifi
 /// The same commitment as a [`QuorumData2`] with no epoch and no block number.
 impl<TYPES: NodeType> Committable for PreEpochQuorumData<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        RawCommitmentBuilder::new("Quorum data")
-            .var_size_bytes(self.leaf_commit.as_ref())
-            .finalize()
+        quorum_data_commit(&self.leaf_commit, None, None)
     }
 }
 
 impl<TYPES: NodeType> QuorumMarker for PreEpochQuorumData<TYPES> {}
+
+/// The same commitment as [`TimeoutData2`], which leaves out the epoch.
+impl Committable for PreEpochTimeoutData {
+    fn commit(&self) -> Commitment<Self> {
+        RawCommitmentBuilder::new("Timeout data")
+            .u64(*self.view)
+            .finalize()
+    }
+}
+
+impl QuorumMarker for PreEpochTimeoutData {}
+
+/// The same commitment as [`ViewSyncFinalizeData2`].
+impl Committable for PreEpochViewSyncFinalizeData {
+    fn commit(&self) -> Commitment<Self> {
+        view_and_relay_commit(self.round, self.relay, self.epoch, "View Sync Finalize")
+    }
+}
+
+impl QuorumMarker for PreEpochViewSyncFinalizeData {}
+
+/// The same fields as for [`ViewChangeEvidence2`].
+impl<TYPES: NodeType> LeafEvidence<TYPES> for PreEpochViewChangeEvidence<TYPES> {
+    fn add_to_leaf_commitment(
+        &self,
+        cb: RawCommitmentBuilder<Leaf2<TYPES>>,
+    ) -> RawCommitmentBuilder<Leaf2<TYPES>> {
+        match self {
+            Self::Timeout(cert) => cb.field("timeout cert", cert.commit()),
+            Self::ViewSync(cert) => cb.field("viewsync cert", cert.commit()),
+            Self::Timeout3(cert) => cb.field("timeout cert v3", cert.commit()),
+        }
+    }
+}
 
 /// Equal when everything but the block payload is equal, like [`Leaf2`].
 impl<TYPES: NodeType> PartialEq for PreEpochLeaf<TYPES> {
@@ -499,14 +676,26 @@ impl<TYPES: NodeType> PartialEq for PreEpochLeaf<TYPES> {
 
 impl<TYPES: NodeType> Eq for PreEpochLeaf<TYPES> {}
 
-/// The layout of [`QuorumData2`], which [`PreEpochQuorumData`] is read from and written as.
-#[derive(Serialize, Deserialize)]
+/// The layout of [`QuorumData2`], with the epoch and the block number a QC from before epochs
+/// lacks. [`PreEpochQuorumData`] is written as it, and a QC from either era is read as it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(bound = "")]
 struct QuorumDataRaw<TYPES: NodeType> {
     leaf_commit: Commitment<Leaf2<TYPES>>,
     epoch: Option<EpochNumber>,
     block_number: Option<u64>,
 }
+
+impl<TYPES: NodeType> Committable for QuorumDataRaw<TYPES> {
+    fn commit(&self) -> Commitment<Self> {
+        quorum_data_commit(&self.leaf_commit, self.epoch, self.block_number)
+    }
+}
+
+impl<TYPES: NodeType> QuorumMarker for QuorumDataRaw<TYPES> {}
+
+/// A QC from either era, as encoded.
+type QuorumCertificateRaw<TYPES> = SimpleCertificate<TYPES, QuorumDataRaw<TYPES>, SuccessThreshold>;
 
 impl<TYPES: NodeType> Serialize for PreEpochQuorumData<TYPES> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -544,7 +733,7 @@ impl<TYPES: NodeType> Serialize for HistoricQuorumCertificate<TYPES> {
 
 impl<'de, TYPES: NodeType> Deserialize<'de> for HistoricQuorumCertificate<TYPES> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        QuorumCertificate2::deserialize(deserializer).map(Self::from)
+        QuorumCertificateRaw::deserialize(deserializer).map(historic_qc)
     }
 }
 
@@ -559,7 +748,71 @@ impl<TYPES: NodeType> Serialize for HistoricLeaf<TYPES> {
 
 impl<'de, TYPES: NodeType> Deserialize<'de> for HistoricLeaf<TYPES> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Leaf2::deserialize(deserializer).map(Self::from)
+        LeafRaw::deserialize(deserializer).map(LeafRaw::into_historic)
+    }
+}
+
+/// The layout of [`Leaf2`], with the QC and evidence of a leaf from either era. A
+/// [`HistoricLeaf`] is read as it.
+#[derive(Deserialize)]
+#[serde(bound(deserialize = ""))]
+struct LeafRaw<TYPES: NodeType> {
+    view_number: ViewNumber,
+    justify_qc: QuorumCertificateRaw<TYPES>,
+    next_epoch_justify_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+    parent_commitment: Commitment<Leaf2<TYPES>>,
+    block_header: TYPES::BlockHeader,
+    upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+    block_payload: Option<TYPES::BlockPayload>,
+    view_change_evidence: Option<PreEpochViewChangeEvidence<TYPES>>,
+    #[serde(with = "serde_bytes")]
+    next_drb_result: Option<DrbResult>,
+    with_epoch: bool,
+}
+
+impl<TYPES: NodeType> LeafRaw<TYPES> {
+    /// The leaf, in the era of its justify QC.
+    fn into_historic(self) -> HistoricLeaf<TYPES> {
+        let Self {
+            view_number,
+            justify_qc,
+            next_epoch_justify_qc,
+            parent_commitment,
+            block_header,
+            upgrade_certificate,
+            block_payload,
+            view_change_evidence,
+            next_drb_result,
+            with_epoch,
+        } = self;
+        match historic_qc(justify_qc) {
+            HistoricQuorumCertificate::PreEpoch(justify_qc) => {
+                HistoricLeaf::PreEpoch(PreEpochLeaf {
+                    view_number,
+                    justify_qc,
+                    next_epoch_justify_qc,
+                    parent_commitment,
+                    block_header,
+                    upgrade_certificate,
+                    block_payload,
+                    view_change_evidence,
+                    next_drb_result,
+                    with_epoch,
+                })
+            },
+            HistoricQuorumCertificate::Epoch(justify_qc) => HistoricLeaf::Epoch(Leaf2 {
+                view_number,
+                justify_qc,
+                next_epoch_justify_qc,
+                parent_commitment,
+                block_header,
+                upgrade_certificate,
+                block_payload,
+                view_change_evidence: view_change_evidence.map(evidence2),
+                next_drb_result,
+                with_epoch,
+            }),
+        }
     }
 }
 
@@ -586,8 +839,126 @@ impl<TYPES: NodeType> Serialize for HistoricCertificatePair<TYPES> {
 
 impl<'de, TYPES: NodeType> Deserialize<'de> for HistoricCertificatePair<TYPES> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        CertificatePair::deserialize(deserializer).map(Self::from)
+        CertificatePairRaw::deserialize(deserializer).map(CertificatePairRaw::into_historic)
     }
+}
+
+/// The layout of [`CertificatePair`], with a QC from either era. A [`HistoricCertificatePair`] is
+/// read as it.
+#[derive(Deserialize)]
+#[serde(bound(deserialize = ""))]
+struct CertificatePairRaw<TYPES: NodeType> {
+    qc: QuorumCertificateRaw<TYPES>,
+    next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+}
+
+impl<TYPES: NodeType> CertificatePairRaw<TYPES> {
+    /// The QCs, in the era of `qc`.
+    fn into_historic(self) -> HistoricCertificatePair<TYPES> {
+        match self.next_epoch_qc {
+            None => historic_qc(self.qc).into(),
+            Some(next_epoch_qc) => HistoricCertificatePair::Epoch(CertificatePair::new(
+                qc2(self.qc),
+                Some(next_epoch_qc),
+            )),
+        }
+    }
+}
+
+/// `qc` in the era its data shows: pre-epoch when it has neither an epoch nor a block number.
+fn historic_qc<TYPES: NodeType>(
+    qc: QuorumCertificateRaw<TYPES>,
+) -> HistoricQuorumCertificate<TYPES> {
+    let QuorumDataRaw {
+        leaf_commit,
+        epoch: None,
+        block_number: None,
+    } = qc.data
+    else {
+        return HistoricQuorumCertificate::Epoch(qc2(qc));
+    };
+    HistoricQuorumCertificate::PreEpoch(with_data(qc, PreEpochQuorumData { leaf_commit }))
+}
+
+/// `qc` as a [`QuorumCertificate2`].
+fn qc2<TYPES: NodeType>(qc: QuorumCertificateRaw<TYPES>) -> QuorumCertificate2<TYPES> {
+    let QuorumDataRaw {
+        leaf_commit,
+        epoch,
+        block_number,
+    } = qc.data;
+    with_data(
+        qc,
+        QuorumData2 {
+            leaf_commit,
+            epoch,
+            block_number,
+        },
+    )
+}
+
+/// `evidence` as a [`ViewChangeEvidence2`].
+fn evidence2<TYPES: NodeType>(
+    evidence: PreEpochViewChangeEvidence<TYPES>,
+) -> ViewChangeEvidence2<TYPES> {
+    match evidence {
+        PreEpochViewChangeEvidence::Timeout(cert) => {
+            let data = TimeoutData2 {
+                view: cert.data.view,
+                epoch: cert.data.epoch,
+            };
+            ViewChangeEvidence2::Timeout(with_data(cert, data))
+        },
+        PreEpochViewChangeEvidence::ViewSync(cert) => {
+            let data = ViewSyncFinalizeData2 {
+                relay: cert.data.relay,
+                round: cert.data.round,
+                epoch: cert.data.epoch,
+            };
+            ViewChangeEvidence2::ViewSync(with_data(cert, data))
+        },
+        PreEpochViewChangeEvidence::Timeout3(cert) => ViewChangeEvidence2::Timeout3(cert),
+    }
+}
+
+/// `evidence` as a [`PreEpochViewChangeEvidence`].
+fn pre_epoch_evidence<TYPES: NodeType>(
+    evidence: ViewChangeEvidence2<TYPES>,
+) -> PreEpochViewChangeEvidence<TYPES> {
+    match evidence {
+        ViewChangeEvidence2::Timeout(cert) => {
+            let data = PreEpochTimeoutData {
+                view: cert.data.view,
+                epoch: cert.data.epoch,
+            };
+            PreEpochViewChangeEvidence::Timeout(with_data(cert, data))
+        },
+        ViewChangeEvidence2::ViewSync(cert) => {
+            let data = PreEpochViewSyncFinalizeData {
+                relay: cert.data.relay,
+                round: cert.data.round,
+                epoch: cert.data.epoch,
+            };
+            PreEpochViewChangeEvidence::ViewSync(with_data(cert, data))
+        },
+        ViewChangeEvidence2::Timeout3(cert) => PreEpochViewChangeEvidence::Timeout3(cert),
+    }
+}
+
+/// `cert` over `data`, with the same vote commitment, view and signatures. `data` must have the
+/// commitment the signers signed.
+fn with_data<TYPES: NodeType, V: Voteable<TYPES>, W: Voteable<TYPES>, T: Threshold<TYPES>>(
+    cert: SimpleCertificate<TYPES, V, T>,
+    data: W,
+) -> SimpleCertificate<TYPES, W, T> {
+    let vote_commitment: [u8; 32] = cert.vote_commitment().into();
+    SimpleCertificate::new(
+        data,
+        Commitment::from_raw(vote_commitment),
+        cert.view_number,
+        cert.signatures,
+        PhantomData,
+    )
 }
 
 /// `qc` as a pre-epoch QC, if it has neither an epoch nor a block number.

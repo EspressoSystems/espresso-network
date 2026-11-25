@@ -1272,16 +1272,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         version: Version,
     ) -> Self {
         let epoch = genesis_epoch_from_version(version);
-
-        let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
-                .await
-                .unwrap();
-
+        let (block_header, payload) =
+            genesis_block::<TYPES>(validated_state, instance_state, version).await;
         let genesis_view = ViewNumber::genesis();
-
-        let block_header =
-            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
 
         let block_number = if version < EPOCH_VERSION {
             None
@@ -1309,7 +1302,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             next_epoch_justify_qc: None,
             parent_commitment: null_quorum_data.leaf_commit,
             upgrade_certificate: None,
-            block_header: block_header.clone(),
+            block_header,
             block_payload: Some(payload),
             view_change_evidence: None,
             next_drb_result: None,
@@ -1461,7 +1454,7 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
 ///
 /// [`Leaf2`] and [`history::PreEpochLeaf`] both commit through it, so a pre-epoch leaf keeps the
 /// commitment it had as a [`Leaf2`].
-pub(crate) struct LeafCommitment<'a, TYPES: NodeType, QC: Committable> {
+pub(crate) struct LeafCommitment<'a, TYPES: NodeType, QC: Committable, EV: LeafEvidence<TYPES>> {
     pub view_number: ViewNumber,
     pub parent_commitment: Commitment<Leaf2<TYPES>>,
     pub block_header: &'a TYPES::BlockHeader,
@@ -1470,10 +1463,10 @@ pub(crate) struct LeafCommitment<'a, TYPES: NodeType, QC: Committable> {
     pub with_epoch: bool,
     pub next_epoch_justify_qc: &'a Option<NextEpochQuorumCertificate2<TYPES>>,
     pub next_drb_result: &'a Option<DrbResult>,
-    pub view_change_evidence: &'a Option<ViewChangeEvidence2<TYPES>>,
+    pub view_change_evidence: &'a Option<EV>,
 }
 
-impl<TYPES: NodeType, QC: Committable> LeafCommitment<'_, TYPES, QC> {
+impl<TYPES: NodeType, QC: Committable, EV: LeafEvidence<TYPES>> LeafCommitment<'_, TYPES, QC, EV> {
     pub(crate) fn commit(self) -> Commitment<Leaf2<TYPES>> {
         let mut cb = RawCommitmentBuilder::new("leaf commitment")
             .u64_field("view number", *self.view_number)
@@ -1493,21 +1486,52 @@ impl<TYPES: NodeType, QC: Committable> LeafCommitment<'_, TYPES, QC> {
                     .fixed_size_bytes(next_drb_result);
             }
 
-            match self.view_change_evidence {
-                Some(ViewChangeEvidence2::Timeout(cert)) => {
-                    cb = cb.field("timeout cert", cert.commit());
-                },
-                Some(ViewChangeEvidence2::ViewSync(cert)) => {
-                    cb = cb.field("viewsync cert", cert.commit());
-                },
-                Some(ViewChangeEvidence2::Timeout3(cert)) => {
-                    cb = cb.field("timeout cert v3", cert.commit());
-                },
-                None => {},
+            if let Some(evidence) = self.view_change_evidence {
+                cb = evidence.add_to_leaf_commitment(cb);
             }
         }
 
         cb.finalize()
+    }
+}
+
+/// The block of a genesis leaf: its header and its empty payload. `version` is passed to the header.
+///
+/// # Panics
+///
+/// Panics if the empty payload cannot be built.
+pub(crate) async fn genesis_block<TYPES: NodeType>(
+    validated_state: &TYPES::ValidatedState,
+    instance_state: &TYPES::InstanceState,
+    version: Version,
+) -> (TYPES::BlockHeader, TYPES::BlockPayload) {
+    let (payload, metadata) =
+        TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
+            .await
+            .unwrap();
+    let header = TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
+    (header, payload)
+}
+
+/// View change evidence, as the commitment of the leaf that carries it covers it.
+pub(crate) trait LeafEvidence<TYPES: NodeType> {
+    /// Adds this evidence to the commitment of its leaf.
+    fn add_to_leaf_commitment(
+        &self,
+        cb: RawCommitmentBuilder<Leaf2<TYPES>>,
+    ) -> RawCommitmentBuilder<Leaf2<TYPES>>;
+}
+
+impl<TYPES: NodeType> LeafEvidence<TYPES> for ViewChangeEvidence2<TYPES> {
+    fn add_to_leaf_commitment(
+        &self,
+        cb: RawCommitmentBuilder<Leaf2<TYPES>>,
+    ) -> RawCommitmentBuilder<Leaf2<TYPES>> {
+        match self {
+            Self::Timeout(cert) => cb.field("timeout cert", cert.commit()),
+            Self::ViewSync(cert) => cb.field("viewsync cert", cert.commit()),
+            Self::Timeout3(cert) => cb.field("timeout cert v3", cert.commit()),
+        }
     }
 }
 

@@ -24,7 +24,9 @@ use disco_types::{request::RequestError, status::StatusCode};
 use hotshot_types::{
     data::{
         Leaf, Leaf2, VidCommitment, VidCommon,
-        history::{HistoricLeaf, HistoricQuorumCertificate},
+        history::{
+            HistoricLeaf, HistoricQuorumCertificate, PreEpochLeaf, PreEpochQuorumCertificate,
+        },
         ns_table::parse_ns_table,
     },
     simple_certificate::QuorumCertificate2,
@@ -43,7 +45,7 @@ use jf_advz::VidScheme;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use snafu::{Snafu, ensure};
 use vbs::version::Version;
-use versions::Upgrade;
+use versions::{EPOCH_VERSION, Upgrade};
 
 use crate::{Header, HeightIndexed, Metadata, Payload, QueryError, QuorumCertificate, Transaction};
 
@@ -455,6 +457,20 @@ impl<Types: NodeType> LeafQueryData<Types> {
         instance_state: &Types::InstanceState,
         upgrade: Upgrade,
     ) -> Self {
+        if upgrade.base < EPOCH_VERSION {
+            return Self {
+                leaf: PreEpochLeaf::genesis(validated_state, instance_state, upgrade.base)
+                    .await
+                    .into(),
+                qc: PreEpochQuorumCertificate::genesis(
+                    validated_state,
+                    instance_state,
+                    upgrade.base,
+                )
+                .await
+                .into(),
+            };
+        }
         Self {
             leaf: Leaf2::genesis(validated_state, instance_state, upgrade.base)
                 .await

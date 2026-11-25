@@ -1,0 +1,170 @@
+{
+  "view_number": 332,
+  "justify_qc": {
+    "data": {
+      "leaf_commit": "COMMIT~-sV9d6vswUaWdWDJ2bZwbQBKVWm-YfeiPYKey85MOv4t",
+      "epoch": null,
+      "block_number": null
+    },
+    "vote_commitment": "COMMIT~Xd9-3JaFX1CBg_iGKxLzgktBuRErza9C62Q0eD6GUM1d",
+    "view_number": 331,
+    "signatures": [
+      "BLS_SIG~zE7OIW3qHWjtafo6oARAifkAgAqDXUIfKSO3fbfcyxEspJL29GU2kIrLdFDT6phozQGKqJjt_I5gUQVtuXrqroU",
+      {
+        "order": "bitvec::order::Lsb0",
+        "head": {
+          "width": 64,
+          "index": 0
+        },
+        "bits": 1,
+        "data": [
+          1
+        ]
+      }
+    ],
+    "_pd": null
+  },
+  "next_epoch_justify_qc": null,
+  "parent_commitment": "COMMIT~-sV9d6vswUaWdWDJ2bZwbQBKVWm-YfeiPYKey85MOv4t",
+  "block_header": {
+    "version": {
+      "Version": {
+        "major": 0,
+        "minor": 3
+      }
+    },
+    "fields": {
+      "chain_config": {
+        "chain_config": {
+          "Left": {
+            "chain_id": "35353",
+            "max_block_size": "30720",
+            "base_fee": "0",
+            "fee_contract": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+            "fee_recipient": "0x0000000000000000000000000000000000000000",
+            "stake_table_contract": "0x0b306bf915c4d645ff596e518faf3f9669b97016"
+          }
+        }
+      },
+      "height": 332,
+      "timestamp": 1791564744,
+      "l1_head": 29,
+      "l1_finalized": {
+        "number": 29,
+        "timestamp": "0x6ac91b1c",
+        "hash": "0xc2074703b8056bf65b994a508ed5ec7a64167c54b733168492c312dab9cc1fd8"
+      },
+      "payload_commitment": "AvidMCommit~Gqsn-jhgFrJGULkoSzoJHJsesPHv0hdQX-CGNtmAo7zF",
+      "builder_commitment": "BUILDER_COMMITMENT~-ePOeGoDCEVjL9G-D7w_3P6iUvECxhFVjGGFN7t1RjtL",
+      "ns_table": {
+        "bytes": "AQAAAGUAAAAQAAAA"
+      },
+      "block_merkle_tree_root": "MERKLE_COMM~Y7R4f3jbsz3osx-bHmNAvVa4_72ECDaiffzkU_RI89UgAAAAAAAAAEwBAAAAAAAAlQ",
+      "fee_merkle_tree_root": "MERKLE_COMM~FoluJGy2q1Xkm1BKLsWzbjitQ4WqdXb5qOhDkC9ghegUAAAAAAAAAAIAAAAAAAAAYw",
+      "fee_info": {
+        "account": "0x7103f704ee6272ad0228343b362eeb3199f7e2b1",
+        "amount": "123"
+      },
+      "builder_signature": {
+        "r": "0x1265263662105684a765a2c0db6a237d67bb7ba55028558ed71fc711da5fd844",
+        "s": "0x4d5c0dd74f867fdb1d5e59238a8987aaa07f1dcfade9c91041ae9389d98ed494",
+        "v": 27
+      },
+      "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA"
+    }
+  },
+  "upgrade_certificate": {
+    "data": {
+      "old_version": {
+        "major": 0,
+        "minor": 2
+      },
+      "new_version": {
+        "major": 0,
+        "minor": 3
+      },
+      "decide_by": 307,
+      "new_version_hash": [
+        1,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "old_version_last_view": 327,
+      "new_version_first_view": 332
+    },
+    "vote_commitment": "COMMIT~xYFVU_VDScZ-FWlVj01DoudNg7hxuLFhStn2zQEnl-aR",
+    "view_number": 222,
+    "signatures": [
+      "BLS_SIG~3h-xXYxnXhmU-0SJLAWuzma2Wi0n2O4FITaY-AgqwAj3D7mTTuQQYSr4n7hlsFlTu_i4d2fMIatVquxJLlizq18",
+      {
+        "order": "bitvec::order::Lsb0",
+        "head": {
+          "width": 64,
+          "index": 0
+        },
+        "bits": 1,
+        "data": [
+          1
+        ]
+      }
+    ],
+    "_pd": null
+  },
+  "block_payload": null,
+  "view_change_evidence": {
+    "Timeout": {
+      "data": {
+        "view": 331,
+        "epoch": null
+      },
+      "vote_commitment": "COMMIT~forzx9EUcJ5QRUA0vWt-bCqyeAnhz7NXUD5VQbALRHDo",
+      "view_number": 331,
+      "signatures": [
+        "BLS_SIG~zE7OIW3qHWjtafo6oARAifkAgAqDXUIfKSO3fbfcyxEspJL29GU2kIrLdFDT6phozQGKqJjt_I5gUQVtuXrqroU",
+        {
+          "order": "bitvec::order::Lsb0",
+          "head": {
+            "width": 64,
+            "index": 0
+          },
+          "bits": 1,
+          "data": [
+            1
+          ]
+        }
+      ],
+      "_pd": null
+    }
+  },
+  "next_drb_result": null,
+  "with_epoch": true
+}
