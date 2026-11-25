@@ -3,7 +3,7 @@ name: Update Release Tracker
 on:
   push:
     branches: [main, "release-*"]
-  # Backport PRs open a minute after the merge to main that already refreshed the tracker.
+  # PRs opened by the backport workflow fire no events; it dispatches the refresh instead.
   pull_request_target:
     types: [opened, reopened, closed]
     branches: ["release-*"]
@@ -29,12 +29,9 @@ jobs:
   # Release-branch runs use that branch's copy of this file; re-run on the default
   # branch so the refresh always uses its workflow and `scripts/release`.
   redispatch:
-    # Fork PRs are skipped; backport PRs come from same-repo `backport-*` branches.
     if: |
       github.ref_name != github.event.repository.default_branch &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'pull_request_target' &&
-        github.event.pull_request.head.repo.full_name == github.repository))
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -50,9 +47,13 @@ jobs:
             -f ref="$GITHUB_REF" ${ISSUE:+-f issue="$ISSUE"}
 
   refresh:
+    # pull_request_target runs on the default branch, so it needs no redispatch. Fork PRs are
+    # skipped; backport PRs come from same-repo branches.
     if: |
       (github.ref_name == github.event.repository.default_branch &&
        (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request == null &&
        contains(github.event.issue.labels.*.name, 'release-tracker') &&

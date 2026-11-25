@@ -119,7 +119,8 @@ impl SequencerDataSource for DataSource {
         }
 
         // Transaction and payload totals count from genesis, and a pruned node never has those
-        // blocks.
+        // blocks. Without an aggregator, the data source also deletes the totals an earlier run
+        // left.
         if opt.prune {
             builder = builder.disable_aggregator();
         }
@@ -1226,18 +1227,39 @@ impl RewardMerkleTreeDataSource for DataSource {
 // A module of its own so `RequestStorage` is not in scope where `CatchupStorage` methods are
 // called by name on this type.
 mod request_storage {
+    use std::fmt;
+
     use async_trait::async_trait;
     use espresso_types::{
-        Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState,
+        BlockMerkleTree, Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Header, Leaf2,
+        NodeState,
         v0_3::{RewardAccountV1, RewardMerkleTreeV1},
         v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     };
+    use hotshot_query_service::{
+        Error, QueryError, QueryResult,
+        data_source::{
+            VersionedDataSource as _,
+            storage::{
+                AvailabilityStorage as _, MerklizedStateHeightStorage as _,
+                MerklizedStateStorage as _, SerializableRetry as _,
+            },
+        },
+        merklized_state::Snapshot,
+        node::BlockId,
+        serializable_retry,
+    };
     use hotshot_types::data::{VidShare, ViewNumber};
+    use jf_merkle_tree_compat::MerkleTreeScheme as _;
+    use light_client::consensus::header::HeaderProof;
 
     use super::SqlStorage;
     use crate::{
         SeqTypes,
-        api::{BlocksFrontier, RewardMerkleTreeDataSource},
+        api::{
+            BlocksFrontier, RewardMerkleTreeDataSource,
+            light_client::{BlockMerkleProof, HeaderProofReads, header_proof},
+        },
         catchup::CatchupStorage,
         request_response::data_source::RequestStorage,
     };
@@ -1305,6 +1327,60 @@ mod request_storage {
         async fn get_vid_share(&self, block_number: u64) -> anyhow::Result<VidShare> {
             let id = hotshot_query_service::node::BlockId::Number(block_number as usize);
             Ok(SqlStorage::get_vid_share::<SeqTypes>(self, id).await?)
+        }
+
+        async fn get_header_proof(&self, root: u64, height: u64) -> anyhow::Result<HeaderProof> {
+            Ok(header_proof(self, root, BlockId::Number(height as usize)).await?)
+        }
+    }
+
+    /// Local reads only: a header missing from storage is an error, never fetched from peers.
+    /// Reads are retried on serialization conflicts.
+    #[async_trait]
+    impl HeaderProofReads for SqlStorage {
+        async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error> {
+            serializable_retry!(self, || async {
+                let mut tx = self
+                    .read()
+                    .await
+                    .map_err(|err| query_error(storage_query_error(err)))?;
+                tx.get_header(id).await.map_err(query_error)
+            })
+            .await
+        }
+
+        async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof> {
+            serializable_retry!(self, || async {
+                let mut tx = self.read().await.map_err(storage_query_error)?;
+                tx.get_path(
+                    Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(index),
+                    height,
+                )
+                .await
+            })
+            .await
+        }
+
+        async fn last_state_height(&self) -> QueryResult<usize> {
+            serializable_retry!(self, || async {
+                let mut tx = self.read().await.map_err(storage_query_error)?;
+                tx.get_last_state_height().await
+            })
+            .await
+        }
+    }
+
+    /// A failure to open a read transaction.
+    fn storage_query_error(err: impl fmt::Display) -> QueryError {
+        QueryError::Error {
+            message: err.to_string(),
+        }
+    }
+
+    fn query_error(err: QueryError) -> Error {
+        Error::Custom {
+            message: err.to_string(),
+            status: err.status(),
         }
     }
 }
@@ -2112,7 +2188,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
+        let epoch_membership = match coordinator.membership_for_epoch(proposal_epoch) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(
@@ -2126,9 +2202,7 @@ async fn reward_header_dependencies(
             },
         };
 
-        let snapshot = epoch_membership
-            .snapshot()
-            .with_context(|| format!("no committee for epoch={proposal_epoch}"))?;
+        let snapshot = epoch_membership.snapshot();
         let leader = snapshot.lookup_leader(proposal.view_number())?;
         let validator = snapshot.validator_config(&leader)?;
 
@@ -3414,5 +3488,153 @@ mod tests {
                 assert_eq!(res.unwrap(), 0);
             }
         }
+    }
+
+    /// A node started with `--prune` deletes the totals an earlier run left.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_deletes_old_totals() {
+        use std::time::Duration;
+
+        use tokio::time::{sleep, timeout};
+
+        let node = start_node_on_old_totals(true).await;
+        timeout(Duration::from_secs(60), async {
+            while !aggregate_rows(&node.storage).await.is_empty() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the pruned node did not delete the old totals");
+    }
+
+    /// A node without `--prune` keeps the totals an earlier run left, as its aggregator resumes
+    /// from them.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_unpruned_node_keeps_old_totals() {
+        use std::time::Duration;
+
+        use http_client::{Client, error::ClientErr};
+        use tokio::time::{sleep, timeout};
+        use vbs::version::StaticVersion;
+
+        let node = start_node_on_old_totals(false).await;
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{}", node.port).parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        timeout(Duration::from_secs(120), async {
+            while client
+                .get::<u64>("status/block-height")
+                .send()
+                .await
+                .unwrap()
+                < 2
+            {
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await
+        .expect("network did not reach block height 2");
+
+        // The aggregator may have added totals above the old ones.
+        let old = aggregate_rows(&node.storage)
+            .await
+            .into_iter()
+            .filter(|&(height, ..)| height < OLD_TOTALS_HEIGHTS)
+            .collect::<Vec<_>>();
+        assert_eq!(old, old_totals());
+    }
+
+    /// [`old_totals`] has totals at heights 0 to `OLD_TOTALS_HEIGHTS - 1`.
+    const OLD_TOTALS_HEIGHTS: i64 = 5;
+
+    /// The totals an earlier run left, as (height, namespace, transactions, bytes): namespace -1
+    /// for all namespaces together, and namespace 7 from height 2 on. The test network has far
+    /// fewer transactions, so an aggregator that counted again from genesis would not write
+    /// these rows back.
+    fn old_totals() -> Vec<(i64, i64, i64, i64)> {
+        (0..OLD_TOTALS_HEIGHTS)
+            .flat_map(|height| {
+                let namespaces = if height < 2 { vec![-1] } else { vec![-1, 7] };
+                namespaces
+                    .into_iter()
+                    .map(move |ns| (height, ns, 1000 * (height + 1), 100_000 * (height + 1)))
+            })
+            .collect()
+    }
+
+    /// Node 0 of a test network, serving the query API on a database it found [`old_totals`] in.
+    struct OldTotalsNode {
+        // Declared first, so that the network stops before the database goes.
+        _network: crate::api::test_helpers::TestNetwork<crate::persistence::no_storage::Options, 5>,
+        storage: SqlStorage,
+        port: u16,
+        _db: TmpDb,
+    }
+
+    /// Write [`old_totals`] into a fresh database, then start a test network whose node 0 serves
+    /// the query API on it, with or without `--prune`.
+    async fn start_node_on_old_totals(prune: bool) -> OldTotalsNode {
+        use espresso_types::TEST_UPGRADE;
+        use test_utils::reserve_tcp_port;
+
+        use crate::{
+            api::{
+                Options as ApiOptions,
+                options::Query,
+                test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            },
+            testing::TestConfigBuilder,
+        };
+
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&tmp_options(&db)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        for (height, namespace, num_transactions, payload_size) in old_totals() {
+            super::super::qs::query(
+                "INSERT INTO aggregate (height, namespace, num_transactions, payload_size)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(height)
+            .bind(namespace)
+            .bind(num_transactions)
+            .bind(payload_size)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(aggregate_rows(&storage).await, old_totals());
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let mut db_opt = tmp_options(&db);
+        db_opt.prune = prune;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(ApiOptions::with_port(port).query_sql(Query::default(), db_opt))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        OldTotalsNode {
+            _network: network,
+            storage,
+            port,
+            _db: db,
+        }
+    }
+
+    /// Every row of the totals as (height, namespace, transactions, bytes), in key order.
+    async fn aggregate_rows(storage: &SqlStorage) -> Vec<(i64, i64, i64, i64)> {
+        let mut tx = storage.read().await.unwrap();
+        query_as(
+            "SELECT height, namespace, num_transactions, payload_size FROM aggregate
+              ORDER BY height, namespace",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
     }
 }

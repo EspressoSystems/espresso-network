@@ -9,10 +9,14 @@ use std::{
 };
 
 use bon::{Builder, bon};
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewChangeEvidence2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidCommitment2,
+        ViewChangeEvidence2, ViewNumber,
+    },
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     initializer::HotShotInitializer,
     message::{Proposal as SignedProposal, UpgradeLock},
@@ -29,7 +33,6 @@ use hotshot_types::{
         signature_key::{SignatureKey, StateSignatureKey},
     },
     upgrade_config::UpgradeConfig,
-    utils::{is_epoch_root, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -61,7 +64,7 @@ use crate::{
     },
     network::Cliquenet,
     outbox::Outbox,
-    proposal::{ProposalValidator, VidShareValidator},
+    proposal::{MalformedProposal, ProposalValidator, VidShareValidator, well_formed},
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
@@ -217,14 +220,14 @@ where
             stake_table_capacity,
             upgrade_lock.clone(),
             initializer.anchor_leaf().clone(),
-            initializer.epoch_height(),
+            membership_coordinator.epoch_length(),
         );
         consensus.set_tracer(leader_tracer.clone());
 
         let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
-            .epoch(initializer.epoch_height())
+            .epoch(membership_coordinator.epoch_length().get())
             .unwrap_or(EpochNumber::genesis());
         let cert1 = initializer.high_qc().clone();
         let parent_proposal = message::Proposal {
@@ -290,17 +293,28 @@ where
                     _ => None,
                 });
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
-        // They are kept signed, so this node can serve them to a peer fetching
-        // them, as one fetching an epoch's boundary block for a re-vote.
-        let saved_proposals = initializer
+        // Those a peer accepts are kept signed, so this node can serve them
+        // to a peer fetching them, as one fetching an epoch's boundary block
+        // for a re-vote. The others are restored but not served.
+        let (signed, unsigned): (Vec<_>, Vec<_>) = initializer
             .saved_proposals()
             .values()
-            .map(|p| SignedProposal {
-                data: message::Proposal::from(p.data.clone()),
-                signature: p.signature.clone(),
-                _pd: std::marker::PhantomData,
+            .map(|p| {
+                restored_proposal(
+                    p,
+                    anchor_cert2.as_ref(),
+                    membership_coordinator.epoch_length(),
+                )
+            })
+            .partition(|p| match servable(&membership_coordinator, p) {
+                Ok(()) => true,
+                Err(err) => {
+                    warn!(view = %p.data.view_number, %err, "not serving stored proposal");
+                    false
+                },
             });
-        consensus.seed_signed_proposals(saved_proposals);
+        consensus.seed_signed_proposals(signed);
+        consensus.seed_proposals(unsigned.into_iter().map(|p| p.data));
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
         // re-enters a view it may have voted or proposed in before it went
@@ -412,7 +426,7 @@ where
                 lock.clone(),
             ))
             .epoch_manager(EpochManager::new(
-                initializer.epoch_height(),
+                membership_coordinator.epoch_length(),
                 membership_coordinator.clone(),
             ))
             .block_builder(
@@ -435,13 +449,13 @@ where
             )
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height(),
+                membership_coordinator.epoch_length(),
                 upgrade_lock.clone(),
                 genesis_qc.as_ref(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height(),
+                membership_coordinator.epoch_length(),
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key).with_metrics(metrics))
@@ -689,19 +703,15 @@ where
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
                         // exact block (cf. SendProposal):
-                        if let VidCommitment::V2(commit) = block.payload_commitment {
-                            self.da_payloads.insert(
-                                (block.view, commit),
-                                PendingDa {
-                                    epoch: block.epoch,
-                                    payload: block.payload.payload.clone(),
-                                    metadata: block.payload.metadata.clone(),
-                                    hashes: manifest.hashes.clone(),
-                                },
-                            );
-                        } else {
-                            warn!(view = %block.view, "block payload commitment is not V2");
-                        }
+                        self.da_payloads.insert(
+                            (block.view, block.payload_commitment),
+                            PendingDa {
+                                epoch: block.epoch,
+                                payload: block.payload.payload.clone(),
+                                metadata: block.payload.metadata.clone(),
+                                hashes: manifest.hashes.clone(),
+                            },
+                        );
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
                         // A leader of several views builds a copy sent for a later one into this
@@ -722,11 +732,11 @@ where
                         }
                         // Held only now, as an error above drops the block: consensus asks to
                         // disperse every block it is given, and that request takes it back.
-                        if let VidCommitment::V2(commit) = block.payload_commitment
-                            && let Some(dispersal) = block.dispersal.take()
-                        {
-                            self.built_dispersals
-                                .insert((block.view, epoch, commit), dispersal);
+                        if let Some(dispersal) = block.dispersal.take() {
+                            self.built_dispersals.insert(
+                                (block.view, epoch, block.payload_commitment),
+                                dispersal,
+                            );
                         }
                         return Ok(block.into())
                     }
@@ -957,7 +967,7 @@ where
             ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "persist proposal");
-                self.storage.append_proposal(proposal.data.clone());
+                self.storage.append_proposal(proposal.clone());
                 // Two blocks can be built for one view. Here we know which one
                 // wins and we persist just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
@@ -992,7 +1002,7 @@ where
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "proposal paired with vid share");
                 self.storage.append_vid(vid_share.clone());
-                self.storage.append_proposal(proposal.data.clone());
+                self.storage.append_proposal(proposal.clone());
                 // Same gate as the in-memory store in `Consensus::apply`: persisting
                 // unconditionally writes a `state_cert` row under a view the sender
                 // chose, which decide promotes into `finalized_state_cert` under the
@@ -1000,7 +1010,7 @@ where
                 // from on restart (highest epoch wins) and what `load_state_cert_by_epoch`
                 // serves.
                 if let Some(state_cert) =
-                    validated_state_cert(&proposal.data, *self.consensus.epoch_height)
+                    validated_state_cert(&proposal.data, self.consensus.epoch_length)
                 {
                     self.storage
                         .append_state_cert(state_cert.view_number(), state_cert.clone());
@@ -1485,7 +1495,7 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
-                    if !vote1.vote.data.is_well_formed(*self.consensus.epoch_height) {
+                    if !vote1.vote.data.is_well_formed(self.consensus.epoch_length) {
                         warn!(%node, %sender, %view, "vote1 is not well formed");
                         return None;
                     }
@@ -1495,8 +1505,8 @@ where
                         crate::leader_trace::LeaderEvent::Vote1VMinus1Arrived
                     );
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
-                    let epoch_height = *self.consensus.epoch_height;
-                    let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
+                    let epoch_length = self.consensus.epoch_length;
+                    let is_epoch_root_vote = epoch_length.position(bn).is_root();
                     debug!(
                         %node, %sender, %view,
                         epoch_root = is_epoch_root_vote,
@@ -1547,7 +1557,7 @@ where
                         warn!(%node, %sender, %view, "vote2 signing key != sender");
                         return None;
                     }
-                    if !vote2.data.is_well_formed(*self.consensus.epoch_height) {
+                    if !vote2.data.is_well_formed(self.consensus.epoch_length) {
                         warn!(%node, %sender, %view, "vote2 is not well formed");
                         return None;
                     }
@@ -1642,7 +1652,7 @@ where
                         return None;
                     }
                     // Checked before the lock's epoch can start a catchup.
-                    if let Err(err) = revote.revote.well_formed(*self.consensus.epoch_height) {
+                    if let Err(err) = revote.revote.well_formed(self.consensus.epoch_length) {
                         warn!(%node, %sender, %view, %err, "malformed re-vote request");
                         return None;
                     }
@@ -2007,7 +2017,12 @@ where
     /// is the fallback when there is no proposal yet or its epoch's stake table is unknown.
     fn upcoming_leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let expected = self.consensus.last_proposal_before(view).map(|p| {
-            if is_last_block(p.block_header.block_number(), *self.consensus.epoch_height) {
+            if self
+                .consensus
+                .epoch_length
+                .position(p.block_header.block_number())
+                .is_last()
+            {
                 p.epoch + 1
             } else {
                 p.epoch
@@ -2021,7 +2036,7 @@ where
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
-            .membership_for_epoch(Some(epoch))
+            .membership_for_epoch(epoch)
             .ok()?;
         membership.leader(view).ok()
     }
@@ -2627,6 +2642,79 @@ pub enum GcScope {
 pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> bool {
     current.saturating_sub(EPOCH_CHANGE_LOOKBEHIND) <= *epoch
         && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
+}
+
+/// A stored proposal as it was before it was stored, as far as it can be
+/// rebuilt.
+///
+/// The stored form has no field for `next_epoch_justify_qc`, the Cert2 of
+/// the block before that the first block of an epoch carries. `anchor_cert2`
+/// is that certificate when the anchor is that block. The leader signs the
+/// leaf commitment, which does not cover the field, so the proposal need not
+/// get back the very certificate it came with.
+fn restored_proposal<T: NodeType>(
+    stored: &SignedProposal<T, QuorumProposalWrapper<T>>,
+    anchor_cert2: Option<&Certificate2<T>>,
+    epoch_length: EpochLength,
+) -> SignedProposal<T, Proposal<T>> {
+    let mut data = Proposal::from(stored.data.clone());
+    data.next_epoch_justify_qc = anchor_cert2
+        .filter(|cert2| {
+            epoch_length.position(cert2.data.block_number).is_last()
+                && cert2.data.leaf_commit == data.justify_qc.data.leaf_commit
+        })
+        .cloned();
+    SignedProposal {
+        data,
+        signature: stored.signature.clone(),
+        _pd: std::marker::PhantomData,
+    }
+}
+
+/// Whether a peer fetching `proposal` accepts it, short of verifying its
+/// certificates: those were verified before it was stored.
+///
+/// A peer drops its request on the first answer, so one it refuses costs it
+/// the proposal until it asks again.
+fn servable<T: NodeType>(
+    membership: &EpochMembershipCoordinator<T>,
+    proposal: &SignedProposal<T, Proposal<T>>,
+) -> Result<(), Unservable> {
+    well_formed(&proposal.data, membership.epoch_length())?;
+    if !is_signed_by_leader(membership, proposal) {
+        return Err(Unservable::NotLeaderSigned);
+    }
+    Ok(())
+}
+
+/// Reason a stored proposal is not [served](servable) to peers.
+#[derive(Debug, thiserror::Error)]
+enum Unservable {
+    /// A first block of an epoch restored without `next_epoch_justify_qc`:
+    /// see [`restored_proposal`].
+    #[error(transparent)]
+    Malformed(#[from] MalformedProposal),
+
+    /// A row written before the leader's signature was stored, or one whose
+    /// leader is not known yet.
+    #[error("not signed by the leader of its view")]
+    NotLeaderSigned,
+}
+
+/// Whether `proposal` carries the signature of its view's leader, as a peer
+/// fetching it requires.
+///
+/// Also false while the leader of its epoch is not known: only a verified
+/// copy is served.
+fn is_signed_by_leader<T: NodeType>(
+    membership: &EpochMembershipCoordinator<T>,
+    proposal: &SignedProposal<T, Proposal<T>>,
+) -> bool {
+    let leader = membership
+        .leader_snapshot(proposal.data.epoch)
+        .and_then(|epoch| epoch.leader(proposal.data.view_number).ok());
+    let leaf: Leaf2<T> = proposal.data.clone().into();
+    leader.is_some_and(|leader| leader.validate(&proposal.signature, leaf.commit().as_ref()))
 }
 
 /// A payload built locally and awaiting DA persistence.

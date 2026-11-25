@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration}
 
 use async_trait::async_trait;
 use committable::Commitment;
+#[cfg(any(test, feature = "testing"))]
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
@@ -337,24 +338,21 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     /// (received proposals) and `maybe_propose` (self-proposed ones).
     /// `seed_signed_proposals` reads persisted rows back on restart without
     /// re-checking, so that write-time gate is the only thing enforcing this.
-    pub fn append_proposal(&mut self, proposal: Proposal<T>) {
-        let view = proposal.view_number;
-        let commitment = proposal_commitment(&proposal);
+    ///
+    /// The leader's signature is stored with it: after a restart this node
+    /// answers fetches from the stored copy, and the fetching peer checks it.
+    pub fn append_proposal(&mut self, proposal: SignedProposal<T, Proposal<T>>) {
+        let view = proposal.data.view_number;
+        let commitment = proposal_commitment(&proposal.data);
         let storage = self.storage.clone();
-        let private_key = self.private_key.clone();
         let timer = self
             .metrics
             .as_ref()
             .map(|m| Measurement::start(m.append_proposal.clone()));
         let handle = self.tasks.spawn(async move {
-            let data = QuorumProposalWrapper::from(proposal);
-            let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
-                error!("failed to sign quorum proposal for storage");
-                return None;
-            };
             let signed = SignedProposal {
-                data,
-                signature,
+                data: QuorumProposalWrapper::from(proposal.data),
+                signature: proposal.signature,
                 _pd: PhantomData,
             };
             loop {
@@ -431,6 +429,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 }
 
 #[async_trait]
+#[cfg(any(test, feature = "testing"))]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
         self.store_high_qc2(high_qc).await

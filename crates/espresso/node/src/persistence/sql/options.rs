@@ -166,7 +166,9 @@ pub struct Options {
     /// which runs only on a database with no merklized state.
     ///
     /// A pruned node keeps no transaction or payload totals, which count from genesis: it does not
-    /// run the aggregator, and the routes that serve the totals return 404.
+    /// run the aggregator, and the routes that serve the totals return 404. At startup it deletes
+    /// the totals an earlier run left and gives their space back. A later switch to `--archive`
+    /// counts the totals again, from the newest ones left, or from genesis if none are left.
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
     pub(crate) prune: bool,
 

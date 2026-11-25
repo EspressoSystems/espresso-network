@@ -31,7 +31,9 @@ Reads **finalized L1 blocks** only, to avoid reorgs.
 events that affect consensus membership, including the V2/V3 event variants.
 
 A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`
-drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake.
+drops validators below `max_stake / VID_TARGET_TOTAL_STAKE` and truncates to `MAX_VALIDATORS` by descending stake. From
+`CANONICAL_STAKE_TABLE_ORDER_VERSION` on, equal stakes rank by address and the result is listed by address; before, both
+follow registration order.
 Effective from the next epoch boundary.
 
 ## Fast finality
@@ -39,6 +41,80 @@ Effective from the next epoch boundary.
 V0_6, `crates/hotshot/new-protocol/`, `doc/stake-table-fast-finality.md`. Replaces CDN + libp2p networking with
 `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key` and `p2p_addr` on the
 StakeTable contract for peer discovery.
+
+## Validator startup
+
+`SequencerContext::init` applies the stored anchor's epoch to cliquenet (an error is logged) and dials the active
+validators at the L1 finalized block (`Fetcher::validator_set_at`); an error reading the L1 finalized block or the
+validators, or dialing them, fails startup; without a stake table contract, or with no validator registered, there is
+nothing to dial and startup continues. Their keys, dialed or already held, are extra request-response
+responders; responders are the table keys and these keys that the network holds at request time. `state_peers` is
+optional for validators.
+
+The seed exists when the chain config names a stake table contract (the LC contract address is read from it);
+without one the catchup walks only. The follower installs the same seed, fetching through its catchup provider:
+`--state-peers`, or the upstreams when unset. It asks the coordinator for the one table it needs before ingesting:
+that of the next epoch, or of the one after once the epoch root is passed, at startup and at each poll. A failed
+or timed out request logs a warning and the next poll retries it. A follower has no request-response: its state peers
+answer at once.
+
+A node behind the stored window is caught up by `EpochMembershipCoordinator::catchup`. When the held pair is more than
+one epoch below the target, the `CatchupSeedFn` hook (`crates/espresso/node/src/lc_contract_seed.rs`) runs first, one
+seed at a time:
+
+1. Reads `finalizedState` (`F`, `blockCommRoot`) of the LC contract at the L1 finalized block. `seed_window`
+   (`crates/espresso/types/src/v0/impls/lc_contract.rs`) decides from `F`, the held start and the target whether a seed
+   runs and which tables it installs.
+2. Fetches the header at `F` through the catchup provider (`Fetcher::peers()`, sources below) and accepts it iff its
+   height is `F` and its `block_comm_root` matches.
+3. `Request::HeaderProof { root: F, height }` proves `root(e-2)` for each table `ST(e)` of the window against it, and
+   the preceding root where the reward of the lowest table reads its block time. Each request is up to 5 attempts
+   with backoff between them; the attempt number `n` (from 0) is passed to the provider as `retry`. Without state
+   peers an attempt is the request-response bound of 6 s. With state peers it lasts until every provider answered or
+   failed: at most `--http-catchup-delay`, then `n + 1` times `--catchup-base-timeout` for each state peer, asked one
+   after another. The backoff is `BackoffParams::default()`: it reads the environment variables
+   `ESPRESSO_NODE_CATCHUP_BACKOFF_*` and `ESPRESSO_NODE_CATCHUP_{BASE,MAX}_RETRY_DELAY`, not the flags
+   `--catchup-backoff-*` and `--catchup-{base,max}-retry-delay`. With `ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE` set a
+   request makes one attempt. The L1 read and each install are bounded.
+4. Installs the tables of the `seed_window`, each with a block reward computed from the proven roots, each root
+   bounded by the catchup timeout. A stake table hash mismatch ends the process. The walk then runs from the top of
+   the window up to the target; `drb_ready` supplies the target's DRB.
+
+The catchup provider is a `ParallelStateCatchup` over request-response and, with `--state-peers`, HTTP state peers.
+State peers are asked `--http-catchup-delay` after each attempt of a request starts, at once when request-response is
+not registered. The root header is read from `/v1/catchup/{F}/leafchain`, a proof from
+`/v1/light-client/header/{F}/{height}`; both are verified before they are accepted. Peers are asked in `PeerScore`
+order, one after another; the first verified answer of either source wins.
+
+An error from the seed (no answering peer, a timeout) is logged and the walk runs from the held start; installed
+tables are present and skipped.
+
+After a seed, the epochs below its window have no stored stake table. The `StakeTableBackfill` task
+(`crates/espresso/node/src/stake_table_backfill.rs`) stores them:
+
+- Runs: once at start, and after every return from the seed's install step, successful or not. Idle between fills.
+- Reads: the stored epochs first (nothing missing: no L1 read), then the LC contract state, one anchor header, the
+  initial token supply (an L1 read only on a deployment where it is neither hardcoded nor cached, outside the 60 s
+  per-epoch deadline), and the proven root headers of the missing epochs below `F`, one request at a time. Stake table
+  events come from storage only.
+- Writes: per epoch, the root header, all validators and the stake table (`EpochCommittees::store_derived_stake_table`),
+  never to memory, newest first: when no peer has the oldest roots, the epochs next to the seeded window are still
+  stored. A stored block reward or stake table hash is not overwritten by a missing one.
+- Failures: an epoch failure (missing header proof, events not stored up to its L1 block, 60 s deadline, storage error)
+  fails that epoch only. An attempt ends as failed when a read before the epochs fails, or when a chunk of 20 epochs
+  stores nothing and has a failure; later chunks are not tried in that attempt. After a failed attempt the fill waits
+  5 s, doubling up to 10 minutes, and tries again; a trigger ends the wait and restarts the backoff at 5 s. A table
+  whose hash differs from the one the next root decides is not stored, logged once with `error!`, and not retried until
+  restart. A chunk that stores nothing deliberately blocks the epochs below it: epochs that cannot be stored need
+  investigation, which the failed-attempts gauge and the error log call for.
+- Logs: one `info!` per stored epoch. A failed attempt logs one line with the failing epoch count, the highest failing
+  epoch and one error: `warn!` for the first 7 consecutive failed attempts of a fill, `error!` from the 8th, when the
+  wait has reached 10 minutes. Each header request is sent once per attempt, with a retry index (at most 4) that scales
+  the peers' timeout; the fill's backoff is the only retry.
+- Metrics (subgroup `catchup`): `stake_table_backfill_missing_epochs` (gauge; includes mismatched epochs),
+  `stake_table_backfill_failed_attempts`
+  (gauge, consecutive failed attempts of the current fill, 0 when it completes), `stake_table_backfill_stored`,
+  `stake_table_backfill_hash_mismatches` (counters).
 
 ## Consensus upgrades
 

@@ -288,17 +288,19 @@ mod error;
 pub mod explorer;
 pub mod fetching;
 pub mod merklized_state;
-pub mod metrics;
 pub mod node;
 mod resolvable;
 #[cfg(feature = "sqlite-options")]
 pub mod sqlite_options;
 pub mod status;
 pub mod task;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod types;
 
 pub use error::Error;
+/// The Prometheus backend lives in `hotshot-metrics`; this keeps the `metrics::` paths working.
+pub use hotshot_metrics::prometheus as metrics;
 pub use hotshot_query_service_types::{
     ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
     QueryResult, QuorumCertificate, SignatureKey, Transaction,
