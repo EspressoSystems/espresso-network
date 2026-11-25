@@ -181,8 +181,8 @@
 <a href=#181 id=181 data-nosnippet>181</a>    <span class="kw">use </span>jf_advz::{VidDisperse, VidScheme};
 <a href=#182 id=182 data-nosnippet>182</a>
 <a href=#183 id=183 data-nosnippet>183</a>    <span class="kw">use crate</span>::{
-<a href=#184 id=184 data-nosnippet>184</a>        NamespaceId, NsIndex, NsTableBuilder, Payload, v0::impls::block::test::ValidTest,
-<a href=#185 id=185 data-nosnippet>185</a>        v0_1::ADVZNsProof,
+<a href=#184 id=184 data-nosnippet>184</a>        NamespaceId, NsIndex, NsTableBuilder, Payload, Transaction,
+<a href=#185 id=185 data-nosnippet>185</a>        v0::impls::block::test::ValidTest, v0_1::ADVZNsProof,
 <a href=#186 id=186 data-nosnippet>186</a>    };
 <a href=#187 id=187 data-nosnippet>187</a>
 <a href=#188 id=188 data-nosnippet>188</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
@@ -386,5 +386,35 @@
 <a href=#386 id=386 data-nosnippet>386</a>                .is_none()
 <a href=#387 id=387 data-nosnippet>387</a>        );
 <a href=#388 id=388 data-nosnippet>388</a>    }
-<a href=#389 id=389 data-nosnippet>389</a>}
+<a href=#389 id=389 data-nosnippet>389</a>
+<a href=#390 id=390 data-nosnippet>390</a>    <span class="doccomment">/// Both namespaces have the same byte length and lie in the same
+<a href=#391 id=391 data-nosnippet>391</a>    /// polynomial. jf-advz 0.2.4 accepted the honest proof's prefix and suffix
+<a href=#392 id=392 data-nosnippet>392</a>    /// at the other namespace's range (jellyfish-compat#56).
+<a href=#393 id=393 data-nosnippet>393</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#394 id=394 data-nosnippet>394</a>    </span><span class="kw">async fn </span>ns_proof_rejects_payload_moved_to_another_namespace() {
+<a href=#395 id=395 data-nosnippet>395</a>        <span class="kw">let </span>txs = [(<span class="number">10u32</span>, <span class="string">b"abc"</span>), (<span class="number">20</span>, <span class="string">b"xyz"</span>)]
+<a href=#396 id=396 data-nosnippet>396</a>            .map(|(ns, bytes)| Transaction::new(NamespaceId::from(ns), bytes.to_vec()));
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>block = Payload::from_transactions(<span class="kw-2">&amp;</span>txs, <span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>Default::default())
+<a href=#398 id=398 data-nosnippet>398</a>            .<span class="kw">await
+<a href=#399 id=399 data-nosnippet>399</a>            </span>.unwrap()
+<a href=#400 id=400 data-nosnippet>400</a>            .<span class="number">0</span>;
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">let </span>disperse = advz_scheme(<span class="number">10</span>).disperse(block.encode()).unwrap();
+<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span>commit = VidCommitment::V0(disperse.commit);
+<a href=#403 id=403 data-nosnippet>403</a>
+<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span>honest = ADVZNsProof::new(<span class="kw-2">&amp;</span>block, <span class="kw-2">&amp;</span>NsIndex(<span class="number">0</span>), <span class="kw-2">&amp;</span>disperse.common).unwrap();
+<a href=#405 id=405 data-nosnippet>405</a>        honest
+<a href=#406 id=406 data-nosnippet>406</a>            .verify(block.ns_table(), <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>disperse.common)
+<a href=#407 id=407 data-nosnippet>407</a>            .expect(<span class="string">"sanity: correct proof should succeed"</span>);
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>        <span class="kw">let </span>forged = ADVZNsProof {
+<a href=#410 id=410 data-nosnippet>410</a>            ns_index: NsIndex(<span class="number">1</span>),
+<a href=#411 id=411 data-nosnippet>411</a>            ..honest
+<a href=#412 id=412 data-nosnippet>412</a>        };
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="macro">assert!</span>(
+<a href=#414 id=414 data-nosnippet>414</a>            forged
+<a href=#415 id=415 data-nosnippet>415</a>                .verify(block.ns_table(), <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>disperse.common)
+<a href=#416 id=416 data-nosnippet>416</a>                .is_none()
+<a href=#417 id=417 data-nosnippet>417</a>        );
+<a href=#418 id=418 data-nosnippet>418</a>    }
+<a href=#419 id=419 data-nosnippet>419</a>}
 </code></pre></div></section></main></body></html>

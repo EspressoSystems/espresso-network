@@ -247,30 +247,57 @@
 <a href=#247 id=247 data-nosnippet>247</a>    };
 <a href=#248 id=248 data-nosnippet>248</a>    <span class="kw">use </span>jf_advz::VidScheme;
 <a href=#249 id=249 data-nosnippet>249</a>
-<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">use crate</span>::{Payload, Transaction, v0::impls::block::test::ValidTest, v0_1::ADVZTxProof};
-<a href=#251 id=251 data-nosnippet>251</a>
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="doccomment">/// A zero-length transaction has no payload bytes to prove, so the proof
-<a href=#253 id=253 data-nosnippet>253</a>    /// alone does not pin which transaction it is for.
-<a href=#254 id=254 data-nosnippet>254</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="kw">async fn </span>empty_tx_proof_rejects_nonempty_tx() {
-<a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="kw">let </span>test = ValidTest::from_tx_lengths(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">5</span>]], <span class="kw-2">&amp;mut </span>rng);
-<a href=#258 id=258 data-nosnippet>258</a>        <span class="kw">let </span>block =
-<a href=#259 id=259 data-nosnippet>259</a>            Payload::from_transactions(<span class="kw-2">&amp;</span>test.all_txs(), <span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>Default::default())
-<a href=#260 id=260 data-nosnippet>260</a>                .<span class="kw">await
-<a href=#261 id=261 data-nosnippet>261</a>                </span>.unwrap()
-<a href=#262 id=262 data-nosnippet>262</a>                .<span class="number">0</span>;
-<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>disperse = advz_scheme(<span class="number">10</span>).disperse(block.encode()).unwrap();
-<a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">let </span>commit = VidCommitment::V0(disperse.commit);
-<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>common = VidCommon::V0(disperse.common.clone());
-<a href=#266 id=266 data-nosnippet>266</a>
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>index = block.iter(block.ns_table()).next().unwrap();
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>(tx, proof) = ADVZTxProof::new(<span class="kw-2">&amp;</span>index, <span class="kw-2">&amp;</span>block, <span class="kw-2">&amp;</span>disperse.common).unwrap();
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="macro">assert!</span>(tx.payload().is_empty());
-<a href=#270 id=270 data-nosnippet>270</a>        <span class="macro">assert!</span>(proof.verify(block.ns_table(), <span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>common));
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">let </span>forged = Transaction::new(tx.namespace(), <span class="string">b"not in the block"</span>.to_vec());
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="macro">assert!</span>(!proof.verify(block.ns_table(), <span class="kw-2">&amp;</span>forged, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>common));
-<a href=#274 id=274 data-nosnippet>274</a>    }
-<a href=#275 id=275 data-nosnippet>275</a>}
+<a href=#250 id=250 data-nosnippet>250</a>    <span class="kw">use crate</span>::{
+<a href=#251 id=251 data-nosnippet>251</a>        NamespaceId, Payload, Transaction, v0::impls::block::test::ValidTest, v0_1::ADVZTxProof,
+<a href=#252 id=252 data-nosnippet>252</a>    };
+<a href=#253 id=253 data-nosnippet>253</a>
+<a href=#254 id=254 data-nosnippet>254</a>    <span class="doccomment">/// A zero-length transaction has no payload bytes to prove, so the proof
+<a href=#255 id=255 data-nosnippet>255</a>    /// alone does not pin which transaction it is for.
+<a href=#256 id=256 data-nosnippet>256</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#257 id=257 data-nosnippet>257</a>    </span><span class="kw">async fn </span>empty_tx_proof_rejects_nonempty_tx() {
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = jf_utils::test_rng();
+<a href=#259 id=259 data-nosnippet>259</a>        <span class="kw">let </span>test = ValidTest::from_tx_lengths(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">5</span>]], <span class="kw-2">&amp;mut </span>rng);
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">let </span>block =
+<a href=#261 id=261 data-nosnippet>261</a>            Payload::from_transactions(<span class="kw-2">&amp;</span>test.all_txs(), <span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>Default::default())
+<a href=#262 id=262 data-nosnippet>262</a>                .<span class="kw">await
+<a href=#263 id=263 data-nosnippet>263</a>                </span>.unwrap()
+<a href=#264 id=264 data-nosnippet>264</a>                .<span class="number">0</span>;
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>disperse = advz_scheme(<span class="number">10</span>).disperse(block.encode()).unwrap();
+<a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>commit = VidCommitment::V0(disperse.commit);
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>common = VidCommon::V0(disperse.common.clone());
+<a href=#268 id=268 data-nosnippet>268</a>
+<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>index = block.iter(block.ns_table()).next().unwrap();
+<a href=#270 id=270 data-nosnippet>270</a>        <span class="kw">let </span>(tx, proof) = ADVZTxProof::new(<span class="kw-2">&amp;</span>index, <span class="kw-2">&amp;</span>block, <span class="kw-2">&amp;</span>disperse.common).unwrap();
+<a href=#271 id=271 data-nosnippet>271</a>        <span class="macro">assert!</span>(tx.payload().is_empty());
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="macro">assert!</span>(proof.verify(block.ns_table(), <span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>common));
+<a href=#273 id=273 data-nosnippet>273</a>
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">let </span>forged = Transaction::new(tx.namespace(), <span class="string">b"not in the block"</span>.to_vec());
+<a href=#275 id=275 data-nosnippet>275</a>        <span class="macro">assert!</span>(!proof.verify(block.ns_table(), <span class="kw-2">&amp;</span>forged, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>common));
+<a href=#276 id=276 data-nosnippet>276</a>    }
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="doccomment">/// Both namespaces hold one 3-byte tx and fit in the first field element,
+<a href=#279 id=279 data-nosnippet>279</a>    /// so every range of `forged` has the same length as the honest range and
+<a href=#280 id=280 data-nosnippet>280</a>    /// lies in the same element. jf-advz 0.2.4 accepted the honest proof's
+<a href=#281 id=281 data-nosnippet>281</a>    /// prefix and suffix at the other namespace's ranges (jellyfish-compat#56).
+<a href=#282 id=282 data-nosnippet>282</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#283 id=283 data-nosnippet>283</a>    </span><span class="kw">async fn </span>tx_proof_rejects_tx_moved_to_another_namespace() {
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw">let </span>txs = [(<span class="number">10u32</span>, <span class="string">b"abc"</span>), (<span class="number">20</span>, <span class="string">b"xyz"</span>)]
+<a href=#285 id=285 data-nosnippet>285</a>            .map(|(ns, bytes)| Transaction::new(NamespaceId::from(ns), bytes.to_vec()));
+<a href=#286 id=286 data-nosnippet>286</a>        <span class="kw">let </span>block = Payload::from_transactions(<span class="kw-2">&amp;</span>txs, <span class="kw-2">&amp;</span>Default::default(), <span class="kw-2">&amp;</span>Default::default())
+<a href=#287 id=287 data-nosnippet>287</a>            .<span class="kw">await
+<a href=#288 id=288 data-nosnippet>288</a>            </span>.unwrap()
+<a href=#289 id=289 data-nosnippet>289</a>            .<span class="number">0</span>;
+<a href=#290 id=290 data-nosnippet>290</a>        <span class="kw">let </span>disperse = advz_scheme(<span class="number">10</span>).disperse(block.encode()).unwrap();
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>commit = VidCommitment::V0(disperse.commit);
+<a href=#292 id=292 data-nosnippet>292</a>        <span class="kw">let </span>common = VidCommon::V0(disperse.common.clone());
+<a href=#293 id=293 data-nosnippet>293</a>
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="kw">let </span>index = block.iter(block.ns_table()).next().unwrap();
+<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">let </span>(tx, proof) = ADVZTxProof::new(<span class="kw-2">&amp;</span>index, <span class="kw-2">&amp;</span>block, <span class="kw-2">&amp;</span>disperse.common).unwrap();
+<a href=#296 id=296 data-nosnippet>296</a>        <span class="macro">assert!</span>(proof.verify(block.ns_table(), <span class="kw-2">&amp;</span>tx, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>common));
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="macro">assert_eq!</span>(tx, txs[<span class="number">0</span>]);
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="kw">let </span>forged = Transaction::new(txs[<span class="number">1</span>].namespace(), tx.payload().to_vec());
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="macro">assert!</span>(!proof.verify(block.ns_table(), <span class="kw-2">&amp;</span>forged, <span class="kw-2">&amp;</span>commit, <span class="kw-2">&amp;</span>common));
+<a href=#301 id=301 data-nosnippet>301</a>    }
+<a href=#302 id=302 data-nosnippet>302</a>}
 </code></pre></div></section></main></body></html>
