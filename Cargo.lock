@@ -5742,8 +5742,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jf-advz"
-version = "0.2.4"
-source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-advz-v0.2.4#4b935eeb59e404b38f823694eb488c1377468f36"
+version = "0.2.5"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=chore%2Fmove-compat-crates#5348f81a755883a09d620170d195dbe043a09a1b"
 dependencies = [
  "anyhow",
  "ark-ec 0.5.0",
@@ -5815,8 +5815,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree-compat"
-version = "0.3.1"
-source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.3.1#4b935eeb59e404b38f823694eb488c1377468f36"
+version = "0.3.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=chore%2Fmove-compat-crates#5348f81a755883a09d620170d195dbe043a09a1b"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
