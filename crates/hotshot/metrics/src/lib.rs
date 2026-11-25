@@ -1,13 +1,50 @@
 // Copyright (c) 2021-2026 Espresso Systems (espressosys.com)
 // This file is part of the Espresso Network repository.
 
-//! The [`Metrics`] trait is used to collect information from multiple components in the entire system.
+//! A vendor-neutral way for every component to publish metrics, with a no-op implementation
+//! ([`NoMetrics`]) and a Prometheus backend (`prometheus::PrometheusMetrics`, feature `prometheus`).
 //!
-//! This trait can be used to spawn the following traits:
-//! - [`Counter`]: an ever-increasing value (example usage: total bytes send/received)
-//! - [`Gauge`]: a value that store the latest value, and can go up and down (example usage: amount of users logged in)
-//! - [`Histogram`]: stores multiple float values based for a graph (example usage: CPU %)
-//! - text: stores a constant string in the collected metrics
+//! # Contract
+//!
+//! ## What a caller gets
+//!
+//! - [`Metrics`] creates write-only handles: a [`Counter`] only goes up, a [`Gauge`] is set or
+//!   moved by a delta, a [`Histogram`] records points, and a text metric records a constant string.
+//!   Each kind also comes as a family ([`MetricsFamily`]), partitioned by label values.
+//! - [`Metrics::subgroup`] returns a child group. The same name returns the same group.
+//! - Handles are `Send + Sync` and can be cloned.
+//!
+//! ## Names
+//!
+//! - A metric's full name is its group path and its own name joined with `_`. The first group is
+//!   the Prometheus namespace and the rest form the subsystem, so the paths `a`/`b_c` and
+//!   `a`/`b`/`c` produce the same full names.
+//! - A full name must be unique in the whole tree. Create each metric once and keep its handle.
+//! - A duplicate is not handled the same way by every implementation: `PrometheusMetrics` panics,
+//!   [`NoMetrics`] accepts it silently. A duplicate therefore passes tests that use [`NoMetrics`]
+//!   and fails only where Prometheus runs. This is known and accepted: checking names would give
+//!   [`NoMetrics`] state, and callers create it by value in many places.
+//! - A family's [`create`](MetricsFamily::create) takes exactly one value per label name, in
+//!   order; Prometheus panics otherwise. The same label values return the same series.
+//!   [`destroy`](MetricsFamily::destroy) of unknown label values only logs a warning.
+//!
+//! ## Implementations
+//!
+//! - [`NoMetrics`]: every call does nothing and [`Metrics::is_recording`] returns `false`.
+//! - `PrometheusMetrics`: the unit label becomes the help text (the name if there is none),
+//!   gauges hold unsigned values, histograms use the Prometheus default buckets, and a text
+//!   metric is a gauge set to 1. It also reads metrics back by name within a group and exports
+//!   the Prometheus text format.
+//! - The `prometheus` feature is off by default, so the core depends only on `dyn-clone` and
+//!   crates in the SP1 zkVM build can use it.
+//!
+//! ## Not covered
+//!
+//! - The trait has no read side: reading a value back needs the concrete backend.
+//! - Histogram buckets cannot be configured.
+//! - `cliquenet` has its own, separate `Metrics` trait.
+//!
+//! This crate depends on no other workspace crate, and must not.
 
 use std::fmt::Debug;
 
@@ -74,7 +111,7 @@ pub trait Metrics: Send + Sync + DynClone + Debug {
 /// ## Counting HTTP requests, partitioned by method.
 ///
 /// ```
-/// # use hotshot_types::traits::metrics::{Metrics, MetricsFamily, Counter};
+/// # use hotshot_metrics::{Metrics, MetricsFamily, Counter};
 /// # fn doc(_metrics: Box<dyn Metrics>) {
 /// let metrics: Box<dyn Metrics>;
 /// # metrics = _metrics;
@@ -96,7 +133,7 @@ pub trait Metrics: Send + Sync + DynClone + Debug {
 /// ## Using labels to store key-value text pairs.
 ///
 /// ```
-/// # use hotshot_types::traits::metrics::{Metrics, MetricsFamily};
+/// # use hotshot_metrics::{Metrics, MetricsFamily};
 /// # fn doc(_metrics: Box<dyn Metrics>) {
 /// let metrics: Box<dyn Metrics>;
 /// # metrics = _metrics;
