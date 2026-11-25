@@ -337,15 +337,6 @@ pub struct LeafQueryDataLegacy<Types: NodeType> {
     pub qc: QuorumCertificate<Types>,
 }
 
-impl<Types: NodeType> From<LeafQueryDataLegacy<Types>> for LeafQueryData<Types> {
-    fn from(legacy: LeafQueryDataLegacy<Types>) -> Self {
-        Self {
-            leaf: Leaf2::from(legacy.leaf).into(),
-            qc: legacy.qc.to_qc2().into(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Snafu)]
 #[snafu(display("QC references leaf {qc_leaf}, but expected {leaf}"))]
 pub struct InconsistentLeafError<Types: NodeType> {

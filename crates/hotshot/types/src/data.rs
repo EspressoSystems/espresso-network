@@ -702,18 +702,6 @@ impl<TYPES: NodeType> ViewChangeEvidence<TYPES> {
             ViewChangeEvidence::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
         }
     }
-
-    /// Convert to ViewChangeEvidence2
-    pub fn to_evidence2(self) -> ViewChangeEvidence2<TYPES> {
-        match self {
-            ViewChangeEvidence::Timeout(timeout_cert) => {
-                ViewChangeEvidence2::Timeout(timeout_cert.to_tc2())
-            },
-            ViewChangeEvidence::ViewSync(view_sync_cert) => {
-                ViewChangeEvidence2::ViewSync(view_sync_cert.to_vsc2())
-            },
-        }
-    }
 }
 
 /// Helper type to encapsulate the various ways that proposal certificates can be captured and

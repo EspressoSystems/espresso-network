@@ -9,15 +9,9 @@ use std::{
 use anyhow::Context;
 use bytesize::ByteSize;
 use clap::Parser;
-use committable::Committable;
 use derive_more::{From, Into};
 use espresso_utils::{impl_serde_from_string_or_integer, ser::FromStringOrInteger};
 use futures::future::BoxFuture;
-use hotshot_types::{
-    consensus::CommitmentMap,
-    data::{Leaf, Leaf2},
-    traits::node_implementation::NodeType,
-};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -27,17 +21,6 @@ use time::{
 use tokio::time::sleep;
 
 use crate::ChainConfig;
-
-pub fn upgrade_commitment_map<Types: NodeType>(
-    map: CommitmentMap<Leaf<Types>>,
-) -> CommitmentMap<Leaf2<Types>> {
-    map.into_values()
-        .map(|leaf| {
-            let leaf2: Leaf2<Types> = leaf.into();
-            (leaf2.commit(), leaf2)
-        })
-        .collect()
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Update<T> {

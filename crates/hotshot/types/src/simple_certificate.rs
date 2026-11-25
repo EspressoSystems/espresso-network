@@ -404,49 +404,6 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
-    /// Convert a `ViewSyncFinalizeCertificate` into a `ViewSyncFinalizeCertificate2`
-    pub fn to_vsc2(self) -> ViewSyncFinalizeCertificate2<TYPES> {
-        let data = ViewSyncFinalizeData2 {
-            relay: self.data.relay,
-            round: self.data.round,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
-impl<TYPES: NodeType> TimeoutCertificate<TYPES> {
-    /// Convert a `TimeoutCertificate` into a `TimeoutCertificate2`
-    pub fn to_tc2(self) -> TimeoutCertificate2<TYPES> {
-        let data = TimeoutData2 {
-            view: self.data.view,
-            epoch: None,
-        };
-
-        let bytes: [u8; 32] = self.vote_commitment.into();
-        let vote_commitment = Commitment::from_raw(bytes);
-
-        SimpleCertificate {
-            data,
-            vote_commitment,
-            view_number: self.view_number,
-            signatures: self.signatures.clone(),
-            _pd: PhantomData,
-        }
-    }
-}
-
 /// A timeout certificate, in one of the forms its signers may have used.
 #[derive(derive_more::Debug, Clone, Eq, PartialEq, Hash)]
 pub enum TimeoutEvidence<T: NodeType> {
