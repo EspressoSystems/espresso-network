@@ -251,9 +251,7 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
     epoch_length: EpochLength,
 ) -> Result<EpochNumber, MalformedProposal> {
     let view = proposal.view_number();
-    let Some(claimed_epoch) = proposal.justify_qc.epoch() else {
-        return Err(MalformedProposal::JustifyQcWithoutEpoch(view));
-    };
+    let claimed_epoch = proposal.justify_qc.data.epoch;
     let parent_block = proposal.block_header.block_number().saturating_sub(1);
     let expected_epoch = epoch_length.epoch_of(parent_block);
     if claimed_epoch != expected_epoch {
@@ -724,12 +722,6 @@ pub enum MalformedProposal {
         expected: EpochNumber,
         claimed: EpochNumber,
     },
-
-    #[error("justify_qc of proposal at view {0} names no epoch")]
-    JustifyQcWithoutEpoch(ViewNumber),
-
-    #[error("justify_qc of proposal at view {0} names no block number")]
-    JustifyQcWithoutBlockNumber(ViewNumber),
 
     #[error(
         "justify_qc of proposal at view {view} is at the genesis view but certifies block \

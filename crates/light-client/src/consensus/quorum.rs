@@ -214,8 +214,8 @@ pub trait Quorum: Sync {
                 // claiming the wrong epoch will fail signature verification.
                 let committing = first.unwrap_or(cert);
                 let next_epoch = match (
-                    committing.as_certificate_pair().and_then(CertificatePair::epoch),
-                    cert.as_certificate_pair().and_then(CertificatePair::epoch),
+                    committing.as_certificate_pair().map(CertificatePair::epoch),
+                    cert.as_certificate_pair().map(CertificatePair::epoch),
                 ) {
                     // Certificates from before the epochs upgrade are always checked against the
                     // quorum supplied for this proof.

@@ -3308,4 +3308,128 @@ mod tests {
         assert_eq!(anchor_view, Some(ViewNumber::new(2)));
         assert_eq!(storage.load_state_cert().await.unwrap(), Some(state_cert));
     }
+
+    /// A leaf from before the new protocol, at view 1 and height `block_number`, with the QC
+    /// that certifies it.
+    async fn legacy_anchor(block_number: u64) -> (Leaf2, QuorumCertificate2<SeqTypes>) {
+        let version = versions::EPOCH_REWARD_VERSION;
+        let node_state = NodeState::mock().with_genesis_version(version);
+        let genesis = Leaf2::genesis(&ValidatedState::default(), &node_state, version).await;
+        let mut block_header = genesis.block_header().clone();
+        *block_header.height_mut() = block_number;
+        let justify_qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &node_state,
+            Upgrade::trivial(version),
+        )
+        .await;
+        let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header,
+                view_number: ViewNumber::new(1),
+                justify_qc: justify_qc.clone(),
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: EpochNumber::new(1),
+                state_cert: None,
+            },
+        });
+        assert!(
+            leaf.block_header().version() < versions::NEW_PROTOCOL_VERSION,
+            "setup: the anchor is from before the new protocol"
+        );
+        let mut qc = justify_qc;
+        qc.view_number = leaf.view_number();
+        qc.data.leaf_commit = Committable::commit(&leaf);
+        qc.data.epoch = EpochNumber::new(1);
+        qc.data.block_number = block_number;
+        (leaf, qc)
+    }
+
+    /// The next epoch's QC over the data of `qc`, at `view`.
+    fn next_epoch_qc_over(
+        qc: &QuorumCertificate2<SeqTypes>,
+        view: ViewNumber,
+    ) -> NextEpochQuorumCertificate2<SeqTypes> {
+        let data: NextEpochQuorumData2<SeqTypes> = qc.data.into();
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
+        let versioned_data = VersionedVoteData::new_infallible(data.clone(), view, &upgrade_lock);
+        let bytes: [u8; 32] = versioned_data.commit().into();
+        NextEpochQuorumCertificate2::new(data, Commitment::from_raw(bytes), view, None, PhantomData)
+    }
+
+    /// `load_consensus_state` refuses an anchor leaf from before the new protocol whose QC
+    /// certifies an epoch transition block without the next epoch's QC over the same data. The
+    /// check does not apply to a block outside the transition, nor when epochs are off.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_load_consensus_state_checks_the_legacy_anchors_next_epoch_qc<
+        P: TestablePersistence,
+    >(
+        _p: PhantomData<P>,
+    ) {
+        const EPOCH_HEIGHT: u64 = 10;
+        let transition_block = EPOCH_HEIGHT;
+        let ordinary_block = 3;
+
+        // (anchor block number, next epoch QC view if any, epoch height or `None` for epochs off,
+        //  loads)
+        let (_, transition_qc) = legacy_anchor(transition_block).await;
+        let cases = [
+            (transition_block, None, Some(EPOCH_HEIGHT), false),
+            (
+                transition_block,
+                Some(transition_qc.view_number + 1),
+                Some(EPOCH_HEIGHT),
+                false,
+            ),
+            (
+                transition_block,
+                Some(transition_qc.view_number),
+                Some(EPOCH_HEIGHT),
+                true,
+            ),
+            (transition_block, None, None, true),
+            (ordinary_block, None, Some(EPOCH_HEIGHT), true),
+        ];
+        for (block_number, next_epoch_qc_view, epoch_height, loads) in cases {
+            let (leaf, qc) = legacy_anchor(block_number).await;
+            let next_epoch_qc = next_epoch_qc_view.map(|view| next_epoch_qc_over(&qc, view));
+            let tmp = P::tmp_storage().await;
+            let storage = P::connect(&tmp).await;
+            storage
+                .append_decided_leaves(
+                    leaf.view_number(),
+                    [(
+                        &leaf_info(leaf.clone()),
+                        CertificatePair::new(qc, next_epoch_qc),
+                    )],
+                    &NullEventConsumer,
+                )
+                .await
+                .unwrap();
+            let node_state = match epoch_height {
+                Some(epoch_height) => NodeState::mock().with_epoch_height(epoch_height),
+                None => NodeState::mock(),
+            };
+
+            let result = storage
+                .load_consensus_state(node_state, Upgrade::trivial(versions::EPOCH_REWARD_VERSION))
+                .await;
+
+            let case = format!(
+                "block {block_number}, next epoch QC at {next_epoch_qc_view:?}, epoch height \
+                 {epoch_height:?}"
+            );
+            match result {
+                Ok((initializer, anchor_view)) => {
+                    assert!(loads, "{case}: loaded, expected a refusal");
+                    assert_eq!(initializer.anchor_leaf(), &leaf, "{case}");
+                    assert_eq!(anchor_view, Some(leaf.view_number()), "{case}");
+                },
+                Err(err) => assert!(!loads, "{case}: refused ({err:#}), expected to load"),
+            }
+        }
+    }
 }

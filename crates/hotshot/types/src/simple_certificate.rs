@@ -861,13 +861,13 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     }
 
     /// The epoch number this certificate belongs to.
-    pub fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.qc.data.epoch)
+    pub fn epoch(&self) -> EpochNumber {
+        self.qc.data.epoch
     }
 
     /// The block number attached to this certificate.
-    pub fn block_number(&self) -> Option<u64> {
-        Some(self.qc.data.block_number)
+    pub fn block_number(&self) -> u64 {
+        self.qc.data.block_number
     }
 
     /// Verify that the next epoch QC is present and consistent if required.

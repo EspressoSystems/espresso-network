@@ -893,7 +893,7 @@ where
                 //  Garbage collect the data for views < decided view
                 if let Some(newest) = leaves.first() {
                     let gc_view = newest.view_number();
-                    let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
+                    let gc_epoch = newest.justify_qc().data.epoch;
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
                     // A gap-fill decide trails the decided view; gc already covered its leaves.
                     if gc_view == self.consensus.last_decided_view() {
