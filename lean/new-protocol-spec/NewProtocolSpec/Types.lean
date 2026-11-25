@@ -54,11 +54,6 @@ deriving DecidableEq, Repr, Inhabited
 /--
 What a vote1 signs: the block, the epoch whose committee certifies it, and its
 height.
-
-The epoch is signed because a verifier needs it before it has the block: a
-certificate is checked against the committee of the epoch it names. The height
-is signed because a certificate is often all a node has of a block, and the
-epoch arithmetic is about heights.
 -/
 structure Vote1Data where
   /-- The block voted for. -/
@@ -136,8 +131,7 @@ abbrev TimeoutCert := Certificate TimeoutData
 /--
 A proposal to append a block to the chain.
 
-Carries what consensus reads. Fields a real proposal adds for light clients,
-state certificates and version upgrades are not modelled.
+Carries what consensus reads.
 -/
 structure Proposal where
   /-- The block header. -/
@@ -226,10 +220,7 @@ def Proposal.payloadCommit (p : Proposal) : PayloadCommit :=
 The hash identifying a block.
 
 Opaque, so no proof can see through to the projection and every rule relates
-`blockHash` images without depending on how they arise. That is what keeps
-`CollisionFree` consistent: a visible body would let two blocks differing only in
-view share an identity, which refutes it. The body is there for the compiler, so
-a machine built on this can run.
+`blockHash` images without depending on how they arise.
 -/
 opaque blockHash (b : Block) : BlockHash := b.identity
 

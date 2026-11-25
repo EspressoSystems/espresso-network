@@ -25,15 +25,14 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::SuccessThreshold,
     simple_vote::{TimeoutVote2, TimeoutVote3},
-    traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
+    traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use super::common::{
     runner::{DropInbound, NodeAction, NodeChange, TestError, TestRunner},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData, mock_membership},
+    utils::{ConsensusHarness, TestData, mock_membership},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -80,21 +79,6 @@ async fn boundary_timeout_vote(
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
     let mut harness = ConsensusHarness::new_with_upgrade_lock(node_index, EPOCH_HEIGHT, lock).await;
 
-    // Pre-feed the DRB results the transition proposals need, as the other
-    // epoch-change tests do.
-    let mut drb_epochs = BTreeSet::new();
-    for view in &test_data.views[..=BOUNDARY] {
-        let block = BlockHeader::<TestTypes>::block_number(&view.proposal.data.block_header);
-        if is_epoch_transition(block, EPOCH_HEIGHT) {
-            drb_epochs.insert(view.epoch_number + 1);
-        }
-    }
-    for e in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(e, TEST_DRB_RESULT))
-            .await;
-    }
-
     let boundary = &test_data.views[BOUNDARY];
     for view in &test_data.views[..=BOUNDARY] {
         harness
@@ -126,10 +110,7 @@ async fn boundary_timeout_vote(
     );
     // Not the last `ViewChanged`: an `EpochChange` that arrives after Cert1
     // moved the node into the view relabels it without emitting another one.
-    let label = harness
-        .consensus
-        .current_epoch()
-        .expect("the node holds an epoch past the boundary");
+    let label = harness.consensus.current_epoch();
 
     harness
         .apply(ConsensusInput::Timeout(ViewNumber::new(NEXT_VIEW)))
@@ -138,7 +119,7 @@ async fn boundary_timeout_vote(
         .outputs()
         .iter()
         .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutVote(vote, _) => Some(vote.clone()),
+            ConsensusOutput::SendTimeoutVote(vote, ..) => Some(vote.clone()),
             _ => None,
         })
         .last()
@@ -170,7 +151,7 @@ async fn split_boundary_votes(
 
 fn v3_vote(vote: TimeoutVote<TestTypes>) -> TimeoutVote3<TestTypes> {
     match vote {
-        TimeoutVote::V3(vote) => vote,
+        TimeoutVote::V3(ballot) => ballot.vote().clone(),
         TimeoutVote::V2(_) => panic!("epoch-binding lock must produce V3 votes"),
     }
 }
@@ -272,6 +253,8 @@ async fn v3_timeout_votes_split_at_epoch_boundary_form_no_certificate() {
 /// and the V2 collector then aggregates all 10 into a certificate.
 #[tokio::test]
 async fn v2_timeout_votes_split_at_epoch_boundary_form_a_certificate() {
+    // Tests behaviour before 0.7.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let lock = test_upgrade_lock();
     let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
 

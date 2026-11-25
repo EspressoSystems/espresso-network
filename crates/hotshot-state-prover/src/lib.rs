@@ -29,12 +29,13 @@ pub mod v3;
 pub mod utils;
 
 mod http;
+#[cfg(any(test, feature = "testing"))]
 mod test_utils;
 
 /// Configuration/Parameters used for hotshot state prover
 #[derive(Debug, Clone)]
 pub struct StateProverConfig {
-    /// Url of the state relay server (a CDN that sequencers push their Schnorr signatures to)
+    /// Url of the state relay server that sequencers push their Schnorr signatures to
     pub relay_server: Url,
     /// Interval between light client state update
     pub update_interval: Duration,

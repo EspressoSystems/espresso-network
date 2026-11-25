@@ -8,8 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::Context;
 use async_broadcast::{Receiver, RecvError};
 use hotshot_types::{
-    data::Leaf2,
-    event::{Event, EventType},
+    data::{Leaf2, ViewNumber},
     message::{Message, MessageKind},
     traits::{
         block_contents::BlockHeader, leaf_fetcher_network::LeafFetcherNetwork,
@@ -22,12 +21,21 @@ use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::Stat
 
 use crate::storage_types::TestStorage;
 
+/// External message delivered to the test membership's leaf fetcher.
+#[derive(Clone, Debug)]
+pub struct ExternalMessage {
+    /// View to use when replying to a leaf request.
+    pub view_number: ViewNumber,
+    /// Serialized leaf request or response.
+    pub data: Vec<u8>,
+}
+
 pub struct Leaf2Fetcher<TYPES: NodeType> {
     pub network: Arc<dyn LeafFetcherNetwork<TYPES>>,
     pub storage: TestStorage<TYPES>,
     pub listener: Option<JoinHandle<()>>,
     pub public_key: TYPES::SignatureKey,
-    pub network_receiver: Option<Receiver<Event<TYPES>>>,
+    pub network_receiver: Option<Receiver<ExternalMessage>>,
 }
 
 impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
@@ -45,7 +53,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         }
     }
 
-    pub fn set_external_channel(&mut self, mut network_receiver: Receiver<Event<TYPES>>) {
+    pub fn set_external_channel(&mut self, mut network_receiver: Receiver<ExternalMessage>) {
         let public_key = self.public_key.clone();
         let storage = self.storage.clone();
         let network = self.network.clone();
@@ -55,9 +63,9 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         let listener = tokio::spawn(async move {
             loop {
                 match network_receiver.recv_direct().await {
-                    Ok(Event {
+                    Ok(ExternalMessage {
                         view_number: view,
-                        event: EventType::ExternalMessageReceived { sender: _, data },
+                        data,
                     }) => {
                         let (requested_height, requester): (u64, TYPES::SignatureKey) =
                             match bincode::deserialize(&data) {
@@ -188,10 +196,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
         tokio::time::timeout(std::time::Duration::from_millis(200), async {
             loop {
                 match network_receiver.recv_direct().await {
-                    Ok(Event {
-                        view_number: _,
-                        event: EventType::ExternalMessageReceived { sender: _, data },
-                    }) => {
+                    Ok(ExternalMessage { data, .. }) => {
                         let leaf: Leaf2<TYPES> = match bincode::deserialize(&data) {
                             Ok(message) => message,
                             Err(e) => {

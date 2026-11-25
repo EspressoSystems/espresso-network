@@ -20,18 +20,26 @@ PATH_EVENTS = (
     ("request_block_header_queued", 2),
     ("block_built_applied", 4),
     ("header_created_applied", 5),
-    ("leaf2_commit_computed", 8),
+    ("proposal_assembled", 8),
     ("proposal_queued", 10),
     ("proposal_broadcast_start", 11),
     ("proposal_broadcast_end", 13),
     ("proposal_validated_v_minus_1", 15),
-    ("vote1_broadcast_start", 16),
-    ("cert1_v_minus_1_input_dispatched", 20),
+    ("vote1_v_minus_1_broadcast_start", 16),
+    ("cert1_v_minus_1_obtained", 20),
     ("vote2_v_minus_1_broadcast_end", 22),
-    ("cert2_v_minus_1_input_dispatched", 27),
+    ("cert2_v_minus_1_obtained", 27),
     ("leaf_decided", 40),
 )
 PATH_DURATIONS = [2, 2, 1, 3, 2, 1, 2, 2, 1, 4, 2, 5, 13]
+DISPERSAL_EVENTS = (
+    "block_commitments_start",
+    "block_commitments_end",
+    "vid_fragments_start",
+    "vid_fragments_end",
+    "vid_shares_unicast_start",
+    "vid_shares_unicast_end",
+)
 
 
 def leader_rows(view: int) -> list[tuple[int, str, int]]:
@@ -108,29 +116,41 @@ def test_leaders_rejects_two_proposers_for_one_view():
 
 
 def test_leader_path_splits_a_view_at_each_event():
-    path, skipped = leadertrace.leader_path(three_nodes(), warmup=1)
+    path, _, skipped = leadertrace.leader_path(three_nodes(), warmup=1)
     assert skipped == Counter()
     assert list(path) == [1, 2, 3]
     assert path[2] == pytest.approx(PATH_DURATIONS)
 
 
+def test_leader_path_ignores_the_dispersal_events():
+    trace = three_nodes()
+    base, _, _ = leadertrace.leader_path(trace, warmup=1)
+    for view in range(4):
+        events = trace[view % 3][view]
+        for i, event in enumerate(DISPERSAL_EVENTS):
+            events[event] = (10 * view + 4 + i) * MS
+    path, _, skipped = leadertrace.leader_path(trace, warmup=1)
+    assert skipped == Counter()
+    assert path == base
+
+
 def test_leader_path_sums_to_decision_time_after_t0():
-    path, _ = leadertrace.leader_path(three_nodes(), warmup=1)
+    path, _, _ = leadertrace.leader_path(three_nodes(), warmup=1)
     for row in path.values():
         assert sum(row) == pytest.approx(40)
 
 
 def test_leader_path_drops_the_warmup_views():
-    path, _ = leadertrace.leader_path(three_nodes(), warmup=3)
+    path, _, _ = leadertrace.leader_path(three_nodes(), warmup=3)
     assert list(path) == [3]
 
 
 def test_leader_path_keeps_negative_durations():
     trace = three_nodes()
     view, t0_ms, skew_ms = 2, 10, 2
-    cert1_ms = t0_ms * view + dict(PATH_EVENTS)["cert1_v_minus_1_input_dispatched"]
+    cert1_ms = t0_ms * view + dict(PATH_EVENTS)["cert1_v_minus_1_obtained"]
     trace[view % 3][view]["vote2_v_minus_1_broadcast_end"] = (cert1_ms - skew_ms) * MS
-    path, skipped = leadertrace.leader_path(trace, warmup=view)
+    path, _, skipped = leadertrace.leader_path(trace, warmup=view)
     segment = [name for name, _ in leadertrace.LEADER_PATH].index("Cert1 -> vote2 sent")
     assert skipped == Counter()
     assert path[view][segment] == pytest.approx(-skew_ms)
@@ -139,16 +159,31 @@ def test_leader_path_keeps_negative_durations():
 def test_leader_path_counts_skips_by_reason():
     trace = three_nodes()
     del trace[1][1]["header_created_applied"]
-    del trace[2][2]["cert2_v_minus_1_input_dispatched"]
+    del trace[2][2]["cert2_v_minus_1_obtained"]
     del trace[0][3]["leaf_decided"]
-    path, skipped = leadertrace.leader_path(trace, warmup=0)
+    path, skipped_views, skipped = leadertrace.leader_path(trace, warmup=0)
     assert list(path) == []
+    assert skipped_views == 4
     assert skipped == Counter(
         {
             "no t0 anchor": 1,
             "missing header_created_applied": 1,
-            "missing cert2_v_minus_1_input_dispatched": 1,
+            "missing cert2_v_minus_1_obtained": 1,
             "missing leaf_decided": 1,
+        }
+    )
+
+
+def test_leader_path_counts_every_absent_event_of_a_view():
+    trace = three_nodes()
+    del trace[1][1]["header_created_applied"]
+    del trace[1][1]["proposal_assembled"]
+    _, skipped_views, skipped = leadertrace.leader_path(trace, warmup=1)
+    assert skipped_views == 1
+    assert skipped == Counter(
+        {
+            "missing header_created_applied": 1,
+            "missing proposal_assembled": 1,
         }
     )
 
@@ -205,3 +240,47 @@ def test_cluster_finality_counts_decisions_of_views_without_a_leader():
     trace[0][99] = {"leaf_decided": 5}
     _, skipped = leadertrace.cluster_finality_ms(trace, warmup=0)
     assert skipped == Counter({"no leader": 1})
+
+
+def test_read_cpu_and_net_difference_the_cumulative_counters(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n20,30\n10,10\n40,35\n")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 20), (40, 20, 5)]
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n2,5,9\n1,1,2\n")
+    assert leadertrace.read_net(net) == [(2, 1, 4, 7)]
+
+
+def test_read_cpu_drops_the_interval_of_a_counter_reset(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,100\n20,150\n30,5\n40,15\n")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 50), (40, 10, 10)]
+
+
+def test_read_net_drops_intervals_where_time_does_not_advance(tmp_path: Path):
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n10,0,0\n10,5,5\n20,9,9\n")
+    assert leadertrace.read_net(net) == [(20, 10, 4, 4)]
+
+
+def test_read_cpu_rejects_a_foreign_header(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t,kind\n")
+    with pytest.raises(ValueError, match="header is not t_ns,usage_usec"):
+        leadertrace.read_cpu(cpu)
+
+
+def test_read_cpu_stops_at_a_truncated_final_row(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,10\n20,30\n30,")
+    assert leadertrace.read_cpu(cpu) == [(20, 10, 20)]
+    net = tmp_path / "net_node0.csv"
+    net.write_text("t_ns,rx_bytes,tx_bytes\n1,1,2\n2,5,9\n3,7")
+    assert leadertrace.read_net(net) == [(2, 1, 4, 7)]
+
+
+def test_read_cpu_rejects_a_broken_row_in_the_middle(tmp_path: Path):
+    cpu = tmp_path / "cpu_node0.csv"
+    cpu.write_text("t_ns,usage_usec\n10,10\n20\n30,40\n")
+    with pytest.raises(ValueError):
+        leadertrace.read_cpu(cpu)

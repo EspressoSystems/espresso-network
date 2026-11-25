@@ -75,17 +75,13 @@ impl<
         self.0.insert(first_epoch, committee);
     }
 
-    pub fn get(&self, epoch: Option<u64>) -> Option<Vec<TestStakeTableEntry<PubKey, StatePubKey>>> {
-        if let Some(e) = epoch {
-            // returns the greatest key smaller than or equal to `e`
-            self.0
-                .range((Bound::Included(&0), Bound::Included(&e)))
-                .last()
-                .map(|(_, committee)| committee)
-                .cloned()
-        } else {
-            None
-        }
+    pub fn get(&self, epoch: u64) -> Option<Vec<TestStakeTableEntry<PubKey, StatePubKey>>> {
+        // returns the greatest key smaller than or equal to `epoch`
+        self.0
+            .range((Bound::Included(&0), Bound::Included(&epoch)))
+            .last()
+            .map(|(_, committee)| committee)
+            .cloned()
     }
 }
 
@@ -109,16 +105,16 @@ pub trait TestStakeTable<
         da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     ) -> Self;
 
-    fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
+    fn stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
 
     fn full_stake_table(&self) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
 
-    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
+    fn da_stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>>;
 
     fn stake(
         &self,
         pub_key: PubKey,
-        epoch: Option<u64>,
+        epoch: u64,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
         self.stake_table(epoch)
             .iter()
@@ -129,7 +125,7 @@ pub trait TestStakeTable<
     fn da_stake(
         &self,
         pub_key: PubKey,
-        epoch: Option<u64>,
+        epoch: u64,
     ) -> Option<TestStakeTableEntry<PubKey, StatePubKey>> {
         self.da_stake_table(epoch)
             .iter()
@@ -137,7 +133,7 @@ pub trait TestStakeTable<
             .cloned()
     }
 
-    fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey>;
+    fn lookup_leader(&self, view_number: u64, epoch: u64) -> anyhow::Result<PubKey>;
 
     fn has_stake_table(&self, epoch: u64) -> bool;
 
@@ -148,8 +144,6 @@ pub trait TestStakeTable<
     fn add_drb_result(&mut self, epoch: u64, drb_result: DrbResult);
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult);
-
-    fn first_epoch(&self) -> Option<u64>;
 
     fn get_epoch_drb(&self, epoch: u64) -> anyhow::Result<DrbResult>;
 

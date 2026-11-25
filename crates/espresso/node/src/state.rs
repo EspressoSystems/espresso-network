@@ -6,11 +6,10 @@ use async_lock::Mutex;
 use committable::Committable;
 use either::Either;
 use espresso_types::{
-    BackoffParams, BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2,
-    ValidatedState,
+    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardMerkleTreeV1},
-    v0_4::Delta,
+    v0_4::{Delta, PermittedRewardMerkleTreeV2},
 };
 use futures::{StreamExt, future::Future};
 use hotshot_query_service::{
@@ -30,11 +29,8 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 
 use crate::{
     NodeState, SeqTypes,
-    api::{
-        LightClientProvider, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data,
-        context::ApiContext,
-    },
-    catchup::{CatchupStorage, SqlStateCatchup},
+    api::{LightClientProvider, RewardMerkleTreeDataSource},
+    catchup::{CatchupStorage, SingleAttemptCatchup},
     persistence::ChainConfigPersistence,
 };
 
@@ -173,7 +169,16 @@ async fn store_state_update(
     .await
     .context("failed to store fee merkle nodes")?;
 
-    // Insert block merkle tree nodes
+    store_block_frontier(tx, block_number, block_merkle_tree).await
+}
+
+/// Store the frontier of `block_merkle_tree`, the block tree at `block_number`, as that snapshot's
+/// block tree nodes.
+async fn store_block_frontier(
+    tx: &mut impl SequencerStateUpdate,
+    block_number: u64,
+    block_merkle_tree: &BlockMerkleTree,
+) -> anyhow::Result<()> {
     let (_, proof) = block_merkle_tree
         .lookup(block_number - 1)
         .expect_ok()
@@ -183,19 +188,15 @@ async fn store_state_update(
         block_merkle_tree.height(),
     );
 
-    {
-        tracing::debug!("inserting blocks frontier");
-        UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
-            tx,
-            proof,
-            path,
-            block_number,
-        )
-        .await
-        .context("failed to store block merkle nodes")?;
-    }
-
-    Ok(())
+    tracing::debug!("inserting blocks frontier");
+    UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
+        tx,
+        proof,
+        path,
+        block_number,
+    )
+    .await
+    .context("failed to store block merkle nodes")
 }
 
 #[tracing::instrument(
@@ -344,12 +345,8 @@ where
     tx.commit().await?;
 
     // Store the genesis reward tree at height 0 so catchup can find it.
-    let tree_data: RewardMerkleTreeV2Data = (&state.reward_merkle_tree_v2)
-        .try_into()
-        .context("serializing genesis reward tree")?;
-    let tree_bytes = bincode::serialize(&tree_data).context("serializing genesis reward tree")?;
     storage
-        .persist_tree(0, tree_bytes)
+        .save_reward_tree_v2(0, &state.reward_merkle_tree_v2)
         .await
         .context("storing genesis reward merkle tree")?;
 
@@ -360,37 +357,80 @@ where
 /// passed the height it is waiting for.
 const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
+/// How long the loop waits before it retries a step of its start that failed, such as a try to
+/// start from a recent epoch boundary.
+const BOUNDARY_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long the loop waits on a local catchup read. Consensus cuts local reads short, so that it
+/// can still vote in time. The loop has no such deadline, while peers may have pruned the heights
+/// it reads, so a slow read cut short on every try would stall it.
+const LOCAL_CATCHUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Where the state loop starts when it has no state of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EmptyStateStart {
+    /// From a snapshot at a recent epoch boundary, from peers, for a pruned node, which serves
+    /// recent state only. Fast, but the trees stay incomplete for good: they have no paths for the
+    /// blocks below the boundary, and no fee account the loop has not touched since.
+    RecentBoundary,
+    /// From genesis, on leaves from peers, for archive nodes and nodes without a pruner. Slow, but
+    /// the only way to complete trees.
+    Genesis,
+}
+
 #[tracing::instrument(skip_all)]
-pub(crate) async fn update_state_storage_loop<T, C>(
+pub(crate) async fn update_state_storage_loop<T>(
     storage: Arc<T>,
     instance: impl Future<Output = NodeState>,
-    provider: Arc<LightClientProvider<C>>,
+    provider: Arc<LightClientProvider>,
+    empty_state_start: EmptyStateStart,
 ) -> anyhow::Result<()>
 where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
-    C: ApiContext,
 {
     let mut instance = instance.await;
     // Use a separate rewards calculator for the state loop so it doesn't
     // interfere with consensus, which may be on a very different epoch.
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
+    // The loop can wait longer on its own database than consensus can.
+    if let Some(catchup) = instance
+        .state_catchup
+        .with_local_timeout(LOCAL_CATCHUP_TIMEOUT)
+    {
+        instance.state_catchup = catchup;
+    }
 
     // Resume from the newest snapshot in storage. The loop cannot start anywhere else:
     // `from_header` gives it a bare state, and its catchup fills in the block frontier and any fee
     // account it has not seen from the parent's snapshot in this database, which exists only up to
     // the head. The state pruner in turn never advances to the head, so that snapshot stays
     // readable however far behind the chain the loop has fallen.
-    let last_height = storage.get_last_state_height().await?;
-    let current_height = storage.block_height().await?;
+    let mut last_height = retry_until_ok("loading the state head", || async {
+        Ok(storage.get_last_state_height().await? as u64)
+    })
+    .await;
+    // With no state of its own on a pruned database, as on a fresh pruned node, the loop would
+    // replay the whole chain from genesis, mostly on leaves from peers. A pruned node serves recent
+    // state only, so give it a recent snapshot to resume from instead.
+    if last_height == 0
+        && empty_state_start == EmptyStateStart::RecentBoundary
+        && let Some(boundary) = seed_boundary_snapshot(&storage, &instance, &provider).await
+    {
+        last_height = boundary;
+    }
+    if last_height > 0 && empty_state_start == EmptyStateStart::Genesis {
+        report_incomplete_trees(&*storage).await;
+    }
+    let current_height = storage.block_height().await.ok();
     tracing::info!(
         node_id = instance.node_id,
         last_height,
-        current_height,
+        ?current_height,
         "updating state storage"
     );
 
-    let parent_leaf = leaf_at(&storage, &provider, last_height as u64).await;
+    let parent_leaf = leaf_at(&storage, &provider, last_height).await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.block_header());
 
     // Seed the parent's reward tree from storage.
@@ -407,66 +447,310 @@ where
     // Load the parent's tree from storage to avoid this. Doing it once is enough
     // every later iteration carries the tree forward in `parent_state`.
     if parent_leaf.block_header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
-        // The tree is only written at epoch boundaries, so the parent height
-        // usually has no row; fall back to the most recent tree at or below it.
-        let reward_merkle_tree_v2 = match storage
-            .load_reward_merkle_tree_v2(parent_leaf.height())
+        parent_state.reward_merkle_tree_v2 =
+            retry_until_ok("loading the parent's reward tree", || {
+                load_parent_reward_tree(&*storage, &parent_leaf)
+            })
             .await
-        {
-            Ok(tree) => tree,
-            Err(_) => storage
-                .load_latest_reward_merkle_tree_v2(parent_leaf.height())
-                .await
-                .context(
-                    "Error starting the state storage update loop: failed to load \
-                     RewardMerkleTreeV2 for the previous height",
-                )?,
-        };
-
-        // The fallback returns the latest tree at or below the parent height,
-        // which is the parent's tree only if their roots match (they do within an
-        // epoch). Verify against the root the parent header commits to.
-        let parent_reward_root = parent_leaf
-            .block_header()
-            .reward_merkle_tree_root()
-            .right()
-            .context("V5+ parent header must have a v2 reward root")?;
-        ensure!(
-            reward_merkle_tree_v2.tree.commitment() == parent_reward_root,
-            "loaded reward tree root {} does not match parent header {parent_reward_root}",
-            reward_merkle_tree_v2.tree.commitment(),
-        );
-
-        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
+            .tree;
     }
 
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.
         tracing::info!("storing genesis merklized state");
-        store_genesis_state(&*storage, instance.chain_config, &instance.genesis_state)
-            .await
-            .context("storing genesis state")?;
+        // Every write is an upsert, so a retry after a partial store is safe.
+        retry_until_ok("storing the genesis state", || {
+            store_genesis_state(&*storage, instance.chain_config, &instance.genesis_state)
+        })
+        .await;
     }
 
     follow_leaves(&storage, &instance, &provider, parent_leaf, parent_state).await;
     Ok(())
 }
 
+/// Archive nodes and nodes without a pruner are meant to have complete trees, which a state that
+/// started from a boundary snapshot, as on a node that was pruned before, never gets: the loop only
+/// moves forward. So say so.
+async fn report_incomplete_trees<T>(storage: &T)
+where
+    T: SequencerStateDataSource,
+{
+    match storage.load_state_start_height().await {
+        Ok(Some(start)) => tracing::error!(
+            start,
+            "merklized state started from a boundary snapshot, not genesis, so its trees are \
+             incomplete"
+        ),
+        Ok(None) => {},
+        Err(err) => tracing::warn!(
+            err = %format_args!("{err:#}"),
+            "failed to load the state start height"
+        ),
+    }
+}
+
+/// Run `f` until it succeeds. An error would end the loop for good, possibly after a seed that
+/// waited minutes for peers, so the steps of its start retry, as the leaves it applies do.
+async fn retry_until_ok<R, Fut>(step: &str, mut f: impl FnMut() -> Fut) -> R
+where
+    Fut: Future<Output = anyhow::Result<R>>,
+{
+    loop {
+        match f().await {
+            Ok(res) => return res,
+            Err(err) => tracing::error!(
+                step,
+                err = %format_args!("{err:#}"),
+                "state loop start step failed, retrying"
+            ),
+        }
+        sleep(BOUNDARY_RETRY_INTERVAL).await;
+    }
+}
+
+/// The reward tree of `parent_leaf`, from storage.
+async fn load_parent_reward_tree<T>(
+    storage: &T,
+    parent_leaf: &Leaf2,
+) -> anyhow::Result<PermittedRewardMerkleTreeV2>
+where
+    T: SequencerStateDataSource,
+{
+    // The tree is only written at epoch boundaries, so the parent height usually has no row; fall
+    // back to the most recent tree at or below it.
+    let tree = match storage
+        .load_reward_merkle_tree_v2(parent_leaf.height())
+        .await
+    {
+        Ok(tree) => tree,
+        Err(_) => storage
+            .load_latest_reward_merkle_tree_v2(parent_leaf.height())
+            .await
+            .context("failed to load RewardMerkleTreeV2 for the previous height")?,
+    };
+
+    // The fallback returns the latest tree at or below the parent height, which is the parent's
+    // tree only if their roots match (they do within an epoch). Verify against the root the parent
+    // header commits to.
+    let parent_reward_root = parent_leaf
+        .block_header()
+        .reward_merkle_tree_root()
+        .right()
+        .context("V5+ parent header must have a v2 reward root")?;
+    ensure!(
+        tree.tree.commitment() == parent_reward_root,
+        "loaded reward tree root {} does not match parent header {parent_reward_root}",
+        tree.tree.commitment(),
+    );
+    Ok(tree)
+}
+
+/// Store a snapshot at a recent epoch boundary for a loop with no state of its own, and return the
+/// boundary, which the loop then resumes from as after a restart.
+///
+/// The boundary is the newest one at or below the local tip, once the node holds a block above the
+/// data pruned height, or above genesis before the data pruner has run; a fresh node holds none
+/// until consensus decides one. It has to be recent: the reward tree is stored only at boundaries,
+/// and every node garbage collects all but the last few, so peers have no tree for an older
+/// snapshot.
+///
+/// The snapshot holds the block frontier and the reward tree, fetched from peers and checked
+/// against the boundary header. Peers serve fee accounts only by address, and the loop cannot know
+/// them all, so the fee tree starts empty and the catchup in [`apply_leaf`] fetches each account
+/// from peers when the loop first needs it. From V0.6 on no block reads one, so it stays empty.
+///
+/// Returns `None`, which leaves the loop to replay from genesis, when there is no boundary yet, or
+/// when it predates epoch rewards and so has no reward tree stored at it.
+async fn seed_boundary_snapshot<T>(
+    storage: &Arc<T>,
+    instance: &NodeState,
+    provider: &LightClientProvider,
+) -> Option<u64>
+where
+    T: SequencerStateDataSource,
+    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+{
+    let epoch_height = instance.epoch_height.filter(|height| *height > 0)?;
+    let pruned = retry_until_ok("loading the data pruned height", || {
+        storage.load_pruned_height()
+    })
+    .await
+    .unwrap_or(0);
+    // Each request is sent once, because this loop retries: peers never answer a request for a
+    // boundary they have pruned, and the next try then picks the boundary again from the tip. Each
+    // try passes its number on, so that peers get longer to answer.
+    let mut retry = 0;
+    let (leaf, state) = loop {
+        let tip = local_tip_above(&**storage, pruned).await;
+        let boundary = tip - tip % epoch_height;
+        if boundary == 0 {
+            return None;
+        }
+        let leaf = leaf_at(storage, provider, boundary).await;
+        if leaf.block_header().version() < EPOCH_REWARD_VERSION {
+            return None;
+        }
+        let catchup = SingleAttemptCatchup::new(instance.state_catchup.clone(), retry);
+        match fetch_boundary_state(&catchup, instance, &leaf).await {
+            Ok(state) => break (leaf, state),
+            // Peers may not have reached the boundary yet, or, if the local tip is stale, may
+            // have pruned its frontier or garbage collected its reward tree. Try again from
+            // wherever the tip is then.
+            Err(err) => {
+                tracing::warn!(
+                    boundary,
+                    retry,
+                    err = %format_args!("{err:#}"),
+                    "fetching the state at the epoch boundary failed, retrying"
+                );
+                retry += 1;
+                sleep(BOUNDARY_RETRY_INTERVAL).await;
+            },
+        }
+    };
+    let height = leaf.height();
+    // Every write is an upsert, so a retry after a partial store is safe.
+    retry_until_ok(
+        &format!("storing the boundary snapshot at height {height}"),
+        || store_boundary_snapshot(&**storage, height, &state),
+    )
+    .await;
+    tracing::info!(
+        height,
+        pruned,
+        "state loop starts from a snapshot at a recent epoch boundary"
+    );
+    Some(height)
+}
+
+/// The height of the newest block in local storage, once it is above `pruned`.
+async fn local_tip_above<T>(storage: &T, pruned: u64) -> u64
+where
+    T: SequencerStateDataSource,
+{
+    loop {
+        match storage.block_height().await {
+            Ok(height) if height as u64 > pruned + 1 => return height as u64 - 1,
+            Ok(height) => tracing::info!(
+                height,
+                pruned,
+                "no block above the data pruned height yet; waiting for one"
+            ),
+            Err(err) => tracing::warn!(
+                err = %format_args!("{err:#}"),
+                "failed to load the local block height"
+            ),
+        }
+        sleep(BOUNDARY_RETRY_INTERVAL).await;
+    }
+}
+
+/// The state at the epoch boundary `leaf`, from `catchup`: the block frontier and the whole reward
+/// tree, each checked against its root in the boundary header.
+async fn fetch_boundary_state(
+    catchup: &impl StateCatchup,
+    instance: &NodeState,
+    leaf: &Leaf2,
+) -> anyhow::Result<ValidatedState> {
+    let header = leaf.block_header();
+    let mut state = ValidatedState::from_header(header);
+    catchup
+        .remember_blocks_merkle_tree(
+            instance,
+            leaf.height(),
+            leaf.view_number(),
+            &mut state.block_merkle_tree,
+        )
+        .await
+        .context("fetching the block frontier")?;
+    let reward_root = header
+        .reward_merkle_tree_root()
+        .right()
+        .context("V5+ header must have a v2 reward root")?;
+    state.reward_merkle_tree_v2 = catchup
+        .fetch_reward_merkle_tree_v2(
+            leaf.height(),
+            leaf.view_number(),
+            reward_root,
+            Default::default(),
+        )
+        .await
+        .context("fetching the reward tree")?
+        .tree;
+    Ok(state)
+}
+
+/// Store `state`, the state at the epoch boundary `height`, as the loop's head snapshot. The loop
+/// keeps nothing of `state`: on every start it rebuilds the head's state from the header and fills
+/// it from this database, so the head needs what a state update stores:
+/// - The reward tree. The loop reads it from here only, so it goes first: a head without it would
+///   fail every start.
+/// - The block frontier. Without it, the loop would fetch it from peers again, and block proofs at
+///   the head would fail.
+/// - The chain config. The loop takes it from the header, but only the loop stores it, and chain
+///   config catchup reads it from here.
+///
+/// No state is stored below the boundary, so the state pruned height goes just below it: queries
+/// for lower heights then answer that the state is pruned, as on a node that pruned it. The
+/// boundary is also recorded as where the state starts, so that a node meant to have complete
+/// trees can tell that it does not.
+async fn store_boundary_snapshot<T>(
+    storage: &T,
+    height: u64,
+    state: &ValidatedState,
+) -> anyhow::Result<()>
+where
+    T: SequencerStateDataSource,
+    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+{
+    storage
+        .save_reward_tree_v2(height, &state.reward_merkle_tree_v2)
+        .await
+        .context("storing the boundary reward tree")?;
+
+    let mut tx = storage
+        .write()
+        .await
+        .context("opening transaction for the boundary snapshot")?;
+    store_block_frontier(&mut tx, height, &state.block_merkle_tree).await?;
+    if let Some(chain_config) = state.chain_config.resolve() {
+        tx.insert_chain_config(chain_config).await?;
+    }
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
+        &mut tx,
+        height as usize,
+    )
+    .await
+    .context("setting state height")?;
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_state_pruned_height(
+        &mut tx,
+        height - 1,
+    )
+    .await
+    .context("setting state pruned height")?;
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_state_start_height(
+        &mut tx, height,
+    )
+    .await
+    .context("setting state start height")?;
+    tx.commit().await
+}
+
 /// Apply every leaf above `parent_leaf` as it arrives. Leaves come from the local stream, except
 /// those the data pruner has already deleted: the availability layer never fetches a leaf at or
 /// below the data pruned height, so the stream would wait for one forever. Those come from peers,
 /// in runs. Returns when the stream ends, or when a leaf from peers does not extend the parent.
-async fn follow_leaves<T, C>(
+async fn follow_leaves<T>(
     storage: &Arc<T>,
     instance: &NodeState,
-    provider: &LightClientProvider<C>,
+    provider: &LightClientProvider,
     mut parent_leaf: Leaf2,
     mut parent_state: ValidatedState,
 ) where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
-    C: ApiContext,
 {
     // Peers serve at most this many leaves per range request.
     let limit = availability::Options::default().small_object_range_limit as u64;
@@ -543,10 +827,9 @@ where
 }
 
 /// The leaf at `height`, from local storage, or from peers once the data pruner has deleted it.
-async fn leaf_at<T, C>(storage: &Arc<T>, provider: &LightClientProvider<C>, height: u64) -> Leaf2
+async fn leaf_at<T>(storage: &Arc<T>, provider: &LightClientProvider, height: u64) -> Leaf2
 where
     T: SequencerStateDataSource,
-    C: ApiContext,
 {
     loop {
         if let Some(pruned) = pruned_past(&**storage, height).await {
@@ -576,21 +859,18 @@ where
 /// The leaves at `heights`, which the data pruned height says are gone, from the query module's
 /// peers through its light client, retrying until they arrive. The light client verifies leaves
 /// of every protocol version, and one proof covers the run: it proves the last leaf final and
-/// chains the rest to it. The leaves are not stored in this database, since the loop needs them
-/// once and the pruner would only delete them again.
-async fn fetch_pruned_leaves<C>(
-    provider: &LightClientProvider<C>,
-    heights: Range<u64>,
-) -> Vec<Leaf2>
-where
-    C: ApiContext,
-{
+/// chains the rest to it. The loop needs each leaf once, so the leaves are stored neither in this
+/// database, where the pruner would only delete them again, nor in the light client's cache.
+async fn fetch_pruned_leaves(provider: &LightClientProvider, heights: Range<u64>) -> Vec<Leaf2> {
     let start = heights.start as usize;
     let end = heights.end as usize;
     let mut delay = Duration::from_secs(1);
     loop {
         if let Some(light_client) = provider.light_client().await {
-            match light_client.fetch_leaves_in_range(start, end).await {
+            match light_client
+                .fetch_leaves_in_range_uncached(start, end)
+                .await
+            {
                 Ok(leaves) => return leaves.into_iter().map(|leaf| leaf.leaf().clone()).collect(),
                 Err(err) => tracing::warn!(
                     ?heights,
@@ -616,13 +896,16 @@ async fn apply_leaf<T>(
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
-    // The parent snapshot is the state head, which this database always keeps, so read it from
-    // here only: peers may have pruned it. When the data pruner has deleted the parent's leaf and
-    // header, the catchup reads the snapshot by the roots in the parent state. Reward accounts do
-    // not use this catchup; `apply_header` reads them through the node's catchup. Retries are off
-    // because the loop below retries.
-    let catchup = SqlStateCatchup::new(storage.clone(), BackoffParams::disabled());
-    loop {
+    // The node's catchup races this database, through the node's SQL persistence, against peers,
+    // which serve what the parent snapshot lacks: a loop that started from a boundary snapshot
+    // holds only the fee accounts it has touched since. The parent snapshot is the state head,
+    // which this database always keeps, while peers may have pruned it. When the data pruner has
+    // deleted the parent's leaf and header, the local read finds the snapshot by the roots in the
+    // parent state. Each request is sent once, because the loop below retries: peers never answer
+    // a request for a height they have pruned, and the next try then reads this database again.
+    // Each try passes its number on, so that peers get longer to answer, as they would on retries
+    // of the request itself.
+    for retry in 0.. {
         tracing::debug!(
             height = leaf.height(),
             node_id = instance.node_id,
@@ -633,7 +916,7 @@ async fn apply_leaf<T>(
             parent_state,
             storage,
             instance,
-            &catchup,
+            &SingleAttemptCatchup::new(instance.state_catchup.clone(), retry),
             parent_leaf,
             &leaf,
         )

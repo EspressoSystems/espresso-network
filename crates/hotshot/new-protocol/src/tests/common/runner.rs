@@ -10,14 +10,14 @@ use bon::Builder;
 use cliquenet::noise::Protocol;
 use committable::{Commitment, Committable};
 use hotshot_example_types::{
-    block_types::TestTransaction, node_types::TestTypes, storage_types::TestStorage,
+    block_types::TestTransaction, membership::fetcher::ExternalMessage, node_types::TestTypes,
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType},
     message::UpgradeLock,
     signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
@@ -202,7 +202,7 @@ pub struct TestRunner {
     decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
 
     /// The version upgrade every node is configured for. Trivial by default.
-    #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
+    #[builder(default = versions::Upgrade::trivial(crate::helpers::test_version()))]
     upgrade: versions::Upgrade,
 
     /// Windows for the upgrade sub-protocol. Disabled by default.
@@ -430,7 +430,7 @@ impl TestRunner {
         EpochMembershipCoordinator<TestTypes>,
         TestStorage<TestTypes>,
         CoordinatorClient<TestTypes>,
-        Sender<Event<TestTypes>>,
+        Sender<ExternalMessage>,
     ) {
         match &self.stake_table_schedule {
             Some(schedule) => mock_membership_with_client_and_schedule(
@@ -647,7 +647,9 @@ impl TestRunner {
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                if !self.persistent_storage {
+                                if self.persistent_storage {
+                                    self.node_storages[change.idx].mark_restart().await;
+                                } else {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
                                 let upgrade_lock = self.make_upgrade_lock(change.idx).await;
@@ -937,7 +939,7 @@ async fn run_node(
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
-    external_events_tx: Sender<Event<TestTypes>>,
+    external_events_tx: Sender<ExternalMessage>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
@@ -945,13 +947,10 @@ async fn run_node(
     let _forward = AbortOnDropHandle::new(tokio::spawn(async move {
         while let Some(m) = external_rx.recv().await {
             let _ = external_events_tx
-                .broadcast_direct(Event {
-                    // The test leaf fetcher ignores the view.
+                .broadcast_direct(ExternalMessage {
+                    // The external channel does not carry a consensus view.
                     view_number: ViewNumber::genesis(),
-                    event: EventType::ExternalMessageReceived {
-                        sender: m.sender,
-                        data: m.data,
-                    },
+                    data: m.data,
                 })
                 .await;
         }
@@ -995,7 +994,9 @@ async fn run_node(
                 // from this anchor.
                 if let Some(newest) = leaves.first() {
                     if let Some(cert2) = cert2 {
-                        storage.insert_cert2(cert2.view_number, cert2.clone()).await;
+                        storage
+                            .insert_cert2(newest.view_number(), cert2.clone())
+                            .await;
                     }
                     storage
                         .update_anchor_leaf(newest.clone(), cert1.clone())

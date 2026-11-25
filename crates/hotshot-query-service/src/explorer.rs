@@ -15,152 +15,30 @@ pub(crate) mod query_data;
 
 pub use currency::*;
 pub use data_source::*;
-pub use hotshot_query_service_types::explorer::Error;
-use hotshot_types::traits::node_implementation::NodeType;
+pub use hotshot_query_service_types::explorer::{
+    Error,
+    response::{
+        BlockDetailResponse, BlockSummaryResponse, ExplorerSummaryResponse, SearchResultResponse,
+        TransactionDetailResponse, TransactionSummariesResponse,
+    },
+};
 pub use query_data::*;
-use serde::{Deserialize, Serialize};
 pub use traits::*;
-
-use crate::{Header, Transaction};
-
-/// [BlockDetailResponse] is a struct that represents the response from the
-/// `get_block_detail` endpoint.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct BlockDetailResponse<Types: NodeType>
-where
-    Header<Types>: ExplorerHeader<Types>,
-{
-    pub block_detail: BlockDetail<Types>,
-}
-
-impl<Types: NodeType> From<BlockDetail<Types>> for BlockDetailResponse<Types>
-where
-    Header<Types>: ExplorerHeader<Types>,
-{
-    fn from(block_detail: BlockDetail<Types>) -> Self {
-        Self { block_detail }
-    }
-}
-
-/// [BlockSummaryResponse] is a struct that represents the response from the
-/// `get_block_summaries` endpoint.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct BlockSummaryResponse<Types: NodeType>
-where
-    Header<Types>: ExplorerHeader<Types>,
-{
-    pub block_summaries: Vec<BlockSummary<Types>>,
-}
-
-impl<Types: NodeType> From<Vec<BlockSummary<Types>>> for BlockSummaryResponse<Types>
-where
-    Header<Types>: ExplorerHeader<Types>,
-{
-    fn from(block_summaries: Vec<BlockSummary<Types>>) -> Self {
-        Self { block_summaries }
-    }
-}
-
-/// [TransactionDetailResponse] is a struct that represents the response from the
-/// `get_transaction_detail` endpoint.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct TransactionDetailResponse<Types: NodeType> {
-    pub transaction_detail: query_data::TransactionDetailResponse<Types>,
-}
-
-impl<Types: NodeType> From<query_data::TransactionDetailResponse<Types>>
-    for TransactionDetailResponse<Types>
-{
-    fn from(transaction_detail: query_data::TransactionDetailResponse<Types>) -> Self {
-        Self { transaction_detail }
-    }
-}
-
-/// [TransactionSummariesResponse] is a struct that represents the response from the
-/// `get_transaction_summaries` endpoint.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct TransactionSummariesResponse<Types: NodeType>
-where
-    Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-{
-    pub transaction_summaries: Vec<TransactionSummary<Types>>,
-}
-
-impl<Types: NodeType> From<Vec<TransactionSummary<Types>>> for TransactionSummariesResponse<Types>
-where
-    Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-{
-    fn from(transaction_summaries: Vec<TransactionSummary<Types>>) -> Self {
-        Self {
-            transaction_summaries,
-        }
-    }
-}
-
-/// [ExplorerSummaryResponse] is a struct that represents the response from the
-/// `get_explorer_summary` endpoint.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct ExplorerSummaryResponse<Types: NodeType>
-where
-    Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-{
-    pub explorer_summary: ExplorerSummary<Types>,
-}
-
-impl<Types: NodeType> From<ExplorerSummary<Types>> for ExplorerSummaryResponse<Types>
-where
-    Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-{
-    fn from(explorer_summary: ExplorerSummary<Types>) -> Self {
-        Self { explorer_summary }
-    }
-}
-
-/// [SearchResultResponse] is a struct that represents the response from the
-/// `get_search_result` endpoint.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct SearchResultResponse<Types: NodeType>
-where
-    Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-{
-    pub search_results: SearchResult<Types>,
-}
-
-impl<Types: NodeType> From<SearchResult<Types>> for SearchResultResponse<Types>
-where
-    Header<Types>: ExplorerHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-{
-    fn from(search_results: SearchResult<Types>) -> Self {
-        Self { search_results }
-    }
-}
 
 #[cfg(test)]
 mod test {
-    use std::{cmp::min, num::NonZeroUsize, time::Duration};
+    use std::{cmp::min, marker::PhantomData, num::NonZeroUsize, time::Duration};
 
     use committable::Commitment;
+    use rstest_reuse::apply;
     use tagged_base64::{Tagged, TaggedBase64};
 
     use super::*;
     use crate::{
-        QueryError,
-        node::NodeDataSource,
+        Header, QueryError, Transaction,
         testing::{
             chain::ChainNode,
-            consensus::MockSqlDataSource,
+            consensus::{TestableDataSource, sql_data_sources},
             mocks::{MockTypes, mock_transaction},
             sleep,
         },
@@ -198,7 +76,10 @@ mod test {
         }
     }
 
-    async fn validate(ds: &MockSqlDataSource) {
+    async fn validate<D>(ds: &D)
+    where
+        D: TestableDataSource + ExplorerDataSource<MockTypes>,
+    {
         let ExplorerSummary {
             histograms,
             latest_block,
@@ -567,9 +448,12 @@ mod test {
         }
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_api() {
-        let mut node = ChainNode::<MockSqlDataSource>::new().await;
+    #[apply(sql_data_sources)]
+    async fn test_api<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource + ExplorerDataSource<MockTypes>,
+    {
+        let mut node = ChainNode::<D>::new().await;
 
         let n_blocks = num_blocks();
         let n_txns = num_txns_per_block();

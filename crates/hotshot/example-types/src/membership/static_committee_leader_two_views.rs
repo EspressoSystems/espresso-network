@@ -34,8 +34,6 @@ pub struct StaticStakeTableLeaderForTwoViews<
 
     drb_results: BTreeMap<u64, DrbResult>,
 
-    first_epoch: Option<u64>,
-
     da_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 }
 
@@ -53,18 +51,17 @@ where
         Self {
             quorum_members,
             da_members,
-            first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
             da_committees: TestCommitteeSchedule::new(),
         }
     }
 
-    fn stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+    fn stake_table(&self, _epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         self.quorum_members.clone()
     }
 
-    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+    fn da_stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         self.da_committees
             .get(epoch)
             .unwrap_or(self.da_members.clone())
@@ -74,7 +71,7 @@ where
         self.quorum_members.clone()
     }
 
-    fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
+    fn lookup_leader(&self, view_number: u64, _epoch: u64) -> anyhow::Result<PubKey> {
         let index = (view_number / 2) as usize % self.quorum_members.len();
         let leader = self.quorum_members[index].clone();
         Ok(leader.signature_key)
@@ -97,8 +94,6 @@ where
     }
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
-        self.first_epoch = Some(epoch);
-
         self.add_epoch_root(epoch);
         self.add_epoch_root(epoch + 1);
 
@@ -111,10 +106,6 @@ where
             .get(&epoch)
             .context("DRB result missing")
             .copied()
-    }
-
-    fn first_epoch(&self) -> Option<u64> {
-        self.first_epoch
     }
 
     fn add_da_committee(

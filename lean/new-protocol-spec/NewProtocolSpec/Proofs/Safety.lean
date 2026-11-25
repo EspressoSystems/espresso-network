@@ -450,8 +450,8 @@ theorem cert2_ancestor_epoch {C : Committee} (N : Network cfg C)
       rcases Nat.eq_or_lt_of_le hview with heqv | hltv
       · -- One view, one epoch: the two certificates name one block.
         obtain ⟨cc, hccb, hccv, hcch, hcce⟩ := cert2_implies_cert1 cfg N hcfg hc2
-        have heq := cert1_unique cfg N hc1 hccb
-          (by rw [← hep, ← hcce]) (by rw [hccv]; exact (ViewNumber.ext heqv).symm)
+        have heq := congrArg Vote1Data.blockHash (cert1_unique cfg N hc1 hccb
+          (by rw [← hep, ← hcce]) (by rw [hccv]; exact (ViewNumber.ext heqv).symm))
         rw [← hcch, ← heq]
         exact Ancestor.refl _
       · -- A later view: step back once.

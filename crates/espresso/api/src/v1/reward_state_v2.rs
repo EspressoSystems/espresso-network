@@ -1,43 +1,38 @@
 //! Reward State V2 API trait for v1
 //!
 //! Returns internal espresso-types (legacy, no OpenAPI docs).
-//! Uses associated types to avoid importing espresso-types in this crate.
 
+use alloy::primitives::Address;
 use async_trait::async_trait;
-use serde::Serialize;
+use espresso_types::{
+    v0::sparse_mt::KeccakNode,
+    v0_3::{RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1},
+    v0_4::{RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleTreeV2},
+};
+use hotshot_contract_adapter::reward::RewardClaimInput;
+use jf_merkle_tree_compat::{
+    MerkleTreeScheme,
+    prelude::{MerkleProof, Sha3Node},
+};
 
 use crate::v1::merklized_state::Snapshot;
 
-/// Reward API trait - returns internal types
-///
-/// Uses associated types to avoid importing espresso-types in this crate.
-/// Types must be Serialize for JSON responses, but don't need JsonSchema.
+pub type RewardStatePathV1 = MerkleProof<
+    RewardAmount,
+    RewardAccountV1,
+    Sha3Node,
+    { <RewardMerkleTreeV1 as MerkleTreeScheme>::ARITY },
+>;
+
+pub type RewardStatePathV2 = MerkleProof<
+    RewardAmount,
+    RewardAccountV2,
+    KeccakNode,
+    { <RewardMerkleTreeV2 as MerkleTreeScheme>::ARITY },
+>;
+
 #[async_trait]
 pub trait RewardApi {
-    /// Type for reward claim input data (must be serializable to JSON)
-    type RewardClaimInput: Serialize + Send + Sync + 'static;
-
-    /// Type for reward balance queries (must be serializable to JSON)
-    type RewardBalance: Serialize + Send + Sync + 'static;
-
-    /// Type for reward account proof queries (must be serializable to JSON)
-    type RewardAccountQueryData: Serialize + Send + Sync + 'static;
-
-    /// Type for paginated reward amounts (must be serializable to JSON)
-    type RewardAmounts: Serialize + Send + Sync + 'static;
-
-    /// Type for raw merkle tree snapshots (must be serializable to JSON)
-    type RewardMerkleTreeData: Serialize + Send + Sync + 'static;
-
-    /// Type for reward account proof queries against the V1 (RewardMerkleTreeV1) tree
-    type RewardAccountQueryDataV1: Serialize + Send + Sync + 'static;
-
-    /// Type for a raw Merkle path into the reward-state (RewardMerkleTreeV1) tree
-    type RewardStatePathV1: Serialize + Send + Sync + 'static;
-
-    /// Type for a raw Merkle path into the reward-state-v2 (RewardMerkleTreeV2) tree
-    type RewardStatePathV2: Serialize + Send + Sync + 'static;
-
     /// Get the height of the last persisted reward-state-v1 merklized state snapshot
     async fn get_reward_state_height(&self) -> anyhow::Result<u64>;
 
@@ -53,7 +48,7 @@ pub trait RewardApi {
         &self,
         height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryDataV1>;
+    ) -> anyhow::Result<RewardAccountQueryDataV1>;
 
     /// Get reward claim input for L1 contract submission
     ///
@@ -67,7 +62,7 @@ pub trait RewardApi {
         &self,
         block_height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardClaimInput>;
+    ) -> anyhow::Result<RewardClaimInput>;
 
     /// Get reward balance at a specific height
     ///
@@ -78,16 +73,13 @@ pub trait RewardApi {
         &self,
         height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardBalance>;
+    ) -> anyhow::Result<RewardAmount>;
 
     /// Get latest reward balance at the most recent finalized height
     ///
     /// # Arguments
     /// * `address` - Ethereum address to query rewards for
-    async fn get_latest_reward_balance(
-        &self,
-        address: String,
-    ) -> anyhow::Result<Self::RewardBalance>;
+    async fn get_latest_reward_balance(&self, address: String) -> anyhow::Result<RewardAmount>;
 
     /// Get Merkle proof for a reward account at a specific height
     ///
@@ -100,7 +92,7 @@ pub trait RewardApi {
         &self,
         height: u64,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryData>;
+    ) -> anyhow::Result<RewardAccountQueryDataV2>;
 
     /// Get Merkle proof for a reward account at the latest finalized height
     ///
@@ -111,7 +103,7 @@ pub trait RewardApi {
     async fn get_latest_reward_account_proof(
         &self,
         address: String,
-    ) -> anyhow::Result<Self::RewardAccountQueryData>;
+    ) -> anyhow::Result<RewardAccountQueryDataV2>;
 
     /// Get paginated list of reward amounts at a specific height
     ///
@@ -124,7 +116,7 @@ pub trait RewardApi {
         height: u64,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Self::RewardAmounts>;
+    ) -> anyhow::Result<Vec<(Address, RewardAmount)>>;
 
     /// Get raw RewardMerkleTreeV2 snapshot at a given height
     ///
@@ -132,10 +124,7 @@ pub trait RewardApi {
     ///
     /// # Arguments
     /// * `height` - Block height to query
-    async fn get_reward_merkle_tree_v2(
-        &self,
-        height: u64,
-    ) -> anyhow::Result<Self::RewardMerkleTreeData>;
+    async fn get_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>>;
 
     /// Get the Merkle path for a key in the reward-state (RewardMerkleTreeV1) tree
     ///
@@ -149,7 +138,7 @@ pub trait RewardApi {
         &self,
         snapshot: Snapshot,
         key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV1>;
+    ) -> anyhow::Result<RewardStatePathV1>;
 
     /// Get the Merkle path for a key in the reward-state-v2 (RewardMerkleTreeV2) tree
     ///
@@ -160,5 +149,5 @@ pub trait RewardApi {
         &self,
         snapshot: Snapshot,
         key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV2>;
+    ) -> anyhow::Result<RewardStatePathV2>;
 }

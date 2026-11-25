@@ -5,7 +5,7 @@ ARG TARGETARCH
 COPY target/$TARGETARCH/release/espresso-node /bin/espresso-node-postgres
 RUN chmod +x /bin/espresso-node-postgres
 
-COPY target/$TARGETARCH/release/espresso-node-sqlite /bin/espresso-node-sqlite
+COPY scripts/espresso-node-sqlite /bin/espresso-node-sqlite
 RUN chmod +x /bin/espresso-node-sqlite
 
 COPY target/$TARGETARCH/release/utils /bin/utils

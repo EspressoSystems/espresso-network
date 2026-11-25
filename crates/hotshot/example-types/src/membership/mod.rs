@@ -11,13 +11,14 @@ use std::sync::Arc;
 use async_broadcast::Receiver;
 use hotshot_types::{
     PeerConfig,
-    event::Event,
+    data::EpochNumber,
     traits::{
         election::Membership, leaf_fetcher_network::LeafFetcherNetwork,
         node_implementation::NodeType,
     },
 };
 
+use self::fetcher::ExternalMessage;
 use crate::storage_types::TestStorage;
 
 /// leader completely randomized every view
@@ -48,12 +49,13 @@ pub mod strict_membership;
 /// memberships don't need this — only types that route catchup through a
 /// test fetcher (e.g. `StrictMembership`) implement it.
 pub trait TestableMembership<TYPES: NodeType>: Membership<TYPES> {
-    /// Construct a membership for tests.
+    /// Construct a membership for tests whose epochs start at `first_epoch`.
     fn new(
         quorum_members: Vec<PeerConfig<TYPES>>,
         da_members: Vec<PeerConfig<TYPES>>,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
+        first_epoch: EpochNumber,
     ) -> Self;
 
     /// Install a fully wired leaf fetcher. Must be called before any code
@@ -63,6 +65,6 @@ pub trait TestableMembership<TYPES: NodeType>: Membership<TYPES> {
         network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,
-        channel: Receiver<Event<TYPES>>,
+        channel: Receiver<ExternalMessage>,
     );
 }

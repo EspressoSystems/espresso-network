@@ -150,6 +150,20 @@ pub fn supermajority_threshold(total_stake: U256) -> U256 {
     }
 }
 
+/// The stake needed to agree on a protocol upgrade: nine tenths of the total
+/// stake, and never less than the [`supermajority_threshold`].
+#[inline]
+pub fn upgrade_threshold(total_stake: U256) -> U256 {
+    let nine = U256::from(9);
+    let ten = U256::from(10);
+    let higher = if total_stake < U256::MAX / nine {
+        (total_stake * nine) / ten
+    } else {
+        (total_stake / ten) * nine
+    };
+    std::cmp::max(higher, supermajority_threshold(total_stake))
+}
+
 #[inline]
 fn u256_to_field(amount: U256) -> CircuitField {
     let amount_bytes: [u8; 32] = amount.to_le_bytes();

@@ -19,6 +19,8 @@ import { EspTokenV2 } from "./EspTokenV2.sol";
 import { RewardMerkleTreeVerifier } from "./libraries/RewardMerkleTreeVerifier.sol";
 import { IRewardClaim } from "./interfaces/IRewardClaim.sol";
 
+// forge-lint: disable-start(missing-zero-check)
+
 /// @title RewardClaim - Espresso Reward Claim Contract
 /// @notice Allows validators and delegators to claim ESP token rewards based on cryptographic
 /// proofs from the Espresso network.

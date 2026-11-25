@@ -1,5 +1,5 @@
 //! Mock implementation of persistence, for testing.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -7,14 +7,11 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
 use hotshot_types::{
-    data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare,
-    },
+    data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
     initializer::InitializerEpochInfo,
@@ -135,19 +132,7 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn append_da(
-        &self,
-        _proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn record_action(
-        &self,
-        _view: ViewNumber,
-        _epoch: Option<EpochNumber>,
-        _action: HotShotAction,
-    ) -> anyhow::Result<()> {
+    async fn record_action(&self, _view: ViewNumber, _action: HotShotAction) -> anyhow::Result<()> {
         Ok(())
     }
     async fn append_quorum_proposal2(
@@ -159,20 +144,6 @@ impl SequencerPersistence for NoStorage {
     async fn store_upgrade_certificate(
         &self,
         _decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn load_next_epoch_quorum_certificate(
-        &self,
-    ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
-        Ok(None)
-    }
-
-    async fn store_eqc(
-        &self,
-        _high_qc: QuorumCertificate2<SeqTypes>,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -190,13 +161,6 @@ impl SequencerPersistence for NoStorage {
         &self,
         _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn append_proposal2(
-        &self,
-        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -233,6 +197,11 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
+}
+
+#[async_trait]
+impl StateCertPersistence for NoStorage {
     async fn get_state_cert_by_epoch(
         &self,
         _epoch: u64,
@@ -247,8 +216,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {}
 }
 
 #[async_trait]
@@ -259,6 +226,10 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         Ok(None)
+    }
+
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        Ok(BTreeSet::new())
     }
 
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {

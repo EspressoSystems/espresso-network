@@ -20,11 +20,7 @@ use serde::Serialize;
 use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
-use crate::{
-    SeqTypes,
-    consensus_handle::ConsensusHandle,
-    context::{ConsensusNode, TaskList},
-};
+use crate::{SeqTypes, consensus_handle::ConsensusHandle, context::TaskList};
 
 #[derive(Clone, Copy, Debug, Parser, Serialize)]
 pub struct ProposalFetcherConfig {
@@ -54,7 +50,7 @@ impl ProposalFetcherConfig {
     pub(crate) fn spawn<P>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
@@ -115,7 +111,7 @@ where
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, Arc<P>>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,

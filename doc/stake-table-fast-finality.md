@@ -489,7 +489,7 @@ time to register and for values to propagate through epoch transitions.
 Multisig-owned proxy (Decaf testnet path):
 
 ```bash
-cargo run -p espresso-node --bin deploy -- \
+cargo run -p espresso-deploy --bin deploy -- \
     --rpc-url "$RPC_URL" \
     --upgrade-stake-table-v3 \
     --use-multisig \
@@ -499,7 +499,7 @@ cargo run -p espresso-node --bin deploy -- \
 Timelock-owned proxy (Mainnet path) emits both `schedule.json` and `execute.json` into the given directory:
 
 ```bash
-cargo run -p espresso-node --bin deploy -- \
+cargo run -p espresso-deploy --bin deploy -- \
     --rpc-url "$RPC_URL" \
     --upgrade-stake-table-v3 \
     --use-timelock-owner \
@@ -526,7 +526,7 @@ In another terminal, generate the Safe TX Builder JSON against the fork:
 ```bash
 ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0xcef474d372b5b09defe2af187bf17338dc704451 \
 ESPRESSO_OPS_TIMELOCK_ADDRESS=0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700 \
-cargo run -p espresso-node --bin deploy -- \
+cargo run -p espresso-deploy --bin deploy -- \
     --rpc-url http://localhost:8545 \
     --upgrade-stake-table-v3 \
     --use-timelock-owner \

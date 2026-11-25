@@ -26,7 +26,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 espresso-contract-deployer = { path = "../deployer" }
-hotshot-state-prover = { workspace = true }
+hotshot-state-prover = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 

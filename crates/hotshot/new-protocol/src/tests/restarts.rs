@@ -1,19 +1,44 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    time::Duration,
-};
+use std::{collections::BTreeMap, marker::PhantomData, net::Ipv4Addr, time::Duration};
 
+use committable::Committable;
+use hotshot_example_types::{
+    node_types::{TEST_VERSIONS, TestTypes},
+    state_types::TestInstanceState,
+    storage_types::TestStorage,
+};
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    addr::NetAddr,
+    consensus::ConsensusMetricsValue,
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
+    event::HotShotAction,
+    initializer::HotShotInitializer,
+    light_client::StateKeyPair,
+    message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey, storage::Storage as _},
+    upgrade_config::UpgradeConfig,
+    x25519::Keypair,
+};
+use tokio::{
+    sync::mpsc,
+    time::{sleep, timeout},
 };
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use crate::tests::common::{
-    runner::{NodeAction, NodeChange, TestRunner},
-    utils::{build_timeout_cert, mock_membership_with_num_nodes},
-    views,
+use crate::{
+    consensus::ConsensusInput,
+    coordinator::Coordinator,
+    helpers::{proposal_commitment, test_upgrade_lock},
+    message::{Message, MessageType, Proposal, ProposalFetchMessage, Validated},
+    network::Cliquenet,
+    tests::common::{
+        assertions::{any, is_proposal_paired},
+        harness::TestHarness,
+        mock::MockCoordinator,
+        runner::{NodeAction, NodeChange, TestRunner},
+        utils::{TestData, TestView, build_timeout_cert, mock_membership_with_num_nodes},
+        views,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -115,14 +140,7 @@ async fn restart_all_nodes_with_storage() {
     runner.run().await.unwrap();
 
     for (idx, storage) in runner.node_storages().iter().enumerate() {
-        let mut seen = HashSet::new();
-        for (view, action) in storage.action_log().await {
-            assert!(
-                seen.insert((view, action)),
-                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
-                 had already acted in"
-            );
-        }
+        assert_no_view_reentered(idx, storage).await;
 
         let (anchor, _) = storage
             .anchor_leaf()
@@ -162,14 +180,7 @@ async fn restart_all_nodes_at_epoch_boundary() {
     runner.run().await.unwrap();
 
     for (idx, storage) in runner.node_storages().iter().enumerate() {
-        let mut seen = HashSet::new();
-        for (view, action) in storage.action_log().await {
-            assert!(
-                seen.insert((view, action)),
-                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
-                 had already acted in"
-            );
-        }
+        assert_no_view_reentered(idx, storage).await;
 
         let (anchor, _) = storage
             .anchor_leaf()
@@ -209,7 +220,7 @@ async fn view_divergence_between_cohorts_recovers() {
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
     let epoch_membership = membership
-        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .membership_for_epoch(EpochNumber::genesis())
         .unwrap();
     let ahead: Vec<_> = [1, 2]
         .map(|view| {
@@ -339,4 +350,320 @@ async fn late_start_f_nodes_with_epochs() {
         .run()
         .await
         .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Serving persisted proposals after a restart
+// ---------------------------------------------------------------------------
+
+/// A node that restarts answers a fetch for a proposal it persisted before
+/// with the leader's signature, so the peer fetching it accepts it.
+///
+/// Fetch requests are broadcast, so this copy is the only answer once every
+/// node holding the proposal has restarted.
+#[tokio::test]
+async fn restarted_node_serves_a_persisted_proposal_a_peer_accepts() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_index = 0;
+
+    let mut node = TestHarness::new(node_index).await;
+    let node_key = node.connect_info().0;
+    for fragment in view.vid_share_inputs(&node_key) {
+        node.message(fragment);
+    }
+    node.message(view.proposal_input());
+    node.process_until_output(|outputs| any(outputs, is_proposal_paired))
+        .await;
+    let storage = node.storage().clone();
+    timeout(Duration::from_secs(5), async {
+        while !storage
+            .proposals_cloned()
+            .await
+            .contains_key(&view.view_number)
+        {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the node persists the proposal");
+
+    let restarted = restart(node, node_index).await;
+    let served = restarted
+        .consensus()
+        .signed_proposals_for_fetch(&view.view_number);
+    let [served] = served.as_slice() else {
+        panic!("one proposal is served for the view, got {}", served.len());
+    };
+    assert_eq!(served.data, view.proposal.data);
+    let leaf: Leaf2<TestTypes> = served.data.clone().into();
+    assert!(
+        view.leader_public_key
+            .validate(&served.signature, leaf.commit().as_ref()),
+        "the served proposal carries the leader's signature"
+    );
+
+    let mut peer = TestHarness::new(1).await;
+    // A commit without its proposal makes the peer fetch it.
+    peer.apply_and_process(view.cert2_input());
+    peer.message(Message::<TestTypes, Validated> {
+        sender: node_key,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+            (*served).clone(),
+        ))),
+    });
+    timeout(
+        Duration::from_secs(5),
+        peer.process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|input| matches!(input, ConsensusInput::FetchedProposal(_)))
+        }),
+    )
+    .await
+    .expect("the peer accepts the proposal the restarted node serves");
+}
+
+/// A stored proposal whose signature is not its leader's, as in rows written
+/// before the leader's signature was stored, is restored but not served: the
+/// peer fetching it would refuse it.
+#[tokio::test]
+async fn restarted_node_does_not_serve_a_proposal_its_leader_did_not_sign() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    let (_, node_private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+    node.storage()
+        .append_proposal_wrapper(&SignedProposal {
+            data: QuorumProposalWrapper::from(view.proposal.data.clone()),
+            signature: BLSPubKey::sign(&node_private_key, &[]).unwrap(),
+            _pd: PhantomData,
+        })
+        .await
+        .unwrap();
+
+    let restarted = restart(node, node_index).await;
+    let consensus = restarted.consensus();
+    assert!(
+        consensus
+            .signed_proposals_for_fetch(&view.view_number)
+            .is_empty()
+    );
+    assert!(
+        consensus
+            .proposals()
+            .contains(view.view_number, proposal_commitment(&view.proposal.data))
+    );
+}
+
+/// The first block of an epoch carries the Cert2 of the block before it,
+/// which the stored proposal has no field for. A node that restarts on that
+/// block serves the first block with the Cert2 it persisted for its anchor,
+/// so the peer fetching it accepts it.
+#[tokio::test]
+async fn restarted_node_serves_the_first_block_of_an_epoch_a_peer_accepts() {
+    let test_data = TestData::new_with_epoch_height(EPOCH_HEIGHT as usize + 1, EPOCH_HEIGHT).await;
+    let [.., boundary, first] = test_data.views.as_slice() else {
+        panic!("the views reach past the first epoch");
+    };
+    assert!(first.proposal.data.next_epoch_justify_qc.is_some());
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    let node_key = node.connect_info().0;
+    store_as_persisted(&node, &first.proposal).await;
+
+    let restarted = restart_at(node, node_index, Some(boundary)).await;
+    let served = restarted
+        .consensus()
+        .signed_proposals_for_fetch(&first.view_number);
+    let [served] = served.as_slice() else {
+        panic!("one proposal is served for the view, got {}", served.len());
+    };
+    assert_eq!(served.data, first.proposal.data);
+
+    let mut peer = TestHarness::new(1).await;
+    peer.apply_and_process(first.cert2_input());
+    peer.message(Message::<TestTypes, Validated> {
+        sender: node_key,
+        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(
+            (*served).clone(),
+        ))),
+    });
+    timeout(
+        Duration::from_secs(5),
+        peer.process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|input| matches!(input, ConsensusInput::FetchedProposal(_)))
+        }),
+    )
+    .await
+    .expect("the peer accepts the proposal the restarted node serves");
+}
+
+/// A restarted node does not serve the first block of an epoch without the
+/// Cert2 of the block before it: the peer fetching it would refuse it. Here
+/// the node's anchor is an earlier block, so it holds no such Cert2.
+#[tokio::test]
+async fn restarted_node_does_not_serve_the_first_block_of_an_epoch_without_its_cert2() {
+    let test_data = TestData::new_with_epoch_height(EPOCH_HEIGHT as usize + 1, EPOCH_HEIGHT).await;
+    let [.., before_boundary, _, first] = test_data.views.as_slice() else {
+        panic!("the views reach past the first epoch");
+    };
+    let node_index = 0;
+    let node = TestHarness::new(node_index).await;
+    store_as_persisted(&node, &first.proposal).await;
+
+    let restarted = restart_at(node, node_index, Some(before_boundary)).await;
+    let consensus = restarted.consensus();
+    assert!(
+        consensus
+            .signed_proposals_for_fetch(&first.view_number)
+            .is_empty()
+    );
+    assert!(
+        consensus
+            .proposals()
+            .contains(first.view_number, proposal_commitment(&first.proposal.data))
+    );
+}
+
+/// The epoch height of a [`TestHarness`] and of the node [`restart_at`] builds.
+const EPOCH_HEIGHT: u64 = 10;
+
+/// Write `proposal` to `node`'s storage the way `Storage::append_proposal`
+/// does, without running the node up to its view.
+async fn store_as_persisted(
+    node: &TestHarness,
+    proposal: &SignedProposal<TestTypes, Proposal<TestTypes>>,
+) {
+    node.storage()
+        .append_proposal_wrapper(&SignedProposal {
+            data: QuorumProposalWrapper::from(proposal.data.clone()),
+            signature: proposal.signature.clone(),
+            _pd: PhantomData,
+        })
+        .await
+        .unwrap();
+}
+
+/// [`restart_at`] genesis: `node` decided nothing.
+async fn restart(node: TestHarness, node_index: u64) -> MockCoordinator {
+    restart_at(node, node_index, None).await
+}
+
+/// The coordinator `node` restarts as: built by `Coordinator::maker`, as a
+/// node builds it, from the proposals `node` persisted.
+///
+/// `anchor` is the view of the last block it decided, whose leaf and
+/// certificates the application persists; `None` if it decided nothing.
+async fn restart_at(
+    node: TestHarness,
+    node_index: u64,
+    anchor: Option<&TestView>,
+) -> MockCoordinator {
+    let epoch_height = EPOCH_HEIGHT;
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+    let state_key_pair = StateKeyPair::generate_from_seed_indexed([0; 32], node_index);
+    let storage = node.storage().clone();
+    let membership = node.membership().clone();
+    drop(node);
+
+    let genesis = HotShotInitializer::<TestTypes>::from_genesis(
+        TestInstanceState::default(),
+        epoch_height,
+        vec![],
+        TEST_VERSIONS.vid2,
+    )
+    .await
+    .unwrap();
+    let (anchor_leaf, anchor_state, high_qc, anchor_cert2) = match anchor {
+        Some(view) => (
+            view.leaf.clone(),
+            None,
+            view.cert1.clone(),
+            Some(view.cert2.clone()),
+        ),
+        None => (
+            genesis.anchor_leaf().clone(),
+            Some(genesis.anchor_state().clone()),
+            genesis.high_qc().clone(),
+            None,
+        ),
+    };
+    let initializer = HotShotInitializer::load(
+        TestInstanceState::default(),
+        epoch_height,
+        vec![],
+        (anchor_leaf, anchor_state),
+        storage.restart_view().await,
+        high_qc,
+        storage.last_actioned_view().await,
+        storage.proposals_cloned().await,
+        None,
+        None,
+    );
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    let network = Cliquenet::create(
+        "test-restart",
+        public_key,
+        Keypair::derive_from::<BLSPubKey>(&private_key).unwrap(),
+        NetAddr::Inet(
+            Ipv4Addr::LOCALHOST.into(),
+            test_utils::reserve_tcp_port().unwrap(),
+        ),
+        vec![],
+        None,
+        upgrade_lock.clone(),
+        Box::new(NoMetrics),
+    )
+    .await
+    .unwrap();
+
+    Coordinator::maker()
+        .membership_coordinator(membership)
+        .network(network)
+        .initializer(&initializer)
+        .upgrade_lock(upgrade_lock)
+        .public_key(public_key)
+        .private_key(private_key)
+        .state_private_key(state_key_pair.sign_key_ref().clone())
+        .stake_table_capacity(10)
+        .timeout_duration(Duration::from_secs(30))
+        .empty_block_delay(Duration::from_secs(1))
+        .block_sizes(BTreeMap::new())
+        .storage(storage)
+        .metrics(&NoMetrics)
+        .consensus_metrics(ConsensusMetricsValue::new(&NoMetrics))
+        .maybe_anchor_cert2(anchor_cert2)
+        .upgrade_config(UpgradeConfig::default())
+        .external_tx(mpsc::unbounded_channel().0)
+        .make()
+}
+
+/// A restarted node votes and proposes only in views after every view it acted
+/// in before the restart.
+///
+/// It may still time out the view it stopped in, which it resumes in and has
+/// to leave. Within one run a view may repeat: a node may act in one view in
+/// two epochs.
+async fn assert_no_view_reentered(idx: usize, storage: &TestStorage<TestTypes>) {
+    let mut latest: Option<ViewNumber> = None;
+    for run in storage.action_log_by_run().await {
+        if let Some(latest) = latest {
+            for (view, action) in &run {
+                let allowed = match action {
+                    HotShotAction::TimeoutVote => *view >= latest,
+                    _ => *view > latest,
+                };
+                assert!(
+                    allowed,
+                    "node {idx} recorded {action:?} for view {view} after a restart, having acted \
+                     up to view {latest} before it"
+                );
+            }
+        }
+        latest = latest.max(run.iter().map(|(view, _)| *view).max());
+    }
 }

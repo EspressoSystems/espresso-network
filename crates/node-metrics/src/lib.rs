@@ -13,7 +13,7 @@
 //! # Node Validator Service
 //!
 //! The Node Validator Service is a general purpose relay service that watches
-//! data flow from the Hot Shot protocol via the CDN pub sub service. It
+//! data flow from the Hot Shot protocol through the node APIs. It
 //! maintains a local state of the network map and is able to relay the
 //! stored details to any client that requests it. In addition it is also
 //! able to provide individual state change updates to any client that

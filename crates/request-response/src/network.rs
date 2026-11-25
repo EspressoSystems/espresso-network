@@ -1,11 +1,10 @@
 //! This file contains the [`Sender`] and [`Receiver`] traits. These traits are **used** by the
 //! [`RequestResponseProtocol`] to send and receive messages from a network or other source.
 //!
-//! For HotShot I've gone ahead and done a blanket implementation for a [`Sender`] for all
-//! [`ConnectedNetwork`]s. The reason it's not done for the [`Receiver`] is because both
-//! HS and the confirmation layer will receive messages from a single point and _then_ decide
-//! what to do with them (as opposed to having some sort of filtering mechanism). So for
-//! [`Receiver`] I've done a blanket implementation for channels that send [`Vec<u8>`]s.
+//! There is no blanket implementation of [`Receiver`] for a network, because both HS and the
+//! confirmation layer will receive messages from a single point and _then_ decide what to do
+//! with them (as opposed to having some sort of filtering mechanism). So for [`Receiver`] I've
+//! done a blanket implementation for channels that send [`Vec<u8>`]s.
 
 use std::sync::Arc;
 

@@ -37,6 +37,16 @@ impl PayloadProof {
         }
     }
 
+    /// Inspect the payload without verifying it.
+    pub fn payload(&self) -> &Payload {
+        &self.payload
+    }
+
+    /// Inspect the VID common data the payload commitment is recomputed from.
+    pub fn vid_common(&self) -> &VidCommon {
+        &self.vid_common
+    }
+
     /// Verify a [`PayloadProof`].
     ///
     /// If the data in this proof matches the expected `header`, the full payload data is returned.

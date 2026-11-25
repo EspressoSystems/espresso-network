@@ -1,0 +1,4 @@
+dbs:
+  - path: ${ESPRESSO_QUERY_WATCHDOG_DB_PATH}
+    replica:
+      url: ${LITESTREAM_REPLICA_URL}

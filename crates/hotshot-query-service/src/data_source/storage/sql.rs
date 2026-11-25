@@ -11,13 +11,22 @@
 // see <https://www.gnu.org/licenses/>.
 
 #![cfg(feature = "sql-data-source")]
-use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, time::Duration};
+use std::{
+    cmp::min,
+    fmt::Debug,
+    future::Future,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder};
 use chrono::Utc;
-use futures::future::FutureExt;
 use hotshot_types::{
     data::VidShare,
     traits::{
@@ -27,11 +36,6 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 use log::LevelFilter;
-use rand::Rng;
-#[cfg(not(feature = "embedded-db"))]
-use sqlx::postgres::{PgConnectOptions, PgSslMode};
-#[cfg(feature = "embedded-db")]
-use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{
     ConnectOptions, Row,
     pool::{Pool, PoolOptions},
@@ -55,16 +59,24 @@ use crate::{
     status::HasMetrics,
 };
 pub extern crate sqlx;
-pub use sqlx::Database;
-#[cfg(feature = "embedded-db")]
-pub use sqlx::Sqlite;
+pub use sqlx::{Database, Sqlite};
 
+// Loaded through `#[path]` by each backend module, so its children are named from here.
+#[path = "sql/data_source.rs"]
+pub mod data_source;
+#[path = "sql/db.rs"]
 mod db;
+#[path = "sql/migrate.rs"]
 mod migrate;
-mod queries;
+#[path = "sql/migration.rs"]
+pub mod migration;
+#[path = "sql/queries.rs"]
+pub(in crate::data_source::storage::sql) mod queries;
+#[path = "sql/transaction.rs"]
 mod transaction;
 
 pub use anyhow::Error;
+pub use data_source::{Builder, SqlDataSource};
 pub use db::*;
 pub use include_dir::include_dir;
 pub use queries::QueryBuilder;
@@ -72,111 +84,13 @@ pub use refinery::Migration;
 pub use transaction::*;
 
 use self::{migrate::Migrator, transaction::PoolMetrics};
-use super::{AvailabilityStorage, NodeStorage};
-// This needs to be reexported so that we can reference it by absolute path relative to this crate
-// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
-// crate which doesn't have `include_dir` as a dependency.
-pub use crate::include_migrations;
-
-/// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
-///
-/// The macro invocation `include_migrations!(path)` evaluates to an expression of type `impl
-/// Iterator<Item = Migration>`. Each migration must be a text file which is an immediate child of
-/// `path`, and there must be no non-migration files in `path`. The migration files must have names
-/// of the form `V${version}__${name}.sql`, where `version` is a positive integer indicating how the
-/// migration is to be ordered relative to other migrations, and `name` is a descriptive name for
-/// the migration.
-///
-/// `path` should be an absolute path. It is possible to give a path relative to the root of the
-/// invoking crate by using environment variable expansions and the `CARGO_MANIFEST_DIR` environment
-/// variable.
-///
-/// As an example, this is the invocation used to load the default migrations from the
-/// `hotshot-query-service` crate. The migrations are located in a directory called `migrations` at
-/// - PostgreSQL migrations are in `/migrations/postgres`.
-/// - SQLite migrations are in `/migrations/sqlite`.
-///
-/// ```
-/// # use hotshot_query_service::data_source::sql::{include_migrations, Migration};
-/// // For PostgreSQL
-/// #[cfg(not(feature = "embedded-db"))]
-///  let mut migrations: Vec<Migration> =
-///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect();
-/// // For SQLite
-/// #[cfg(feature = "embedded-db")]
-/// let mut migrations: Vec<Migration> =
-///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect();
-///
-///     migrations.sort();
-///     assert_eq!(migrations[0].version(), 10);
-///     assert_eq!(migrations[0].name(), "init_schema");
-/// ```
-///
-/// Note that a similar macro is available from Refinery:
-/// [embed_migrations](https://docs.rs/refinery/0.8.11/refinery/macro.embed_migrations.html). This
-/// macro differs in that it evaluates to an iterator of [migrations](Migration), making it an
-/// expression macro, while `embed_migrations` is a statement macro that defines a module which
-/// provides access to the embedded migrations only indirectly via a
-/// [`Runner`](https://docs.rs/refinery/0.8.11/refinery/struct.Runner.html). The direct access to
-/// migrations provided by [`include_migrations`] makes this macro easier to use with
-/// [`Config::migrations`], for combining custom migrations with [`default_migrations`].
-#[macro_export]
-macro_rules! include_migrations {
-    ($dir:tt) => {
-        $crate::data_source::storage::sql::include_dir!($dir)
-            .files()
-            .map(|file| {
-                let path = file.path();
-                let name = path
-                    .file_name()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "migration file {} must have a non-empty UTF-8 name",
-                            path.display()
-                        )
-                    });
-                let sql = file
-                    .contents_utf8()
-                    .unwrap_or_else(|| panic!("migration file {name} must use UTF-8 encoding"));
-                $crate::data_source::storage::sql::Migration::unapplied(name, sql)
-                    .expect("invalid migration")
-            })
-    };
-}
-
-/// Drop connections that come back to the pool with a transaction still open.
-///
-/// In sqlx 0.8.6, a `begin()` cancelled mid-flight can return its connection to the pool inside
-/// a transaction that sqlx does not know about.
-pub fn release_only_idle(pool: PoolOptions<sqlx::Postgres>) -> PoolOptions<sqlx::Postgres> {
-    // TODO(abdul): remove once a sqlx release includes launchbadge/sqlx#4394.
-    // With no transaction open, this query starts its own, so both timestamps are the same.
-    // Keep `raw_sql`. A normal query is sent in several messages and Postgres moves
-    // `statement_timestamp()` forward on each one, so the timestamps would always differ.
-    pool.after_release(|conn, _| {
-        async move {
-            let row = conn
-                .fetch_one(sqlx::raw_sql(
-                    "SELECT transaction_timestamp() <> statement_timestamp()",
-                ))
-                .await?;
-            let in_transaction: bool = row.try_get(0)?;
-            Ok(!in_transaction)
-        }
-        .boxed()
-    })
-}
+pub use super::super::retry::SerializableRetryConfig;
+use super::{super::retry::is_serialization_conflict_err, Db};
+use crate::data_source::storage::{AvailabilityStorage, NodeStorage, sql::StorageConnectionType};
 
 /// The migrations required to build the default schema for this version of [`SqlStorage`].
 pub fn default_migrations() -> Vec<Migration> {
-    #[cfg(not(feature = "embedded-db"))]
-    let mut migrations =
-        include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect::<Vec<_>>();
-
-    #[cfg(feature = "embedded-db")]
-    let mut migrations =
-        include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect::<Vec<_>>();
+    let mut migrations = Db::migrations();
 
     // Check version uniqueness and sort by version.
     validate_migrations(&mut migrations).expect("default migrations are invalid");
@@ -245,20 +159,15 @@ fn add_custom_migrations(
 
 #[derive(Clone)]
 pub struct Config {
-    #[cfg(feature = "embedded-db")]
-    db_opt: SqliteConnectOptions,
-
-    #[cfg(not(feature = "embedded-db"))]
-    db_opt: PgConnectOptions,
+    pub(super) db_opt: <Db as Backend>::ConnectOptions,
 
     pool_opt: PoolOptions<Db>,
 
-    /// Extra pool_opt to allow separately configuring the connection pool for query service
-    #[cfg(not(feature = "embedded-db"))]
+    /// Extra pool_opt to allow separately configuring the connection pool for query service.
+    /// SQLite shares one pool between both connection types, so it ignores this.
     pool_opt_query: PoolOptions<Db>,
 
-    #[cfg(not(feature = "embedded-db"))]
-    schema: String,
+    pub(super) schema: String,
     reset: bool,
     migrations: Vec<Migration>,
     no_migrations: bool,
@@ -268,45 +177,17 @@ pub struct Config {
     pool: Option<Pool<Db>>,
 }
 
-#[cfg(not(feature = "embedded-db"))]
 impl Default for Config {
     fn default() -> Self {
-        PgConnectOptions::default()
-            .username("postgres")
-            .password("password")
-            .host("localhost")
-            .port(5432)
-            .into()
+        Self::with_connect_options(Db::default_connect_options())
     }
 }
 
-#[cfg(feature = "embedded-db")]
-impl Default for Config {
-    fn default() -> Self {
-        crate::sqlite_options::sqlite_options().into()
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-impl From<SqliteConnectOptions> for Config {
-    fn from(db_opt: SqliteConnectOptions) -> Self {
-        Self {
-            db_opt,
-            pool_opt: PoolOptions::default(),
-            reset: false,
-            migrations: vec![],
-            no_migrations: false,
-            pruner_cfg: None,
-            archive: false,
-            serializable_retry_config: SerializableRetryConfig::default(),
-            pool: None,
-        }
-    }
-}
-
-#[cfg(not(feature = "embedded-db"))]
-impl From<PgConnectOptions> for Config {
-    fn from(db_opt: PgConnectOptions) -> Self {
+impl Config {
+    // Each backend implements `From` for its own connect options in its own module. A `From` over
+    // the projection `<Db as Backend>::ConnectOptions` would not be normalized by coherence, and
+    // would then conflict with every other `From` and `TryFrom` impl for `Config`.
+    pub(super) fn with_connect_options(db_opt: <Db as Backend>::ConnectOptions) -> Self {
         Self {
             db_opt,
             pool_opt: PoolOptions::default(),
@@ -323,94 +204,13 @@ impl From<PgConnectOptions> for Config {
     }
 }
 
-#[cfg(not(feature = "embedded-db"))]
 impl FromStr for Config {
-    type Err = <PgConnectOptions as FromStr>::Err;
+    type Err = sqlx::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(PgConnectOptions::from_str(s)?.into())
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-impl FromStr for Config {
-    type Err = <SqliteConnectOptions as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(SqliteConnectOptions::from_str(s)?.into())
-    }
-}
-
-#[cfg(feature = "embedded-db")]
-impl Config {
-    pub fn busy_timeout(mut self, timeout: Duration) -> Self {
-        self.db_opt = self.db_opt.busy_timeout(timeout);
-        self
-    }
-
-    pub fn db_path(mut self, path: std::path::PathBuf) -> Self {
-        self.db_opt = self.db_opt.filename(path);
-        self
-    }
-}
-
-#[cfg(not(feature = "embedded-db"))]
-impl Config {
-    /// Set the hostname of the database server.
-    ///
-    /// The default is `localhost`.
-    pub fn host(mut self, host: impl Into<String>) -> Self {
-        self.db_opt = self.db_opt.host(&host.into());
-        self
-    }
-
-    /// Set the port on which to connect to the database.
-    ///
-    /// The default is 5432, the default Postgres port.
-    pub fn port(mut self, port: u16) -> Self {
-        self.db_opt = self.db_opt.port(port);
-        self
-    }
-
-    /// Set the DB user to connect as.
-    pub fn user(mut self, user: &str) -> Self {
-        self.db_opt = self.db_opt.username(user);
-        self
-    }
-
-    /// Set a password for connecting to the database.
-    pub fn password(mut self, password: &str) -> Self {
-        self.db_opt = self.db_opt.password(password);
-        self
-    }
-
-    /// Set the name of the database to connect to.
-    pub fn database(mut self, database: &str) -> Self {
-        self.db_opt = self.db_opt.database(database);
-        self
-    }
-
-    /// Use TLS for an encrypted connection to the database.
-    ///
-    /// Note that an encrypted connection may be established even if this option is not set, as long
-    /// as both the client and server support it. This option merely causes connection to fail if an
-    /// encrypted stream cannot be established.
-    pub fn tls(mut self) -> Self {
-        self.db_opt = self.db_opt.ssl_mode(PgSslMode::Require);
-        self
-    }
-
-    #[cfg(not(feature = "embedded-db"))]
-    pub fn connect_options(&self) -> &PgConnectOptions {
-        &self.db_opt
-    }
-
-    /// Set the name of the schema to use for queries.
-    ///
-    /// The default schema is named `hotshot` and is created via the default migrations.
-    pub fn schema(mut self, schema: impl Into<String>) -> Self {
-        self.schema = schema.into();
-        self
+        Ok(Self::with_connect_options(
+            <Db as Backend>::ConnectOptions::from_str(s)?,
+        ))
     }
 }
 
@@ -430,10 +230,9 @@ impl Config {
 
     /// Reset the schema on connection.
     ///
-    /// When this [`Config`] is used to [`connect`](Self::connect) a
-    /// [`SqlDataSource`](crate::data_source::SqlDataSource), if this option is set, the relevant
-    /// [`schema`](Self::schema) will first be dropped and then recreated, yielding a completely
-    /// fresh instance of the query service.
+    /// When this [`Config`] is used to [`connect`](Self::connect) a [`SqlDataSource`], if this
+    /// option is set, the Postgres schema or the SQLite file will first be dropped and then
+    /// recreated, yielding a completely fresh instance of the query service.
     ///
     /// This is a particularly useful capability for development and staging environments. Still, it
     /// must be used with extreme caution, as using this will irrevocably delete any data pertaining
@@ -485,12 +284,7 @@ impl Config {
     /// automatically closed to reduce load on the server.
     pub fn idle_connection_timeout(mut self, timeout: Duration) -> Self {
         self.pool_opt = self.pool_opt.idle_timeout(Some(timeout));
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            self.pool_opt_query = self.pool_opt_query.idle_timeout(Some(timeout));
-        }
-
+        self.pool_opt_query = self.pool_opt_query.idle_timeout(Some(timeout));
         self
     }
 
@@ -502,12 +296,7 @@ impl Config {
     /// server implementation.
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
-        }
-
+        self.pool_opt_query = self.pool_opt_query.max_lifetime(Some(timeout));
         self
     }
 
@@ -521,7 +310,8 @@ impl Config {
         self
     }
 
-    #[cfg(not(feature = "embedded-db"))]
+    /// Set the minimum number of connections of the query pool. SQLite has one pool, so this does
+    /// nothing there.
     pub fn query_min_connections(mut self, min: u32) -> Self {
         self.pool_opt_query = self.pool_opt_query.min_connections(min);
         self
@@ -536,7 +326,8 @@ impl Config {
         self
     }
 
-    #[cfg(not(feature = "embedded-db"))]
+    /// Set the maximum number of connections of the query pool. SQLite has one pool, so this does
+    /// nothing there.
     pub fn query_max_connections(mut self, max: u32) -> Self {
         self.pool_opt_query = self.pool_opt_query.max_connections(max);
         self
@@ -551,25 +342,34 @@ impl Config {
             .log_slow_statements(LevelFilter::Warn, threshold);
         self
     }
+}
 
-    /// Set the maximum time a single SQL statement is allowed to run before being canceled.
-    ///
-    /// This helps prevent queries from running indefinitely even when the client is dropped
-    #[cfg(not(feature = "embedded-db"))]
-    pub fn statement_timeout(mut self, timeout: Duration) -> Self {
-        // Format duration as milliseconds
-        // PostgreSQL interprets values without units as milliseconds
-        let timeout_ms = timeout.as_millis();
-        self.db_opt = self
-            .db_opt
-            .options([("statement_timeout", timeout_ms.to_string())]);
-        self
-    }
+/// Heights of totals [`SqlStorage::delete_aggregates`] deletes per transaction on SQLite, when a
+/// data source without an aggregator deletes the ones an earlier run left.
+const AGGREGATE_DELETE_HEIGHTS: u64 = 1000;
 
-    /// not supported for SQLite.
-    #[cfg(feature = "embedded-db")]
-    pub fn statement_timeout(self, _timeout: Duration) -> Self {
-        self
+/// The pause between two transactions of [`SqlStorage::delete_aggregates`].
+const AGGREGATE_DELETE_PAUSE: Duration = Duration::from_millis(250);
+
+/// Run `op`, and retry it with backoff when it fails, so that one failed transaction does not end
+/// work that takes hours. `what` names it in the warnings.
+async fn with_retries<T, F, Fut>(what: &str, mut op: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
+    loop {
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(err) => match backoff.next() {
+                Some(delay) => {
+                    tracing::warn!("retrying {what}: {err:#}");
+                    sleep(delay).await;
+                },
+                None => return Err(err),
+            },
+        }
     }
 }
 
@@ -582,6 +382,8 @@ pub struct SqlStorage {
     pruned_heights: PrunedHeightMetrics,
     pruner_cfg: Option<PrunerCfg>,
     serializable_retry_config: SerializableRetryConfig,
+    // Set by the first `init_pruned_height` above genesis. Clones share it.
+    pruned_height_initialized: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -590,6 +392,12 @@ struct PruneState {
     target_height: u64,
     minimum_retention_height: u64,
 }
+
+/// A data batch deletes at most `CERT2_PRUNE_FACTOR * batch_size` cert2s, the lowest first.
+///
+/// A node that pruned before cert2s were pruned has a backlog of them below its pruned height.
+/// Each batch adds up to `batch_size` more, so the backlog only shrinks with a factor above 1.
+const CERT2_PRUNE_FACTOR: u64 = 10;
 
 fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
     // A zero step would underflow the subtraction to `u64::MAX` and prune the whole table.
@@ -705,19 +513,12 @@ impl<'a> Pruner<'a> {
     }
 }
 
-#[derive(PartialEq)]
-pub enum StorageConnectionType {
-    Sequencer,
-    Query,
-}
-
 impl SqlStorage {
     pub fn pool(&self) -> Pool<Db> {
         self.pool.clone()
     }
 
     /// Connect to a remote database.
-    #[allow(unused_variables)]
     pub async fn connect(
         mut config: Config,
         connection_type: StorageConnectionType,
@@ -726,19 +527,20 @@ impl SqlStorage {
         let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
         let pruned_heights = PrunedHeightMetrics::new(&*metrics.subgroup("pruner".into()));
 
-        #[cfg(feature = "embedded-db")]
-        let pool = config.pool_opt.clone();
-        #[cfg(not(feature = "embedded-db"))]
         let pool = match connection_type {
-            StorageConnectionType::Sequencer => config.pool_opt.clone(),
-            StorageConnectionType::Query => config.pool_opt_query.clone(),
+            StorageConnectionType::Query if Db::KIND == DbKind::Postgres => {
+                config.pool_opt_query.clone()
+            },
+            StorageConnectionType::Query | StorageConnectionType::Sequencer => {
+                config.pool_opt.clone()
+            },
         };
 
         let pruner_cfg = config.pruner_cfg;
         let serializable_retry_config = config.serializable_retry_config;
 
         // Only reuse the same pool if we're using sqlite
-        if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
+        if Db::KIND == DbKind::Sqlite || connection_type == StorageConnectionType::Sequencer {
             // re-use the same pool if present and return early
             if let Some(pool) = config.pool {
                 return Ok(Self {
@@ -748,31 +550,18 @@ impl SqlStorage {
                     pool,
                     pruner_cfg,
                     serializable_retry_config,
+                    pruned_height_initialized: Default::default(),
                 });
             }
         } else if config.pool.is_some() {
             tracing::info!("not reusing existing pool for query connection");
         }
 
-        #[cfg(not(feature = "embedded-db"))]
-        let schema = config.schema.clone();
-        #[cfg(not(feature = "embedded-db"))]
-        let pool = pool.after_connect(move |conn, _| {
-            let schema = config.schema.clone();
-            async move {
-                query(&format!("SET search_path TO {schema}"))
-                    .execute(conn)
-                    .await?;
-                Ok(())
-            }
-            .boxed()
-        });
-        #[cfg(not(feature = "embedded-db"))]
-        let pool = release_only_idle(pool);
+        let schema = config.schema;
+        let pool = Db::session_hooks(pool, schema.clone());
 
-        #[cfg(feature = "embedded-db")]
         if config.reset {
-            std::fs::remove_file(config.db_opt.get_filename())?;
+            Db::delete_file(&config.db_opt)?;
         }
 
         let pool = pool.connect_with(config.db_opt).await?;
@@ -780,23 +569,22 @@ impl SqlStorage {
         // Create or connect to the schema for this query service.
         let mut conn = pool.acquire().await?;
 
-        // Disable statement timeout for migrations, as they can take a long time
-        #[cfg(not(feature = "embedded-db"))]
-        query("SET statement_timeout = 0")
-            .execute(conn.as_mut())
-            .await?;
+        if Db::KIND == DbKind::Postgres {
+            // Disable statement timeout for migrations, as they can take a long time
+            query("SET statement_timeout = 0")
+                .execute(conn.as_mut())
+                .await?;
 
-        #[cfg(not(feature = "embedded-db"))]
-        if config.reset {
-            query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            if config.reset {
+                query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+                    .execute(conn.as_mut())
+                    .await?;
+            }
+
+            query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
                 .execute(conn.as_mut())
                 .await?;
         }
-
-        #[cfg(not(feature = "embedded-db"))]
-        query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
-            .execute(conn.as_mut())
-            .await?;
 
         // Get migrations and interleave with custom migrations, sorting by version number.
         validate_migrations(&mut config.migrations)?;
@@ -851,121 +639,13 @@ impl SqlStorage {
             metrics,
             pruner_cfg,
             serializable_retry_config,
+            pruned_height_initialized: Default::default(),
         };
         // Before the state writer can start: it resumes from the head, and the heights it rewrites
         // have to come under a pruning batch again. The pruner's first run is an interval away.
         storage.state_prune_start().await?;
         Ok(storage)
     }
-}
-
-/// Retry policy for transactions aborted by PostgreSQL serialization conflicts (SQLSTATE 40001).
-#[derive(Clone, Copy, Debug)]
-pub struct SerializableRetryConfig {
-    /// Initial delay before the first retry.
-    base: Duration,
-    /// Maximum delay between retries.
-    max: Duration,
-    /// Multiplier applied to the delay between successive retries.
-    factor: u32,
-    /// Backoff jitter as a `(numerator, denominator)` ratio of the delay.
-    jitter: (u64, u64),
-    /// Maximum number of retries before giving up.
-    retry_max: u32,
-    /// When set, each retried conflict spawns a background `pg_stat_activity` / `pg_locks` snapshot.
-    pg_stat_diag: bool,
-}
-
-impl Default for SerializableRetryConfig {
-    fn default() -> Self {
-        Self {
-            base: Duration::from_millis(10),
-            max: Duration::from_millis(500),
-            factor: 2,
-            jitter: (5, 10),
-            retry_max: 100,
-            pg_stat_diag: false,
-        }
-    }
-}
-
-impl SerializableRetryConfig {
-    /// Construct a retry policy. `jitter` is a `(numerator, denominator)` ratio of the delay.
-    pub const fn new(
-        base: Duration,
-        max: Duration,
-        factor: u32,
-        jitter: (u64, u64),
-        retry_max: u32,
-        pg_stat_diag: bool,
-    ) -> Self {
-        Self {
-            base,
-            max,
-            factor,
-            jitter,
-            retry_max,
-            pg_stat_diag,
-        }
-    }
-
-    /// Run `f`, retrying (up to `retry_max` times with exponential backoff + jitter) whenever
-    /// `should_retry` returns `true` for the error. `f` is re-run from scratch on each attempt.
-    async fn retry_if<F, Fut, T, E>(
-        &self,
-        op: &'static str,
-        mut should_retry: impl FnMut(&E) -> bool,
-        f: F,
-    ) -> Result<T, E>
-    where
-        F: Fn() -> Fut,
-        Fut: Future<Output = Result<T, E>>,
-    {
-        let mut delay = self.base;
-        for i in 0..=self.retry_max {
-            match f().await {
-                Ok(res) => return Ok(res),
-                Err(err) if i < self.retry_max && should_retry(&err) => {
-                    tracing::warn!(
-                        op,
-                        attempt = i + 1,
-                        max_retries = self.retry_max,
-                        delay_ms = delay.as_millis(),
-                        "serialization conflict, retrying transaction after {delay:?}"
-                    );
-                    sleep(delay).await;
-                    delay = self.backoff(delay);
-                },
-                Err(err) => return Err(err),
-            }
-        }
-        unreachable!()
-    }
-
-    /// Compute the next backoff delay: `delay * factor` plus random jitter, capped at `max`.
-    fn backoff(&self, delay: Duration) -> Duration {
-        if delay >= self.max {
-            return self.max;
-        }
-        let ms = delay
-            .saturating_mul(self.factor)
-            .as_millis()
-            .min(u64::MAX as u128) as u64;
-        let (jitter_num, jitter_den) = self.jitter;
-        let jitter = if jitter_num == 0 || jitter_den == 0 {
-            0
-        } else {
-            let mut rng = rand::thread_rng();
-            ms * rng.gen_range(0..jitter_num) / jitter_den
-        };
-        min(Duration::from_millis(ms + jitter), self.max)
-    }
-}
-
-/// Returns `true` if `err`'s [`Display`](std::fmt::Display) output identifies it as a PostgreSQL
-/// serialization conflict (SQLSTATE 40001, message "could not serialize access").
-fn is_serialization_conflict_err<E: std::fmt::Display>(err: &E) -> bool {
-    format!("{err:#}").contains("could not serialize access")
 }
 
 /// Like [`is_serialization_conflict_err`] but also logs concurrent DB sessions for diagnostics.
@@ -976,93 +656,15 @@ fn serialization_conflict_with_diag<E: std::fmt::Display>(
     let mut first = true;
     move |err| {
         if is_serialization_conflict_err(err) {
-            #[cfg(not(feature = "embedded-db"))]
             if first {
                 first = false;
-                spawn_pg_stat_activity_log(pool.clone(), op);
+                Db::log_conflict_sessions(pool.clone(), op);
             }
-            #[cfg(feature = "embedded-db")]
-            let _ = (&pool, op, &mut first);
             true
         } else {
             false
         }
     }
-}
-
-/// Spawn a background task that queries `pg_stat_activity` and `pg_locks` to identify the
-/// connections and predicate locks involved in a serialization conflict, logging them at `warn`.
-#[cfg(not(feature = "embedded-db"))]
-fn spawn_pg_stat_activity_log(pool: Pool<Db>, op: &'static str) {
-    use sqlx::Row as _;
-    tokio::spawn(async move {
-        match sqlx::query(
-            "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) AS \
-             query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS DISTINCT FROM \
-             'idle' AND usename = current_user",
-        )
-        .fetch_all(&pool)
-        .await
-        {
-            Ok(rows) if rows.is_empty() => {
-                tracing::warn!(op, "serialization conflict: no other non-idle DB sessions");
-            },
-            Ok(rows) => {
-                for row in &rows {
-                    let pid: i32 = row.try_get("pid").unwrap_or(-1);
-                    let state: String = row.try_get("state").unwrap_or_default();
-                    let query_text: String = row.try_get("query").unwrap_or_default();
-                    tracing::warn!(
-                        op,
-                        pid,
-                        state,
-                        "serialization conflict: concurrent session: {query_text}",
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::error!(op, "failed to query pg_stat_activity: {e:#}");
-            },
-        }
-
-        // Log SSI predicate locks held by all non-idle sessions
-        match sqlx::query(
-            "SELECT l.pid, l.locktype, CASE WHEN l.relation IS NOT NULL THEN c.relname ELSE NULL \
-             END AS relation, l.page, l.tuple, left(COALESCE(a.query, ''), 100) AS query FROM \
-             pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid LEFT JOIN pg_class c ON c.oid = \
-             l.relation WHERE l.mode = 'SIReadLock' AND a.state IS DISTINCT FROM 'idle' AND l.pid \
-             != pg_backend_pid() ORDER BY l.pid, c.relname",
-        )
-        .fetch_all(&pool)
-        .await
-        {
-            Ok(rows) if rows.is_empty() => {
-                tracing::warn!(op, "serialization conflict: no SIReadLocks held");
-            },
-            Ok(rows) => {
-                for row in &rows {
-                    let pid: i32 = row.try_get("pid").unwrap_or(-1);
-                    let locktype: String = row.try_get("locktype").unwrap_or_default();
-                    let relation: Option<String> = row.try_get("relation").unwrap_or(None);
-                    let page: Option<i32> = row.try_get("page").unwrap_or(None);
-                    let tuple: Option<i16> = row.try_get("tuple").unwrap_or(None);
-                    let query_text: String = row.try_get("query").unwrap_or_default();
-                    tracing::warn!(
-                        op,
-                        pid,
-                        locktype,
-                        relation,
-                        page,
-                        tuple,
-                        "serialization conflict: SIReadLock: {query_text}",
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::warn!(op, "failed to query pg_locks: {e:#}");
-            },
-        }
-    });
 }
 
 #[async_trait]
@@ -1083,186 +685,6 @@ impl SerializableRetry for SqlStorage {
                 .retry_if(op, is_serialization_conflict_err, f)
                 .await
         }
-    }
-}
-
-#[cfg(test)]
-mod serializable_retry_tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    };
-
-    use super::{Duration, SerializableRetryConfig, is_serialization_conflict_err};
-
-    /// A retry policy with small delays and a low retry cap, so the exhaustion test runs quickly.
-    const TEST_RETRY: SerializableRetryConfig = SerializableRetryConfig::new(
-        Duration::from_millis(1),
-        Duration::from_millis(5),
-        2,
-        (5, 10),
-        5,
-        false,
-    );
-
-    /// An error whose message matches a PostgreSQL serialization conflict.
-    fn mock_serialization_error() -> anyhow::Error {
-        anyhow::anyhow!(
-            "could not serialize access due to read/write dependencies among transactions"
-        )
-    }
-
-    #[test]
-    fn test_is_serialization_conflict_err() {
-        // The PostgreSQL serialization-conflict message must be recognised.
-        assert!(is_serialization_conflict_err(&mock_serialization_error()));
-        // Other database errors must NOT match.
-        assert!(!is_serialization_conflict_err(&anyhow::anyhow!(
-            "duplicate key value violates unique constraint"
-        )));
-        // Non-database errors must not match.
-        assert!(!is_serialization_conflict_err(&anyhow::anyhow!(
-            "plain error"
-        )));
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_succeeds_immediately() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if("test", is_serialization_conflict_err, || {
-                let calls = calls_clone.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            })
-            .await;
-
-        assert!(result.is_ok());
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_retries_on_serialization_error() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        // The closure fails twice with a serialization error, then succeeds on the third attempt.
-        let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if("test", is_serialization_conflict_err, || {
-                let calls = calls_clone.clone();
-                async move {
-                    let n = calls.fetch_add(1, Ordering::SeqCst);
-                    if n < 2 {
-                        Err(mock_serialization_error())
-                    } else {
-                        Ok(())
-                    }
-                }
-            })
-            .await;
-
-        assert!(result.is_ok());
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_exhausts_retries() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        // The closure always fails; retry must give up after TEST_RETRY.retry_max (5) retries.
-        let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if("test", is_serialization_conflict_err, || {
-                let calls = calls_clone.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err(mock_serialization_error())
-                }
-            })
-            .await;
-
-        assert!(result.is_err());
-        // 1 initial attempt + 5 retries = 6 total calls.
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_no_retry_on_other_errors() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        // Non-serialization errors must not be retried.
-        let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if("test", is_serialization_conflict_err, || {
-                let calls = calls_clone.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err(anyhow::anyhow!("unrelated error"))
-                }
-            })
-            .await;
-
-        assert!(result.is_err());
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    /// Verify that [`function_name!`](crate::function_name) resolves to the unqualified name of the
-    /// enclosing function, both from a nested helper and from the test fn itself.
-    #[test]
-    fn test_function_name_macro() {
-        fn outer_test_fn() -> &'static str {
-            crate::function_name!()
-        }
-        assert_eq!(outer_test_fn(), "outer_test_fn");
-        assert_eq!(crate::function_name!(), "test_function_name_macro");
-
-        // Non-ASCII identifiers must not panic: the macro slices the `type_name` output, and
-        // a multi-byte codepoint near a slice boundary would panic if the macro used fixed
-        // byte offsets instead of char-boundary-safe operations.
-        fn télécharger() -> &'static str {
-            crate::function_name!()
-        }
-        assert_eq!(télécharger(), "télécharger");
-    }
-
-    /// Verify that [`function_name!`](crate::function_name) resolves to the function name even from
-    /// `async` contexts, where the body is lowered into a generator/closure. This is the case that
-    /// every production call site hits, and a naive macro reports `{{closure}}` here.
-    #[test_log::test(tokio::test)]
-    async fn test_function_name_macro_async() {
-        // Plain `async fn`: the body becomes a generator, adding a `{{closure}}` path segment.
-        async fn plain_async_fn() -> &'static str {
-            crate::function_name!()
-        }
-        assert_eq!(plain_async_fn().await, "plain_async_fn");
-
-        // Closure returning an async block inside an `async fn`, mirroring the real
-        // `serializable_retry!(self, || async { .. })` call sites: adds multiple `{{closure}}`
-        // segments to the path.
-        async fn nested_async_blocks() -> &'static str {
-            let f = || async { crate::function_name!() };
-            f().await
-        }
-        assert_eq!(nested_async_blocks().await, "nested_async_blocks");
-
-        // `#[async_trait]` method: the body is rewritten to `Box::pin(async move { .. })`, exactly
-        // as the real `serializable_retry!` call sites are.
-        struct S;
-        #[async_trait::async_trait]
-        trait T {
-            async fn async_trait_method(&self) -> &'static str;
-        }
-        #[async_trait::async_trait]
-        impl T for S {
-            async fn async_trait_method(&self) -> &'static str {
-                crate::function_name!()
-            }
-        }
-        assert_eq!(S.async_trait_method().await, "async_trait_method");
     }
 }
 
@@ -1293,6 +715,129 @@ impl SqlStorage {
     /// trip SSI predicate-lock conflicts against concurrent consensus writes. See [`Backfill`].
     pub async fn backfill(&self) -> anyhow::Result<Transaction<Backfill>> {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+
+    /// Delete every row of the transaction and payload totals and give their space back to the
+    /// disk. Returns whether there were any.
+    ///
+    /// For a node without an aggregator, which keeps no totals, to drop the ones an earlier run
+    /// left. Nothing else may read or write the totals meanwhile.
+    ///
+    /// On Postgres it truncates the table. That returns the table and its index at once and writes
+    /// almost no WAL, where deleted rows would stay in the index until a `VACUUM FULL`.
+    ///
+    /// On SQLite it deletes the newest heights first, at most `heights` heights per transaction.
+    /// After each transaction it gives the freed pages back with an incremental vacuum and pauses,
+    /// so that the write lock, which consensus shares, is free most of the time. The rows left at
+    /// any point are the totals of every height from genesis up to some height, so an aggregator
+    /// started later resumes from them.
+    pub async fn delete_aggregates(&self, heights: u64) -> anyhow::Result<bool> {
+        let Some(top) = with_retries("reading the totals' heights", || {
+            self.highest_aggregate_height(u64::MAX)
+        })
+        .await?
+        else {
+            return Ok(false);
+        };
+        match Db::KIND {
+            DbKind::Postgres => {
+                with_retries("truncating the totals", || self.truncate_aggregates()).await?
+            },
+            DbKind::Sqlite => self.delete_aggregates_from(top, heights.max(1)).await?,
+        }
+        Ok(true)
+    }
+
+    /// Delete the totals from height `top` down, `heights` heights per transaction, each followed
+    /// by an incremental vacuum and a pause.
+    async fn delete_aggregates_from(&self, top: u64, heights: u64) -> anyhow::Result<()> {
+        let vacuum_pages = self.pruner_cfg.as_ref().map_or_else(
+            || PrunerCfg::default().incremental_vacuum_pages(),
+            |cfg| cfg.incremental_vacuum_pages(),
+        );
+        let mut top = Some(top);
+        let mut rows = 0;
+        let mut batches = 0u64;
+        while let Some(height) = top {
+            rows += with_retries("deleting totals", || {
+                self.delete_newest_aggregates(height, heights)
+            })
+            .await?;
+            with_retries("vacuuming deleted totals", || self.vacuum(vacuum_pages)).await?;
+            // Below the heights just deleted, which also skips any gap in the heights.
+            top = match height.checked_sub(heights) {
+                Some(below) => {
+                    with_retries("reading the totals' heights", || {
+                        self.highest_aggregate_height(below)
+                    })
+                    .await?
+                },
+                None => None,
+            };
+            batches += 1;
+            if batches.is_multiple_of(100) {
+                tracing::info!(
+                    target: "announce",
+                    rows,
+                    batches,
+                    "deleting transaction and payload totals"
+                );
+            }
+            if top.is_some() {
+                sleep(AGGREGATE_DELETE_PAUSE).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete every row of the totals in one transaction, on Postgres.
+    async fn truncate_aggregates(&self) -> anyhow::Result<()> {
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to truncate totals")?;
+        query("TRUNCATE aggregate")
+            .execute(tx.as_mut())
+            .await
+            .context("truncating totals")?;
+        tx.commit().await.context("committing truncated totals")
+    }
+
+    /// The highest height of the totals at or below `at_most`, if any.
+    async fn highest_aggregate_height(&self, at_most: u64) -> anyhow::Result<Option<u64>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to read the totals' heights")?;
+        let (height,): (Option<i64>,) =
+            query_as("SELECT max(height) FROM aggregate WHERE height <= $1")
+                .bind(i64::try_from(at_most).unwrap_or(i64::MAX))
+                .fetch_one(tx.as_mut())
+                .await
+                .context("reading the totals' heights")?;
+        Ok(height.map(|height| height as u64))
+    }
+
+    /// Delete the rows of the `heights` heights of the totals from `top` down in one transaction,
+    /// and return how many rows were deleted.
+    ///
+    /// Both ends of the range are bound values: Postgres then searches the primary key, where a
+    /// bound it cannot estimate, such as a subquery, makes it scan the whole table.
+    async fn delete_newest_aggregates(&self, top: u64, heights: u64) -> anyhow::Result<u64> {
+        let top = i64::try_from(top).unwrap_or(i64::MAX);
+        let bottom = top.saturating_sub(i64::try_from(heights).unwrap_or(i64::MAX));
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to delete totals")?;
+        let res = query("DELETE FROM aggregate WHERE height > $1 AND height <= $2")
+            .bind(bottom)
+            .bind(top)
+            .execute(tx.as_mut())
+            .await
+            .context("deleting totals")?;
+        tx.commit().await.context("committing deleted totals")?;
+        Ok(res.rows_affected())
     }
 
     async fn new_pruner<'a>(&'a self) -> anyhow::Result<Pruner<'a>> {
@@ -1435,30 +980,52 @@ impl SqlStorage {
     ) -> anyhow::Result<()> {
         tracing::info!("pruning batch");
         match category {
-            PruneCategory::Data => self.prune_data_batch(to).await?,
+            PruneCategory::Data => self.prune_data_batch(pruner.cfg, to).await?,
             PruneCategory::State => self.prune_state_batch(pruner.cfg, from, to).await?,
         }
         pruner.set_pruned_height(category, to);
         Ok(())
     }
 
-    async fn prune_data_batch(&self, to: u64) -> anyhow::Result<()> {
+    async fn prune_data_batch(&self, cfg: &PrunerCfg, to: u64) -> anyhow::Result<()> {
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
-        let mut tx = self
-            .write()
-            .await
-            .context("opening transaction for pruned height")?;
-        tx.save_pruned_height(to).await?;
-        tx.commit().await.context("committing pruned height")?;
-        self.pruned_heights.set(PruneCategory::Data, to);
+        self.set_pruned_height(to).await?;
 
         let mut tx = self
             .prune_write()
             .await
             .context("opening pruning transaction")?;
-        tx.delete_batch(to).await?;
+        let cert2_limit = cfg.batch_size().saturating_mul(CERT2_PRUNE_FACTOR);
+        tx.delete_batch(to, cert2_limit).await?;
         tx.commit().await.context("committing deleted batch")
+    }
+
+    /// Record `height` as the data pruned height, without deleting anything: data at or below it
+    /// counts as pruned, and is never fetched. A height below the recorded one leaves it as is.
+    async fn set_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        let mut tx = self
+            .write()
+            .await
+            .context("opening transaction for pruned height")?;
+        let stored = tx.save_pruned_height(height).await?;
+        tx.commit().await.context("committing pruned height")?;
+        self.pruned_heights.set(PruneCategory::Data, stored);
+        Ok(())
+    }
+
+    /// Whether the database has neither pruned nor stored a block above genesis. A pruned height of
+    /// 0 still counts: the first pruner run can delete the genesis block before the first decide.
+    async fn is_fresh(&self) -> anyhow::Result<bool> {
+        let mut tx = self.read().await.context("opening transaction")?;
+        let pruned = self
+            .load_pruned_height(&mut tx, PruneCategory::Data)
+            .await?;
+        let (highest,) = query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .context("loading the highest block")?;
+        Ok(pruned.is_none_or(|pruned| pruned == 0) && highest.is_none_or(|height| height == 0))
     }
 
     /// State is never fetched from peers, so unlike data the marker need not commit first.
@@ -1561,13 +1128,14 @@ impl SqlStorage {
     async fn get_disk_usage(&self) -> anyhow::Result<u64> {
         let mut tx = self.read().await?;
 
-        #[cfg(not(feature = "embedded-db"))]
-        let query = "SELECT pg_database_size(current_database())";
-
-        #[cfg(feature = "embedded-db")]
-        let query = "
+        let query = match Db::KIND {
+            DbKind::Sqlite => {
+                "
             SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
-                     AS total_bytes";
+                 AS total_bytes"
+            },
+            DbKind::Postgres => "SELECT pg_database_size(current_database())",
+        };
 
         let row = tx.fetch_one(query).await.context("getting disk usage")?;
         let size: i64 = row.get(0);
@@ -1577,7 +1145,7 @@ impl SqlStorage {
 
     /// No-op on Postgres: no incremental vacuum, and a full one is too expensive to schedule.
     async fn vacuum(&self, pages: u64) -> anyhow::Result<()> {
-        if !cfg!(feature = "embedded-db") {
+        if Db::KIND == DbKind::Postgres {
             return Ok(());
         }
         let mut conn = self.pool().acquire().await?;
@@ -1722,6 +1290,28 @@ impl PruneStorage for SqlStorage {
         self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
         Ok(Some(to))
     }
+
+    async fn delete_leftover_aggregates(&self) -> anyhow::Result<bool> {
+        self.delete_aggregates(AGGREGATE_DELETE_HEIGHTS).await
+    }
+
+    async fn init_pruned_height(&self, height: u64) -> anyhow::Result<()> {
+        if height == 0
+            || self.pruner_cfg.is_none()
+            || self.pruned_height_initialized.load(Ordering::Acquire)
+        {
+            return Ok(());
+        }
+        if height > 1 && self.is_fresh().await? {
+            self.set_pruned_height(height - 1)
+                .await
+                .context("marking the blocks below the first block as pruned")?;
+            tracing::info!(height, "fresh pruned database starts at its first block");
+        }
+        self.pruned_height_initialized
+            .store(true, Ordering::Release);
+        Ok(())
+    }
 }
 
 impl VersionedDataSource for SqlStorage {
@@ -1746,243 +1336,67 @@ impl VersionedDataSource for SqlStorage {
 // These tests start `postgres` from PATH, which doesn't work on Windows.
 #[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
 pub mod testing {
-    #![allow(unused_imports)]
-    use std::{
-        env,
-        process::{Child, Command, Stdio},
-        time::Duration,
-    };
-
     use refinery::Migration;
-    use test_utils::reserve_tcp_port;
-    use tokio::time::timeout;
 
-    use super::Config;
-    use crate::testing::sleep;
-    #[derive(Debug)]
-    pub struct TmpDb {
-        #[cfg(not(feature = "embedded-db"))]
-        postgres: TmpPostgres,
-        #[cfg(feature = "embedded-db")]
-        db_path: std::path::PathBuf,
-    }
-    impl TmpDb {
-        pub async fn init() -> Self {
-            #[cfg(feature = "embedded-db")]
-            {
-                let file = tempfile::Builder::new()
-                    .prefix("sqlite-")
-                    .suffix(".db")
-                    .tempfile()
-                    .unwrap();
-                let (_, db_path) = file.keep().unwrap();
-                Self { db_path }
-            }
+    pub use super::super::tmp_db::TmpDb;
+    use super::{Backend as _, Db, DbKind};
 
-            #[cfg(not(feature = "embedded-db"))]
-            Self {
-                postgres: TmpPostgres::init().await,
-            }
+    #[cfg(test)]
+    #[async_trait::async_trait]
+    impl crate::testing::consensus::TestSqlDb for TmpDb {
+        type Storage = super::SqlStorage;
+
+        async fn init() -> Self {
+            TmpDb::init().await
         }
 
-        #[cfg(not(feature = "embedded-db"))]
-        pub fn host(&self) -> String {
-            self.postgres.host()
+        async fn storage(&self) -> anyhow::Result<super::SqlStorage> {
+            super::SqlStorage::connect(self.config(), super::StorageConnectionType::Query).await
         }
 
-        #[cfg(not(feature = "embedded-db"))]
-        pub fn port(&self) -> u16 {
-            self.postgres.port()
-        }
-
-        #[cfg(feature = "embedded-db")]
-        pub fn path(&self) -> std::path::PathBuf {
-            self.db_path.clone()
-        }
-
-        pub fn config(&self) -> Config {
-            #[cfg(feature = "embedded-db")]
-            let mut cfg = Config::default().db_path(self.db_path.clone());
-
-            #[cfg(not(feature = "embedded-db"))]
-            let mut cfg = Config::default()
-                .user("postgres")
-                .password("password")
-                .host(self.host())
-                .port(self.port());
-
-            cfg = cfg.migrations(vec![
-                Migration::unapplied(
-                    "V101__create_test_merkle_tree_table.sql",
-                    &TestMerkleTreeMigration::create("test_tree"),
-                )
-                .unwrap(),
-            ]);
-
-            cfg
-        }
-    }
-
-    #[cfg(feature = "embedded-db")]
-    impl Drop for TmpDb {
-        fn drop(&mut self) {
-            std::fs::remove_file(self.db_path.clone()).unwrap();
-        }
-    }
-
-    /// A throwaway Postgres server with user `postgres` and trust auth, removed on drop.
-    ///
-    /// Available whichever database the query service is built for, for crates that keep data of
-    /// their own in Postgres.
-    #[derive(Debug)]
-    pub struct TmpPostgres {
-        host: String,
-        port: u16,
-        data_dir: std::path::PathBuf,
-        postgres: Option<Child>,
-    }
-
-    impl TmpPostgres {
-        pub async fn init() -> Self {
-            let port = reserve_tcp_port().unwrap();
-            let host = "127.0.0.1".to_string();
-
-            // initdb requires an empty target; clear any dir left by a crashed run
-            // that reused this (recycled) ephemeral port.
-            let data_dir = env::temp_dir().join(format!("espresso-tmpdb-{port}"));
-            let _ = std::fs::remove_dir_all(&data_dir);
-
-            let output = Command::new("initdb")
-                .arg("-D")
-                .arg(&data_dir)
-                .args(["-U", "postgres", "--auth=trust"])
-                .output()
-                .expect("initdb failed to run; is postgres installed and on PATH?");
-            assert!(
-                output.status.success(),
-                "initdb failed for {data_dir:?}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-
-            let mut db = Self {
-                host,
-                port,
-                data_dir,
-                postgres: None,
-            };
-
-            db.start().await;
-            db
-        }
-
-        pub fn host(&self) -> String {
-            self.host.clone()
-        }
-
-        pub fn port(&self) -> u16 {
-            self.port
-        }
-
-        fn stop(&mut self) {
-            let Some(mut postgres) = self.postgres.take() else {
-                return;
-            };
-            tracing::info!(port = self.port, "stopping postgres");
-            // Fast shutdown (SIGINT to the postmaster) releases the datadir before
-            // Drop removes it; fall back to SIGKILL if pg_ctl is unavailable.
-            let stopped = Command::new("pg_ctl")
-                .arg("-D")
-                .arg(&self.data_dir)
-                .args(["stop", "-m", "fast", "-w"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false);
-            if !stopped {
-                let _ = postgres.kill();
-            }
-            let _ = postgres.wait();
-        }
-
-        async fn start(&mut self) {
-            tracing::info!(port = self.port, "starting postgres");
-            let postgres = Command::new("postgres")
-                .arg("-D")
-                .arg(&self.data_dir)
-                .args(["-p", &self.port.to_string()])
-                .args(["-h", &self.host])
-                // Keep the unix socket inside the data dir instead of a shared /tmp.
-                .arg("-k")
-                .arg(&self.data_dir)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("failed to start postgres; is it installed and on PATH?");
-            self.postgres = Some(postgres);
-
-            self.wait_for_ready().await;
-        }
-
-        async fn wait_for_ready(&self) {
-            let timeout_duration = Duration::from_secs(
-                env::var("SQL_TMP_DB_CONNECT_TIMEOUT")
-                    .unwrap_or("60".to_string())
-                    .parse()
-                    .expect("SQL_TMP_DB_CONNECT_TIMEOUT must be an integer number of seconds"),
-            );
-
-            if let Err(err) = timeout(timeout_duration, async {
-                while !Command::new("pg_isready")
-                    .args(["-h", &self.host])
-                    .args(["-p", &self.port.to_string()])
-                    .args(["-U", "postgres"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|status| status.success())
-                    .unwrap_or(false)
-                {
-                    tracing::warn!("database is not ready");
-                    sleep(Duration::from_secs(1)).await;
-                }
-            })
+        async fn pruning_storage(
+            &self,
+            cfg: super::PrunerCfg,
+        ) -> anyhow::Result<super::SqlStorage> {
+            super::SqlStorage::connect(
+                self.config().pruner_cfg(cfg)?,
+                super::StorageConnectionType::Query,
+            )
             .await
-            {
-                panic!(
-                    "failed to connect to TmpDb within configured timeout {timeout_duration:?}: \
-                     {err:#}\n{}",
-                    "Consider increasing the timeout by setting SQL_TMP_DB_CONNECT_TIMEOUT"
-                );
-            }
+        }
+
+        async fn archive_storage(&self) -> anyhow::Result<super::SqlStorage> {
+            super::SqlStorage::connect(self.config().archive(), super::StorageConnectionType::Query)
+                .await
         }
     }
 
-    impl Drop for TmpPostgres {
-        fn drop(&mut self) {
-            self.stop();
-            let _ = std::fs::remove_dir_all(&self.data_dir);
-        }
+    /// The migrations a [`TmpDb`] applies on top of the default schema.
+    pub(crate) fn test_migrations() -> Vec<Migration> {
+        Vec::from([Migration::unapplied(
+            "V101__create_test_merkle_tree_table.sql",
+            &TestMerkleTreeMigration::create("test_tree"),
+        )
+        .unwrap()])
     }
 
     pub struct TestMerkleTreeMigration;
 
     impl TestMerkleTreeMigration {
         fn create(name: &str) -> String {
-            let (bit_vec, binary, hash_pk, root_stored_column) = if cfg!(feature = "embedded-db") {
-                (
+            let (bit_vec, binary, hash_pk, root_stored_column) = match Db::KIND {
+                DbKind::Sqlite => (
                     "TEXT",
                     "BLOB",
                     "INTEGER PRIMARY KEY AUTOINCREMENT",
                     " (json_extract(data, '$.test_merkle_tree_root'))",
-                )
-            } else {
-                (
+                ),
+                DbKind::Postgres => (
                     "BIT(8)",
                     "BYTEA",
                     "BIGSERIAL PRIMARY KEY",
                     "(data->>'test_merkle_tree_root')",
-                )
+                ),
             };
 
             format!(
@@ -2016,12 +1430,13 @@ pub mod testing {
 // These tests start `postgres` from PATH, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use std::time::Duration;
+    use std::{ops::RangeInclusive, time::Duration};
 
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
+    use hotshot_types::simple_certificate::Certificate2;
     use jf_merkle_tree_compat::{
         MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::UniversalMerkleTree,
     };
@@ -2034,7 +1449,10 @@ mod test {
             MerklizedStateStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
         },
         merklized_state::{MerklizedState, Snapshot, UpdateStateData},
-        testing::mocks::{MockMerkleTree, MockTypes},
+        testing::{
+            chain::{EPOCH_HEIGHT, MockChain, NUM_NODES},
+            mocks::{MockMerkleTree, MockTypes},
+        },
     };
 
     impl SqlStorage {
@@ -2106,27 +1524,11 @@ mod test {
         connect(true, migrations).await.unwrap();
     }
 
-    #[test]
-    #[cfg(not(feature = "embedded-db"))]
-    fn test_config_from_str() {
-        let cfg = Config::from_str("postgresql://user:password@host:8080").unwrap();
-        assert_eq!(cfg.db_opt.get_username(), "user");
-        assert_eq!(cfg.db_opt.get_host(), "host");
-        assert_eq!(cfg.db_opt.get_port(), 8080);
-    }
-
-    #[test]
-    #[cfg(feature = "embedded-db")]
-    fn test_config_from_str() {
-        let cfg = Config::from_str("sqlite://data.db").unwrap();
-        assert_eq!(cfg.db_opt.get_filename().to_string_lossy(), "data.db");
-    }
-
     async fn vacuum(storage: &SqlStorage) {
-        #[cfg(feature = "embedded-db")]
-        let query = "PRAGMA incremental_vacuum(16000)";
-        #[cfg(not(feature = "embedded-db"))]
-        let query = "VACUUM";
+        let query = match Db::KIND {
+            DbKind::Sqlite => "PRAGMA incremental_vacuum(16000)",
+            DbKind::Postgres => "VACUUM",
+        };
         storage
             .pool
             .acquire()
@@ -2657,6 +2059,322 @@ mod test {
         count
     }
 
+    /// A pruner run deletes the cert2s at the heights it prunes, and keeps the ones above.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning() {
+        let db = TmpDb::init().await;
+        let (storage, chain) = storage_with_sparse_cert2s(&db).await;
+
+        let cfg = PrunerCfg::default();
+        let mut pruner = Some(data_pruner(&cfg, 3));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(2));
+        assert_eq!(count_rows(&storage, "leaf2").await, 2);
+
+        let mut tx = storage.read().await.unwrap();
+        let cert2_1: Option<Certificate2<MockTypes>> = tx.load_cert2(1).await.unwrap();
+        assert_eq!(cert2_1, None);
+        let cert2_2: Option<Certificate2<MockTypes>> = tx.load_cert2(2).await.unwrap();
+        assert_eq!(cert2_2, None);
+        let cert2_4: Option<Certificate2<MockTypes>> = tx.load_cert2(4).await.unwrap();
+        assert_eq!(cert2_4, Some(cert2_at(&chain, 4)));
+        let earliest: Option<Certificate2<MockTypes>> = tx.load_earliest_cert2(0).await.unwrap();
+        assert_eq!(earliest, Some(cert2_at(&chain, 4)));
+    }
+
+    /// A later pruner run, which starts above genesis, deletes the cert2s at its heights too.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_later_run() {
+        let db = TmpDb::init().await;
+        let (storage, _) = storage_with_sparse_cert2s(&db).await;
+
+        let cfg = PrunerCfg::default();
+        let mut pruner = Some(data_pruner(&cfg, 3));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(2));
+        pruner.as_mut().unwrap().data.target_height = 5;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(4));
+
+        assert_eq!(count_rows(&storage, "leaf2").await, 0);
+        assert_eq!(count_rows(&storage, "cert2").await, 0);
+    }
+
+    /// A batch deletes the backlog of cert2s that older versions left below the pruned height,
+    /// when the backlog fits in the batch's cert2 limit but holds more rows than `batch_size` and
+    /// is not a multiple of it. The cert2s above the batch stay.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_larger_than_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 9).await;
+        insert_cert2s(&storage, &chain, [8, 9]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 6));
+        for to in [1, 3, 5] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=5).await;
+
+        pruner.as_mut().unwrap().data.target_height = 8;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(7));
+        assert_cert2s_pruned_to(&storage, &chain, 7, &[8, 9]).await;
+    }
+
+    /// As above, with a backlog of exactly twice `batch_size` rows and no cert2 in the batch.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_exact_multiple_of_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 8).await;
+        insert_cert2s(&storage, &chain, [7, 8]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 5));
+        for to in [1, 3, 4] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=4).await;
+
+        pruner.as_mut().unwrap().data.target_height = 7;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(6));
+        assert_cert2s_pruned_to(&storage, &chain, 6, &[7, 8]).await;
+    }
+
+    /// A batch deletes a backlog that fits in its cert2 limit together with the cert2s at its own
+    /// heights.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_with_batch_window() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, chain) = storage_with_leaves(&db, &cfg, 8).await;
+        insert_cert2s(&storage, &chain, [4, 5, 6, 8]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 4));
+        for to in [1, 3] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=3).await;
+
+        pruner.as_mut().unwrap().data.target_height = 6;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
+        assert_cert2s_pruned_to(&storage, &chain, 5, &[6, 8]).await;
+    }
+
+    /// A batch deletes at most `CERT2_PRUNE_FACTOR * batch_size` cert2s, the lowest first, so a
+    /// larger backlog shrinks over several batches. A cert2 at a batch's own height waits until
+    /// the backlog below it is gone, and the cert2s above the batch stay.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_backlog_bounded_per_batch() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(1);
+        let limit = CERT2_PRUNE_FACTOR * cfg.batch_size();
+        // Two full batches of backlog and 3 rows more, so not a multiple of the limit.
+        let backlog_end = 2 * limit + 3;
+        // In the window of the first batch, in the window of the third batch, and above all
+        // batches.
+        let window_cert2s = [backlog_end + 1, backlog_end + 3, backlog_end + 5];
+        let (storage, chain) = storage_with_leaves(&db, &cfg, (backlog_end + 5) as usize).await;
+        insert_cert2s(&storage, &chain, window_cert2s).await;
+
+        let mut pruner = Some(data_pruner(&cfg, backlog_end + 1));
+        for to in 0..=backlog_end {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=backlog_end).await;
+        let kept_from =
+            |lowest: u64| -> Vec<u64> { (lowest..=backlog_end).chain(window_cert2s).collect() };
+
+        pruner.as_mut().unwrap().data.target_height = backlog_end + 4;
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 1)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, limit, &kept_from(limit + 1)).await;
+
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 2)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, 2 * limit, &kept_from(2 * limit + 1)).await;
+
+        // The rest of the backlog and the cert2s of the first and third windows fit in the limit.
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(backlog_end + 3)
+        );
+        assert_cert2s_pruned_to(&storage, &chain, backlog_end + 3, &[backlog_end + 5]).await;
+    }
+
+    /// A batch whose window holds no header still deletes the cert2s at or below its end: the
+    /// backlog, and a cert2 in the window without a leaf. The cert2 above the batch stays.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_pruning_batch_without_headers() {
+        let db = TmpDb::init().await;
+        let cfg = PrunerCfg::default().with_batch_size(2);
+        let (storage, mut chain) = storage_with_leaves(&db, &cfg, 3).await;
+        // Blocks 4 to 6 are missing, so the batch window 4 to 5 has no header. Block 7 has its
+        // leaf, so a header that the batch must not delete exists.
+        chain.push_empty(4).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf(&chain.blocks()[7].leaf).await.unwrap();
+        tx.commit().await.unwrap();
+        insert_cert2s(&storage, &chain, [5, 7]).await;
+
+        let mut pruner = Some(data_pruner(&cfg, 4));
+        for to in [1, 3] {
+            assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(to));
+        }
+        insert_cert2_backlog(&storage, &chain, 1..=3).await;
+        assert_eq!(count_rows(&storage, "header").await, 1);
+
+        pruner.as_mut().unwrap().data.target_height = 6;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5));
+        assert_eq!(count_rows(&storage, "header").await, 1);
+        assert_cert2s_pruned_to(&storage, &chain, 5, &[7]).await;
+    }
+
+    /// Storage with leaves at heights 0 to 4 and cert2s at heights 1, 2 and 4 only: a leaf
+    /// finalized indirectly, by the decide of a later leaf, has no cert2 of its own.
+    async fn storage_with_sparse_cert2s(db: &TmpDb) -> (SqlStorage, MockChain) {
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(Default::default());
+
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push_empty(4).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf_range(chain.blocks().iter().map(|block| &block.leaf))
+            .await
+            .unwrap();
+        for height in [1, 2, 4] {
+            tx.insert_cert2(height, cert2_at(&chain, height))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        assert_eq!(count_rows(&storage, "leaf2").await, 5);
+        assert_eq!(count_rows(&storage, "cert2").await, 3);
+        (storage, chain)
+    }
+
+    /// The cert2 finalizing the block at `height`.
+    fn cert2_at(chain: &MockChain, height: u64) -> Certificate2<MockTypes> {
+        let cert2 = chain.cert2(&chain.blocks()[height as usize]).unwrap();
+        assert_eq!(cert2.data.block_number, height);
+        cert2
+    }
+
+    /// A pruner whose next data batches delete every height below `target_height`.
+    fn data_pruner(cfg: &PrunerCfg, target_height: u64) -> Pruner<'_> {
+        Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height,
+                minimum_retention_height: target_height,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg,
+            extra_pruning: false,
+        }
+    }
+
+    /// Storage with leaves at heights 0 to `tip` and no cert2s, configured to prune with `cfg`.
+    async fn storage_with_leaves(
+        db: &TmpDb,
+        cfg: &PrunerCfg,
+        tip: usize,
+    ) -> (SqlStorage, MockChain) {
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(cfg.clone());
+
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push_empty(tip).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf_range(chain.blocks().iter().map(|block| &block.leaf))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        (storage, chain)
+    }
+
+    async fn insert_cert2s(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        heights: impl IntoIterator<Item = u64>,
+    ) {
+        let mut tx = storage.write().await.unwrap();
+        for height in heights {
+            tx.insert_cert2(height, cert2_at(chain, height))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+    }
+
+    /// Insert cert2s at `heights`, all at or below the pruned height, as a node upgraded from a
+    /// version whose pruner never deleted cert2s still has them.
+    async fn insert_cert2_backlog(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        heights: RangeInclusive<u64>,
+    ) {
+        let pruned = storage
+            .read()
+            .await
+            .unwrap()
+            .load_pruned_height()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            *heights.end() <= pruned,
+            "backlog above pruned height {pruned}"
+        );
+
+        insert_cert2s(storage, chain, heights.clone()).await;
+        let mut tx = storage.read().await.unwrap();
+        for height in heights {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(cert2, Some(cert2_at(chain, height)));
+        }
+    }
+
+    /// Assert that no cert2 at or below `pruned` is left, and that exactly the cert2s at `kept`,
+    /// in ascending order, are left, unchanged.
+    async fn assert_cert2s_pruned_to(
+        storage: &SqlStorage,
+        chain: &MockChain,
+        pruned: u64,
+        kept: &[u64],
+    ) {
+        let mut tx = storage.read().await.unwrap();
+        for height in 0..=pruned {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(cert2, None, "cert2 left at height {height}");
+        }
+        for &height in kept {
+            let cert2: Option<Certificate2<MockTypes>> = tx.load_cert2(height).await.unwrap();
+            assert_eq!(
+                cert2,
+                Some(cert2_at(chain, height)),
+                "cert2 at height {height}"
+            );
+        }
+        let earliest: Option<Certificate2<MockTypes>> = tx.load_earliest_cert2(0).await.unwrap();
+        assert_eq!(
+            earliest,
+            kept.first().map(|&height| cert2_at(chain, height))
+        );
+        drop(tx);
+
+        assert_eq!(count_rows(storage, "cert2").await, kept.len() as i64);
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pruning_empty_batch_skips_gc() {
         let db = TmpDb::init().await;
@@ -2758,9 +2476,11 @@ mod test {
                 .unwrap()
                 .is_none()
         );
-        for height in [10, 20, 30] {
+        // The last height is lower: a pruner run that started before a fresh pruned start must not
+        // move the marker back down.
+        for (height, stored) in [(10, 10), (20, 20), (30, 30), (15, 30)] {
             let mut tx = storage.write().await.unwrap();
-            tx.save_pruned_height(height).await.unwrap();
+            assert_eq!(tx.save_pruned_height(height).await.unwrap(), stored);
             tx.commit().await.unwrap();
             assert_eq!(
                 storage
@@ -2770,7 +2490,7 @@ mod test {
                     .load_pruned_height()
                     .await
                     .unwrap(),
-                Some(height)
+                Some(stored)
             );
         }
     }
@@ -2798,6 +2518,31 @@ mod test {
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
+    }
+
+    /// Archive mode keeps the state start height, so that an archive node whose state started from
+    /// a snapshot can tell that its trees are incomplete.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_keeps_state_start_height() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_start_height().await.unwrap(), None);
+        drop(tx);
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<_, MockMerkleTree, 8>::set_state_start_height(&mut tx, 40)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        let storage = SqlStorage::connect(db.config().archive(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_start_height().await.unwrap(), Some(40));
     }
 
     fn pruned_height_gauge(storage: &SqlStorage, name: &str) -> usize {
@@ -3750,36 +3495,541 @@ mod test {
             .unwrap_err();
     }
 
+    /// [`write_aggregates`] stores totals at heights 0 to `AGGREGATE_HEIGHTS - 1`.
+    const AGGREGATE_HEIGHTS: u64 = 10;
+
+    /// Each namespace and the first height whose block has transactions in it. From that height
+    /// on, every height has a row for the namespace, as the aggregator writes them.
+    const AGGREGATE_NAMESPACES: [(i64, u64); 3] = [(1, 0), (2, 3), (3, 6)];
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg(not(feature = "embedded-db"))]
-    async fn test_cancelled_begin_does_not_leak_transaction() {
-        use sqlx::Connection;
-
+    async fn test_delete_aggregates_deletes_all_rows() {
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(
-            db.config().max_connections(1),
-            StorageConnectionType::Sequencer,
-        )
-        .await
-        .unwrap();
-
-        let mut conn = storage.pool.acquire().await.unwrap();
-        assert!(
-            conn.begin().now_or_never().is_none(),
-            "BEGIN finished on the first poll, so nothing was cancelled"
-        );
-        drop(conn);
-
-        let mut conn = storage.pool.acquire().await.unwrap();
-        let row = conn
-            .fetch_one(sqlx::raw_sql(
-                "SELECT transaction_timestamp() <> statement_timestamp()",
-            ))
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
             .await
             .unwrap();
-        assert!(
-            !row.get::<bool, _>(0),
-            "the connection came back from the pool inside the cancelled transaction"
+
+        // One height per chunk, chunks that do not divide the heights, one that does, and one
+        // larger than the table.
+        for heights in [1, 3, 4, 5, AGGREGATE_HEIGHTS + 5] {
+            write_aggregates(&storage).await;
+            assert!(
+                delete_all_aggregates(&storage, heights).await,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_zero_heights_deletes_all_rows() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        write_aggregates(&storage).await;
+        assert!(delete_all_aggregates(&storage, 0).await);
+        assert_no_aggregates(&storage).await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_empty_table() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [0, 1, AGGREGATE_HEIGHTS] {
+            assert!(
+                !delete_all_aggregates(&storage, heights).await,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// The aggregator writes every height, but `delete_aggregates` deletes every row whatever
+    /// heights the table holds, also across gaps wider than a chunk.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_heights_with_gaps() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for table in [
+            [0, 1, 7, 20, 21].as_slice(),
+            &[5, 6, 30],
+            &[0, 1000, 1001, 5000],
+        ] {
+            for heights in [1, 2, 3, 25] {
+                let rows = totals_at(table);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert!(
+                    delete_all_aggregates(&storage, heights).await,
+                    "table {table:?}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_lowest_height_above_zero() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let tables: [Vec<u64>; 2] = [(6..=13).collect(), (1_000_000..1_000_005).collect()];
+        for table in &tables {
+            for heights in [1, 3, 8, 20] {
+                let rows = totals_at(table);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert!(
+                    delete_all_aggregates(&storage, heights).await,
+                    "table {table:?}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_single_height() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Heights with one row and with several.
+        for height in [0, 2, 41] {
+            for heights in [1, 2, AGGREGATE_HEIGHTS] {
+                let rows = totals_at(&[height]);
+                insert_aggregate_rows(&storage, &rows).await;
+                assert!(
+                    delete_all_aggregates(&storage, heights).await,
+                    "height {height}, heights {heights}"
+                );
+                assert_no_aggregates(&storage).await;
+            }
+        }
+    }
+
+    /// A chunk wider than any difference of two heights deletes every row, and does not overflow.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_chunk_beyond_i64() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX] {
+            write_aggregates(&storage).await;
+            assert!(
+                delete_all_aggregates(&storage, heights).await,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// While `delete_aggregates` runs, the rows left are always every row up to some height, so an
+    /// aggregator started at any moment resumes from the right totals.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_keeps_oldest_heights_while_running() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [1, 3] {
+            write_aggregates(&storage).await;
+            watch_delete_all_aggregates(&storage, heights).await;
+        }
+        insert_aggregate_rows(&storage, &totals_at(&[0, 1, 7, 20, 21])).await;
+        watch_delete_all_aggregates(&storage, 3).await;
+    }
+
+    /// `delete_aggregates` gives the space of the deleted totals back: on SQLite no free page is
+    /// left in the file, and on Postgres the table and its index are back to their empty size.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_aggregates_returns_space() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let rows = totals_at(&(0..3000).collect::<Vec<_>>());
+
+        match Db::KIND {
+            DbKind::Sqlite => {
+                assert_eq!(
+                    sqlite_pragma(&storage, "auto_vacuum").await,
+                    2,
+                    "not incremental"
+                );
+                // Free pages the migrations left, so that every free page at the end is one the
+                // deletion freed.
+                vacuum(&storage).await;
+                assert_eq!(sqlite_pragma(&storage, "freelist_count").await, 0);
+                let empty = sqlite_pragma(&storage, "page_count").await;
+                insert_aggregate_rows(&storage, &rows).await;
+                let filled = sqlite_pragma(&storage, "page_count").await - empty;
+                assert!(filled >= 10, "the totals fill only {filled} pages");
+
+                run_delete_aggregates(&storage, 100).await;
+
+                let free = sqlite_pragma(&storage, "freelist_count").await;
+                assert_eq!(
+                    free, 0,
+                    "{free} free pages are left after deleting totals that filled {filled} pages"
+                );
+            },
+            DbKind::Postgres => {
+                insert_aggregate_rows(&storage, &rows).await;
+                let (table, index) = aggregate_relation_sizes(&storage).await;
+                assert!(
+                    table >= 10 * PG_PAGE_SIZE && index > PG_PAGE_SIZE,
+                    "the totals fill only {table} bytes of table and {index} bytes of index"
+                );
+
+                run_delete_aggregates(&storage, 100).await;
+
+                let (table, index) = aggregate_relation_sizes(&storage).await;
+                assert_eq!(
+                    table, 0,
+                    "table of {table} bytes, index of {index} bytes left"
+                );
+                assert!(
+                    index <= PG_PAGE_SIZE,
+                    "table of {table} bytes, index of {index} bytes left"
+                );
+            },
+        }
+        assert_no_aggregates(&storage).await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_newest_aggregates_deletes_top_heights() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let blocks = write_aggregates(&storage).await;
+
+        // Each chunk starts at the newest height the one before left. The chunks cross the heights
+        // where a namespace starts, so their heights have different numbers of rows.
+        let mut end = AGGREGATE_HEIGHTS;
+        for heights in [3, 1, 2] {
+            let new_end = end - heights;
+            let kept = aggregate_rows(&storage)
+                .await
+                .into_iter()
+                .filter(|&(height, ..)| (height as u64) < new_end)
+                .collect::<Vec<_>>();
+            let deleted = (new_end..end).map(rows_at_height).sum::<u64>();
+
+            assert_eq!(
+                storage
+                    .delete_newest_aggregates(end - 1, heights)
+                    .await
+                    .unwrap(),
+                deleted,
+                "heights {new_end}..{end}"
+            );
+            assert_eq!(
+                aggregate_rows(&storage).await,
+                kept,
+                "heights {new_end}..{end}"
+            );
+            assert_resumes_after(&storage, &blocks, new_end - 1).await;
+            end = new_end;
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_newest_aggregates_more_heights_than_table() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [AGGREGATE_HEIGHTS, AGGREGATE_HEIGHTS + 5] {
+            write_aggregates(&storage).await;
+            let rows = count_rows(&storage, "aggregate").await;
+            assert_eq!(
+                storage
+                    .delete_newest_aggregates(AGGREGATE_HEIGHTS - 1, heights)
+                    .await
+                    .unwrap(),
+                rows as u64,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_delete_newest_aggregates_empty_table() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        for heights in [1, AGGREGATE_HEIGHTS] {
+            assert_eq!(
+                storage
+                    .delete_newest_aggregates(AGGREGATE_HEIGHTS - 1, heights)
+                    .await
+                    .unwrap(),
+                0,
+                "heights {heights}"
+            );
+            assert_no_aggregates(&storage).await;
+        }
+    }
+
+    /// Write the totals of [`aggregate_blocks`] the way the aggregator does: in chunks, each one
+    /// starting from the newest totals stored. Returns the blocks.
+    async fn write_aggregates(
+        storage: &SqlStorage,
+    ) -> Vec<crate::availability::PayloadMetadata<MockTypes>> {
+        use crate::data_source::storage::{AggregatesStorage, UpdateAggregatesStorage};
+
+        let blocks = aggregate_blocks().await;
+        for chunk in blocks.chunks(4) {
+            let mut tx = storage.write().await.unwrap();
+            let prev = AggregatesStorage::<MockTypes>::load_prev_aggregate(&mut tx)
+                .await
+                .unwrap()
+                .unwrap_or_default();
+            tx.update_aggregates(prev, chunk).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let rows = (0..AGGREGATE_HEIGHTS).map(rows_at_height).sum::<u64>();
+        assert_eq!(count_rows(storage, "aggregate").await as u64, rows);
+        blocks
+    }
+
+    /// One block per height below [`AGGREGATE_HEIGHTS`]. From its first height on, namespace `ns`
+    /// has `ns` transactions in each block, of `ns * (height + 1)` bytes in all.
+    async fn aggregate_blocks() -> Vec<crate::availability::PayloadMetadata<MockTypes>> {
+        use crate::availability::{NamespaceInfo, NamespaceMap, PayloadMetadata};
+
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
         );
+        (0..AGGREGATE_HEIGHTS)
+            .map(|height| {
+                let namespaces: NamespaceMap<MockTypes> = AGGREGATE_NAMESPACES
+                    .iter()
+                    .filter(|&&(_, first)| first <= height)
+                    .map(|&(ns, _)| {
+                        let info = NamespaceInfo {
+                            num_transactions: ns as u64,
+                            size: ns as u64 * (height + 1),
+                        };
+                        (ns, info)
+                    })
+                    .collect();
+                PayloadMetadata {
+                    height,
+                    num_transactions: namespaces.values().map(|ns| ns.num_transactions).sum(),
+                    size: namespaces.values().map(|ns| ns.size).sum(),
+                    namespaces,
+                    ..genesis.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// The number of rows the totals have at `height`: one for all namespaces together, and one for
+    /// each namespace that has had transactions by then.
+    fn rows_at_height(height: u64) -> u64 {
+        let namespaces = AGGREGATE_NAMESPACES
+            .iter()
+            .filter(|&&(_, first)| first <= height)
+            .count();
+        1 + namespaces as u64
+    }
+
+    /// Every row of the totals as (height, namespace, transactions, bytes), in key order.
+    async fn aggregate_rows(storage: &SqlStorage) -> Vec<(i64, i64, i64, i64)> {
+        let mut tx = storage.read().await.unwrap();
+        query_as(
+            "SELECT height, namespace, num_transactions, payload_size FROM aggregate
+              ORDER BY height, namespace",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+    }
+
+    /// Run `delete_aggregates`, and fail instead of hanging if it never finishes.
+    async fn delete_all_aggregates(storage: &SqlStorage, heights: u64) -> bool {
+        tokio::time::timeout(Duration::from_secs(60), storage.delete_aggregates(heights))
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"))
+            .unwrap()
+    }
+
+    /// Run `delete_aggregates`, and fail instead of hanging if it never finishes. Unlike
+    /// [`delete_all_aggregates`], it does not look at what `delete_aggregates` returns.
+    async fn run_delete_aggregates(storage: &SqlStorage, heights: u64) {
+        tokio::time::timeout(Duration::from_secs(60), storage.delete_aggregates(heights))
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"))
+            .unwrap();
+    }
+
+    /// The size of a Postgres page, and of an empty B-tree index, which is only its metapage.
+    const PG_PAGE_SIZE: i64 = 8192;
+
+    /// The value of the SQLite `PRAGMA {name}`.
+    async fn sqlite_pragma(storage: &SqlStorage, name: &str) -> i64 {
+        let mut tx = storage.read().await.unwrap();
+        let (value,) = query_as::<(i64,)>(&format!("PRAGMA {name}"))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        value
+    }
+
+    /// The sizes in bytes of the Postgres table of the totals and of its primary key index.
+    async fn aggregate_relation_sizes(storage: &SqlStorage) -> (i64, i64) {
+        let mut tx = storage.read().await.unwrap();
+        query_as("SELECT pg_relation_size('aggregate'), pg_relation_size('aggregate_pkey')")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap()
+    }
+
+    /// Assert that no totals are left, so an aggregator would start again at genesis.
+    async fn assert_no_aggregates(storage: &SqlStorage) {
+        use crate::data_source::storage::AggregatesStorage;
+
+        assert_eq!(count_rows(storage, "aggregate").await, 0);
+        let mut tx = storage.read().await.unwrap();
+        let prev = AggregatesStorage::<MockTypes>::load_prev_aggregate(&mut tx)
+            .await
+            .unwrap();
+        assert_eq!(prev.map(|agg| agg.height), None);
+    }
+
+    /// Assert that the newest totals left are the sums over `blocks` up to `height`, so an
+    /// aggregator would resume right after `height`.
+    async fn assert_resumes_after(
+        storage: &SqlStorage,
+        blocks: &[crate::availability::PayloadMetadata<MockTypes>],
+        height: u64,
+    ) {
+        use crate::data_source::storage::{Aggregate, AggregatesStorage};
+
+        let mut expected = Aggregate::<MockTypes>::default();
+        for block in &blocks[..=height as usize] {
+            *expected.num_transactions.entry(None).or_default() += block.num_transactions as usize;
+            *expected.payload_size.entry(None).or_default() += block.size as usize;
+            for (&ns, info) in &block.namespaces {
+                *expected.num_transactions.entry(Some(ns)).or_default() +=
+                    info.num_transactions as usize;
+                *expected.payload_size.entry(Some(ns)).or_default() += info.size as usize;
+            }
+        }
+
+        let mut tx = storage.read().await.unwrap();
+        let prev = AggregatesStorage::<MockTypes>::load_prev_aggregate(&mut tx)
+            .await
+            .unwrap()
+            .expect("no totals left");
+        assert_eq!(prev.height, height as i64);
+        assert_eq!(prev.num_transactions, expected.num_transactions);
+        assert_eq!(prev.payload_size, expected.payload_size);
+    }
+
+    /// Rows of the totals as (height, namespace, transactions, bytes) at each of `heights`: one for
+    /// all namespaces together, and one for each of namespaces 1 to `height % 3`, so that heights
+    /// have different numbers of rows.
+    fn totals_at(heights: &[u64]) -> Vec<(i64, i64, i64, i64)> {
+        heights
+            .iter()
+            .flat_map(|&height| {
+                let height = height as i64;
+                std::iter::once(-1)
+                    .chain(1..=height % 3)
+                    .map(move |ns| (height, ns, height + 1, (ns + 2) * (height + 1)))
+            })
+            .collect()
+    }
+
+    /// Insert `rows` into an empty table of the totals, as (height, namespace, transactions,
+    /// bytes).
+    async fn insert_aggregate_rows(storage: &SqlStorage, rows: &[(i64, i64, i64, i64)]) {
+        assert_eq!(count_rows(storage, "aggregate").await, 0);
+        let mut tx = storage.write().await.unwrap();
+        for &(height, namespace, num_transactions, payload_size) in rows {
+            query(
+                "INSERT INTO aggregate (height, namespace, num_transactions, payload_size)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(height)
+            .bind(namespace)
+            .bind(num_transactions)
+            .bind(payload_size)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(aggregate_rows(storage).await, rows);
+    }
+
+    /// Run `delete_aggregates` and read the totals again and again until it finishes. Assert that
+    /// each read finds the rows there were up to some height, that on SQLite some read finds only
+    /// part of them, and that it reports that there were totals.
+    async fn watch_delete_all_aggregates(storage: &SqlStorage, heights: u64) {
+        let written = aggregate_rows(storage).await;
+        let deleting = tokio::spawn({
+            let storage = storage.clone();
+            async move { storage.delete_aggregates(heights).await }
+        });
+
+        let watch = async {
+            let mut partial_reads = 0;
+            while !deleting.is_finished() {
+                let left = aggregate_rows(storage).await;
+                let newest = left.last().map(|&(height, ..)| height);
+                let oldest_written = written
+                    .iter()
+                    .copied()
+                    .filter(|&(height, ..)| newest.is_some_and(|newest| height <= newest))
+                    .collect::<Vec<_>>();
+                assert_eq!(left, oldest_written, "heights {heights}");
+                if !left.is_empty() && left.len() < written.len() {
+                    partial_reads += 1;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+            partial_reads
+        };
+        let partial_reads = tokio::time::timeout(Duration::from_secs(60), watch)
+            .await
+            .unwrap_or_else(|_| panic!("delete_aggregates({heights}) did not finish"));
+
+        // On SQLite each transaction deletes at most `heights` heights, and a pause follows it, so
+        // the reads see the table partly deleted. Postgres truncates the table in one step.
+        if Db::KIND == DbKind::Sqlite {
+            assert!(
+                partial_reads > 0,
+                "heights {heights}: no read found the table partly deleted"
+            );
+        }
+        assert!(deleting.await.unwrap().unwrap(), "heights {heights}");
+        assert_no_aggregates(storage).await;
     }
 }

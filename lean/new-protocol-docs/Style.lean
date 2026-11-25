@@ -45,7 +45,9 @@ signature, a hyphen at each camel-case seam and a bare break after each dot, but
 a name written as `{name X}` or as plain code reaches LaTeX without them, and a
 long one then runs past the margin. `breakbefore` and `breakafter` ask fancyvrb
 for the same two policies, and for a break after `_`, everywhere a name is set
-inline.
+inline. No break is marked: a hyphen would read as part of the name, and
+fancyvrb cannot tell a camel-case seam from the start of a word. Verso's own
+hyphens are switched off for the same reason.
 
 A few lines still have no break in reach, a name being one long word in a narrow
 column. `emergencystretch` gives TeX a last pass in which it may loosen the
@@ -90,7 +92,7 @@ where
 private def houseTeXPreamble : String :=
   fontRules ++
   r#"
-\RecustomVerbatimCommand{\LeanVerb}{Verb}{commandchars=\\\{\},fontsize=\small,breaklines=true,breakafter={._},breakbefore={ABCDEFGHIJKLMNOPQRSTUVWXYZ},breakbeforesymbolpre={-},breakaftersymbolpre={}}
+\RecustomVerbatimCommand{\LeanVerb}{Verb}{commandchars=\\\{\},fontsize=\small,formatcom={\def\-{}\let\allowbreak\relax},breaklines=true,breakafter={._},breakbefore={ABCDEFGHIJKLMNOPQRSTUVWXYZ},breakbeforesymbolpre={},breakaftersymbolpre={}}
 
 \emergencystretch=1em
 "#
@@ -168,7 +170,7 @@ block_extension SpecBox (mirrors : Name) via houseStyle where
       let anchor := match st.externalTags[id]? with
         | some dest => #[("id", toString dest.htmlId)]
         | none => #[]
-      pure <| .tag "div" (#[("class", "spec-def")] ++ anchor) (.seq (← content.mapM go))
+      pure <| .element "div" (#[("class", "spec-def")] ++ anchor) (.seq (← content.mapM go))
 
 /-- The declaration a `:::spec` box reproduces. -/
 structure SpecConfig where
@@ -262,13 +264,13 @@ pre.spec-value {
       let .ok (tokens : Array ValueToken) := FromJson.fromJson? data
         | do reportError "`{expansion}` lost its value"; pure .empty
       let st : TraverseState ← HtmlT.state (genre := Verso.Genre.Manual)
-      let rendered := tokens.map fun (run, const?) =>
+      let rendered := tokens.map fun (chars, const?) =>
         let link? := const?.bind fun c =>
           (st.linksFromDomain docstringDomain c "doc" s!"Documentation for {c}")[0]?
         match link? with
-        | some link => .tag "a" #[("href", link.href)] (.text true run)
-        | none => .text true run
-      pure <| {{<pre class="spec-value">{{.seq rendered}}</pre>}}
+        | some link => .element "a" #[("href", link.href)] (.text chars)
+        | none => .text chars
+      pure html%{<pre class="spec-value">{.seq rendered}</pre>}
 
 /-- The declaration whose value `{expansion}` prints. -/
 structure ExpansionConfig where
@@ -401,12 +403,12 @@ title={Example: #1}}
     open Verso.Output.Html in
     some <| fun _ go _ data content => do
       let description := (FromJson.fromJson? (α := String) data).toOption.getD "Example"
-      pure <| {{
+      pure html%{
         <details class="example">
-          <summary class="description">{{description}}</summary>
-          <div class="example-content">{{← content.mapM go}}</div>
+          <summary class="description">{description}</summary>
+          <div class="example-content">{← content.mapM go}</div>
         </details>
-      }}
+      }
 
 /-- The title of a `:::scenario`, which is all a folded one shows. -/
 structure ScenarioConfig where
@@ -518,13 +520,13 @@ table.tabular td > p:last-child, table.tabular th > p:last-child { margin-bottom
         | do reportError "`:::rows` lost its cells"; pure .empty
       let rows ← (toRows columns cells).mapIdxM fun i row => do
         let rendered ← row.mapM fun cell => do
-          let content : Verso.Output.Html ← cell.contents.mapM go
-          pure <| if header && i == 0 then {{<th>{{content}}</th>}} else {{<td>{{content}}</td>}}
-        let row : Verso.Output.Html := .seq rendered
-        pure <| if header && i == 0 then {{<thead><tr>{{row}}</tr></thead>}} else {{<tr>{{row}}</tr>}}
-      pure {{<table class="tabular">{{Verso.Output.Html.seq rows}}</table>}}
+          let content : Html ← cell.contents.mapM go
+          pure <| if header && i == 0 then html%{<th>{content}</th>} else html%{<td>{content}</td>}
+        let row : Html := .seq rendered
+        pure <| if header && i == 0 then html%{<thead><tr>{row}</tr></thead>} else html%{<tr>{row}</tr>}
+      pure html%{<table class="tabular">{Html.seq rows}</table>}
 
-open Lean.Doc.Syntax in
+open Lean.Doc (UnorderedListView) in
 /--
 A table whose cells may hold prose.
 -/
@@ -533,14 +535,12 @@ meta def rows : DirectiveExpanderOf RowsConfig
   | cfg, stxs => do
     let #[list] := stxs
       | throwError "Expected a single list, whose items are the rows"
-    let `(block|ul{$rowItems*}) := list
+    let some outer := UnorderedListView.of list
       | throwErrorAt list "Expected a single list, whose items are the rows"
-    let rows ← rowItems.mapM fun rowItem => do
-      let #[row] := (← listItem rowItem).filter (·.raw.isOfKind ``ul)
-        | throwErrorAt rowItem "Expected one list of cells in this row"
-      let `(block|ul{$cellItems*}) := row
-        | throwErrorAt row "Expected one list of cells in this row"
-      cellItems.mapM listItem
+    let rows ← outer.items.mapM fun rowItem => do
+      let #[row] := rowItem.contents.filterMap UnorderedListView.of
+        | throwErrorAt rowItem.stx "Expected one list of cells in this row"
+      pure (row.items.map (·.contents))
     let some columns := rows[0]?.map (·.size)
       | throwErrorAt list "Expected at least one row"
     if let some bad := rows.find? (·.size != columns) then
@@ -548,7 +548,3 @@ meta def rows : DirectiveExpanderOf RowsConfig
     let cells ← rows.flatten.mapM (·.mapM elabBlock)
     ``(Block.other (RowsBox $(quote columns) $(quote cfg.header))
         #[Block.ul #[ $[Verso.Doc.ListItem.mk #[ $cells,* ]],* ]])
-where
-  listItem : Syntax → DocElabM (TSyntaxArray `block)
-    | `(list_item| * $content*) => pure content
-    | other => throwErrorAt other "Expected a list item"

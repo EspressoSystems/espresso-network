@@ -15,6 +15,8 @@ import { IPlonkVerifier } from "./interfaces/IPlonkVerifier.sol";
 import { PlonkVerifier } from "./libraries/PlonkVerifier.sol";
 import { LightClientStateUpdateVK as VkLib } from "./libraries/LightClientStateUpdateVK.sol";
 
+// forge-lint: disable-start(reentrancy-events)
+
 /// @title Light Client Contract
 /// @notice This contract serves as an always-on client
 /// that verifies HotShot's state (Espresso's consensus state) which can be used by

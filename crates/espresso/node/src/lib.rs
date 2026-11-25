@@ -1,8 +1,10 @@
 mod external_event_handler;
+mod lc_contract_headers;
+mod lc_contract_seed;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
-mod startup_catchup;
+mod stake_table_backfill;
 
 pub mod api;
 pub mod catchup;
@@ -13,7 +15,6 @@ pub mod genesis;
 #[cfg(any(test, feature = "testing"))]
 pub mod legacy_chain;
 pub use espresso_keyset as keyset;
-pub mod network;
 pub mod options;
 pub mod persistence;
 pub mod run;
@@ -22,14 +23,13 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, path::PathBuf, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
-use derivative::Derivative;
 use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, SeqTypes,
@@ -71,7 +71,7 @@ use hotshot_types::{
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -82,38 +82,13 @@ use options::Identity;
 pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
-use serde::{Deserialize, Serialize};
 use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
 
-/// The node's `NodeImplementation`, generic over its persistence.
-#[derive(Derivative, Serialize, Deserialize)]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    Default(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Hash(bound = "")
-)]
-pub struct Node<P: SequencerPersistence>(PhantomData<fn(&P)>);
-
-// Using derivative to derive Clone triggers the clippy lint
-// https://rust-lang.github.io/rust-clippy/master/index.html#/incorrect_clone_impl_on_copy_type
-impl<P: SequencerPersistence> Clone for Node<P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
 pub type SequencerApiVersion = StaticVersion<0, 1>;
-
-impl<P: SequencerPersistence> NodeImplementation<SeqTypes> for Node<P> {
-    type Storage = Arc<P>;
-}
 
 #[derive(Clone, Debug)]
 pub struct NetworkParams {
@@ -127,9 +102,6 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -179,6 +151,7 @@ pub async fn init_node<P>(
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
+    leader_trace_dir: Option<PathBuf>,
 ) -> anyhow::Result<SequencerContext<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -356,10 +329,9 @@ where
 
             let registration = orchestrator_registration(&validator_config)?;
 
-            let config =
-                get_complete_config(&orchestrator_client, registration.clone(), None, None)
-                    .await?
-                    .0;
+            let config = get_complete_config(&orchestrator_client, registration.clone())
+                .await?
+                .0;
 
             tracing::warn!(
                 node_id = config.node_index,
@@ -462,9 +434,9 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
+        leader_trace_dir,
     )
     .await?;
 
@@ -598,6 +570,9 @@ where
     P: SequencerPersistence + MembershipPersistence,
     Arc<P>: Storage<SeqTypes>,
 {
+    // Before the L1 work below, which can wait a long time for L1.
+    let first_epoch = genesis.first_epoch()?;
+
     let l1_client = l1_params
         .options
         .with_metrics(metrics)
@@ -641,13 +616,15 @@ where
 
     let state_catchup_providers = ParallelStateCatchup::new(&[], catchup.local_timeout)
         .with_fallback_delay(catchup.http_delay);
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
-        catchup.state_peers,
-        catchup.backoff,
-        catchup.base_timeout,
-        metrics,
-    );
-    state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    if !catchup.state_peers.is_empty() {
+        let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+            catchup.state_peers,
+            catchup.backoff,
+            catchup.base_timeout,
+            metrics,
+        );
+        state_catchup_providers.add_fallback_provider(Arc::new(state_peers));
+    }
     // Local is a single attempt per call; remote providers retry.
     match persistence
         .clone()
@@ -689,19 +666,22 @@ where
     let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    let mut membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         block_reward,
         fetcher,
         epoch_height,
-    );
+        first_epoch,
+    )?;
     info!("Membership created. Reloading stake");
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
     info!("Stake reloaded");
 
     let persistence = Arc::new(persistence);
-    let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
+    let epoch_length =
+        std::num::NonZeroU64::new(epoch_height).context("genesis needs a positive epoch_height")?;
+    let coordinator = EpochMembershipCoordinator::new(membership, epoch_length, &persistence);
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
@@ -736,11 +716,9 @@ where
     })
 }
 
-/// Scans the whole L1 contract history when nothing is persisted yet, keeping every
-/// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
-/// the first step, which silently downgrades the node to a stale epoch window when it
-/// exceeds its timeout. Untimed: an unreachable L1 panics after
-/// `l1_events_max_retry_duration`.
+/// Scans the whole L1 contract history when nothing is persisted yet, so that the seed's
+/// installs, the follower's polls and the startup dial do not load that scan onto their first
+/// read. Untimed: an unreachable L1 panics after `l1_events_max_retry_duration`.
 pub(crate) async fn prefetch_stake_table_events(
     fetcher: &Fetcher,
     l1_client: &espresso_types::v0::L1Client,
@@ -751,14 +729,11 @@ pub(crate) async fn prefetch_stake_table_events(
         return Ok(());
     };
 
-    // Not redundant: a genesis pinning a complete L1 block never waits on the L1 client,
-    // so it reaches this with an empty snapshot.
-    l1_client.wait_for_finalized_block(l1_genesis.number).await;
+    // A pinned genesis block never waits on the L1 client, so the snapshot may be empty here.
+    // Does not fetch the genesis block itself: RPCs that prune old history no longer serve it.
     let finalized = l1_client
-        .snapshot()
-        .await
-        .finalized
-        .context("no finalized L1 block after waiting for the genesis block")?;
+        .wait_for_latest_finalized_at_least(l1_genesis.number)
+        .await;
 
     tracing::info!(
         target: "announce",
@@ -870,8 +845,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, Header, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -879,7 +854,10 @@ pub mod testing {
         future::join_all,
         stream::{Stream, StreamExt},
     };
-    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+    use hotshot_contract_adapter::{
+        sol_types::{LightClientStateSol, LightClientV3Mock},
+        stake_table::StakeTableContractVersion,
+    };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
@@ -890,6 +868,7 @@ pub mod testing {
             BlockPayload, EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
             signature_key::BuilderSignatureKey,
         },
+        utils::epoch_from_block_number,
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
@@ -1297,7 +1276,7 @@ pub mod testing {
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
                 l1_opt: L1ClientOptions {
                     stake_table_update_interval: Duration::from_secs(5),
-                    l1_events_max_block_range: 1000,
+                    l1_events_max_block_range: std::num::NonZeroU64::new(1000).unwrap(),
                     l1_polling_interval: Duration::from_secs(1),
                     subscription_timeout: Duration::from_secs(5),
                     ..Default::default()
@@ -1428,6 +1407,42 @@ pub mod testing {
             self.contracts.clone()
         }
 
+        /// Sets the mock LC contract's `finalizedState` to `header`'s height and `block_comm_root`,
+        /// as a prover would after proving it; `viewNum` keeps its value. `commitment_header`
+        /// supplies the `block_comm_root`: `header` for a valid state, another header for one no
+        /// header at that height matches. `contracts` are those the network deployed.
+        pub async fn set_lc_contract_finalized_state(
+            &self,
+            contracts: &Contracts,
+            header: &Header,
+            commitment_header: &Header,
+        ) -> anyhow::Result<()> {
+            let address = contracts
+                .address(Contract::LightClientProxy)
+                .context("no LightClientProxy deployed")?;
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(self.signer.clone()))
+                .connect_http(self.l1_url.clone());
+            let lc = LightClientV3Mock::new(address, &provider);
+            let current = LightClientStateSol::from(lc.finalizedState().call().await?);
+            let proven =
+                LightClientStateSol::from(header.get_light_client_state(ViewNumber::new(0))?);
+            let committed = LightClientStateSol::from(
+                commitment_header.get_light_client_state(ViewNumber::new(0))?,
+            );
+            let state = LightClientStateSol {
+                viewNum: current.viewNum,
+                blockCommRoot: committed.blockCommRoot,
+                ..proven
+            };
+            lc.setFinalizedState(state.into())
+                .send()
+                .await?
+                .watch()
+                .await?;
+            Ok(())
+        }
+
         pub fn validator_providers(
             &self,
         ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
@@ -1474,6 +1489,37 @@ pub mod testing {
         pub async fn init_node<P: PersistenceOptions>(
             &self,
             i: usize,
+            state: ValidatedState,
+            persistence_opt: P,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<RequestResponseStorage>,
+            metrics: &dyn Metrics,
+            stake_table_capacity: usize,
+            event_consumer: impl EventConsumer + 'static,
+            upgrade: versions::Upgrade,
+            upgrades: BTreeMap<Version, Upgrade>,
+        ) -> SequencerContext<P::Persistence> {
+            self.try_init_node(
+                i,
+                state,
+                persistence_opt,
+                state_peers,
+                storage,
+                metrics,
+                stake_table_capacity,
+                event_consumer,
+                upgrade,
+                upgrades,
+            )
+            .await
+            .expect("node initializes")
+        }
+
+        /// [`Self::init_node`], returning the error `SequencerContext::init` refuses with.
+        #[allow(clippy::too_many_arguments)]
+        pub async fn try_init_node<P: PersistenceOptions>(
+            &self,
+            i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
@@ -1483,7 +1529,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<P::Persistence> {
+        ) -> anyhow::Result<SequencerContext<P::Persistence>> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1560,13 +1606,17 @@ pub mod testing {
             fetcher.spawn_update_loop().await;
 
             let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
-            let mut membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 block_reward,
                 fetcher,
                 config.epoch_height,
-            );
+                EpochNumber::new(epoch_from_block_number(
+                    config.epoch_start_block,
+                    config.epoch_height,
+                )),
+            )?;
             membership.reload_stake(50).await;
 
             let membership = Arc::new(membership);
@@ -1574,7 +1624,7 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
-                config.epoch_height,
+                std::num::NonZeroU64::new(config.epoch_height).unwrap(),
                 &persistence.clone(),
             );
 
@@ -1646,12 +1696,11 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
+                None,
             )
             .await
-            .unwrap()
         }
 
         pub fn builder_key() -> EthKeyPair {
@@ -1987,5 +2036,62 @@ mod test {
                 break;
             }
         }
+    }
+
+    #[rstest::rstest]
+    #[case::missing(None)]
+    #[case::zero(Some(0))]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn init_node_state_rejects_epochless_genesis_before_l1(
+        #[case] epoch_height: Option<u64>,
+    ) {
+        use espresso_types::v0::traits::PersistenceOptions;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/mainnet.toml");
+        let mut genesis = Genesis::from_file(&path).unwrap();
+        genesis.epoch_height = epoch_height;
+        // Nothing listens on the L1 port and this block is never finalized, so L1 work cannot finish.
+        genesis.l1_finalized = L1Finalized::Number { number: u64::MAX };
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let l1_params = L1Params {
+            urls: vec![format!("http://127.0.0.1:{port}").parse().unwrap()],
+            options: L1ClientOptions::default(),
+        };
+        let catchup = CatchupParams {
+            state_peers: vec![],
+            backoff: Default::default(),
+            base_timeout: Duration::from_secs(2),
+            local_timeout: Duration::from_secs(5),
+            http_delay: Duration::ZERO,
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let persistence = persistence::fs::Options::new(tmp.path().into())
+            .create()
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            init_node_state(
+                &genesis,
+                &NetworkConfig::<SeqTypes>::default(),
+                l1_params,
+                catchup,
+                persistence,
+                &NoMetrics,
+            ),
+        )
+        .await;
+
+        let err = match result {
+            Ok(Err(err)) => err,
+            Ok(Ok(_)) => panic!("init_node_state accepted epoch_height={epoch_height:?}"),
+            Err(_) => panic!("init_node_state did not return within 10s: it is doing L1 work"),
+        };
+        assert!(
+            format!("{err:#}").contains("epoch_height"),
+            "expected an epoch_height error, got: {err:#}"
+        );
     }
 }

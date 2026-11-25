@@ -21,7 +21,7 @@ use hotshot_types::{
 };
 use tokio::sync::mpsc;
 
-use super::utils::reconstructed_blocks;
+use super::utils::{epoch_length, reconstructed_blocks};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -77,7 +77,7 @@ pub async fn build_test_coordinator(
         config: upgrade_config,
     } = upgrade;
 
-    let epoch_manager = EpochManager::new(epoch_height, membership.clone());
+    let epoch_manager = EpochManager::new(epoch_length(epoch_height), membership.clone());
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -107,7 +107,7 @@ pub async fn build_test_coordinator(
         10,
         upgrade_lock.clone(),
         initial_leaf,
-        epoch_height,
+        epoch_length(epoch_height),
     );
 
     let vid_disperser = VidDisperser::new(
@@ -138,7 +138,7 @@ pub async fn build_test_coordinator(
 
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
-    let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    let genesis_proposal = build_genesis_proposal(&genesis_leaf);
 
     let anchor_view = if let Some((anchor_leaf, anchor_cert)) = restart_anchor {
         // Seed the persisted anchor as the parent, exactly as production's
@@ -192,15 +192,14 @@ pub async fn build_test_coordinator(
         );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
         if let Some(cert2) = storage.cert2(anchor_view).await {
-            consensus.seed_cert2(cert2);
+            consensus.seed_anchor_cert2(cert2);
         }
         anchor_view
     } else {
-        // The synthetic genesis proposal carries the genesis cert1 as its
-        // justify_qc, so the leaf derived from it has a different commitment than
-        // `genesis_leaf` (which has a null justify_qc). `request_header` for view 1
-        // looks up the parent state by the proposal's leaf commitment, so seed the
-        // genesis state under that commitment too.
+        // This genesis leaf is from before epochs, so the leaf rebuilt from the
+        // genesis proposal commits differently. `request_header` for view 1
+        // looks up the parent state by the proposal's leaf commitment, so seed
+        // the genesis state under that commitment too.
         state_manager.seed_state(
             ViewNumber::genesis(),
             genesis_state,
@@ -251,12 +250,15 @@ pub async fn build_test_coordinator(
 
     let proposal_validator = ProposalValidator::new(
         membership.clone(),
-        epoch_height,
+        epoch_length(epoch_height),
         upgrade_lock.clone(),
         consensus.cert1_at(ViewNumber::genesis()),
     );
-    let share_validator =
-        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator = VidShareValidator::new(
+        membership.clone(),
+        epoch_length(epoch_height),
+        upgrade_lock.clone(),
+    );
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -323,16 +325,16 @@ pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificat
     )
 }
 
-/// Create a genesis `Proposal` from the genesis leaf and cert.
-pub(crate) fn build_genesis_proposal(
-    genesis_leaf: &Leaf2<TestTypes>,
-    genesis_cert1: &Certificate1<TestTypes>,
-) -> Proposal<TestTypes> {
+/// Create a genesis `Proposal` from the genesis leaf, as `Coordinator::maker`
+/// builds the anchor proposal: with the leaf's own `justify_qc`. For a leaf of
+/// an epoch version, as a new-protocol anchor is, the proposal then commits as
+/// the leaf does.
+pub(crate) fn build_genesis_proposal(genesis_leaf: &Leaf2<TestTypes>) -> Proposal<TestTypes> {
     Proposal {
         block_header: genesis_leaf.block_header().clone(),
         view_number: ViewNumber::genesis(),
         epoch: EpochNumber::genesis(),
-        justify_qc: genesis_cert1.clone(),
+        justify_qc: genesis_leaf.justify_qc().clone(),
         next_epoch_justify_qc: None,
         upgrade_certificate: None,
         view_change_evidence: None,

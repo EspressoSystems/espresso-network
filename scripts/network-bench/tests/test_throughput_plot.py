@@ -1,6 +1,9 @@
+import dataclasses
 import json
 from pathlib import Path
 
+import fakes
+import netbench
 import numpy as np
 import pytest
 from fakes import load_script
@@ -267,3 +270,58 @@ def test_binned_by_group_counts_one_label_name_per_group():
     starts, counts = plot.binned_by_group(events, groups, "no-propose", 0.0, 20.0)
     assert list(starts) == [0.0, 10.0]
     assert {g: list(c) for g, c in counts.items()} == {"a": [1, 0], "b": [1, 1]}
+
+
+TOPOLOGY = fakes.TOPOLOGY
+IN_RUN_LATENCY_FAIL = ["consensus latency p50 15000 ms > 1000 ms"]
+
+
+def write_judged_run(run_dir: Path) -> list[dict]:
+    """`fakes.write_run_dir` with the config and genesis `main` reads; returns steps.json,
+    whose first step the final files pass and whose second they fail."""
+    run_dir.mkdir(parents=True)
+    fakes.write_run_dir(run_dir)
+    config = dataclasses.asdict(netbench.BenchConfig())
+    (run_dir / "config.json").write_text(json.dumps(config))
+    (run_dir / "genesis.toml").write_text('[chain_config]\nmax_block_size = "50mb"\n')
+    return json.loads((run_dir / "steps.json").read_text())
+
+
+def failed_in_run(steps: list[dict]) -> list[dict]:
+    """The steps, the first failed on consensus latency as the ramp judged it while the
+    payload scans lagged."""
+    return [steps[0] | {"consensus_fails": IN_RUN_LATENCY_FAIL}, *steps[1:]]
+
+
+def test_final_steps_carry_the_verdict_of_the_result(tmp_path: Path):
+    """steps.json failed the 1 MB/s step on consensus latency; the final files pass it, as
+    result.json does."""
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    steps = failed_in_run(write_judged_run(run_dir))
+    final = plot.final_steps(run_dir, steps)
+    result = netbench.analyze(run_dir, netbench.BenchConfig(), TOPOLOGY)["steps"]
+    assert final[0]["consensus_fails"] == []
+    assert [(s["consensus_fails"], s["query_fails"]) for s in final] == [
+        (s["consensus_fails"], s["query_fails"]) for s in result
+    ]
+    assert [s["rate_mb_s"] for s in final] == [1.0, 2.0]
+
+
+def test_final_steps_of_a_run_without_run_json_are_as_in_steps_json(tmp_path: Path):
+    """A failed run has no run.json: the steps stay as the ramp judged them."""
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    steps = failed_in_run(write_judged_run(run_dir))
+    (run_dir / "run.json").unlink()
+    assert plot.final_steps(run_dir, steps) == steps
+
+
+def test_main_shades_the_measured_windows_by_the_final_verdict(tmp_path: Path):
+    """The chart of a run whose steps.json failed the 1 MB/s step that the final files pass
+    is the chart of the same run whose steps.json passed it."""
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    steps = write_judged_run(run_dir)
+    plot.main([str(run_dir)])
+    passed = (run_dir / "throughput.png").read_bytes()
+    (run_dir / "steps.json").write_text(json.dumps(failed_in_run(steps)))
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes() == passed

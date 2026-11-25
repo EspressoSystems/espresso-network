@@ -35,13 +35,19 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct TestInstanceState {
     pub delay_config: DelayConfig,
+    /// A payload keeps at most this many transactions and leaves out the rest, as a real
+    /// payload does when it hits a block limit.
+    pub max_block_transactions: Option<usize>,
 }
 
 impl InstanceState for TestInstanceState {}
 
 impl TestInstanceState {
     pub fn new(delay_config: DelayConfig) -> Self {
-        TestInstanceState { delay_config }
+        TestInstanceState {
+            delay_config,
+            max_block_transactions: None,
+        }
     }
 }
 

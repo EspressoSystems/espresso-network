@@ -4,21 +4,6 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-/// Constants associated with the upgrade process.
-pub struct UpgradeConstants {
-    /// The offset for how far in the future we will send out a `QuorumProposal` with an `UpgradeCertificate` we form. This is also how far in advance of sending a `QuorumProposal` we begin collecting votes on an `UpgradeProposal`.
-    pub propose_offset: u64,
-
-    /// The offset for how far in the future the upgrade certificate we attach should be decided on (or else discarded).
-    pub decide_by_offset: u64,
-
-    /// The offset for how far in the future the upgrade actually begins.
-    pub begin_offset: u64,
-
-    /// The offset for how far in the future the upgrade ends.
-    pub finish_offset: u64,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
 /// Holds configuration for the upgrade task.

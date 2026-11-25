@@ -23,9 +23,9 @@ theorem SafeHistory.of_every {node : PubKey} {P : EpochNumber → Prop} {h : His
   vote1Justified := fun n vote ⟨st, hn, hm⟩ _ => hs.vote1Justified n vote ⟨st, hn, hm⟩ trivial
   vote1Once v v' a b _ he hv := hs.vote1Once v v' a b trivial he hv
   vote2Justified := fun n vote ⟨st, hn, hm⟩ _ => hs.vote2Justified n vote ⟨st, hn, hm⟩ trivial
-  vote2Once v v' a b _ he hv := hs.vote2Once v v' a b trivial he hv
   vote2BeforeTimeout := fun n vote ⟨st, hn, hm⟩ _ tv htv _ => hs.vote2BeforeTimeout n vote ⟨st, hn, hm⟩ trivial tv htv trivial
-  timeoutLock := fun n vote ⟨st, hn, hm⟩ _ v2 hv2 _ => hs.timeoutLock n vote ⟨st, hn, hm⟩ trivial v2 hv2 trivial
+  timeoutLock := fun n vote ⟨st, hn, hm⟩ _ v2 hv2 _ hle =>
+    hs.timeoutLock n vote ⟨st, hn, hm⟩ trivial v2 hv2 trivial hle
   decideJustified n st blocks c1 c2 hn hm _ := hs.decideJustified n st blocks c1 c2 hn hm trivial
   decideOnce n st i blocks c1 c2 hn hi _ := hs.decideOnce n st i blocks c1 c2 hn hi trivial
 
@@ -37,35 +37,35 @@ theorem Network.safe_at (k : PubKey) (h : C.Honest k) (n : Nat) :
 theorem Network.parentGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (sender : PubKey) (p : Proposal)
     (vid : VidShare) (hin : (N.trace k h n).input = .proposal sender p (some vid)) :
     p.parentCert = cfg.anchorCert ∨ Cert1Backed N.trace p.parentCert :=
-  N.cert1Genuine k h n _ (by rw [hin]; rfl)
+  N.cert1Genuine k h n _ (Or.inr (Or.inr ⟨_, _, _, hin, rfl⟩))
 
 /-- The timeout evidence of a proposal an honest node is handed is backed, and its lock checked. -/
 theorem Network.evidenceGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (sender : PubKey)
     (p : Proposal) (vid : VidShare) (tc : TimeoutCert) (hin : (N.trace k h n).input = .proposal sender p (some vid))
     (hte : p.timeoutEvidence = some tc) :
     TimeoutCertBacked N.trace tc ∧ TimeoutLockChecked N.trace cfg tc :=
-  N.timeoutCertGenuine k h n tc (by rw [hin]; simp [Input.timeoutCert, hte])
+  N.timeoutCertGenuine k h n tc (Or.inr (Or.inl ⟨_, _, _, hin, hte⟩))
 
 /-- The timeout evidence of a re-vote request an honest node is handed is backed, and its lock checked. -/
 theorem Network.revoteEvidenceGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (sender : PubKey)
     (r : RevoteRequest) (tc : TimeoutCert) (hin : (N.trace k h n).input = .revote sender r)
     (hte : r.timeoutEvidence = some tc) :
     TimeoutCertBacked N.trace tc ∧ TimeoutLockChecked N.trace cfg tc :=
-  N.timeoutCertGenuine k h n tc (by rw [hin]; simp [Input.timeoutCert, hte])
+  N.timeoutCertGenuine k h n tc (Or.inr (Or.inr ⟨_, _, hin, hte⟩))
 
 /-- A timeout certificate an honest node is handed has a checked lock. -/
 theorem Network.timeoutLockGenuine (k : PubKey) (h : C.Honest k) (n : Nat) (tc : TimeoutCert)
     (hin : (N.trace k h n).input = .timeoutCertificate tc) : TimeoutLockChecked N.trace cfg tc :=
-  (N.timeoutCertGenuine k h n tc (by rw [hin]; rfl)).2
+  (N.timeoutCertGenuine k h n tc (Or.inl hin)).2
 
 /-- A `Cert2` an honest node holds is backed. -/
 theorem cert2_held_backed {k : PubKey} {h : C.Honest k} {n : Nat} {c : Cert2}
     (hc : ((N.trace k h).history n).HasCert2 c) : Cert2Backed N.trace c := by
   rcases hc with hrec | ⟨c1, p, hrec⟩
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
-    exact N.cert2Genuine k h m c (by rw [hm]; rfl)
+    exact N.cert2Genuine k h m c (Or.inl hm)
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
-    exact N.cert2Genuine k h m c (by rw [hm]; rfl)
+    exact N.cert2Genuine k h m c (Or.inr ⟨_, _, hm⟩)
 
 /--
 A vote1 an honest node sends is its own, for a well-formed valid proposal it
@@ -88,7 +88,7 @@ theorem vote1_signed {k : PubKey} {h : C.Honest k} {v : Vote1}
     (N.safe_at k h n).vote1Justified n v ⟨(N.trace k h n), (Trace.history_getElem? _ (Nat.lt_succ_self n)), hn⟩ he
   rw [Trace.history_upTo _ (Nat.le_refl _)] at hcase
   refine ⟨hsig, ?_⟩
-  rcases hcase with ⟨sender, p, vid, hrec, hwf, hval, -, hop, hfor⟩ | ⟨sender, r, hrec, hwf, -, hfor⟩
+  rcases hcase with ⟨sender, p, vid, hrec, hwf, hval, -, hop, -, hfor⟩ | ⟨sender, r, hrec, hwf, -, hfor⟩
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
     refine Or.inl ⟨m, sender, p, vid, hm, hwf, hval, fun hent => ?_, hfor⟩
     obtain ⟨-, bc, hbc, hbv, hbd⟩ := hop hent
@@ -137,7 +137,7 @@ theorem vote1_safe {k : PubKey} {h : C.Honest k} {v : Vote1}
   obtain ⟨-, hcase⟩ :=
     (N.safe_at k h n).vote1Justified n v ⟨(N.trace k h n), (Trace.history_getElem? _ (Nat.lt_succ_self n)), hn⟩ he
   rw [Trace.history_upTo _ (Nat.le_refl _)] at hcase
-  rcases hcase with ⟨sender, p, vid, hrec, hwf, -, hsafe, hopen, hfor⟩
+  rcases hcase with ⟨sender, p, vid, hrec, hwf, -, hsafe, hopen, -, hfor⟩
     | ⟨sender, r, hrec, hwf, hsafe, hfor⟩
   · obtain ⟨m, -, hm⟩ := (Trace.received_history _).mp hrec
     exact Or.inl ⟨m, sender, p, vid, hm, hwf, hsafe, ⟨n + 1, hopen⟩, hfor⟩
@@ -165,7 +165,7 @@ theorem timeout_lock_covers {k : PubKey} {h : C.Honest k} {v2 : Vote2} {tv : Tim
     exact absurd hle (Nat.not_le_of_lt hlt)
   · have hcover := (N.safe_at k h j).timeoutLock j tv ⟨(N.trace k h j), (Trace.history_getElem? _ (Nat.lt_succ_self j)), hj⟩ het v2
     rw [Trace.history_upTo _ (Nat.le_succ j)] at hcover
-    exact hcover ((Trace.sent_history _).mpr ⟨i, by omega, hi⟩) he2
+    exact hcover ((Trace.sent_history _).mpr ⟨i, by omega, hi⟩) he2 hle
 
 /-- A `Cert1` an honest node holds, other than the anchor's, it received at some step. -/
 theorem cert1_received {k : PubKey} {h : C.Honest k} {n : Nat} {c : Cert1}
@@ -186,6 +186,8 @@ theorem cert1_held_backed {k : PubKey} {h : C.Honest k} {n : Nat} {c : Cert1}
   · exact Or.inl hne
   · obtain ⟨m, hm⟩ := cert1_received N hc hne
     refine N.cert1Genuine k h m c ?_
-    rcases hm with hm | ⟨c2, p, hm⟩ <;> rw [hm] <;> rfl
+    rcases hm with hm | ⟨c2, p, hm⟩
+    · exact Or.inl hm
+    · exact Or.inr (Or.inl ⟨c2, p, hm⟩)
 
 end NewProtocol

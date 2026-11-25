@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, fmt, num::NonZeroU64, str::FromStr, sync::Arc};
 #[cfg(feature = "node")]
-use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
+use std::{num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -61,6 +61,7 @@ use super::{
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
+    v0_3::Fetcher,
 };
 use crate::L1ClientOptions;
 #[cfg(feature = "node")]
@@ -422,6 +423,11 @@ const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 /// ([alloy-transport-2.4.1/src/error.rs:266-272](https://github.com/alloy-rs/alloy/blob/v2.4.1/crates/transport/src/error.rs#L266-L272)).
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
+
+/// How long to wait for the L1 client to see a finalized block, and the bound on the LC contract
+/// reads together.
+#[cfg(feature = "node")]
+pub(super) const L1_FINALIZED_WAIT: Duration = Duration::from_secs(30);
 
 /// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
@@ -970,10 +976,36 @@ impl L1Client {
     ///
     /// If the desired block number is not finalized yet, this function will block until it becomes
     /// finalized.
-    ///
-    /// While behind, refreshes the finalized block from the RPC directly rather than only
-    /// waiting on the poller.
     pub async fn wait_for_finalized_block(&self, number: u64) -> L1BlockInfo {
+        let (state, _) = self.lock_once_finalized_reaches(number).await;
+        self.fetch_finalized_block_by_number(state, number).await.1
+    }
+
+    /// Wait until the finalized block number reaches at least `number` and return the latest
+    /// finalized block, without fetching block `number` itself.
+    pub async fn wait_for_latest_finalized_at_least(&self, number: u64) -> L1BlockInfo {
+        self.lock_once_finalized_reaches(number).await.1
+    }
+
+    /// The number of the latest finalized block; waits up to `L1_FINALIZED_WAIT` for the first one.
+    pub async fn finalized_number_within_wait(&self) -> anyhow::Result<u64> {
+        let block = tokio::time::timeout(
+            L1_FINALIZED_WAIT,
+            self.wait_for_latest_finalized_at_least(0),
+        )
+        .await
+        .context("no L1 finalized block yet")?;
+        Ok(block.number)
+    }
+
+    /// Wait until the finalized block number reaches at least `number`, returning the locked
+    /// state and the latest finalized block.
+    ///
+    /// While behind, refreshes the finalized block from the RPC directly.
+    async fn lock_once_finalized_reaches(
+        &self,
+        number: u64,
+    ) -> (MutexGuard<'_, L1State>, L1BlockInfo) {
         'outer: loop {
             // Subscribe to events before checking the current state, to ensure we don't miss a relevant
             // event.
@@ -984,7 +1016,7 @@ impl L1Client {
                 let state = self.state.lock().await;
                 if let Some(finalized) = state.snapshot.finalized {
                     if finalized.number >= number {
-                        return self.fetch_finalized_block_by_number(state, number).await.1;
+                        return (state, finalized);
                     }
                     tracing::info!(
                         number,
@@ -1010,7 +1042,7 @@ impl L1Client {
                                 state.put_finalized(finalized);
                                 if finalized.info.number >= number {
                                     tracing::info!(number, ?finalized, "got finalized L1 block");
-                                    return self.fetch_finalized_block_by_number(state, number).await.1;
+                                    return (state, finalized.info);
                                 }
                                 tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
                             },
@@ -1031,7 +1063,7 @@ impl L1Client {
                             && finalized.number >= number
                         {
                             tracing::info!(number, ?finalized, "got finalized L1 block");
-                            return self.fetch_finalized_block_by_number(state, number).await.1;
+                            return (state, finalized);
                         }
                     },
                 }
@@ -1335,19 +1367,8 @@ impl L1Client {
 
         // Divide the range `prev_finalized..=new_finalized` into chunks of size
         // `events_max_block_range`.
-        let mut start = prev;
-        let end = new_finalized;
-        let chunk_size = opt.l1_events_max_block_range;
-        let chunks = std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
-        });
+        let chunks =
+            Fetcher::block_range_chunks(prev, new_finalized, opt.l1_events_max_block_range);
 
         // Fetch events for each chunk.
         let events = stream::iter(chunks).then(|(from, to)| {
@@ -1872,7 +1893,7 @@ mod test {
         f: impl FnOnce(&mut L1ClientOptions),
     ) -> L1Client {
         let mut opt = L1ClientOptions {
-            l1_events_max_block_range: 1,
+            l1_events_max_block_range: NonZeroU64::MIN,
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
             ..Default::default()
@@ -2179,6 +2200,23 @@ mod test {
             .expect("wait_for_block did not refresh from the RPC without the poller");
     }
 
+    /// The wait for a finalized L1 block is bounded.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn finalized_number_wait_is_bounded() {
+        let l1_client = L1ClientOptions::default()
+            .connect(vec!["http://localhost:1".parse().unwrap()])
+            .unwrap();
+
+        let start = tokio::time::Instant::now();
+        let err = l1_client.finalized_number_within_wait().await.unwrap_err();
+
+        assert!(start.elapsed() >= L1_FINALIZED_WAIT);
+        assert!(
+            format!("{err:#}").contains("no L1 finalized block yet"),
+            "{err:#}"
+        );
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wait_for_finalized_block_refreshes_without_poller() {
         let anvil = Anvil::new()
@@ -2205,6 +2243,89 @@ mod test {
         .await
         .expect("wait_for_finalized_block did not refresh from the RPC without the poller");
         assert_eq!(block.hash, new_finalized.info.hash);
+    }
+
+    /// An RPC that pruned old history returns null for block `number`; waiting for a later
+    /// finalized block must not request it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_wait_for_latest_finalized_at_least_skips_pruned_block() {
+        let anvil = Anvil::new()
+            .args(["--no-mining", "--slots-in-an-epoch", "1"])
+            .spawn();
+        let by_number_requests = Arc::new(AtomicUsize::new(0));
+        let proxy_url =
+            serve_pruned_history_proxy(anvil.endpoint_url(), by_number_requests.clone()).await;
+        // Margin 1 routes `pruned_number` through the by-number fetch, so a regression shows in
+        // the counter.
+        let l1_client = L1ClientOptions {
+            l1_finalized_safety_margin: NonZeroU64::new(1).unwrap().into(),
+            l1_wait_refresh_interval: Duration::from_millis(50),
+            ..Default::default()
+        }
+        .connect(vec![proxy_url])
+        .expect("Failed to create L1 client");
+
+        l1_client.anvil_mine(Some(5), None).await.unwrap();
+        let new_finalized = fetch_finalized_block_from_rpc(
+            &l1_client.provider,
+            l1_client.options().l1_request_timeout,
+        )
+        .await
+        .unwrap()
+        .expect("anvil finalized a block after mining");
+        let pruned_number = new_finalized.info.number - 2;
+
+        let block = tokio::time::timeout(
+            Duration::from_secs(3),
+            l1_client.wait_for_latest_finalized_at_least(pruned_number),
+        )
+        .await
+        .expect("wait_for_latest_finalized_at_least did not return");
+        assert_eq!(block, new_finalized.info);
+        assert_eq!(by_number_requests.load(Ordering::SeqCst), 0);
+
+        let old_path = tokio::time::timeout(
+            Duration::from_millis(500),
+            l1_client.wait_for_finalized_block(pruned_number),
+        )
+        .await;
+        old_path.expect_err("wait_for_finalized_block returned a block the RPC pruned");
+        assert!(by_number_requests.load(Ordering::SeqCst) > 0);
+    }
+
+    /// Proxies every JSON-RPC request to `target` except `eth_getBlockByNumber` with a numeric
+    /// block, which returns null as on an RPC that pruned old history, counting those requests.
+    async fn serve_pruned_history_proxy(target: Url, by_number_requests: Arc<AtomicUsize>) -> Url {
+        let provider = ProviderBuilder::new().connect_http(target);
+        let route = warp::post()
+            .and(warp::body::json::<Value>())
+            .then(move |req: Value| {
+                let provider = provider.clone();
+                let by_number_requests = by_number_requests.clone();
+                async move {
+                    let id = req["id"].clone();
+                    let is_by_number_query = req["method"].as_str() == Some("eth_getBlockByNumber")
+                        && req["params"]
+                            .get(0)
+                            .and_then(Value::as_str)
+                            .is_some_and(|block| block.starts_with("0x"));
+                    if is_by_number_query {
+                        by_number_requests.fetch_add(1, Ordering::SeqCst);
+                        return jsonrpc_result(id, Value::Null);
+                    }
+
+                    let method = req["method"]
+                        .as_str()
+                        .expect("JSON-RPC request has method")
+                        .to_string();
+                    let result: Value = provider
+                        .raw_request(Cow::Owned(method), req["params"].clone())
+                        .await
+                        .expect("proxy request to anvil");
+                    jsonrpc_result(id, result)
+                }
+            });
+        test_server::serve_on_random_port(route).await
     }
 
     /// Never responds, to prove a hung L1 RPC can't stall a bounded call indefinitely.

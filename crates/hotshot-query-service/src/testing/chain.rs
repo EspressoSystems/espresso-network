@@ -326,6 +326,20 @@ impl<D: DataSourceLifeCycle + UpdateAvailabilityData<MockTypes>> ChainNode<D> {
     }
 }
 
+/// The VID common and shares for `header`, which must commit to the genesis payload.
+///
+/// The genesis header commits to VID over `GENESIS_VID_NUM_STORAGE_NODES`, so this disperses to
+/// exactly that many nodes for the commitment to match.
+pub fn genesis_vid(header: &MockHeader) -> (VidCommon, Vec<VidShare>) {
+    let (payload_commitment, vid_common, vid_shares) = disperse(
+        &MockPayload::genesis(),
+        &header.metadata,
+        GENESIS_VID_NUM_STORAGE_NODES,
+    );
+    assert_eq!(payload_commitment, header.payload_commitment);
+    (vid_common, vid_shares)
+}
+
 async fn genesis(epoch_height: u64) -> MockBlock {
     let leaf = Leaf2::<MockTypes>::genesis(
         &Default::default(),
@@ -334,18 +348,12 @@ async fn genesis(epoch_height: u64) -> MockBlock {
     )
     .await;
     let header = leaf.block_header().clone();
-    let payload = MockPayload::genesis();
-
-    // The genesis header commits to VID over `GENESIS_VID_NUM_STORAGE_NODES`, so disperse to
-    // exactly that many nodes for the commitment to match.
-    let (payload_commitment, vid_common, vid_shares) =
-        disperse(&payload, &header.metadata, GENESIS_VID_NUM_STORAGE_NODES);
-    assert_eq!(payload_commitment, header.payload_commitment);
+    let (vid_common, vid_shares) = genesis_vid(&header);
 
     let qc = qc_for(&leaf, epoch_height);
     MockBlock {
         leaf: LeafQueryData::new(leaf, qc).unwrap(),
-        block: BlockQueryData::new(header.clone(), payload),
+        block: BlockQueryData::new(header.clone(), MockPayload::genesis()),
         vid_common: VidCommonQueryData::new(header, vid_common),
         vid_shares,
     }
@@ -385,14 +393,14 @@ fn disperse(
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
+    use rstest_reuse::apply;
+
     use super::*;
-    use crate::{
-        availability::{AvailabilityDataSource, UpdateAvailabilityData},
-        node::NodeDataSource,
-        testing::{
-            consensus::{DataSourceLifeCycle, MockSqlDataSource},
-            mocks::mock_transaction,
-        },
+    use crate::testing::{
+        consensus::{DataSourceLifeCycle, TestableDataSource, sql_data_sources},
+        mocks::mock_transaction,
     };
 
     #[tokio::test]
@@ -414,10 +422,10 @@ mod test {
         assert_eq!(chain.tip().leaf.header().timestamp, 100);
     }
 
-    #[tokio::test]
-    async fn test_chain_round_trips_through_storage() {
-        let storage = MockSqlDataSource::create(0).await;
-        let ds = <MockSqlDataSource as DataSourceLifeCycle>::connect(&storage).await;
+    #[apply(sql_data_sources)]
+    async fn test_chain_round_trips_through_storage<D: TestableDataSource>(_d: PhantomData<D>) {
+        let storage = D::create(0).await;
+        let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
 
         let mut chain = MockChain::new(2, 10).await;
         chain.push([mock_transaction(vec![1, 2, 3])]).await;

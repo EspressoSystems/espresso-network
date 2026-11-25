@@ -19,7 +19,7 @@
 //! REST APIs provided by this crate.
 //!
 //! This module also comes with a few pre-built persistence implementations:
-//! * [`SqlStorage`]
+//! * [`sql::postgres::SqlStorage`] and [`sql::sqlite::SqlStorage`]
 //! * [`FileSystemStorage`]
 //!
 //! # Storage Traits vs Data Source Traits
@@ -144,14 +144,107 @@ pub mod fail_storage;
 pub mod fs;
 mod ledger_log;
 pub mod pruning;
-pub mod sql;
+
+/// SQL storage, with one module per database backend.
+///
+/// [`postgres`](sql::postgres) and [`sqlite`](sql::sqlite) compile the same code against their own
+/// database, so a binary can link both and choose one at runtime.
+#[cfg(feature = "sql-data-source")]
+pub mod sql {
+    pub use ::sqlx;
+    pub use include_dir::include_dir;
+    pub use refinery::Migration;
+
+    pub use crate::include_migrations;
+
+    pub mod postgres;
+    mod retry;
+    pub mod sqlite;
+
+    pub use postgres::release_only_idle;
+    pub use retry::SerializableRetryConfig;
+
+    // These tests start `postgres` from PATH, which doesn't work on Windows.
+    #[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
+    pub mod testing {
+        pub use super::postgres::tmp_db::TmpPostgres;
+    }
+
+    #[derive(PartialEq)]
+    pub enum StorageConnectionType {
+        Sequencer,
+        Query,
+    }
+
+    /// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
+    ///
+    /// The macro invocation `include_migrations!(path)` evaluates to an expression of type `impl
+    /// Iterator<Item = Migration>`. Each migration must be a text file which is an immediate child of
+    /// `path`, and there must be no non-migration files in `path`. The migration files must have names
+    /// of the form `V${version}__${name}.sql`, where `version` is a positive integer indicating how the
+    /// migration is to be ordered relative to other migrations, and `name` is a descriptive name for
+    /// the migration.
+    ///
+    /// `path` should be an absolute path. It is possible to give a path relative to the root of the
+    /// invoking crate by using environment variable expansions and the `CARGO_MANIFEST_DIR` environment
+    /// variable.
+    ///
+    /// As an example, this is the invocation used to load the default migrations from the
+    /// `hotshot-query-service` crate. The migrations are located in a directory called `migrations` at
+    /// - PostgreSQL migrations are in `/migrations/postgres`.
+    /// - SQLite migrations are in `/migrations/sqlite`.
+    ///
+    /// ```
+    /// # use hotshot_query_service::data_source::sql::{include_migrations, Migration};
+    /// let mut migrations: Vec<Migration> =
+    ///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect();
+    ///
+    /// migrations.sort();
+    /// assert_eq!(migrations[0].version(), 10);
+    /// assert_eq!(migrations[0].name(), "init_schema");
+    /// ```
+    ///
+    /// Note that a similar macro is available from Refinery:
+    /// [embed_migrations](https://docs.rs/refinery/0.8.11/refinery/macro.embed_migrations.html). This
+    /// macro differs in that it evaluates to an iterator of [migrations](Migration), making it an
+    /// expression macro, while `embed_migrations` is a statement macro that defines a module which
+    /// provides access to the embedded migrations only indirectly via a
+    /// [`Runner`](https://docs.rs/refinery/0.8.11/refinery/struct.Runner.html). The direct access to
+    /// migrations provided by [`include_migrations`] makes this macro easier to use with
+    /// [`postgres::Config::migrations`], for combining custom migrations with
+    /// [`postgres::default_migrations`].
+    #[macro_export]
+    macro_rules! include_migrations {
+        ($dir:tt) => {
+            $crate::data_source::storage::sql::include_dir!($dir)
+                .files()
+                .map(|file| {
+                    let path = file.path();
+                    let name = path
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "migration file {} must have a non-empty UTF-8 name",
+                                path.display()
+                            )
+                        });
+                    let sql = file
+                        .contents_utf8()
+                        .unwrap_or_else(|| panic!("migration file {name} must use UTF-8 encoding"));
+                    $crate::data_source::storage::sql::Migration::unapplied(name, sql)
+                        .expect("invalid migration")
+                })
+        };
+    }
+}
 
 #[cfg(any(test, feature = "testing"))]
 pub use fail_storage::FailStorage;
 #[cfg(feature = "file-system-data-source")]
 pub use fs::FileSystemStorage;
 #[cfg(feature = "sql-data-source")]
-pub use sql::{SqlStorage, StorageConnectionType};
+pub use sql::StorageConnectionType;
 
 /// Persistent storage for a HotShot blockchain.
 ///
@@ -482,4 +575,5 @@ where
 #[async_trait]
 pub trait MerklizedStateHeightStorage {
     async fn get_last_state_height(&mut self) -> QueryResult<usize>;
+    async fn load_state_start_height(&mut self) -> QueryResult<Option<u64>>;
 }

@@ -25211,207 +25211,265 @@ error ZeroAmount()
             topics: &[alloy_sol_types::Word],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            <Self as alloy_sol_types::SolEventInterface>::decode_raw_log_with_config(
+                topics,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        fn decode_raw_log_with_config(
+            topics: &[alloy_sol_types::Word],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             match topics.first().copied() {
                 Some(
                     <CommissionUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <CommissionUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <CommissionUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::CommissionUpdated)
                 }
                 Some(
                     <ConsensusKeysUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <ConsensusKeysUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ConsensusKeysUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ConsensusKeysUpdated)
                 }
                 Some(
                     <ConsensusKeysUpdatedV2 as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <ConsensusKeysUpdatedV2 as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ConsensusKeysUpdatedV2 as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ConsensusKeysUpdatedV2)
                 }
                 Some(<Delegated as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Delegated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <Delegated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::Delegated)
                 }
                 Some(
                     <ExitEscrowPeriodUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <ExitEscrowPeriodUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ExitEscrowPeriodUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ExitEscrowPeriodUpdated)
                 }
                 Some(<Initialized as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Initialized as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <Initialized as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::Initialized)
                 }
                 Some(
                     <MaxCommissionIncreaseUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <MaxCommissionIncreaseUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <MaxCommissionIncreaseUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::MaxCommissionIncreaseUpdated)
                 }
                 Some(
                     <MetadataUriUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <MetadataUriUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <MetadataUriUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::MetadataUriUpdated)
                 }
                 Some(
                     <MinCommissionUpdateIntervalUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <MinCommissionUpdateIntervalUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <MinCommissionUpdateIntervalUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::MinCommissionUpdateIntervalUpdated)
                 }
                 Some(
                     <MinDelegateAmountUpdated as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <MinDelegateAmountUpdated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <MinDelegateAmountUpdated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::MinDelegateAmountUpdated)
                 }
                 Some(
                     <OwnershipTransferred as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <OwnershipTransferred as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <OwnershipTransferred as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::OwnershipTransferred)
                 }
                 Some(<Paused as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Paused as alloy_sol_types::SolEvent>::decode_raw_log(topics, data)
+                    <Paused as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
+                            topics,
+                            data,
+                            config,
+                        )
                         .map(Self::Paused)
                 }
                 Some(<RoleAdminChanged as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RoleAdminChanged as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <RoleAdminChanged as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::RoleAdminChanged)
                 }
                 Some(<RoleGranted as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RoleGranted as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <RoleGranted as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::RoleGranted)
                 }
                 Some(<RoleRevoked as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RoleRevoked as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <RoleRevoked as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::RoleRevoked)
                 }
                 Some(<Undelegated as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Undelegated as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <Undelegated as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::Undelegated)
                 }
                 Some(<UndelegatedV2 as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <UndelegatedV2 as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <UndelegatedV2 as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::UndelegatedV2)
                 }
                 Some(<Unpaused as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Unpaused as alloy_sol_types::SolEvent>::decode_raw_log(topics, data)
+                    <Unpaused as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
+                            topics,
+                            data,
+                            config,
+                        )
                         .map(Self::Unpaused)
                 }
                 Some(<Upgraded as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Upgraded as alloy_sol_types::SolEvent>::decode_raw_log(topics, data)
+                    <Upgraded as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
+                            topics,
+                            data,
+                            config,
+                        )
                         .map(Self::Upgraded)
                 }
                 Some(<ValidatorExit as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <ValidatorExit as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ValidatorExit as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ValidatorExit)
                 }
                 Some(
                     <ValidatorExitClaimed as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <ValidatorExitClaimed as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ValidatorExitClaimed as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ValidatorExitClaimed)
                 }
                 Some(<ValidatorExitV2 as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <ValidatorExitV2 as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ValidatorExitV2 as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ValidatorExitV2)
                 }
                 Some(
                     <ValidatorRegistered as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <ValidatorRegistered as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ValidatorRegistered as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ValidatorRegistered)
                 }
                 Some(
                     <ValidatorRegisteredV2 as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <ValidatorRegisteredV2 as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <ValidatorRegisteredV2 as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::ValidatorRegisteredV2)
                 }
                 Some(<Withdrawal as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Withdrawal as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <Withdrawal as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::Withdrawal)
                 }
                 Some(
                     <WithdrawalClaimed as alloy_sol_types::SolEvent>::SIGNATURE_HASH,
                 ) => {
-                    <WithdrawalClaimed as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <WithdrawalClaimed as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::WithdrawalClaimed)
                 }
                 _ => {
+                    if topics
+                        .len()
+                        .checked_mul(alloy_sol_types::Word::len_bytes())
+                        .and_then(|len| len.checked_add(data.len()))
+                        .is_none_or(|len| len > config.get_memory_limit())
+                    {
+                        return alloy_sol_types::private::Err(
+                            alloy_sol_types::Error::MemoryLimitExceeded(
+                                config.get_memory_limit(),
+                            ),
+                        );
+                    }
                     alloy_sol_types::private::Err(alloy_sol_types::Error::InvalidLog {
                         name: <Self as alloy_sol_types::SolEventInterface>::NAME,
                         log: alloy_sol_types::private::Box::new(

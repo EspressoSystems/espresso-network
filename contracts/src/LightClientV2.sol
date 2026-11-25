@@ -8,6 +8,8 @@ import { IPlonkVerifier } from "./interfaces/IPlonkVerifier.sol";
 import { PlonkVerifierV2 } from "./libraries/PlonkVerifierV2.sol";
 import { LightClientStateUpdateVKV2 as VkLib } from "./libraries/LightClientStateUpdateVKV2.sol";
 
+// forge-lint: disable-start(reentrancy-events)
+
 /// @notice LightClient V2: with stake table snapshot update during epoch change.
 contract LightClientV2 is LightClient {
     /// @notice When entering a new epoch and a new stake table snapshot.

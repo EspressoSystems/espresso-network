@@ -14,7 +14,7 @@ use axum::{
     response::Response,
     routing::get,
 };
-use espresso_node::api::sql::DataSource;
+use espresso_node::api::sql::postgres::DataSource;
 use espresso_types::SeqTypes;
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use hotshot_query_service::{

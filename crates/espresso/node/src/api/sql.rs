@@ -9,6 +9,7 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     BlockMerkleCommitment, BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, ValidatedState, get_l1_deposits,
+    v0::traits::PersistenceOptions as _,
     v0_1::IterableFeeInfo,
     v0_3::{
         REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
@@ -23,19 +24,18 @@ use hotshot_query_service::{
     availability::LeafId,
     data_source::{
         VersionedDataSource,
-        sql::{Config, SqlDataSource, Transaction},
         storage::{
-            AvailabilityStorage, MerklizedStateStorage, NodeStorage, SqlStorage,
+            AvailabilityStorage, MerklizedStateStorage, NodeStorage,
             pruning::{PrunerCfg, PrunerConfig},
-            sql::{Db, TransactionMode, Write, query_as},
         },
     },
     merklized_state::Snapshot,
+    status::HasMetrics as _,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    traits::{ValidatedState as _, election::MembershipSnapshot},
+    traits::{ValidatedState as _, election::MembershipSnapshot, metrics::Metrics},
     utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
@@ -43,6 +43,8 @@ use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, prelude::MerkleNode,
 };
+use light_client::storage::LightClientDbOptions;
+use process_metrics::ProcessMetrics;
 use sqlx::{Encode, Row, Type};
 use tokio::time::sleep;
 use vbs::version::Version;
@@ -51,19 +53,43 @@ use versions::{
 };
 
 use super::{
-    BlocksFrontier,
-    data_source::{Provider, SequencerDataSource},
+    persistence::{BackendOptions as _, Options},
+    qs::{
+        Backend as _, Config, Db, DbKind, SqlDataSource, SqlStorage, Transaction, TransactionMode,
+        Write, query_as,
+    },
 };
 use crate::{
     SeqTypes,
-    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    api::{
+        ApiState, BlocksFrontier, LightClientProvider, RewardMerkleTreeDataSource,
+        RewardMerkleTreeV2Data,
+        data_source::{DataSourceOptions, NodeStateDataSource as _, Provider, SequencerDataSource},
+        options::{self, Query, get_public_env_vars, init_query_data_source},
+        state::NodeApiStateImpl,
+        update::{ApiEventConsumer, ApiSink},
+    },
     catchup::{CatchupStorage, NullStateCatchup},
-    persistence::{ChainConfigPersistence, sql::Options},
-    state::compute_state_update,
+    context::TaskList,
+    persistence::{ChainConfigPersistence, sql::Options as SqlOptions},
+    request_response::data_source::Storage as RequestResponseStorage,
+    state::{EmptyStateStart, compute_state_update, update_state_storage_loop},
     util::BoundedJoinSet,
 };
 
 pub type DataSource = SqlDataSource<SeqTypes, Provider>;
+
+impl DataSourceOptions for Options {
+    type DataSource = DataSource;
+
+    fn enable_query_module(&self, opt: options::Options, query: Query) -> options::Options {
+        opt.query_sql(query, self.clone().into_inner())
+    }
+
+    fn light_client_db(&self, query: &Query) -> anyhow::Result<LightClientDbOptions> {
+        Ok(Db::light_client_db(&Config::try_from(&**self)?, query))
+    }
+}
 
 #[async_trait]
 impl SequencerDataSource for DataSource {
@@ -73,7 +99,7 @@ impl SequencerDataSource for DataSource {
         let fetch_limit = opt.fetch_rate_limit;
         let active_fetch_delay = opt.active_fetch_delay;
         let chunk_fetch_delay = opt.chunk_fetch_delay;
-        let mut cfg = Config::try_from(&opt)?;
+        let mut cfg = Config::try_from(&*opt)?;
 
         if reset {
             cfg = cfg.reset_schema();
@@ -88,6 +114,13 @@ impl SequencerDataSource for DataSource {
         if opt.lightweight {
             tracing::warn!("enabling light weight mode..");
             builder = builder.leaf_only();
+        }
+
+        // Transaction and payload totals count from genesis, and a pruned node never has those
+        // blocks. Without an aggregator, the data source also deletes the totals an earlier run
+        // left.
+        if opt.prune {
+            builder = builder.disable_aggregator();
         }
 
         if let Some(delay) = active_fetch_delay {
@@ -119,6 +152,110 @@ impl SequencerDataSource for DataSource {
     }
 }
 
+/// Start the query module of `api` over this backend, returning what consensus needs from it.
+pub(in crate::api) async fn init_query_module(
+    api: &options::Options,
+    query_opt: Query,
+    mod_opt: Options,
+    state: ApiState,
+    tasks: &mut TaskList,
+) -> anyhow::Result<(
+    Box<dyn Metrics>,
+    Box<dyn ApiSink>,
+    Option<RequestResponseStorage>,
+)> {
+    let mut provider = Provider::default();
+
+    // Use the database itself as a fetching provider: sometimes we can fetch data that is
+    // missing from the query service from ephemeral consensus storage.
+    let db_provider = mod_opt.clone().create().await?;
+    provider = provider
+        .with_block_provider(db_provider.clone())
+        .with_vid_common_provider(db_provider);
+    // If that fails, fetch missing data from peers.
+    let light_client_db = mod_opt.light_client_db(&query_opt)?;
+    let light_client = Arc::new(LightClientProvider::new(
+        query_opt.peers,
+        state.clone(),
+        query_opt.light_client,
+        light_client_db,
+    )?);
+    provider = provider.with_provider(Arc::clone(&light_client));
+
+    let ranges_concurrency = mod_opt.ranges_concurrency;
+    let ds = DataSource::create(mod_opt.clone(), provider, false).await?;
+    let inner_storage = ds.inner();
+    tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+    let (registry, ds) = init_query_data_source(ds, state.clone());
+    light_client.set_metrics(registry.clone());
+
+    let get_node_state = {
+        let state = state.clone();
+        async move { state.node_state().await }
+    };
+    let empty_state_start = if mod_opt.prune {
+        EmptyStateStart::RecentBoundary
+    } else {
+        EmptyStateStart::Genesis
+    };
+    tasks.spawn(
+        "merklized state storage update loop",
+        update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
+    );
+
+    // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
+    if mod_opt.archive && !mod_opt.archive_full_state {
+        let get_node_state = {
+            let state = state.clone();
+            async move { state.node_state().await }
+        };
+        tasks.spawn(
+            "archive state garbage collector",
+            ArchiveStateGc::new(&mod_opt).run(inner_storage.clone(), get_node_state),
+        );
+    }
+
+    let port = api.http.port;
+    let env_vars = get_public_env_vars().unwrap_or_default();
+    let node_cfg = api.public_node_config.as_deref().cloned();
+    let modules = espresso_api::OptionalModules {
+        submit: api.submit.is_some(),
+        config: api.config.is_some(),
+        explorer: api.explorer.is_some(),
+        ..Default::default()
+    };
+    let max_connections = api.http.max_connections;
+    // Both transports serve the same state; cloning shares the env vars and node config
+    // rather than copying the genesis they embed.
+    let mut api_state = NodeApiStateImpl::new(ds.clone())
+        .with_env_vars(env_vars)
+        .with_public_node_config(node_cfg);
+    if let Some(ranges_concurrency) = ranges_concurrency {
+        api_state = api_state.with_ranges_concurrency(ranges_concurrency);
+    }
+    let tonic_state = api_state.clone();
+    tasks.spawn("API server", async move {
+        if let Err(e) = espresso_api::serve_axum(port, api_state, modules, max_connections).await {
+            tracing::error!("Axum server error: {}", e);
+        }
+        anyhow::Ok(())
+    });
+
+    if let Some(tonic_port) = api.http.tonic_port {
+        tasks.spawn("Tonic gRPC server", async move {
+            if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
+                tracing::error!("Tonic gRPC server error: {}", e);
+            }
+        });
+    }
+
+    Ok((
+        registry,
+        Box::new(ApiEventConsumer::from(ds)),
+        Some(RequestResponseStorage::Sql(inner_storage)),
+    ))
+}
+
 /// Prune archive state older than the light client contract's retained history. Block merkle paths
 /// below the marker are rebuilt on request from newer snapshots; fee and reward state is gone.
 ///
@@ -131,7 +268,7 @@ pub(crate) struct ArchiveStateGc {
 }
 
 impl ArchiveStateGc {
-    pub(crate) fn new(opt: &Options) -> Self {
+    pub(crate) fn new(opt: &SqlOptions) -> Self {
         Self {
             min_retention: opt.archive_state_min_retention,
             cfg: PrunerCfg::from(opt.pruning),
@@ -436,10 +573,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             // Postgres supports improved performance by using `FOR UPDATE` in a sub-select to
             // acquire exclusive locks on visited rows, which are later deleted. SQLite does not
             // support this syntax.
-            #[cfg(not(feature = "embedded-db"))]
-            let for_update = "FOR UPDATE";
-            #[cfg(feature = "embedded-db")]
-            let for_update = "";
+            let for_update = match Db::KIND {
+                DbKind::Sqlite => "",
+                DbKind::Postgres => "FOR UPDATE",
+            };
 
             // Delete batches from the merkle data table until there is nothing left to delete.
             loop {
@@ -1060,6 +1197,167 @@ impl RewardMerkleTreeDataSource for DataSource {
     }
 }
 
+// A module of its own so `RequestStorage` is not in scope where `CatchupStorage` methods are
+// called by name on this type.
+mod request_storage {
+    use std::fmt;
+
+    use async_trait::async_trait;
+    use espresso_types::{
+        BlockMerkleTree, Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Header, Leaf2,
+        NodeState,
+        v0_3::{RewardAccountV1, RewardMerkleTreeV1},
+        v0_4::{RewardAccountV2, RewardMerkleTreeV2},
+    };
+    use hotshot_query_service::{
+        Error, QueryError, QueryResult,
+        data_source::{
+            VersionedDataSource as _,
+            storage::{
+                AvailabilityStorage as _, MerklizedStateHeightStorage as _,
+                MerklizedStateStorage as _, SerializableRetry as _,
+            },
+        },
+        merklized_state::Snapshot,
+        node::BlockId,
+        serializable_retry,
+    };
+    use hotshot_types::data::{VidShare, ViewNumber};
+    use jf_merkle_tree_compat::MerkleTreeScheme as _;
+    use light_client::consensus::header::HeaderProof;
+
+    use super::SqlStorage;
+    use crate::{
+        SeqTypes,
+        api::{
+            BlocksFrontier, RewardMerkleTreeDataSource,
+            light_client::{BlockMerkleProof, HeaderProofReads, header_proof},
+        },
+        catchup::CatchupStorage,
+        request_response::data_source::RequestStorage,
+    };
+
+    #[async_trait]
+    impl RequestStorage for SqlStorage {
+        async fn get_accounts(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            accounts: &[FeeAccount],
+        ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+            CatchupStorage::get_accounts(self, instance, height, view, accounts).await
+        }
+
+        async fn get_reward_accounts_v1(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            accounts: &[RewardAccountV1],
+        ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+            CatchupStorage::get_reward_accounts_v1(self, instance, height, view, accounts).await
+        }
+
+        async fn get_reward_accounts_v2(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+            accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+            CatchupStorage::get_reward_accounts_v2(self, instance, height, view, accounts).await
+        }
+
+        async fn get_frontier(
+            &self,
+            instance: &NodeState,
+            height: u64,
+            view: ViewNumber,
+        ) -> anyhow::Result<BlocksFrontier> {
+            CatchupStorage::get_frontier(self, instance, height, view).await
+        }
+
+        async fn get_chain_config(
+            &self,
+            commitment: committable::Commitment<ChainConfig>,
+        ) -> anyhow::Result<ChainConfig> {
+            CatchupStorage::get_chain_config(self, commitment).await
+        }
+
+        async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+            CatchupStorage::get_leaf_chain(self, height).await
+        }
+
+        async fn load_cert2(&self, height: u64) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+            CatchupStorage::load_cert2(self, height).await
+        }
+
+        async fn load_tree(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+            RewardMerkleTreeDataSource::load_tree(self, height).await
+        }
+
+        async fn get_vid_share(&self, block_number: u64) -> anyhow::Result<VidShare> {
+            let id = hotshot_query_service::node::BlockId::Number(block_number as usize);
+            Ok(SqlStorage::get_vid_share::<SeqTypes>(self, id).await?)
+        }
+
+        async fn get_header_proof(&self, root: u64, height: u64) -> anyhow::Result<HeaderProof> {
+            Ok(header_proof(self, root, BlockId::Number(height as usize)).await?)
+        }
+    }
+
+    /// Local reads only: a header missing from storage is an error, never fetched from peers.
+    /// Reads are retried on serialization conflicts.
+    #[async_trait]
+    impl HeaderProofReads for SqlStorage {
+        async fn header(&self, id: BlockId<SeqTypes>) -> Result<Header, Error> {
+            serializable_retry!(self, || async {
+                let mut tx = self
+                    .read()
+                    .await
+                    .map_err(|err| query_error(storage_query_error(err)))?;
+                tx.get_header(id).await.map_err(query_error)
+            })
+            .await
+        }
+
+        async fn block_path(&self, index: u64, height: u64) -> QueryResult<BlockMerkleProof> {
+            serializable_retry!(self, || async {
+                let mut tx = self.read().await.map_err(storage_query_error)?;
+                tx.get_path(
+                    Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(index),
+                    height,
+                )
+                .await
+            })
+            .await
+        }
+
+        async fn last_state_height(&self) -> QueryResult<usize> {
+            serializable_retry!(self, || async {
+                let mut tx = self.read().await.map_err(storage_query_error)?;
+                tx.get_last_state_height().await
+            })
+            .await
+        }
+    }
+
+    /// A failure to open a read transaction.
+    fn storage_query_error(err: impl fmt::Display) -> QueryError {
+        QueryError::Error {
+            message: err.to_string(),
+        }
+    }
+
+    fn query_error(err: QueryError) -> Error {
+        Error::Custom {
+            message: err.to_string(),
+            status: err.status(),
+        }
+    }
+}
+
 impl CatchupStorage for DataSource {
     async fn get_accounts(
         &self,
@@ -1166,7 +1464,7 @@ impl ChainConfigPersistence for Transaction<Write> {
     }
 }
 
-impl super::data_source::PruningDataSource for SqlStorage {
+impl crate::api::data_source::PruningDataSource for SqlStorage {
     async fn get_oldest_block(
         &self,
     ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
@@ -1218,15 +1516,14 @@ impl super::data_source::PruningDataSource for SqlStorage {
     }
 }
 
-impl super::data_source::DatabaseMetadataSource for SqlStorage {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
+impl crate::api::data_source::DatabaseMetadataSource for SqlStorage {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<espresso_api::v1::database::TableSize>> {
         let mut tx = self
             .read()
             .await
             .context("opening transaction to fetch table sizes")?;
 
-        #[cfg(not(feature = "embedded-db"))]
-        {
+        if Db::KIND == DbKind::Postgres {
             let query = r#"
                 SELECT
                     schemaname || '.' || relname AS table_name,
@@ -1247,7 +1544,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
                 let row_count: i64 = row.try_get("row_count").unwrap_or(-1);
                 let total_size_bytes: Option<i64> = row.try_get("total_size_bytes").ok();
 
-                table_sizes.push(super::data_source::TableSize {
+                table_sizes.push(espresso_api::v1::database::TableSize {
                     table_name,
                     row_count,
                     total_size_bytes,
@@ -1255,10 +1552,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             }
 
             Ok(table_sizes)
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
+        } else {
             // First, get all table names from sqlite_master
             let table_names_query = r#"
                 SELECT name
@@ -1292,7 +1586,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
 
                 let row_count: i64 = count_row.try_get("count").unwrap_or(0);
 
-                table_sizes.push(super::data_source::TableSize {
+                table_sizes.push(espresso_api::v1::database::TableSize {
                     table_name,
                     row_count,
                     total_size_bytes: None,
@@ -1305,7 +1599,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
 
     async fn get_migration_status(
         &self,
-    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+    ) -> anyhow::Result<Vec<espresso_api::v1::database::MigrationStatus>> {
         let mut tx = self
             .read()
             .await
@@ -1329,7 +1623,7 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
         Ok(rows
             .into_iter()
             .map(|(name, started_at, completed_at, last_offset)| {
-                super::data_source::MigrationStatus {
+                espresso_api::v1::database::MigrationStatus {
                     name,
                     started_at,
                     completed_at,
@@ -1340,19 +1634,19 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
     }
 }
 
-impl super::data_source::DatabaseMetadataSource for DataSource {
-    async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
+impl crate::api::data_source::DatabaseMetadataSource for DataSource {
+    async fn get_table_sizes(&self) -> anyhow::Result<Vec<espresso_api::v1::database::TableSize>> {
         self.as_ref().get_table_sizes().await
     }
 
     async fn get_migration_status(
         &self,
-    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+    ) -> anyhow::Result<Vec<espresso_api::v1::database::MigrationStatus>> {
         self.as_ref().get_migration_status().await
     }
 }
 
-impl super::data_source::PruningDataSource for DataSource {
+impl crate::api::data_source::PruningDataSource for DataSource {
     async fn get_oldest_block(
         &self,
     ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
@@ -1860,8 +2154,6 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let first_epoch = first_epoch.context("first epoch not found")?;
-
         let proposal_epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
 
         // reward distribution starts third epoch onwards
@@ -1869,7 +2161,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
+        let epoch_membership = match coordinator.membership_for_epoch(proposal_epoch) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(
@@ -1883,9 +2175,7 @@ async fn reward_header_dependencies(
             },
         };
 
-        let snapshot = epoch_membership
-            .snapshot()
-            .with_context(|| format!("no committee for epoch={proposal_epoch}"))?;
+        let snapshot = epoch_membership.snapshot();
         let leader = snapshot.lookup_leader(proposal.view_number())?;
         let validator = snapshot.validator_config(&leader)?;
 
@@ -1924,31 +2214,28 @@ where
 #[cfg(any(test, feature = "testing"))]
 pub(crate) mod impl_testable_data_source {
 
-    use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
+    use hotshot_query_service::{
+        availability::LeafQueryData,
+        data_source::{
+            Transaction as _,
+            storage::{
+                MerklizedStateHeightStorage as _, SerializableRetry as _,
+                UpdateAvailabilityStorage as _, pruning::PrunedHeightStorage as _,
+                sql::StorageConnectionType,
+            },
+        },
+        merklized_state::UpdateStateData,
+        serializable_retry,
+    };
 
-    use super::*;
-    use crate::api::{self, data_source::testing::TestableSequencerDataSource, options::Query};
-
-    pub fn tmp_options(db: &TmpDb) -> Options {
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let opt = crate::persistence::sql::PostgresOptions {
-                port: Some(db.port()),
-                host: Some(db.host()),
-                user: Some("postgres".into()),
-                password: Some("password".into()),
-                ..Default::default()
-            };
-
-            opt.into()
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let opt = crate::persistence::sql::SqliteOptions { path: db.path() };
-            opt.into()
-        }
-    }
+    pub(crate) use super::super::persistence::tmp_options;
+    use super::{super::qs::testing::TmpDb, *};
+    use crate::api::{
+        self,
+        data_source::testing::{
+            DeferredMigration, TestableSequencerDataSource, TestableSqlDataSource,
+        },
+    };
 
     #[async_trait]
     impl TestableSequencerDataSource for DataSource {
@@ -1959,7 +2246,7 @@ pub(crate) mod impl_testable_data_source {
         }
 
         fn persistence_options(storage: &Self::Storage) -> Self::Options {
-            tmp_options(storage)
+            Options::try_from(tmp_options(storage)).unwrap()
         }
 
         fn leaf_only_ds_options(
@@ -1973,6 +2260,212 @@ pub(crate) mod impl_testable_data_source {
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {
             opt.query_sql(Query::default(), tmp_options(storage))
+        }
+    }
+
+    #[async_trait]
+    impl TestableSqlDataSource for DataSource {
+        type SqlStorage = SqlStorage;
+
+        fn tmp_options(storage: &Self::Storage) -> SqlOptions {
+            tmp_options(storage)
+        }
+
+        fn sql_persistence_options(opt: SqlOptions) -> Self::Options {
+            Options::try_from(opt).unwrap()
+        }
+
+        async fn on_request_data_source(
+            storage: &Self::Storage,
+            provider: Provider,
+        ) -> anyhow::Result<Self> {
+            Config::try_from(&tmp_options(storage))?
+                .builder(provider)
+                .await?
+                .disable_proactive_fetching()
+                .disable_aggregator()
+                .build()
+                .await
+        }
+
+        async fn prune_state_below(ds: &Self, height: u64, cfg: &PrunerCfg) -> anyhow::Result<()> {
+            let sql: &SqlStorage = ds.as_ref();
+            sql.prune_state_below(height, 0, cfg).await
+        }
+
+        async fn connect(
+            opt: &SqlOptions,
+            connection_type: StorageConnectionType,
+        ) -> anyhow::Result<SqlStorage> {
+            Ok(SqlStorage::connect(Config::try_from(opt)?, connection_type).await?)
+        }
+
+        async fn local_block_height(db: &SqlStorage) -> anyhow::Result<u64> {
+            let mut tx = db.read().await?;
+            Ok(NodeStorage::<SeqTypes>::block_height(&mut tx).await? as u64)
+        }
+
+        // Read in this order because every move of the pruned height, up by a batch or down by
+        // the startup repair, lands below the head, and the head only grows, so a head read
+        // after the pruned height is always above it.
+        async fn state_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, u64)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_state_pruned_height().await?;
+            let head = tx.get_last_state_height().await? as u64;
+            Ok((pruned, head))
+        }
+
+        async fn state_start_height(db: &SqlStorage) -> anyhow::Result<Option<u64>> {
+            Ok(db.read().await?.load_state_start_height().await?)
+        }
+
+        async fn lowest_block_tree_node(db: &SqlStorage) -> anyhow::Result<u64> {
+            let mut tx = db.read().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(created) FROM block_merkle_tree")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            lowest
+                .map(|height| height as u64)
+                .context("no block tree nodes")
+        }
+
+        async fn insert_leaf(
+            db: &SqlStorage,
+            leaf: &LeafQueryData<SeqTypes>,
+        ) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            tx.insert_leaf(leaf).await?;
+            tx.commit().await
+        }
+
+        async fn set_last_state_height(db: &SqlStorage, height: u64) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_last_state_height(
+                &mut tx,
+                height as usize,
+            )
+            .await?;
+            tx.commit().await
+        }
+
+        async fn stamp_state_pruned_height(db: &SqlStorage, height: u64) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(Transaction::<Write>::STATE_PRUNED_HEIGHT_ID, height as i64)],
+            )
+            .await?;
+            tx.commit().await
+        }
+
+        // The node may be writing new blocks meanwhile, so a serialization conflict is retried.
+        async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
+            serializable_retry!(db, || async {
+                let mut tx = db.write().await?;
+                tx.upsert(
+                    "pruned_height",
+                    ["id", "last_height"],
+                    ["id"],
+                    [(Transaction::<Write>::PRUNED_HEIGHT_ID, pruned as i64)],
+                )
+                .await?;
+                for statement in [
+                    "DELETE FROM transactions WHERE block_height <= $1",
+                    "DELETE FROM leaf2 WHERE height <= $1",
+                    "DELETE FROM header WHERE height <= $1",
+                ] {
+                    sqlx::query(statement)
+                        .bind(pruned as i64)
+                        .execute(tx.as_mut())
+                        .await?;
+                }
+                tx.commit().await
+            })
+            .await
+        }
+
+        async fn delete_data_between(db: &SqlStorage, from: u64, to: u64) -> anyhow::Result<()> {
+            let mut tx = db.write().await?;
+            for statement in [
+                "DELETE FROM transactions WHERE block_height > $1 AND block_height <= $2",
+                "DELETE FROM leaf2 WHERE height > $1 AND height <= $2",
+                "DELETE FROM header WHERE height > $1 AND height <= $2",
+            ] {
+                sqlx::query(statement)
+                    .bind(from as i64)
+                    .bind(to as i64)
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            tx.commit().await
+        }
+
+        async fn count_leaves_up_to(db: &SqlStorage, height: u64) -> anyhow::Result<i64> {
+            let mut tx = db.read().await?;
+            Ok(
+                sqlx::query_scalar("SELECT count(*) FROM leaf2 WHERE height <= $1")
+                    .bind(height as i64)
+                    .fetch_one(tx.as_mut())
+                    .await?,
+            )
+        }
+
+        async fn data_heights(db: &SqlStorage) -> anyhow::Result<(Option<u64>, Option<u64>)> {
+            let mut tx = db.read().await?;
+            let pruned = tx.load_pruned_height().await?;
+            let lowest: Option<i64> =
+                sqlx::query_scalar("SELECT min(height) FROM leaf2 WHERE height > 0")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            Ok((pruned, lowest.map(|height| height as u64)))
+        }
+
+        async fn insert_deferred_migration(
+            db: &SqlStorage,
+            migration: DeferredMigration,
+        ) -> anyhow::Result<()> {
+            let DeferredMigration {
+                name,
+                started_at,
+                completed_at,
+                last_offset,
+            } = migration;
+            let mut tx = db.write().await?;
+            sqlx::query(
+                "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(name)
+            .bind(started_at)
+            .bind(completed_at)
+            .bind(last_offset)
+            .execute(tx.as_mut())
+            .await?;
+            tx.commit().await
+        }
+
+        async fn reconstruct_state(
+            db: &SqlStorage,
+            instance: &NodeState,
+            from_height: u64,
+            to_view: ViewNumber,
+            fee_accounts: &[FeeAccount],
+            reward_accounts: &[RewardAccountV2],
+        ) -> anyhow::Result<(ValidatedState, Leaf2)> {
+            let mut tx = db.read().await?;
+            reconstruct_state(
+                instance,
+                db,
+                &mut tx,
+                from_height,
+                to_view,
+                fee_accounts,
+                reward_accounts,
+            )
+            .await
         }
     }
 }
@@ -1989,19 +2482,15 @@ mod tests {
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
+        QueryError,
         data_source::{
             Transaction, VersionedDataSource,
-            sql::Config,
             storage::{
-                UpdateAvailabilityStorage,
-                pruning::PrunedHeightStorage,
-                sql::{
-                    SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
-                    testing::TmpDb,
-                },
+                UpdateAvailabilityStorage, pruning::PrunedHeightStorage, sql::StorageConnectionType,
             },
         },
         merklized_state::{MerklizedState, UpdateStateData},
+        node::NodeDataSource,
     };
     use hotshot_types::data::ViewNumber;
     use jf_merkle_tree_compat::{
@@ -2011,9 +2500,14 @@ mod tests {
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
-    use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
+    use super::{
+        super::qs::{Config, SqlStorage, Transaction as SqlTransaction, Write, testing::TmpDb},
+        ArchiveStateGc, SeqTypes,
+        impl_testable_data_source::tmp_options,
+        query_as,
+    };
     use crate::{
-        api::RewardMerkleTreeDataSource,
+        api::{RewardMerkleTreeDataSource, data_source::SequencerDataSource},
         catchup::{CatchupStorage, SqlStateCatchup},
     };
 
@@ -2377,7 +2871,7 @@ mod tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_get_table_sizes() {
-        use super::super::data_source::DatabaseMetadataSource;
+        use crate::api::data_source::DatabaseMetadataSource;
 
         let db = TmpDb::init().await;
         let opt = tmp_options(&db);
@@ -2406,5 +2900,177 @@ mod tests {
             !table_sizes.is_empty(),
             "should have at least one table in the database"
         );
+    }
+
+    /// A pruned node runs without an aggregator, so it has no transaction or payload totals.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_has_no_totals() {
+        for prune in [false, true] {
+            let storage = TmpDb::init().await;
+            let mut opt = tmp_options(&storage);
+            opt.prune = prune;
+            let ds = super::DataSource::create(
+                opt.try_into().unwrap(),
+                super::Provider::default(),
+                false,
+            )
+            .await
+            .unwrap();
+
+            let res = NodeDataSource::count_transactions_in_range(&ds, .., None).await;
+            if prune {
+                assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+            } else {
+                assert_eq!(res.unwrap(), 0);
+            }
+        }
+    }
+
+    /// A node started with `--prune` deletes the totals an earlier run left.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_node_deletes_old_totals() {
+        use std::time::Duration;
+
+        use tokio::time::{sleep, timeout};
+
+        let node = start_node_on_old_totals(true).await;
+        timeout(Duration::from_secs(60), async {
+            while !aggregate_rows(&node.storage).await.is_empty() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the pruned node did not delete the old totals");
+    }
+
+    /// A node without `--prune` keeps the totals an earlier run left, as its aggregator resumes
+    /// from them.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_unpruned_node_keeps_old_totals() {
+        use std::time::Duration;
+
+        use http_client::{Client, error::ClientErr};
+        use tokio::time::{sleep, timeout};
+        use vbs::version::StaticVersion;
+
+        let node = start_node_on_old_totals(false).await;
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{}", node.port).parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        timeout(Duration::from_secs(120), async {
+            while client
+                .get::<u64>("status/block-height")
+                .send()
+                .await
+                .unwrap()
+                < 2
+            {
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await
+        .expect("network did not reach block height 2");
+
+        // The aggregator may have added totals above the old ones.
+        let old = aggregate_rows(&node.storage)
+            .await
+            .into_iter()
+            .filter(|&(height, ..)| height < OLD_TOTALS_HEIGHTS)
+            .collect::<Vec<_>>();
+        assert_eq!(old, old_totals());
+    }
+
+    /// [`old_totals`] has totals at heights 0 to `OLD_TOTALS_HEIGHTS - 1`.
+    const OLD_TOTALS_HEIGHTS: i64 = 5;
+
+    /// The totals an earlier run left, as (height, namespace, transactions, bytes): namespace -1
+    /// for all namespaces together, and namespace 7 from height 2 on. The test network has far
+    /// fewer transactions, so an aggregator that counted again from genesis would not write
+    /// these rows back.
+    fn old_totals() -> Vec<(i64, i64, i64, i64)> {
+        (0..OLD_TOTALS_HEIGHTS)
+            .flat_map(|height| {
+                let namespaces = if height < 2 { vec![-1] } else { vec![-1, 7] };
+                namespaces
+                    .into_iter()
+                    .map(move |ns| (height, ns, 1000 * (height + 1), 100_000 * (height + 1)))
+            })
+            .collect()
+    }
+
+    /// Node 0 of a test network, serving the query API on a database it found [`old_totals`] in.
+    struct OldTotalsNode {
+        // Declared first, so that the network stops before the database goes.
+        _network: crate::api::test_helpers::TestNetwork<crate::persistence::no_storage::Options, 5>,
+        storage: SqlStorage,
+        port: u16,
+        _db: TmpDb,
+    }
+
+    /// Write [`old_totals`] into a fresh database, then start a test network whose node 0 serves
+    /// the query API on it, with or without `--prune`.
+    async fn start_node_on_old_totals(prune: bool) -> OldTotalsNode {
+        use espresso_types::TEST_UPGRADE;
+        use test_utils::reserve_tcp_port;
+
+        use crate::{
+            api::{
+                Options as ApiOptions,
+                options::Query,
+                test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            },
+            testing::TestConfigBuilder,
+        };
+
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&tmp_options(&db)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        for (height, namespace, num_transactions, payload_size) in old_totals() {
+            super::super::qs::query(
+                "INSERT INTO aggregate (height, namespace, num_transactions, payload_size)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(height)
+            .bind(namespace)
+            .bind(num_transactions)
+            .bind(payload_size)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        assert_eq!(aggregate_rows(&storage).await, old_totals());
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let mut db_opt = tmp_options(&db);
+        db_opt.prune = prune;
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(ApiOptions::with_port(port).query_sql(Query::default(), db_opt))
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        OldTotalsNode {
+            _network: network,
+            storage,
+            port,
+            _db: db,
+        }
+    }
+
+    /// Every row of the totals as (height, namespace, transactions, bytes), in key order.
+    async fn aggregate_rows(storage: &SqlStorage) -> Vec<(i64, i64, i64, i64)> {
+        let mut tx = storage.read().await.unwrap();
+        query_as(
+            "SELECT height, namespace, num_transactions, payload_size FROM aggregate
+              ORDER BY height, namespace",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
     }
 }

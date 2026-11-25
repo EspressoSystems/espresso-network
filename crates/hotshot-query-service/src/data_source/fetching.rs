@@ -343,8 +343,10 @@ impl<Types, S, P> Builder<Types, S, P> {
 
     /// Run without an aggregator.
     ///
-    /// This can reduce load on the CPU and the database, but it will cause aggregate statistics
-    /// (such as transaction counts) not to update.
+    /// This can reduce load on the CPU and the database, but transaction counts, payload sizes and
+    /// the explorer summary then return [`QueryError::NotFound`]. The data source also deletes the
+    /// totals an earlier run with an aggregator left, which it never reads; an aggregator started
+    /// later counts them again from genesis.
     pub fn disable_aggregator(mut self) -> Self {
         self.aggregator = false;
         self
@@ -418,6 +420,9 @@ where
     scanner: Option<BackgroundTask>,
     // The aggregator task, which derives aggregate statistics from a block stream.
     aggregator: Option<BackgroundTask>,
+    // Without an aggregator, the task that deletes the totals an earlier run left. This is only
+    // saved here so that we can cancel it on drop.
+    leftover_totals_cleanup: Option<BackgroundTask>,
     pruner: Pruner<Types, S>,
 }
 
@@ -565,6 +570,12 @@ where
         } else {
             None
         };
+        let leftover_totals_cleanup = aggregator.is_none().then(|| {
+            BackgroundTask::spawn(
+                "leftover totals cleanup",
+                delete_leftover_totals(fetcher.storage.clone()),
+            )
+        });
 
         let storage = fetcher.storage.clone();
 
@@ -574,6 +585,7 @@ where
             scanner,
             pruner,
             aggregator,
+            leftover_totals_cleanup,
         };
 
         Ok(ds)
@@ -582,6 +594,15 @@ where
     /// Get a copy of the (shared) inner storage
     pub fn inner(&self) -> Arc<S> {
         self.fetcher.storage.clone()
+    }
+}
+
+/// Delete the transaction and payload totals an earlier run with an aggregator left.
+async fn delete_leftover_totals<S: PruneStorage + Sync>(storage: Arc<S>) {
+    match storage.delete_leftover_aggregates().await {
+        Ok(false) => {},
+        Ok(true) => tracing::info!("deleted the totals an earlier run left"),
+        Err(err) => tracing::warn!("failed to delete the totals an earlier run left: {err:#}"),
     }
 }
 
@@ -867,13 +888,17 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + PruneStorage + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         let height = info.height() as usize;
+        self.fetcher
+            .storage
+            .init_pruned_height(info.height())
+            .await?;
 
         // Save the new decided leaf.
         self.fetcher
@@ -2236,6 +2261,16 @@ where
         })
         .await
     }
+
+    async fn load_state_start_height(&self) -> QueryResult<Option<u64>> {
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.load_state_start_height().await
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -2262,6 +2297,7 @@ where
         range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2277,6 +2313,7 @@ where
         range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2405,6 +2442,8 @@ where
         explorer::query_data::ExplorerSummary<Types>,
         explorer::query_data::GetExplorerSummaryError,
     > {
+        // The summary counts transactions from genesis.
+        self.check_aggregator()?;
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -2428,6 +2467,21 @@ where
             tx.get_search_results(query.clone()).await
         })
         .await
+    }
+}
+
+impl<Types, S, P> FetchingDataSource<Types, S, P>
+where
+    Types: NodeType,
+{
+    /// Transaction counts and payload sizes come from the aggregator. Without one, this data source
+    /// has none: rows an earlier run left in storage stop where that run did, and a node without an
+    /// aggregator, such as a pruned one, never has the blocks to count from genesis.
+    fn check_aggregator(&self) -> QueryResult<()> {
+        if self.aggregator.is_none() {
+            return Err(QueryError::NotFound);
+        }
+        Ok(())
     }
 }
 
@@ -3006,6 +3060,8 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestMetadata},
         node_types::TEST_VERSIONS,
@@ -3016,16 +3072,15 @@ mod test {
         traits::{BlockPayload, block_contents::EncodeBytes},
         utils::BuilderCommitment,
     };
+    use rstest_reuse::apply;
 
     use super::{leaf::RangeRequest, *};
     use crate::{
-        data_source::{
-            sql::testing::TmpDb,
-            storage::{SqlStorage, StorageConnectionType},
-        },
         fetching::provider::NoFetching,
         testing::{
-            consensus::MockSqlDataSource,
+            consensus::{
+                SavePrunedHeight, TestSqlDb, TestableDataSource, sql_data_sources, sql_dbs,
+            },
             mocks::{MockPayload, MockTypes, mock_transaction},
         },
     };
@@ -3195,18 +3250,19 @@ mod test {
         );
     }
 
-    async fn test_sync_status(chunk_size: usize, present_ranges: &[(usize, usize)]) {
+    async fn test_sync_status<D>(chunk_size: usize, present_ranges: &[(usize, usize)])
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
         let block_height = present_ranges.last().unwrap().1;
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .with_sync_status_chunk_size(chunk_size)
-            .with_sync_status_ttl(Duration::ZERO)
-            .build()
-            .await
-            .unwrap();
+        let storage = D::create(0).await;
+        let ds = D::build(&storage, |builder| {
+            builder
+                .with_sync_status_chunk_size(chunk_size)
+                .with_sync_status_ttl(Duration::ZERO)
+        })
+        .await;
 
         // Generate some mock leaves to insert.
         let mut leaves: Vec<LeafQueryData<MockTypes>> = vec![
@@ -3298,31 +3354,42 @@ mod test {
         assert_eq!(ranges.next(), None);
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks() {
-        test_sync_status(10, &[(0, 1), (3, 5), (8, 10)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(10, &[(0, 1), (3, 5), (8, 10)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk() {
-        test_sync_status(5, &[(1, 4)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks_present_range_overlapping_chunk<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(5, &[(1, 4)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk() {
-        test_sync_status(5, &[(0, 1), (4, 5)]).await;
+    #[apply(sql_data_sources)]
+    async fn test_sync_status_multiple_chunks_missing_range_overlapping_chunk<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes> + SavePrunedHeight,
+    {
+        test_sync_status::<D>(5, &[(0, 1), (4, 5)]).await;
     }
 
-    #[tokio::test]
-    #[test_log::test]
-    async fn test_load_range_incomplete() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
+    #[apply(sql_data_sources)]
+    async fn test_load_range_incomplete<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+        for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let db = D::connect(&storage).await;
         {
             let mut tx = db.write().await.unwrap();
             tx.insert_leaf(
@@ -3415,18 +3482,15 @@ mod test {
     /// `n * (n + 1) / 2`. A double-count or skip would fail the final assertion.
     ///
     /// This test is slow because it must wait for `AGGREGATOR_RETRY_INTERVAL` (30 s) to elapse.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    #[apply(sql_data_sources)]
     #[cfg(not(target_os = "windows"))]
-    async fn test_aggregator_recovery_after_missed_notification() {
-        let storage = TmpDb::init().await;
-        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-
-        let ds = MockSqlDataSource::builder(db, NoFetching)
-            .build()
-            .await
-            .unwrap();
+    async fn test_aggregator_recovery_after_missed_notification<D>(_d: PhantomData<D>)
+    where
+        D: TestableDataSource,
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
 
         // Build N blocks: block at height i has i+1 transactions.
         // Each block gets a distinct payload (and thus a distinct payload_commitment),
@@ -3484,8 +3548,7 @@ mod test {
         // `store_and_notify`. The aggregator task has already started and is waiting on a
         // notification for height 0 that will never arrive via this path.
         {
-            let inner = ds.inner();
-            let mut tx = inner.write().await.unwrap();
+            let mut tx = ds.write().await.unwrap();
             for leaf in &leaves {
                 tx.insert_leaf(leaf).await.unwrap();
             }
@@ -3515,5 +3578,206 @@ mod test {
             .await
             .expect("aggregate should be available after recovery");
         assert_eq!(total, expected_total);
+    }
+
+    /// A data source without an aggregator has no totals, also when an earlier run with one left
+    /// aggregate rows in storage: those stop where that run did.
+    #[apply(sql_dbs)]
+    async fn test_no_totals_without_aggregator<Db: TestSqlDb>(_db: PhantomData<Db>)
+    where
+        for<'a> <Db::Storage as VersionedDataSource>::ReadOnly<'a>: ExplorerStorage<MockTypes>,
+    {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
+        let genesis = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = db.write().await.unwrap();
+            tx.update_aggregates(Aggregate::default(), &[PayloadMetadata::from(genesis)])
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+
+        for res in [
+            ds.count_transactions_in_range(.., None).await,
+            ds.count_transactions_in_range(..=0, None).await,
+            ds.payload_size_in_range(.., None).await,
+        ] {
+            assert!(matches!(res, Err(QueryError::NotFound)), "{res:?}");
+        }
+        let err = ds.get_explorer_summary().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                explorer::query_data::GetExplorerSummaryError::QueryError(
+                    explorer::errors::QueryError {
+                        error: QueryError::NotFound
+                    }
+                )
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// A data source without an aggregator never reads or adds to the transaction and payload
+    /// totals, so it deletes the ones an earlier run with an aggregator left.
+    #[apply(sql_dbs)]
+    async fn test_data_source_without_aggregator_deletes_old_totals<Db: TestSqlDb>(
+        _db: PhantomData<Db>,
+    ) {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
+        seed_totals::<Db>(&db).await;
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+
+        let deadline = Instant::now() + OLD_TOTALS_TIMEOUT;
+        loop {
+            let heights_left = stored_totals::<Db>(ds.as_ref())
+                .await
+                .map(|totals| totals.len());
+            if matches!(heights_left, Ok(0)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the old totals are still stored {OLD_TOTALS_TIMEOUT:?} after a data source \
+                 without an aggregator started (heights left: {heights_left:?})"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// A data source with an aggregator keeps the totals an earlier run left: its aggregator
+    /// resumes from them.
+    #[apply(sql_dbs)]
+    async fn test_data_source_with_aggregator_keeps_old_totals<Db: TestSqlDb>(
+        _db: PhantomData<Db>,
+    ) {
+        let tmp = Db::init().await;
+        let db = tmp.storage().await.unwrap();
+        seed_totals::<Db>(&db).await;
+        let ds = FetchingDataSource::<MockTypes, _, _>::builder(db, NoFetching)
+            .build()
+            .await
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            assert_eq!(
+                stored_totals::<Db>(ds.as_ref()).await.unwrap(),
+                seeded_totals()
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// How long a data source without an aggregator may take to delete the old totals.
+    const OLD_TOTALS_TIMEOUT: Duration = Duration::from_secs(60);
+
+    /// Number of heights, from genesis up, of the totals [`seed_totals`] stores.
+    const SEEDED_HEIGHTS: usize = 10;
+
+    /// The only namespace of the blocks [`seed_totals`] counts.
+    const SEEDED_NAMESPACE: i64 = 7;
+
+    /// Transactions and bytes of each block [`seed_totals`] counts, all in [`SEEDED_NAMESPACE`].
+    const SEEDED_BLOCK: crate::availability::NamespaceInfo = crate::availability::NamespaceInfo {
+        num_transactions: 2,
+        size: 30,
+    };
+
+    /// The cumulative totals stored at one height, as (transactions, bytes).
+    #[derive(Debug, PartialEq)]
+    struct HeightTotals {
+        all_namespaces: (usize, usize),
+        seeded_namespace: (usize, usize),
+    }
+
+    /// Store the totals of [`SEEDED_HEIGHTS`] blocks the way an earlier run with an aggregator
+    /// leaves them, and check that the storage then holds [`seeded_totals`].
+    async fn seed_totals<Db: TestSqlDb>(storage: &Db::Storage) {
+        let genesis = PayloadMetadata::from(
+            BlockQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await,
+        );
+        let blocks = (0..SEEDED_HEIGHTS as u64)
+            .map(|height| PayloadMetadata {
+                height,
+                num_transactions: SEEDED_BLOCK.num_transactions,
+                size: SEEDED_BLOCK.size,
+                namespaces: [(SEEDED_NAMESPACE, SEEDED_BLOCK)].into_iter().collect(),
+                ..genesis.clone()
+            })
+            .collect::<Vec<_>>();
+        let mut tx = storage.write().await.unwrap();
+        tx.update_aggregates(Aggregate::default(), &blocks)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(stored_totals::<Db>(storage).await.unwrap(), seeded_totals());
+    }
+
+    /// What [`stored_totals`] returns after [`seed_totals`].
+    fn seeded_totals() -> Vec<HeightTotals> {
+        (1..=SEEDED_HEIGHTS)
+            .map(|blocks| {
+                let totals = (
+                    blocks * SEEDED_BLOCK.num_transactions as usize,
+                    blocks * SEEDED_BLOCK.size as usize,
+                );
+                HeightTotals {
+                    all_namespaces: totals,
+                    seeded_namespace: totals,
+                }
+            })
+            .collect()
+    }
+
+    /// The totals in storage at each height from genesis up to the highest height of any row.
+    /// Empty if and only if there are no rows.
+    async fn stored_totals<Db: TestSqlDb>(
+        storage: &Db::Storage,
+    ) -> anyhow::Result<Vec<HeightTotals>> {
+        let mut tx = storage.read().await?;
+        let heights = AggregatesStorage::<MockTypes>::aggregates_height(&mut tx).await?;
+        let mut totals = Vec::with_capacity(heights);
+        for height in 0..heights {
+            totals.push(HeightTotals {
+                all_namespaces: totals_up_to(&mut tx, height, None).await?,
+                seeded_namespace: totals_up_to(&mut tx, height, Some(SEEDED_NAMESPACE)).await?,
+            });
+        }
+        Ok(totals)
+    }
+
+    /// The (transactions, bytes) of `namespace` (all namespaces if `None`) in the blocks up to and
+    /// including `height`.
+    async fn totals_up_to(
+        tx: &mut impl NodeStorage<MockTypes>,
+        height: usize,
+        namespace: Option<i64>,
+    ) -> anyhow::Result<(usize, usize)> {
+        Ok((
+            tx.count_transactions_in_range(..=height, namespace).await?,
+            tx.payload_size_in_range(..=height, namespace).await?,
+        ))
     }
 }

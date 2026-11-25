@@ -9,15 +9,12 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 axum = { workspace = true }
-blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
-libp2p-identity = { workspace = true }
-multiaddr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

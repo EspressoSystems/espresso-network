@@ -846,12 +846,7 @@ pub async fn distribute_block_reward(
         .context("epoch height not found")?;
     let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
-    let first_epoch = {
-        coordinator
-            .membership()
-            .first_epoch()
-            .context("The first epoch was not set.")?
-    };
+    let first_epoch = coordinator.membership().first_epoch();
 
     // Rewards are distributed only if the current epoch is not the first or second epoch
     // this is because we don't have stake table from the contract for the first two epochs
@@ -958,11 +953,9 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let coordinator = instance_state.coordinator.clone();
 
-    let membership = coordinator.membership_for_epoch(Some(epoch))?;
+    let membership = coordinator.membership_for_epoch(epoch)?;
 
-    let snapshot = membership
-        .snapshot()
-        .context(format!("no committee for epoch {epoch:?}"))?;
+    let snapshot = membership.snapshot();
 
     let leader: BLSPubKey = snapshot
         .leader(view)
@@ -1239,7 +1232,7 @@ impl EpochRewardsCalculator {
         );
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)) {
+        if let Err(err) = coordinator.membership_for_epoch(epoch) {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)

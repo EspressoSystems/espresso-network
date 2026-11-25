@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_example_types::node_types::TestTypes;
@@ -8,19 +8,20 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::{TimeoutEvidence, UpgradeCertificate2},
     traits::signature_key::SignatureKey,
-    utils::is_epoch_root,
     vote::HasViewNumber,
 };
 
 use crate::{
-    helpers::{proposal_commitment, test_upgrade_lock},
+    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
     message::{Certificate1, Proposal, ProposalMessage},
     proposal::{
         MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
         justify_qc_matches_parent, next_epoch_justify_qc_matches_parent, state_cert_matches_parent,
         view_change_evidence_matches_parent,
     },
-    tests::common::utils::{TestData, mock_membership_with_num_nodes},
+    tests::common::utils::{
+        TestData, build_timeout_cert3_with_lock, epoch_length, mock_membership_with_num_nodes,
+    },
     upgrade::expected_upgrade_data,
 };
 
@@ -47,7 +48,7 @@ fn at_block(proposals: &[Proposal<TestTypes>], block_number: u64) -> Proposal<Te
 }
 
 fn rejects(proposal: &Proposal<TestTypes>, epoch_height: u64, expected_epoch: u64) {
-    match epoch_matches_height(proposal, epoch_height) {
+    match epoch_matches_height(proposal, epoch_length(epoch_height)) {
         Err(MalformedProposal::Epoch {
             expected, claimed, ..
         }) => {
@@ -64,7 +65,7 @@ fn rejects(proposal: &Proposal<TestTypes>, epoch_height: u64, expected_epoch: u6
 #[tokio::test]
 async fn epoch_matching_its_block_number_is_accepted() {
     let proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
-    assert!(epoch_matches_height(&proposal, EPOCH_HEIGHT).is_ok());
+    assert!(epoch_matches_height(&proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
 }
 
 #[tokio::test]
@@ -95,7 +96,7 @@ async fn no_block_of_a_chain_crossing_epoch_boundaries_is_rejected() {
 
     for proposal in &proposals {
         assert!(
-            epoch_matches_height(proposal, EPOCH_HEIGHT).is_ok(),
+            epoch_matches_height(proposal, epoch_length(EPOCH_HEIGHT)).is_ok(),
             "block {} claims epoch {}",
             proposal.block_header.block_number,
             proposal.epoch,
@@ -130,7 +131,7 @@ async fn epoch_of_block_zero_is_checked() {
     proposal.block_header.block_number = 0;
 
     proposal.epoch = EpochNumber::genesis();
-    assert!(epoch_matches_height(&proposal, EPOCH_HEIGHT).is_ok());
+    assert!(epoch_matches_height(&proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
 
     proposal.epoch = EpochNumber::new(u64::MAX);
     rejects(&proposal, EPOCH_HEIGHT, *EpochNumber::genesis());
@@ -153,7 +154,12 @@ async fn epoch_is_checked_before_the_leader_is_resolved() {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
-    let mut validator = ProposalValidator::new(membership, EPOCH_HEIGHT, test_upgrade_lock(), None);
+    let mut validator = ProposalValidator::new(
+        membership,
+        epoch_length(EPOCH_HEIGHT),
+        test_upgrade_lock(),
+        None,
+    );
 
     validator.validate(ProposalMessage::unchecked(tampered));
     let result = validator.next().await.expect("a validation result");
@@ -173,7 +179,7 @@ fn rejects_justify_qc_epoch(
     epoch_height: u64,
     expected_epoch: u64,
 ) {
-    match justify_qc_matches_parent(proposal, epoch_height) {
+    match justify_qc_matches_parent(proposal, epoch_length(epoch_height)) {
         Err(MalformedProposal::JustifyQcEpoch {
             expected, claimed, ..
         }) => {
@@ -196,7 +202,7 @@ async fn no_justify_qc_of_a_chain_crossing_epoch_boundaries_is_rejected() {
 
     for proposal in &proposals {
         assert!(
-            justify_qc_matches_parent(proposal, EPOCH_HEIGHT).is_ok(),
+            justify_qc_matches_parent(proposal, epoch_length(EPOCH_HEIGHT)).is_ok(),
             "block {} has a justify_qc for block {:?} in epoch {:?}",
             proposal.block_header.block_number,
             proposal.justify_qc.data.block_number,
@@ -239,7 +245,7 @@ async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch
         first_of_epoch.justify_qc.data.epoch,
         Some(EpochNumber::new(1))
     );
-    assert!(justify_qc_matches_parent(&first_of_epoch, EPOCH_HEIGHT).is_ok());
+    assert!(justify_qc_matches_parent(&first_of_epoch, epoch_length(EPOCH_HEIGHT)).is_ok());
 
     let mut tampered = first_of_epoch.clone();
     tampered.justify_qc.data.epoch = Some(tampered.epoch);
@@ -259,7 +265,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
     for claimed in [proposal.block_header.block_number, parent_block - 1] {
         let mut tampered = proposal.clone();
         tampered.justify_qc.data.block_number = Some(claimed);
-        match justify_qc_matches_parent(&tampered, EPOCH_HEIGHT) {
+        match justify_qc_matches_parent(&tampered, epoch_length(EPOCH_HEIGHT)) {
             Err(MalformedProposal::JustifyQcBlockNumber {
                 expected,
                 claimed: reported,
@@ -275,7 +281,7 @@ async fn justify_qc_certifying_another_block_is_rejected() {
     let mut without_block_number = proposal.clone();
     without_block_number.justify_qc.data.block_number = None;
     assert!(matches!(
-        justify_qc_matches_parent(&without_block_number, EPOCH_HEIGHT),
+        justify_qc_matches_parent(&without_block_number, epoch_length(EPOCH_HEIGHT)),
         Err(MalformedProposal::JustifyQcWithoutBlockNumber(_))
     ));
 }
@@ -295,11 +301,13 @@ async fn no_state_cert_of_a_chain_crossing_epoch_boundaries_is_rejected() {
         let block = proposal.block_header.block_number;
         assert_eq!(
             proposal.state_cert.is_some(),
-            is_epoch_root(block.saturating_sub(1), EPOCH_HEIGHT),
+            epoch_length(EPOCH_HEIGHT)
+                .position(block.saturating_sub(1))
+                .is_root(),
             "block {block} carries state_cert={}",
             proposal.state_cert.is_some(),
         );
-        assert!(state_cert_matches_parent(proposal, EPOCH_HEIGHT).is_ok());
+        assert!(state_cert_matches_parent(proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
     }
 }
 
@@ -311,7 +319,7 @@ async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
     let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
     let parent_block = proposal.block_header.block_number - 1;
     assert!(
-        !is_epoch_root(parent_block, EPOCH_HEIGHT),
+        !epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
         "fixture precondition: parent block must not be an epoch root"
     );
     assert!(
@@ -328,7 +336,7 @@ async fn state_cert_on_a_non_epoch_root_proposal_is_rejected() {
 
     assert!(
         matches!(
-            state_cert_matches_parent(&tampered, EPOCH_HEIGHT),
+            state_cert_matches_parent(&tampered, epoch_length(EPOCH_HEIGHT)),
             Err(MalformedProposal::StateCertUnexpected(_))
         ),
         "a state_cert attached to a non-epoch-root proposal must be rejected"
@@ -350,7 +358,7 @@ async fn state_cert_missing_at_an_epoch_root_proposal_is_rejected() {
 
     assert!(
         matches!(
-            state_cert_matches_parent(&stripped, EPOCH_HEIGHT),
+            state_cert_matches_parent(&stripped, epoch_length(EPOCH_HEIGHT)),
             Err(MalformedProposal::StateCertMissing(_))
         ),
         "an epoch-root-parent proposal missing its state_cert must be rejected"
@@ -365,7 +373,7 @@ async fn justify_qc_without_an_epoch_is_rejected() {
     proposal.justify_qc.data.epoch = None;
 
     assert!(matches!(
-        justify_qc_matches_parent(&proposal, EPOCH_HEIGHT),
+        justify_qc_matches_parent(&proposal, epoch_length(EPOCH_HEIGHT)),
         Err(MalformedProposal::JustifyQcWithoutEpoch(_))
     ));
 }
@@ -384,7 +392,11 @@ fn rejects_next_epoch_justify_qc(
     proposal: &Proposal<TestTypes>,
     justify_qc_epoch: EpochNumber,
 ) -> MalformedProposal {
-    match next_epoch_justify_qc_matches_parent(proposal, EPOCH_HEIGHT, justify_qc_epoch) {
+    match next_epoch_justify_qc_matches_parent(
+        proposal,
+        epoch_length(EPOCH_HEIGHT),
+        justify_qc_epoch,
+    ) {
         Err(err) => err,
         Ok(cert2) => panic!(
             "expected a mismatch, got {:?}",
@@ -401,12 +413,14 @@ async fn no_next_epoch_justify_qc_of_a_chain_crossing_epoch_boundaries_is_reject
     let proposals = chain_crossing_epoch_boundaries().await;
 
     for proposal in &proposals {
-        let justify_qc_epoch =
-            justify_qc_matches_parent(proposal, EPOCH_HEIGHT).expect("an honest justify_qc");
-        let cert2 = next_epoch_justify_qc_matches_parent(proposal, EPOCH_HEIGHT, justify_qc_epoch)
-            .unwrap_or_else(|err| {
-                panic!("block {} carries {err}", proposal.block_header.block_number)
-            });
+        let justify_qc_epoch = justify_qc_matches_parent(proposal, epoch_length(EPOCH_HEIGHT))
+            .expect("an honest justify_qc");
+        let cert2 = next_epoch_justify_qc_matches_parent(
+            proposal,
+            epoch_length(EPOCH_HEIGHT),
+            justify_qc_epoch,
+        )
+        .unwrap_or_else(|err| panic!("block {} carries {err}", proposal.block_header.block_number));
         let follows_a_boundary = (proposal.block_header.block_number - 1) % EPOCH_HEIGHT == 0
             && proposal.block_header.block_number > 1;
         assert_eq!(
@@ -427,13 +441,40 @@ async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejecte
     let (proposal, justify_qc_epoch) = first_of_epoch(&proposals);
     let parent_block = proposal.block_header.block_number - 1;
 
+    // A commit earlier than the block is no commit of it.
     let mut wrong_view = proposal.clone();
     let cert2 = wrong_view.next_epoch_justify_qc.as_mut().expect("a cert2");
-    cert2.view_number += 1;
+    cert2.view_number = proposal.justify_qc.view_number() - 1;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&wrong_view, justify_qc_epoch),
         MalformedProposal::NextEpochJustifyQcParent { claimed_view, parent_view, .. }
-            if claimed_view == parent_view + 1
+            if claimed_view + 1 == parent_view
+    ));
+
+    // A later one is: a re-vote commits the block again at a view of its own,
+    // and the first block of the next epoch still names the block's own QC.
+    let mut revoted = proposal.clone();
+    revoted.view_number += 1;
+    let cert2 = revoted.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number += 1;
+    assert!(
+        next_epoch_justify_qc_matches_parent(
+            &revoted,
+            epoch_length(EPOCH_HEIGHT),
+            justify_qc_epoch
+        )
+        .is_ok(),
+        "a commit at a later view than the block is accepted"
+    );
+
+    // But not one at the proposal's own view or later: the first block comes
+    // after the commit of its parent.
+    let mut too_late = proposal.clone();
+    let cert2 = too_late.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number = proposal.view_number;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&too_late, justify_qc_epoch),
+        MalformedProposal::NextEpochJustifyQcNotEarlier { .. }
     ));
 
     let mut wrong_epoch = proposal.clone();
@@ -535,7 +576,6 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
         },
         TimeoutEvidence::V3(mut tc) => {
             tc.view_number = view;
-            tc.data.view = view;
             TimeoutEvidence::V3(tc)
         },
     };
@@ -591,7 +631,6 @@ async fn evidence_on_a_proposal_that_follows_its_parent_is_checked() {
         },
         TimeoutEvidence::V3(mut tc) => {
             tc.view_number = previous.view_number;
-            tc.data.view = previous.view_number;
             TimeoutEvidence::V3(tc)
         },
     };
@@ -621,6 +660,102 @@ async fn evidence_on_a_proposal_that_follows_its_parent_is_checked() {
     );
 }
 
+/// A timeout certificate whose lock is of a later epoch than the certificate is
+/// rejected before the lock's epoch is looked up: no honest signer holds such a
+/// lock, and looking it up would wait on a catchup for an epoch of the
+/// leader's choosing.
+#[tokio::test]
+async fn evidence_with_a_lock_of_a_later_epoch_is_rejected_before_lookup() {
+    let data = TestData::new_with_epoch_height(3, EPOCH_HEIGHT).await;
+    let [.., previous, view] = data.views.as_slice() else {
+        panic!("three views");
+    };
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
+    let mut lock = previous.cert1.clone();
+    lock.data.epoch = Some(view.epoch_number + 1000);
+    let committee = membership
+        .membership_for_epoch(view.epoch_number)
+        .expect("the proposal's committee");
+    let evidence = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+        previous.view_number,
+        view.epoch_number,
+        Some(lock),
+        &committee,
+    ));
+    let mut proposal = view.proposal.clone();
+    proposal.data.view_change_evidence = Some(evidence);
+    let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+    proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+        .expect("sign the proposal");
+
+    let mut validator = ProposalValidator::new(
+        membership,
+        epoch_length(EPOCH_HEIGHT),
+        test_timeout_epoch_lock(),
+        None,
+    );
+    validator.validate(ProposalMessage::unchecked(proposal));
+    let result = tokio::time::timeout(Duration::from_secs(10), validator.next())
+        .await
+        .expect("validation does not wait on the lock's epoch")
+        .expect("a validation result")
+        .map(|_| ());
+    assert!(
+        matches!(result, Err(ValidationError::InvalidViewChangeEvidence(_))),
+        "expected InvalidViewChangeEvidence, got {result:?}"
+    );
+}
+
+/// A timeout certificate that binds another epoch than its proposal's, later or
+/// earlier, is rejected before its committee is looked up, for the same reason.
+#[tokio::test]
+async fn evidence_of_another_epoch_than_the_proposal_is_rejected_before_lookup() {
+    let data = TestData::new_with_epoch_height(3, EPOCH_HEIGHT).await;
+    let [.., previous, view] = data.views.as_slice() else {
+        panic!("three views");
+    };
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
+    let committee = membership
+        .membership_for_epoch(view.epoch_number)
+        .expect("the proposal's committee");
+    let later = view.epoch_number + 1000;
+    let earlier = EpochNumber::new(view.epoch_number.saturating_sub(1));
+    for tc_epoch in [later, earlier] {
+        let evidence = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+            previous.view_number,
+            tc_epoch,
+            None,
+            &committee,
+        ));
+        let mut proposal = view.proposal.clone();
+        proposal.data.view_change_evidence = Some(evidence);
+        let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+        proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+            .expect("sign the proposal");
+
+        let mut validator = ProposalValidator::new(
+            membership.clone(),
+            epoch_length(EPOCH_HEIGHT),
+            test_timeout_epoch_lock(),
+            None,
+        );
+        validator.validate(ProposalMessage::unchecked(proposal));
+        let result = tokio::time::timeout(Duration::from_secs(10), validator.next())
+            .await
+            .expect("validation does not wait on the certificate's epoch")
+            .expect("a validation result")
+            .map(|_| ());
+        assert!(
+            matches!(result, Err(ValidationError::ViewChangeEvidenceEpoch { .. })),
+            "certificate of epoch {tc_epoch}: expected ViewChangeEvidenceEpoch, got {result:?}"
+        );
+    }
+}
+
 /// Validate `proposal` with a validator that accepts `genesis_qc` at the genesis
 /// view.
 async fn validate_with_genesis_qc(
@@ -630,8 +765,12 @@ async fn validate_with_genesis_qc(
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
-    let mut validator =
-        ProposalValidator::new(membership, EPOCH_HEIGHT, test_upgrade_lock(), genesis_qc);
+    let mut validator = ProposalValidator::new(
+        membership,
+        epoch_length(EPOCH_HEIGHT),
+        test_upgrade_lock(),
+        genesis_qc,
+    );
     validator.validate(ProposalMessage::unchecked(proposal));
     validator
         .next()
@@ -653,14 +792,14 @@ async fn genesis_justify_qc_certifying_a_later_block_is_rejected() {
         ViewNumber::genesis(),
         "setup: the first proposal extends the genesis QC"
     );
-    assert!(justify_qc_matches_parent(&proposal, EPOCH_HEIGHT).is_ok());
+    assert!(justify_qc_matches_parent(&proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
 
     proposal.justify_qc.data.block_number = Some(23);
     proposal.justify_qc.data.epoch = Some(EpochNumber::new(3));
     proposal.block_header.block_number = 24;
     proposal.epoch = EpochNumber::new(3);
     assert!(matches!(
-        justify_qc_matches_parent(&proposal, EPOCH_HEIGHT),
+        justify_qc_matches_parent(&proposal, epoch_length(EPOCH_HEIGHT)),
         Err(MalformedProposal::GenesisJustifyQcBlockNumber { claimed: 23, .. })
     ));
 }

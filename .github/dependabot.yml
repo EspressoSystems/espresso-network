@@ -1,7 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      # The runner looks up a local action's `uses:` in actions.lock, but the lockfile only has
+      # entries for refs the workflows use. Bump these with the workflows so the refs stay equal.
+      - "/.github/actions/*"
     # Group all updates together
     groups:
       all:
@@ -9,22 +13,33 @@ updates:
         - "*"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "cargo"
     directories:
       - "/"
-      - "/crates/espresso/node-sqlite"
     groups:
       # The `all` group should include mainly updates from crates.io which are
       # more likely to succeed without intervention.
       ark:
         patterns:
           - "ark-*"
-      cdn:
-        patterns:
-          - "cdn-*"
       jf:
         patterns:
           - "jf-*"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "uv"
+    directory: "/.github/claude"
+    groups:
+      all:
+        patterns:
+          - "*"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

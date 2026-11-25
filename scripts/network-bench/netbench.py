@@ -7,6 +7,7 @@ by the AWS driver and its agents.
 import argparse
 import asyncio
 import base64
+import bisect
 import contextlib
 import dataclasses
 import functools
@@ -37,7 +38,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from multiprocessing.context import SpawnProcess
 from pathlib import Path
-from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlsplit
 
 import chaos as ch
@@ -414,6 +415,11 @@ class DeploymentMeta(TypedDict):
     max_block_size: NotRequired[str]
     # `--prune` retention of the query node's data and state; absent without pruning.
     prune: NotRequired[str]
+    # `--epoch-height` and whether every node was staked on L1 for it; absent for the template's.
+    epoch_height: NotRequired[int]
+    staking: NotRequired[bool]
+    # How far the light-client prover got on ctl; absent without `--prover`.
+    prover: NotRequired[str]
     # `--slow-nodes`: the nodes whose espresso-node ran on `slow_cores` cores; absent without.
     slow_nodes: NotRequired[list[str]]
     slow_cores: NotRequired[int]
@@ -821,17 +827,23 @@ def read(pool: Http, url: str) -> tuple[int, bytes]:
     pool is closed."""
     deadline = pool.clock.time() + READ_DEADLINE_S
     for attempt in itertools.count():
+        # Chaos faults drop and refuse connections; the deadline still reports a node that
+        # stays down.
+        quiet = attempt > 0
         try:
             status, body = pool.request("GET", url)
         except OSError as err:
             problem = str(err)
+            quiet |= isinstance(err, ConnectionError) or isinstance(
+                err.__cause__, ConnectionError
+            )
         else:
             if status < 500:
                 return status, body
             problem = f"GET {url}: HTTP {status}"
         if pool.clock.time() >= deadline:
             raise NetworkError(f"{problem}, retried for {READ_DEADLINE_S:.0f} s")
-        log.log(logging.DEBUG if attempt else logging.WARNING, "%s, retrying", problem)
+        log.log(logging.DEBUG if quiet else logging.WARNING, "%s, retrying", problem)
         if pool.clock.wait(pool.closed, READ_RETRY_S):
             raise NetworkError(f"{problem}, stopped retrying")
     raise AssertionError("unreachable")
@@ -1168,10 +1180,17 @@ class LoadState:
         self.max_in_flight = 0
         self.cap_waits = 0
         self.timeouts = 0
+        # Every timeout, also of txs a late scan included after all: for the progress line.
+        self.timeouts_seen = 0
         self.phase = Phase("starting", None, 0.0, 0.0)
         self.submit_errors = 0
         self.failovers = 0
         self.included: set[int] = set()
+        # Timed out and not found yet, with the time by which the block must have shown on the
+        # query node for a late find to include it; see `include`.
+        self.timed_out: dict[int, tuple[Tx, float]] = {}
+        # The latest of those times: a scan past it can include none of them any more.
+        self.findable_until = -math.inf
         self.duplicates = 0
         self.heartbeat_errors = 0
         self.missing_payloads: list[int] = []
@@ -1209,9 +1228,17 @@ class LoadState:
             tx.t_included = now
         elif status == "timeout":
             self.timeouts += 1
+            self.timeouts_seen += 1
         self.room.set()
 
+    def time_out(self, tx: Tx, now: float, findable_until: float) -> None:
+        """A scan that finds it in a block shown by `findable_until` still includes it."""
+        self.resolve(tx.id, "timeout", now)
+        self.timed_out[tx.id] = (tx, findable_until)
+        self.findable_until = max(self.findable_until, findable_until)
+
     def include(self, tx_id: int, height: int, at: float) -> None:
+        """`at`: when the block showed on the query node."""
         if tx_id in self.included:
             self.duplicates += 1
             return
@@ -1220,6 +1247,17 @@ class LoadState:
             self.included.add(tx_id)
             tx.height = height
             self.resolve(tx_id, "included", at)
+            return
+        late = self.timed_out.pop(tx_id, None)
+        if late is None:
+            return
+        tx, findable_until = late
+        # Too late to count as included, its block still dates its consensus latency.
+        tx.height = height
+        if at <= findable_until:
+            self.included.add(tx_id)
+            tx.status, tx.t_included = "included", at
+            self.timeouts -= 1
 
 
 async def generate_load(
@@ -2175,8 +2213,41 @@ async def track_inclusion(
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
     A transaction counts as included when its block's header appeared on the query node. A
-    payload no query node has is retried after each scan until MISSING_PAYLOAD_S."""
-    deadline = None
+    payload no query node has is retried after each scan until MISSING_PAYLOAD_S. After
+    `done`, scans go on while a timed-out transaction may still be found, up to
+    `tx_timeout_s` after `done` was set."""
+    ended = asyncio.create_task(set_at(done, clock))
+    try:
+        await track_until_settled(cfg, state, scan, heights, counters, ended, clock)
+    finally:
+        ended.cancel()
+
+
+async def set_at(event: asyncio.Event, clock: Clock) -> float:
+    await event.wait()
+    return clock.time()
+
+
+async def track_until_settled(
+    cfg: BenchConfig,
+    state: LoadState,
+    scan: Scan,
+    heights: Heights,
+    counters: list[dict[str, Any]],
+    ended: "asyncio.Task[float]",
+    clock: Clock,
+) -> None:
+    """`track_inclusion`, with `ended` done when the load ended, at its result."""
+
+    def deadline() -> float:
+        return ended.result() + cfg.tx_timeout_s if ended.done() else math.inf
+
+    def settled() -> bool:
+        """The load ended, nothing is pending, and no timed-out tx can still be found."""
+        scanned = scanned_before(heights, height, missing, clock.time())
+        unfound = state.timed_out and scanned <= state.findable_until
+        return ended.done() and not state.pending and not unfound
+
     report = clock.time() + PROGRESS_S
     reported_timeouts = 0
     height = heights.start
@@ -2190,14 +2261,12 @@ async def track_inclusion(
                 counters,
                 now,
                 cfg.tx_size,
-                state.timeouts - reported_timeouts,
+                state.timeouts_seen - reported_timeouts,
             )
-            report, reported_timeouts = now + PROGRESS_S, state.timeouts
-        if done.is_set():
-            if deadline is None:
-                deadline = now + cfg.tx_timeout_s
-                state.phase = Phase("done", None, now, cfg.tx_timeout_s)
-            if not state.pending or (now > deadline and not missing):
+            report, reported_timeouts = now + PROGRESS_S, state.timeouts_seen
+        if ended.done():
+            state.phase = Phase("done", None, ended.result(), cfg.tx_timeout_s)
+            if settled() or (now > deadline() and not missing):
                 for tx_id in list(state.pending):
                     state.resolve(tx_id, "timeout", now)
                 log_totals(state)
@@ -2205,9 +2274,14 @@ async def track_inclusion(
         for tx in [
             tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
         ]:
-            state.resolve(tx.id, "timeout", now)
+            state.time_out(tx, now, tx.t_submit + cfg.tx_timeout_s)
         top = heights.top("query")
-        while height < top - PAYLOAD_LAG_BLOCKS:
+        # A backlog can outlast the deadline and the need to scan: check both per batch.
+        while (
+            height < top - PAYLOAD_LAG_BLOCKS
+            and clock.time() <= deadline()
+            and not settled()
+        ):
             batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
             scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
             for h, (ids, at, answered) in zip(batch, scans):
@@ -2220,6 +2294,14 @@ async def track_inclusion(
         await clock.asleep(0.1)
 
 
+def scanned_before(
+    heights: Heights, next_height: int, missing: Mapping[int, float], now: float
+) -> float:
+    """When the query node showed the lowest height not scanned yet: every block it showed
+    before then is scanned. `now` when every block it showed is."""
+    return heights.seen["query"].get(min([next_height, *missing]), now)
+
+
 async def retry_missing(
     state: LoadState,
     scan: Scan,
@@ -2228,8 +2310,9 @@ async def retry_missing(
     clock: Clock,
 ) -> None:
     """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
-    payload counts as lost; its transactions, which cannot be told apart, time out. The
-    time restarts while every query node refuses."""
+    payload counts as lost; its transactions, which cannot be told apart, time out. A lost
+    payload counts as scanned when given up. The time restarts while every query node
+    refuses."""
     for height, at_height in list(missing.items()):
         ids, at, answered = await scan_stamped(scan, height, clock)
         if not answered:
@@ -2241,6 +2324,7 @@ async def retry_missing(
         if ids is None:
             log.warning("payload %d missing on every query node, skipping", height)
             state.missing_payloads.append(height)
+            heights.scanned[height] = at
         else:
             record_inclusions(state, ids, heights, height, at)
 
@@ -2393,7 +2477,8 @@ def judge_step(
     counters: list[dict[str, Any]],
     now: float,
 ) -> dict[str, Any]:
-    """The one verdict on a step, as the ramp takes it at `now`; stored in steps.json."""
+    """The verdict on a step that steers the ramp or search, as known at `now`; stored in
+    steps.json. result.json judges the step again on the final files, see `final_verdict`."""
     m = step_measures(step, cfg, txs, heights, counters, now)
     consensus, query = step_fails(m, cfg)
     return {**step, **m, "consensus_fails": consensus, "query_fails": query}
@@ -2407,22 +2492,13 @@ def step_measures(
     counters: list[dict[str, Any]],
     now: float,
 ) -> StepMeasures:
-    """Over the measured half, from what is known at `now`. A transaction not yet on a
-    validator, and a height not yet on the query node, count with their time so far once that
-    exceeds the target."""
+    """Over the measured half, from what is known at `now`: see `consensus_latencies`. A
+    height not yet on the query node counts with its time so far once that exceeds the
+    target."""
     t0, t1 = step["t_mid"], step["t_end"]
     inside = [c for c in counters if t0 <= c["ts"] <= t1]
     timeouts = ch.counter_total(inside, "timeouts")
-    on_validator = {h["height"]: h["validator"] for h in heights}
-    consensus = []
-    for tx in txs:
-        if not t0 <= tx["t_submit"] <= t1:
-            continue
-        seen = on_validator.get(tx["height"])
-        if seen is not None:
-            consensus.append((seen - tx["t_submit"]) * 1000)
-        elif (now - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
-            consensus.append((now - tx["t_submit"]) * 1000)
+    consensus, _ = consensus_latencies(step, cfg, txs, heights, now)
     lags = []
     for h in heights:
         seen = h["validator"]
@@ -2447,6 +2523,57 @@ def step_measures(
         "query_lag_ms": quantiles([lag for _, lag in lags]),
         "query_lag_slope_ms_s": theil_sen(lags),
     }
+
+
+def consensus_latencies(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    now: float,
+) -> tuple[list[float], int]:
+    """Consensus latency in ms of each transaction of the measured half known at `now`, and
+    how many are unknown. A transaction not yet on a validator counts with its time until
+    `undecided_until` once that exceeds the target, and is unknown otherwise. One that timed
+    out and no scan found counts at most its timeout: that it missed it is all that is known."""
+    t0, t1 = step["t_mid"], step["t_end"]
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    unscanned = unscanned_decided(heights, now)
+    known, unknown = [], 0
+    for tx in txs:
+        if not t0 <= tx["t_submit"] <= t1:
+            continue
+        seen = on_validator.get(tx["height"])
+        if seen is not None:
+            known.append((seen - tx["t_submit"]) * 1000)
+            continue
+        until = undecided_until(unscanned, tx["t_submit"], now)
+        if tx["status"] == "timeout":
+            until = min(until, tx["t_submit"] + cfg.tx_timeout_s)
+        if (until - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
+            known.append((until - tx["t_submit"]) * 1000)
+        else:
+            unknown += 1
+    return known, unknown
+
+
+def unscanned_decided(heights: Sequence[Mapping[str, Any]], now: float) -> list[float]:
+    """Sorted, when each height whose payload scan had not finished at `now` reached a
+    validator; heights on no validator yet are left out."""
+    return sorted(
+        h["validator"]
+        for h in heights
+        if (h["scanned"] is None or h["scanned"] > now) and h["validator"] is not None
+    )
+
+
+def undecided_until(unscanned: Sequence[float], t_submit: float, now: float) -> float:
+    """Until when a transaction sent at `t_submit` that the payload scans have not matched is
+    known to be undecided. It is in an unscanned height, or one not shown yet, decided after
+    it was sent, so the first of `unscanned` (see `unscanned_decided`) at or after
+    `t_submit` bounds it. `now` when none does."""
+    i = bisect.bisect_left(unscanned, t_submit)
+    return min(unscanned[i], now) if i < len(unscanned) else now
 
 
 def submit_measures(
@@ -2658,10 +2785,15 @@ def analyze(
     host = list(read_jsonl(out / "host.jsonl"))
     txs = list(read_jsonl(out / "load.jsonl"))
     heights = list(read_jsonl(out / "heights.jsonl"))
+    counters = list(read_jsonl(out / "consensus.jsonl"))
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
+    end = evidence_end(t1, counters, heights)
     steps = [
-        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
+        step_result(
+            final_verdict(step, cfg, txs, heights, counters, end), txs, series, host
+        )
+        for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -2693,6 +2825,50 @@ def analyze(
     return result
 
 
+def evidence_end(
+    t1: float,
+    counters: Sequence[Mapping[str, Any]],
+    heights: Sequence[Mapping[str, Any]],
+) -> float:
+    """The last time the run recorded anything: when the final verdicts are judged."""
+    stamps = [h[k] for h in heights for k in ("validator", "query", "scanned")]
+    return max(
+        [t1, *(c["ts"] for c in counters), *(t for t in stamps if t is not None)]
+    )
+
+
+def final_verdict(
+    judged: dict[str, Any],
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> dict[str, Any]:
+    """A step of steps.json judged again on the run's final files. The ramp judged it at its
+    end, before the payload scans had matched every transaction and the query node had shown
+    every block; that verdict only steers the ramp or search. The pacer's measures stay as
+    the run saw them: load.jsonl leaves out transactions it queued but never sent. Unlike the
+    ramp's, this verdict fails a step whose unknown latencies could decide its p50."""
+    window = cast(StepWindow, judged)
+    m = step_measures(window, cfg, txs, heights, counters, now)
+    final = judged | {
+        "consensus_latency_ms": m["consensus_latency_ms"],
+        "query_lag_ms": m["query_lag_ms"],
+        "query_lag_slope_ms_s": m["query_lag_slope_ms_s"],
+    }
+    consensus, query = step_fails(cast(StepMeasures, final), cfg)
+    known, unknown = consensus_latencies(window, cfg, txs, heights, now)
+    on_time = sum(1 for ms in known if ms <= cfg.latency_target_ms)
+    n = len(known) + unknown
+    if unknown and on_time <= n / 2 and len(known) - on_time <= n / 2:
+        consensus.append(
+            f"consensus latency unknown for {unknown} of {n} txs: "
+            "the payload scans never reached them"
+        )
+    return final | {"consensus_fails": consensus, "query_fails": query}
+
+
 def step_kind(step: Mapping[str, Any]) -> ProbeKind:
     """steps.json and result.json from before `kind` have only `refine`."""
     return step.get("kind", "refine" if step["refine"] else "ramp")
@@ -2704,7 +2880,7 @@ def step_result(
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
 ) -> StepResult:
-    """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
+    """The final verdict on a step (see final_verdict) plus metrics that decide nothing."""
     t0, t1 = judged["t_mid"], judged["t_end"]
     views = [
         rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s
@@ -3081,7 +3257,9 @@ def load_stats(
         "max_in_flight": meta["max_in_flight"],
         "cap_waits": meta["cap_waits"],
         "missing_payloads": meta["missing_payloads"],
-        "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
+        "tracker_lag_ms": quantiles(
+            scan_lags(heights, t0, t1, set(meta["missing_payloads"]))
+        ),
         "drain_s": meta["drain_s"],
         "refine_skipped": meta["refine_skipped"],
         # Absent from load-meta.json of runs before it was recorded.
@@ -3117,12 +3295,17 @@ def client_stats(
     }
 
 
-def scan_lags(heights: list[dict[str, Any]], t0: float, t1: float) -> list[float]:
+def scan_lags(
+    heights: list[dict[str, Any]], t0: float, t1: float, lost: set[int]
+) -> list[float]:
     """Per height: ms from when its scan could start, once node0 showed the height
-    PAYLOAD_LAG_BLOCKS above it, to the scan's end."""
+    PAYLOAD_LAG_BLOCKS above it, to the scan's end. A `lost` payload is stamped scanned when
+    given up, MISSING_PAYLOAD_S on, which is no lag of the bench."""
     shown = {h["height"]: h["query"] for h in heights}
     lags = []
     for h in heights:
+        if h["height"] in lost:
+            continue
         ready = shown.get(h["height"] + PAYLOAD_LAG_BLOCKS)
         if ready is not None and h["scanned"] is not None and t0 <= ready <= t1:
             lags.append((h["scanned"] - ready) * 1000)
@@ -3582,6 +3765,12 @@ def deployment_lines(result: BenchResult) -> list[str]:
             else []
         ),
         *prune_lines(result),
+        *(
+            [f"- epoch height: {d['epoch_height']}, every node staked on L1"]
+            if d.get("staking")
+            else []
+        ),
+        *([f"- light-client prover: {d['prover']}"] if "prover" in d else []),
     ]
 
 

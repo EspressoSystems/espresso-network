@@ -27,7 +27,7 @@ use hotshot_types::{
     traits::{
         ValidatedState,
         metrics::{Gauge, Metrics},
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::StateAndDelta,
@@ -39,13 +39,13 @@ use tracing::{error, warn};
 
 /// The node's handle on consensus: the [`Coordinator`], run on its own task from
 /// [`start_consensus`](Self::start_consensus) on, and what the rest of the node reads from it.
-pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
+pub struct ConsensusHandle<T: NodeType, S> {
     epoch_height: BlockNumber,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
     membership_coordinator: EpochMembershipCoordinator<T>,
     resting: Arc<RwLock<Resting<T>>>,
-    new_proto: Arc<RwLock<NewProtocol<T, I::Storage>>>,
+    coordinator: Arc<RwLock<CoordinatorState<T, S>>>,
     /// Cancelled once the coordinator task has ended, however it ended.
     exited: CancellationToken,
 }
@@ -59,7 +59,7 @@ struct Resting<T: NodeType> {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum NewProtocol<T: NodeType, S> {
+enum CoordinatorState<T: NodeType, S> {
     Empty,
     Init {
         coordinator: Coordinator<T, S>,
@@ -76,20 +76,19 @@ enum NewProtocol<T: NodeType, S> {
     },
 }
 
-impl<T: NodeType, S> NewProtocol<T, S> {
+impl<T: NodeType, S> CoordinatorState<T, S> {
     fn take(&mut self) -> Self {
         mem::replace(self, Self::Empty)
     }
 }
 
-impl<T, I> ConsensusHandle<T, I>
+impl<T, S> ConsensusHandle<T, S>
 where
     T: NodeType,
-    I: NodeImplementation<T>,
-    I::Storage: NewProtocolStorage<T>,
+    S: NewProtocolStorage<T>,
 {
     pub fn new(
-        coordinator: Coordinator<T, I::Storage>,
+        coordinator: Coordinator<T, S>,
         external_rx: UnboundedReceiver<OpaqueMessage<T::SignatureKey>>,
         upgrade_lock: UpgradeLock<T>,
         membership_coordinator: EpochMembershipCoordinator<T>,
@@ -107,13 +106,6 @@ where
                 .into()
         });
 
-        let new_proto = Arc::new(RwLock::new(NewProtocol::Init {
-            coordinator,
-            external_rx,
-            event_tx,
-            queue_len: coordinator_event_queue_len,
-        }));
-
         Self {
             epoch_height: initializer.epoch_height().into(),
             event_rx: event_rx.deactivate(),
@@ -124,20 +116,25 @@ where
                 leaf: initializer.anchor_leaf().clone(),
                 state: initializer.anchor_state().clone(),
             })),
-            new_proto,
+            coordinator: Arc::new(RwLock::new(CoordinatorState::Init {
+                coordinator,
+                external_rx,
+                event_tx,
+                queue_len: coordinator_event_queue_len,
+            })),
             exited: CancellationToken::new(),
         }
     }
 
     pub async fn start_consensus(&self) {
-        if matches!(*self.new_proto.read(), NewProtocol::Running { .. }) {
+        if matches!(*self.coordinator.read(), CoordinatorState::Running { .. }) {
             return;
         }
 
-        let mut new_proto = self.new_proto.write();
+        let mut state = self.coordinator.write();
 
-        match new_proto.take() {
-            NewProtocol::Init {
+        match state.take() {
+            CoordinatorState::Init {
                 coordinator,
                 external_rx,
                 event_tx,
@@ -145,7 +142,7 @@ where
             } => {
                 let client_api = coordinator.client_api().clone();
                 let shutdown = CancellationToken::new();
-                *new_proto = NewProtocol::Running {
+                *state = CoordinatorState::Running {
                     coordinator: AbortOnDropHandle::new(spawn(run_coordinator(
                         coordinator,
                         external_rx,
@@ -159,7 +156,7 @@ where
                     shutdown,
                 };
             },
-            other => *new_proto = other,
+            other => *state = other,
         }
     }
 
@@ -214,8 +211,8 @@ where
         &self,
         err: QueryError,
     ) -> parking_lot::RwLockReadGuard<'_, Resting<T>> {
-        let stopping = match &*self.new_proto.read() {
-            NewProtocol::Running { shutdown, .. } => shutdown.is_cancelled(),
+        let stopping = match &*self.coordinator.read() {
+            CoordinatorState::Running { shutdown, .. } => shutdown.is_cancelled(),
             _ => true,
         };
         if !stopping {
@@ -267,7 +264,7 @@ where
             return self.resting.read().leaf.epoch(*self.epoch_height);
         };
         match client_api.current_epoch().await {
-            Ok(epoch) => epoch,
+            Ok(epoch) => Some(epoch),
             Err(err) => {
                 warn!(%err, "coordinator unavailable for current_epoch");
                 None
@@ -275,15 +272,15 @@ where
         }
     }
 
-    pub async fn epoch_height(&self) -> BlockNumber {
+    pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
     }
 
-    pub async fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
+    pub fn membership_coordinator(&self) -> EpochMembershipCoordinator<T> {
         self.membership_coordinator.clone()
     }
 
-    pub async fn upgrade_lock(&self) -> UpgradeLock<T> {
+    pub fn upgrade_lock(&self) -> UpgradeLock<T> {
         self.upgrade_lock.clone()
     }
 
@@ -410,8 +407,8 @@ where
     /// start it afterwards; the readers serve the resting state from here on.
     pub async fn shut_down(&self) {
         self.membership_coordinator.cancel_all_drb();
-        let running = match &*self.new_proto.read() {
-            NewProtocol::Running { shutdown, .. } => {
+        let running = match &*self.coordinator.read() {
+            CoordinatorState::Running { shutdown, .. } => {
                 shutdown.cancel();
                 true
             },
@@ -423,23 +420,23 @@ where
             // the coordinator for dead.
             self.exited.cancelled().await;
         }
-        drop(self.new_proto.write().take());
+        drop(self.coordinator.write().take());
     }
 
     /// Aborts the coordinator task without touching the handle's state, as a panic in it would.
     #[cfg(test)]
     pub(crate) fn kill_coordinator(&self) {
-        if let NewProtocol::Running { coordinator, .. } = &*self.new_proto.read() {
+        if let CoordinatorState::Running { coordinator, .. } = &*self.coordinator.read() {
             coordinator.abort();
         }
     }
 
     pub(crate) async fn client_api(&self) -> Option<ClientApi<T>> {
-        if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
+        if let CoordinatorState::Running { client_api, .. } = &*self.coordinator.read() {
             return Some(client_api.clone());
         }
         self.start_consensus().await;
-        if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
+        if let CoordinatorState::Running { client_api, .. } = &*self.coordinator.read() {
             Some(client_api.clone())
         } else {
             None

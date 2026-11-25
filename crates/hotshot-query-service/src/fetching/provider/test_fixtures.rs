@@ -31,14 +31,11 @@ use axum::{
 use disco_types::status::StatusCode;
 use futures::{StreamExt, TryStreamExt};
 use hotshot_types::data::VidCommitment;
-use http_client::Client;
-use http_wire::{self as wire, healthcheck_response, spawn_serve};
+use http_wire::{self as wire, healthcheck_response};
 use serde::Serialize;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
-use test_utils::reserve_tcp_port;
 use tokio::task::JoinHandle;
-use vbs::version::StaticVersion;
 
 use crate::{
     Error,
@@ -402,15 +399,12 @@ pub(crate) fn app(api: Router) -> Router {
         .fallback(no_route)
 }
 
-/// Bind `router` on a fresh port and serve it for the rest of the test process. Waits for the
-/// server to answer its healthcheck, so one-shot fetches do not race the bind.
+/// Bind `router` on a fresh port and serve it for the rest of the test process. The port is bound
+/// before this returns, so no other test can take it and one-shot fetches cannot race the bind.
 pub(crate) async fn serve(router: Router) -> (u16, JoinHandle<()>) {
-    let port = reserve_tcp_port().unwrap();
-    let url = format!("http://0.0.0.0:{port}").parse().unwrap();
-    let task = spawn_serve(&url, router);
-    let client: Client<Error, StaticVersion<0, 1>> =
-        Client::new(format!("http://localhost:{port}").parse().unwrap());
-    assert!(client.connect(Some(Duration::from_secs(60))).await);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     (port, task)
 }
 

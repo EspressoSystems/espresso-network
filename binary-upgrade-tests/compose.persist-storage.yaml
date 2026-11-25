@@ -64,25 +64,6 @@ services:
     volumes:
       - espresso-node-4-storage:/var/lib/espresso
 
-  # node-5 (old-from-new scenarios) joins after boot and is never in the
-  # orchestrator's known_nodes_with_stake, so the boot cdn-whitelist run leaves
-  # it out of the CDN whitelist and the marshal rejects it ("not in whitelist").
-  # The whitelist is just a keydb set; the marshal treats an empty set as "allow
-  # all" (cdn-proto check_whitelist: SCARD==0 => true). Clear it after the boot
-  # whitelist runs so the late-joining node-5 is admitted. No orchestrator and no
-  # cdn-whitelist binary change needed; the CDN is being replaced by cliquenet.
-  cdn-open:
-    image: docker.io/eqalpha/keydb:latest
-    entrypoint: ["sh", "-c"]
-    command: ['keydb-cli -h keydb -a "$$KEYDB_PASSWORD" DEL whitelist']
-    environment:
-      KEYDB_PASSWORD: changemeplease!!
-    depends_on:
-      keydb:
-        condition: service_healthy
-      cdn-whitelist:
-        condition: service_completed_successfully
-
 volumes:
   espresso-node-2-storage:
     name: espresso-node-2-storage

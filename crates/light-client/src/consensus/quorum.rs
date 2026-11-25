@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
+    data::ViewNumber,
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
@@ -142,6 +143,9 @@ pub trait Quorum: Sync {
         self.verify_static::<V>(qc)
     }
 
+    /// The number of blocks in an epoch.
+    fn epoch_height(&self) -> u64;
+
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
     /// version.
     ///
@@ -250,6 +254,12 @@ pub trait Quorum: Sync {
             // Check that the first QC in the chain signs the required leaf.
             let first_qc = first.context("empty QC chain")?;
             ensure!(first_qc.leaf_commit() == leaf.commit());
+            ensure!(
+                first_qc.view_number() == leaf.view_number(),
+                "first QC is from view {}, not the leaf's view {}",
+                first_qc.view_number(),
+                leaf.view_number()
+            );
 
             Ok(ChainVersions {
                 leaf: version,
@@ -330,6 +340,12 @@ impl StakeTable {
     where
         V: StaticVersionType + 'static,
     {
+        // `is_valid_cert` skips the signature check in the genesis view. The only certificate
+        // there is the unsigned genesis QC, so a server could forge one for any leaf.
+        ensure!(
+            cert.view_number() > ViewNumber::genesis(),
+            "certificate must not be from the genesis view"
+        );
         let upgrade = Upgrade::trivial(version(V::MAJOR, V::MINOR));
         cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(upgrade))
             .context("invalid threshold signature")
@@ -456,10 +472,16 @@ where
 
         Ok(())
     }
+
+    fn epoch_height(&self) -> u64 {
+        self.epoch_height
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
     use bitvec::vec::BitVec;
     use committable::Commitment;
     use espresso_types::PrivKey;
@@ -467,23 +489,25 @@ mod test {
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
-        simple_vote::{NextEpochQuorumData2, QuorumData2, VersionedVoteData},
+        simple_vote::{NextEpochQuorumData2, QuorumData2, VersionedVoteData, Vote2Data},
         traits::signature_key::SignatureKey,
         vote::Certificate as _,
     };
     use pretty_assertions::assert_eq;
+    use versions::NEW_PROTOCOL_VERSION;
 
     use super::*;
     use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LEGACY_VERSION,
-        VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade,
-        epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum,
+        LEAF_CHAIN_EPOCH_HEIGHT, LEGACY_VERSION, VersionCheckQuorum,
+        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
+        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_valid_chain() {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let ChainVersions { leaf: version, .. } = AlwaysTrueQuorum
+        let ChainVersions { leaf: version, .. } = AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -496,7 +520,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wrong_leaf() {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        AlwaysTrueQuorum
+        AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[2].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -508,7 +532,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_invalid_qc() {
         let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
-        AlwaysFalseQuorum
+        AlwaysFalseQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &[Certificate::for_parent(leaves[1].leaf())],
@@ -520,7 +544,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_consecutive() {
         let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
-        AlwaysTrueQuorum
+        AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain([&leaves[1], &leaves[3]]),
@@ -532,14 +556,13 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
         let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS).await;
-        let ChainVersions { leaf: version, .. } =
-            VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
-                .verify_qc_chain_and_get_version(
-                    leaves[0].leaf(),
-                    &qc_chain_from_leaf_chain(&leaves[1..]),
-                )
-                .await
-                .unwrap();
+        let ChainVersions { leaf: version, .. } = VersionCheckQuorum::new(
+            leaves.iter().map(|leaf| leaf.leaf().clone()),
+            LEAF_CHAIN_EPOCH_HEIGHT,
+        )
+        .verify_qc_chain_and_get_version(leaves[0].leaf(), &qc_chain_from_leaf_chain(&leaves[1..]))
+        .await
+        .unwrap();
         assert_eq!(version, leaves[0].header().version());
     }
 
@@ -551,19 +574,24 @@ mod test {
             proposal.upgrade_certificate = None;
         })
         .await;
-        VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
-            .verify_qc_chain_and_get_version(
-                leaves[0].leaf(),
-                &qc_chain_from_leaf_chain(&leaves[1..]),
-            )
-            .await
-            .unwrap_err();
+        VersionCheckQuorum::new(
+            leaves.iter().map(|leaf| leaf.leaf().clone()),
+            LEAF_CHAIN_EPOCH_HEIGHT,
+        )
+        .verify_qc_chain_and_get_version(leaves[0].leaf(), &qc_chain_from_leaf_chain(&leaves[1..]))
+        .await
+        .unwrap_err();
     }
+
+    const EPOCH_HEIGHT: u64 = 10;
+
+    /// The last five blocks of the first epoch: block 6 precedes the transition, 7 to 10 are in it.
+    const EPOCH_END: std::ops::RangeInclusive<u64> = 6..=10;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change() {
-        let leaves = epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION).await;
-        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
+        let leaves = epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION).await;
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -575,12 +603,13 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_missing_eqc() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
-            // Delete the next epoch justify QC, making this an invalid epoch change QC.
-            proposal.next_epoch_justify_qc = None;
-        })
-        .await;
-        EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
+                // Delete the next epoch justify QC, making this an invalid epoch change QC.
+                proposal.next_epoch_justify_qc = None;
+            })
+            .await;
+        EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -591,14 +620,15 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_inconsistent_eqc_view_number() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
-            // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
-            if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
-                next_epoch_justify_qc.view_number += 1;
-            }
-        })
-        .await;
-        EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
+                // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
+                if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
+                    next_epoch_justify_qc.view_number += 1;
+                }
+            })
+            .await;
+        EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -609,14 +639,15 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_inconsistent_eqc_data() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
-            // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
-            if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
-                *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
-            }
-        })
-        .await;
-        EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
+                // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
+                if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
+                    *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
+                }
+            })
+            .await;
+        EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -627,12 +658,13 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_absent_eqc_before_upgrade() {
-        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, LEGACY_VERSION, |proposal| {
-            // Delete the next epoch justify QC; this is allowed since epochs are not enabled yet.
-            proposal.next_epoch_justify_qc = None;
-        })
-        .await;
-        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
+        let leaves =
+            custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, LEGACY_VERSION, |proposal| {
+                // Delete the next epoch justify QC; this is allowed since epochs are not enabled yet.
+                proposal.next_epoch_justify_qc = None;
+            })
+            .await;
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(EPOCH_HEIGHT)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -686,11 +718,12 @@ mod test {
         data: QuorumData2<SeqTypes>,
         view: ViewNumber,
         quorum: &QuorumKeys,
+        version: Version,
     ) -> QuorumCertificate2<SeqTypes> {
         let commit = VersionedVoteData::new_infallible(
             data,
             view,
-            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION)),
+            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(version)),
         )
         .commit();
         let sig = boundary_signature(commit.as_ref(), quorum);
@@ -744,7 +777,12 @@ mod test {
             block_number: Some(10),
         };
         let committing_qc = Certificate::new(
-            boundary_signed_qc(committing_data, ViewNumber::new(10), &current),
+            boundary_signed_qc(
+                committing_data,
+                ViewNumber::new(10),
+                &current,
+                EPOCH_VERSION,
+            ),
             Some(boundary_signed_next_epoch_qc(
                 committing_data,
                 ViewNumber::new(10),
@@ -765,6 +803,7 @@ mod test {
             },
             ViewNumber::new(11),
             deciding_quorum,
+            EPOCH_VERSION,
         ));
 
         let quorum = StakeTableQuorum::new(
@@ -825,7 +864,7 @@ mod test {
             block_number: Some(5),
         };
         let committing_qc = Certificate::new(
-            boundary_signed_qc(committing_data, ViewNumber::new(5), &current),
+            boundary_signed_qc(committing_data, ViewNumber::new(5), &current, EPOCH_VERSION),
             disguise_as_boundary
                 .then(|| boundary_signed_next_epoch_qc(committing_data, ViewNumber::new(5), &next)),
         );
@@ -838,6 +877,7 @@ mod test {
             },
             ViewNumber::new(6),
             &next,
+            EPOCH_VERSION,
         ));
 
         let quorum = StakeTableQuorum::new(
@@ -871,5 +911,113 @@ mod test {
             .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
             .await
             .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_unsigned_genesis_view_cert2_rejected() {
+        let stake_table: StakeTable = (0..5)
+            .map(|i| StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed(Default::default(), i).0,
+                stake_amount: U256::from(1),
+            })
+            .collect();
+        let quorum =
+            StakeTableQuorum::new((Arc::new(stake_table.clone()), Arc::new(stake_table)), 10);
+
+        let data = Vote2Data {
+            leaf_commit: Commitment::from_raw([7; 32]),
+            epoch: EpochNumber::new(100),
+            block_number: 1000,
+        };
+        let cert2 = Certificate2::<SeqTypes>::new(
+            data.clone(),
+            data.commit(),
+            ViewNumber::genesis(),
+            None,
+            PhantomData,
+        );
+
+        let err = quorum
+            .verify_cert2(&cert2, NEW_PROTOCOL_VERSION)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("genesis view"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// A server can pair a QC it made up for the genesis view with real public QCs from the next
+    /// two views, which sign unrelated leaves.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_unsigned_genesis_view_qc_cannot_start_a_qc_chain() {
+        let keys = boundary_quorum(0..5);
+        let stake_table = Arc::new(StakeTable::from(keys.1.clone()));
+        let quorum = StakeTableQuorum::new((stake_table.clone(), stake_table), 10);
+
+        let leaf = &leaf_chain(1..=1, LEGACY_VERSION).await[0];
+        let unsigned = QuorumData2 {
+            leaf_commit: Committable::commit(leaf.leaf()),
+            epoch: None,
+            block_number: None,
+        };
+        let forged = Certificate::non_epoch_change(QuorumCertificate2::new(
+            unsigned,
+            unsigned.commit(),
+            ViewNumber::genesis(),
+            None,
+            PhantomData,
+        ));
+        let [real_1, real_2] = [1, 2].map(|view| {
+            let data = QuorumData2 {
+                leaf_commit: Commitment::from_raw([view as u8; 32]),
+                epoch: None,
+                block_number: None,
+            };
+            Certificate::non_epoch_change(boundary_signed_qc(
+                data,
+                ViewNumber::new(view),
+                &keys,
+                LEGACY_VERSION,
+            ))
+        });
+
+        let err = quorum
+            .verify_qc_chain_and_get_version(leaf.leaf(), [&forged, &real_1, &real_2])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("genesis view"),
+            "unexpected error: {err:#}"
+        );
+        let err = quorum
+            .verify_next_epoch(&forged, LEGACY_VERSION)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("genesis view"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_first_qc_from_another_view_rejected() {
+        let leaves = leaf_chain(1..=4, LEGACY_VERSION).await;
+        let qcs = qc_chain_from_leaf_chain(&leaves[1..])
+            .into_iter()
+            .map(|cert| {
+                let mut qc = cert.qc().clone();
+                qc.view_number += 10;
+                Certificate::non_epoch_change(qc)
+            })
+            .collect::<Vec<_>>();
+        let err = AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)
+            .verify_qc_chain_and_get_version(leaves[0].leaf(), &qcs)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not the leaf's view"),
+            "unexpected error: {err:#}"
+        );
     }
 }

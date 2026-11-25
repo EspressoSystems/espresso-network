@@ -929,7 +929,7 @@ class FakeRunner:
             assert match, f"FakeRunner: no ping target in {command!r}"
             ms = self.pings[match.group(1)]
             return completed(stdout=f"rtt min/avg/max/mdev = {ms}/{ms}/{ms}/0.1 ms\n")
-        if "docker wait deploy" in command:
+        if "docker wait " in command:
             return completed(stdout="0\n")
         return completed()
 
@@ -1537,6 +1537,7 @@ ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS=0x0000000000000000000000000000000000000001
 ESP_TOKEN_PROXY_ADDRESS=0x0000000000000000000000000000000000000002
 ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0x0000000000000000000000000000000000000003
 ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0x0000000000000000000000000000000000000004
+ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX=18
 ESPRESSO_ETH_MULTISIG_ADDRESS=a0Ee7A142d267C1f36714E4a8F75612F20a79720
 ESPRESSO_OPS_TIMELOCK_ADMIN=${{ESPRESSO_ETH_MULTISIG_ADDRESS}}
 """

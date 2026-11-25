@@ -236,6 +236,13 @@ def OpensB (h : History) (p : Proposal) : Prop :=
     ∧ p.parentCert.data.blockHash = blockHash parent)
     ∧ ∃ c2 ∈ cert2sHeld h ++ [cfg.anchorCert2], c2.view < p.viewNumber ∧ c2.data = p.parentCert.data.toVote2
 
+/-- `ParentReady`, over lists. -/
+def ParentReadyB (h : History) (p : Proposal) : Prop :=
+  p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+    ∨ ∃ parent ∈ proposalsHeld cfg h, parent.viewNumber ≤ p.parentCert.view
+        ∧ p.parentCert.data.blockHash = blockHash parent
+        ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
+
 /-- `ProposalJustified`, over lists. -/
 def ProposalJustifiedB (h : History) (p : Proposal) : Prop :=
   leader p.epoch p.viewNumber = some node ∧ ProposalWellFormed cfg p
@@ -288,9 +295,26 @@ def AboveFloorB (h : History) (v : ViewNumber) : Prop :=
 /-- `History.TimedOut`, over lists. -/
 def TimedOutB (h : History) (v : ViewNumber) : Prop := ∃ vote ∈ timeoutVotesSent h, v ≤ vote.view
 
+/--
+The view of the timer or one-honest indication step `n` of `h` takes
+(`History.TimerAt`), if any.
+-/
+def timerView (h : History) (n : Nat) : Option ViewNumber :=
+  match h[n]? with
+  | some st =>
+    match st.input with
+    | .timeout v => if viewOf cfg (h.take n) = v then some v else none
+    | .timeoutOneHonest v => if viewOf cfg (h.take n) ≤ v then some v else none
+    | _ => none
+  | none => none
+
+/-- The views of the timers and one-honest indications a history took. -/
+def timerViews (h : History) : List ViewNumber :=
+  (List.range h.length).filterMap (timerView cfg h)
+
 /-- `History.PastView`, over lists. -/
 def PastViewB (h : History) (v : ViewNumber) : Prop :=
-  TimedOutB h v ∨ ∃ tc ∈ timeoutCertsIn h, v ≤ tc.view
+  TimedOutB h v ∨ (∃ tc ∈ timeoutCertsIn h, v ≤ tc.view) ∨ ∃ w ∈ timerViews cfg h, v ≤ w
 
 /-- `Owed`, over lists. -/
 def OwedB (h : History) : Obligation → Prop
@@ -298,11 +322,7 @@ def OwedB (h : History) : Obligation → Prop
       (∃ x ∈ receivedProposals h, x.2.1 = p ∧ leader p.epoch p.viewNumber = some x.1
         ∧ ShareMatches p x.2.2)
       ∧ ProposalWellFormed cfg p ∧ h.Received (.blockValidated p.viewNumber (blockHash p))
-      ∧ (p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
-          ∨ ∃ parent ∈ proposalsHeld cfg h, parent.viewNumber ≤ p.parentCert.view
-              ∧ p.parentCert.data.blockHash = blockHash parent
-              ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit)
-      ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
+      ∧ ParentReadyB cfg h p ∧ SafeParentB p ∧ OpensB cfg h p ∧ NotBehindB cfg h p.epoch
       ∧ ¬ TimedOutB h p.viewNumber
       ∧ (∀ vote ∈ vote1sSent h, vote.data.epoch = p.epoch → vote.view ≠ p.viewNumber)
       ∧ viewOf cfg h = p.viewNumber
@@ -312,20 +332,23 @@ def OwedB (h : History) : Obligation → Prop
       ∧ (∃ b ∈ proposalsHeld cfg h, Certifies r.cert b ∧ h.HasPayload cfg b.viewNumber b.payloadCommit)
       ∧ NotBehindB cfg h r.cert.data.epoch ∧ ¬ TimedOutB h r.view
       ∧ (∀ vote ∈ vote1sSent h, vote.data.epoch = r.cert.data.epoch → vote.view ≠ r.view)
+      ∧ (∀ c2 ∈ cert2sHeld h, c2.data ≠ r.cert.data.toVote2)
       ∧ viewOf cfg h = r.view
   | .vote2 c =>
       (c ∈ cert1sHeld cfg h ∧ ∃ b ∈ proposalsHeld cfg h, Certifies c b
         ∧ h.HasPayload cfg b.viewNumber b.payloadCommit)
+      ∧ NotBehindB cfg h c.data.epoch
       ∧ (∀ vote ∈ vote2sSent h, vote.data.epoch = c.data.epoch → vote.view ≠ c.view)
       ∧ (∀ c2 ∈ cert2sHeld h, c2.data.epoch = c.data.epoch → c2.view ≠ c.view)
-      ∧ ¬ PastViewB h c.view ∧ AboveFloorB cfg h c.view
+      ∧ ¬ PastViewB cfg h c.view ∧ cfg.anchorView < c.view ∧ ∀ u ∈ decidedViews h, u < c.view
   | .decide c =>
       c ∈ cert2sHeld h ∧ ∃ b ∈ proposalsHeld cfg h, Commits c b
         ∧ (∃ c1 ∈ cert1sHeld cfg h, Certifies c1 b)
         ∧ b.viewNumber ∉ decidedViews h ∧ AboveFloorB cfg h b.viewNumber
   | .propose e v =>
       ((∃ p ∈ proposalCandidates cfg h v, p.epoch = e ∧ ProposalJustifiedB cfg leader node h p)
-        ∨ ∃ r ∈ revoteCandidates cfg h v, r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node h r)
+        ∨ ∃ r ∈ revoteCandidates cfg h v, r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node h r
+            ∧ ∀ c2 ∈ cert2sHeld h, c2.data ≠ r.cert.data.toVote2)
       ∧ (∀ p ∈ proposalsSent h, p.viewNumber = v → p.epoch ≠ e)
       ∧ (∀ r ∈ revotesSent h, r.view = v → r.cert.data.epoch ≠ e)
       ∧ ¬ TimedOutB h v ∧ viewOf cfg h = v
@@ -339,6 +362,9 @@ instance (h : History) (c : Cert1) (ev : Option TimeoutCert) : Decidable (CertJu
 instance (h : History) (p : Proposal) : Decidable (OpensB cfg h p) := by
   unfold OpensB; infer_instance
 
+instance (h : History) (p : Proposal) : Decidable (ParentReadyB cfg h p) := by
+  unfold ParentReadyB; infer_instance
+
 instance (h : History) (p : Proposal) : Decidable (ProposalJustifiedB cfg leader node h p) := by
   unfold ProposalJustifiedB; infer_instance
 
@@ -351,7 +377,7 @@ instance (h : History) (v : ViewNumber) : Decidable (AboveFloorB cfg h v) := by
 instance (h : History) (v : ViewNumber) : Decidable (TimedOutB h v) := by
   unfold TimedOutB; infer_instance
 
-instance (h : History) (v : ViewNumber) : Decidable (PastViewB h v) := by
+instance (h : History) (v : ViewNumber) : Decidable (PastViewB cfg h v) := by
   unfold PastViewB; infer_instance
 
 instance decOwedB (h : History) : (o : Obligation) → Decidable (OwedB cfg leader node h o)
@@ -374,8 +400,51 @@ theorem timedOutB_iff {h : History} {v : ViewNumber} : TimedOutB h v ↔ h.Timed
 theorem inView_iff_viewOf {h : History} {v : ViewNumber} : h.InView cfg v ↔ viewOf cfg h = v :=
   ⟨viewOf_of_inView, fun e => e ▸ inView_viewOf cfg h⟩
 
-theorem pastViewB_iff {h : History} {v : ViewNumber} : PastViewB h v ↔ h.PastView v := by
-  simp only [PastViewB, PastView, timedOutB_iff, mem_timeoutCertsIn]
+theorem timerView_eq_some {h : History} {n : Nat} {v : ViewNumber} :
+    timerView cfg h n = some v ↔ h.TimerAt cfg n v := by
+  constructor
+  · intro ht
+    unfold timerView at ht
+    split at ht
+    · rename_i st hst
+      refine ⟨st, hst, ?_⟩
+      revert ht
+      cases st.input <;> simp only [reduceCtorEq, false_implies, Option.ite_none_right_eq_some,
+        Option.some.injEq]
+      · rintro ⟨hv, rfl⟩
+        exact Or.inl ⟨rfl, hv ▸ inView_viewOf cfg _⟩
+      · rintro ⟨hv, rfl⟩
+        exact Or.inr ⟨rfl, _, inView_viewOf cfg _, hv⟩
+    · cases ht
+  · rintro ⟨st, hst, hcase⟩
+    unfold timerView
+    rw [hst]
+    rcases hcase with ⟨hi, hv⟩ | ⟨hi, w, hw, hle⟩
+    · have : viewOf cfg (h.take n) = v := viewOf_of_inView hv
+      simp [hi, this]
+    · have : viewOf cfg (h.take n) ≤ v := viewOf_of_inView hw ▸ hle
+      simp [hi, this]
+
+theorem mem_timerViews {h : History} {v : ViewNumber} :
+    v ∈ timerViews cfg h ↔ ∃ n, h.TimerAt cfg n v := by
+  simp only [timerViews, List.mem_filterMap, List.mem_range, timerView_eq_some]
+  constructor
+  · rintro ⟨n, -, ht⟩; exact ⟨n, ht⟩
+  · rintro ⟨n, ht⟩
+    obtain ⟨st, hst, -⟩ := id ht
+    exact ⟨n, (List.getElem?_eq_some_iff.mp hst).1, ht⟩
+
+theorem pastViewB_iff {h : History} {v : ViewNumber} : PastViewB cfg h v ↔ h.PastView cfg v := by
+  simp only [PastViewB, PastView, timedOutB_iff, mem_timeoutCertsIn, mem_timerViews]
+  constructor
+  · rintro (ht | htc | ⟨w, ⟨n, hn⟩, hle⟩)
+    · exact Or.inl ht
+    · exact Or.inr (Or.inl htc)
+    · exact Or.inr (Or.inr ⟨n, w, hn, hle⟩)
+  · rintro (ht | htc | ⟨n, w, hn, hle⟩)
+    · exact Or.inl ht
+    · exact Or.inr (Or.inl htc)
+    · exact Or.inr (Or.inr ⟨w, ⟨n, hn⟩, hle⟩)
 
 theorem notBehindB_iff {h : History} {e : EpochNumber} : NotBehindB cfg h e ↔ NotBehind cfg h e := by
   have hE := inEpoch_epochOfHistory cfg h
@@ -421,6 +490,12 @@ theorem certJustifiedB_iff {h : History} {c : Cert1} {ev : Option TimeoutCert} :
 theorem opensB_iff {h : History} {p : Proposal} : OpensB cfg h p ↔ OpensEpochJustified cfg h p := by
   simp only [OpensB, OpensEpochJustified, mem_proposalsHeld, List.mem_append, mem_cert2sHeld,
     List.mem_singleton]
+
+theorem parentReadyB_iff {h : History} {p : Proposal} : ParentReadyB cfg h p ↔ ParentReady cfg h p := by
+  simp only [ParentReadyB, ParentReady, mem_proposalsHeld]
+
+instance (h : History) (p : Proposal) : Decidable (ParentReady cfg h p) :=
+  decidable_of_iff _ parentReadyB_iff
 
 theorem proposalJustifiedB_iff {h : History} {p : Proposal} :
     ProposalJustifiedB cfg leader node h p ↔ ProposalJustified cfg leader node h p := by
@@ -556,18 +631,20 @@ theorem owedVote1Again_iff {h : History} {r : RevoteRequest} :
       ∧ (∃ b, h.HasProposal cfg b ∧ Certifies r.cert b ∧ h.HasPayload cfg b.viewNumber b.payloadCommit)
       ∧ NotBehind cfg h r.cert.data.epoch ∧ ¬ h.TimedOut r.view
       ∧ (∀ vote : Vote1, h.Sent (.vote1 vote) → vote.data.epoch = r.cert.data.epoch → vote.view ≠ r.view)
+      ∧ (∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2)
       ∧ h.InView cfg r.view) :=
-  ⟨fun ⟨a, b, c, d, e, f, g, i⟩ => ⟨a, b, c, d, e, f, g, i⟩,
-    fun ⟨a, b, c, d, e, f, g, i⟩ => ⟨a, b, c, d, e, f, g, i⟩⟩
+  ⟨fun ⟨a, b, c, d, e, f, g, i, j⟩ => ⟨a, b, c, d, e, f, g, i, j⟩,
+    fun ⟨a, b, c, d, e, f, g, i, j⟩ => ⟨a, b, c, d, e, f, g, i, j⟩⟩
 
 theorem owedVote2_iff {h : History} {c : Cert1} :
     OwedVote2 cfg h c ↔
       ((∃ b, h.HasCert1 cfg c ∧ h.HasProposal cfg b ∧ Certifies c b
           ∧ h.HasPayload cfg b.viewNumber b.payloadCommit)
+        ∧ NotBehind cfg h c.data.epoch
         ∧ (∀ vote : Vote2, h.Sent (.vote2 vote) → vote.data.epoch = c.data.epoch → vote.view ≠ c.view)
         ∧ (∀ c2, h.HasCert2 c2 → c2.data.epoch = c.data.epoch → c2.view ≠ c.view)
-        ∧ ¬ h.PastView c.view ∧ h.AfterFloor cfg c.view) :=
-  ⟨fun ⟨a, b, c, d, e⟩ => ⟨a, b, c, d, e⟩, fun ⟨a, b, c, d, e⟩ => ⟨a, b, c, d, e⟩⟩
+        ∧ ¬ h.PastView cfg c.view ∧ cfg.anchorView < c.view ∧ ∀ u, h.DecidedView u → u < c.view) :=
+  ⟨fun ⟨a, b, c, d, e, f, g⟩ => ⟨a, b, c, d, e, f, g⟩, fun ⟨a, b, c, d, e, f, g⟩ => ⟨a, b, c, d, e, f, g⟩⟩
 
 theorem owedDecide_iff {h : History} {c : Cert2} :
     OwedDecide cfg h c ↔
@@ -579,8 +656,8 @@ theorem owedB_iff {h : History} {o : Obligation} :
     OwedB cfg leader node h o ↔ Owed cfg leader node h o := by
   cases o with
   | vote1 p =>
-    simp only [OwedB, Owed, owedVote1_iff, ParentReady, safeParentB_iff, opensB_iff, notBehindB_iff, mem_proposalsHeld,
-      mem_vote1sSent, timedOutB_iff, ← inView_iff_viewOf]
+    simp only [OwedB, Owed, owedVote1_iff, parentReadyB_iff, safeParentB_iff, opensB_iff,
+      notBehindB_iff, mem_vote1sSent, timedOutB_iff, ← inView_iff_viewOf]
     apply and_congr _ Iff.rfl
     constructor
     · rintro ⟨⟨s, q, vid⟩, hx, rfl, hl, hs⟩
@@ -589,7 +666,7 @@ theorem owedB_iff {h : History} {o : Obligation} :
       exact ⟨(s, p, vid), mem_receivedProposals.mpr hr, rfl, hl, hs⟩
   | vote1Again r =>
     simp only [OwedB, Owed, owedVote1Again_iff, safeRevoteB_iff, notBehindB_iff, mem_proposalsHeld,
-      mem_vote1sSent, timedOutB_iff, ← inView_iff_viewOf]
+      mem_vote1sSent, mem_cert2sHeld, timedOutB_iff, ← inView_iff_viewOf]
     apply and_congr _ Iff.rfl
     constructor
     · rintro ⟨⟨s, q⟩, hx, rfl, hl⟩
@@ -598,7 +675,7 @@ theorem owedB_iff {h : History} {o : Obligation} :
       exact ⟨(s, r), mem_receivedRevotes.mpr hr, rfl, hl⟩
   | vote2 c =>
     simp only [OwedB, Owed, owedVote2_iff, mem_cert1sHeld, mem_proposalsHeld,
-      mem_vote2sSent, mem_cert2sHeld, pastViewB_iff, aboveFloorB_iff]
+      mem_vote2sSent, mem_cert2sHeld, pastViewB_iff, mem_decidedViews, notBehindB_iff]
     apply and_congr _ Iff.rfl
     constructor
     · rintro ⟨hc, b, hb, h1, h2⟩; exact ⟨b, hc, hb, h1, h2⟩
@@ -612,17 +689,21 @@ theorem owedB_iff {h : History} {o : Obligation} :
       exact ⟨hc, b, mem_proposalsHeld.mpr hb, h1, ⟨c1, mem_cert1sHeld.mpr hc1, h2⟩, h3, h4⟩
   | propose e v =>
     have hj : ((∃ p ∈ proposalCandidates cfg h v, p.epoch = e ∧ ProposalJustifiedB cfg leader node h p)
-        ∨ ∃ r ∈ revoteCandidates cfg h v, r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node h r)
+        ∨ ∃ r ∈ revoteCandidates cfg h v, r.cert.data.epoch = e ∧ RevoteJustifiedB cfg leader node h r
+            ∧ ∀ c2 ∈ cert2sHeld h, c2.data ≠ r.cert.data.toVote2)
         ↔ ((∃ p, ProposalJustified cfg leader node h p ∧ p.viewNumber = v ∧ p.epoch = e)
-          ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e) := by
+          ∨ ∃ r, RevoteJustified cfg leader node h r ∧ r.view = v ∧ r.cert.data.epoch = e
+              ∧ ∀ c2, h.HasCert2 c2 → c2.data ≠ r.cert.data.toVote2) := by
       constructor
-      · rintro (⟨p, hp, he, hj⟩ | ⟨r, hr, he, hj⟩)
+      · rintro (⟨p, hp, he, hj⟩ | ⟨r, hr, he, hj, hnc⟩)
         · exact Or.inl ⟨p, proposalJustifiedB_iff.mp hj, viewNumber_of_mem_candidates hp, he⟩
-        · exact Or.inr ⟨r, revoteJustifiedB_iff.mp hj, view_of_mem_revoteCandidates hr, he⟩
-      · rintro (⟨p, hj, rfl, rfl⟩ | ⟨r, hj, rfl, rfl⟩)
+        · exact Or.inr ⟨r, revoteJustifiedB_iff.mp hj, view_of_mem_revoteCandidates hr, he,
+            fun c2 hc => hnc c2 (mem_cert2sHeld.mpr hc)⟩
+      · rintro (⟨p, hj, rfl, rfl⟩ | ⟨r, hj, rfl, rfl, hnc⟩)
         · obtain ⟨q, hq, hqe, hjq⟩ := proposalCandidates_complete hj
           exact Or.inl ⟨q, hq, hqe, proposalJustifiedB_iff.mpr hjq⟩
-        · exact Or.inr ⟨r, revoteCandidates_complete hj, rfl, revoteJustifiedB_iff.mpr hj⟩
+        · exact Or.inr ⟨r, revoteCandidates_complete hj, rfl, revoteJustifiedB_iff.mpr hj,
+            fun c2 hc => hnc c2 (mem_cert2sHeld.mp hc)⟩
     have hn : ((∀ p ∈ proposalsSent h, p.viewNumber = v → p.epoch ≠ e)
         ∧ (∀ r ∈ revotesSent h, r.view = v → r.cert.data.epoch ≠ e)) ↔ ¬ ProposedIn h e v := by
       simp only [ProposedIn, mem_proposalsSent, mem_revotesSent, not_or, not_exists, not_and]

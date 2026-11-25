@@ -5,11 +5,13 @@
 //! whose shards cover the recovery threshold. This module owns the three stages
 //! of that lifecycle, one per submodule:
 //!
-//! - [`disperse`] -- the leader side. [`VidDisperser`] erasure-codes each
-//!   namespace, coalesces namespaces into size-balanced buckets, and unicasts
-//!   to every node a stream of [`AvidmGf2DisperseShareFragment`] messages
-//!   (one per bucket), each carrying that node's shares for the bucket's
-//!   namespaces.
+//! - [`disperse`] -- the leader side. The block builder erasure-codes each
+//!   namespace into a [`BuiltDispersal`] and folds the payload commitment from
+//!   it. [`VidDisperser`] coalesces namespaces into size-balanced buckets and
+//!   unicasts to every node a stream of [`AvidmGf2DisperseShareFragment`]
+//!   messages (one per bucket), each carrying that node's shares for the
+//!   bucket's namespaces. Without a built dispersal it erasure-codes the
+//!   namespaces itself.
 //!
 //! - [`fragments`] -- the receive side of dispersal, the mirror of
 //!   [`VidDisperser`]. [`VidFragmentAccumulator`] buffers the fragments a node
@@ -29,7 +31,10 @@ mod disperse;
 mod fragments;
 mod reconstruct;
 
-pub use disperse::{VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser};
+pub use disperse::{
+    BuiltDispersal, Dispersal, VidDisperseError, VidDisperseOutput, VidDisperseRequest,
+    VidDisperser, disperse_payload,
+};
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{
     data::{
@@ -54,7 +59,7 @@ pub fn expected_vid_param<T: NodeType>(
     membership: &EpochMembershipCoordinator<T>,
     epoch: EpochNumber,
 ) -> Option<AvidmGf2Param> {
-    let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
+    let membership = membership.stake_table_for_epoch(epoch).ok()?;
     let total_weight = vid_total_weight::<T, _>(membership.stake_table(), Some(epoch));
     init_avidm_gf2_param(total_weight).ok()
 }

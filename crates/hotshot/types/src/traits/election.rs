@@ -7,13 +7,13 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 //!
 //! Reads of per-epoch state go through a [`MembershipSnapshot`] obtained from
-//! [`Membership::snapshot`]. Reads of pre-epoch state go through a
-//! [`NonEpochMembershipSnapshot`] obtained from [`Membership::non_epoch_snapshot`].
-//! Each snapshot is a consistent point-in-time view; its accessors observe
-//! one moment of the membership state, so derived values from the same
-//! snapshot are guaranteed to come from one logical instant.
+//! [`Membership::snapshot`]. Each snapshot is a consistent point-in-time view;
+//! its accessors observe one moment of the membership state, so derived values
+//! from the same snapshot are guaranteed to come from one logical instant.
+//! Reads of the views before the first epoch go through the
+//! [`GenesisStakeTables`] from [`Membership::genesis_stake_tables`].
 
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use alloy_primitives::U256;
 use committable::{Commitment, Committable};
@@ -25,7 +25,7 @@ use crate::{
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    stake_table::supermajority_threshold,
+    stake_table::{one_honest_threshold, supermajority_threshold, upgrade_threshold},
     traits::signature_key::StakeTableEntryType,
 };
 
@@ -45,8 +45,8 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
     /// The epoch this snapshot is bound to.
     fn epoch(&self) -> EpochNumber;
 
-    /// The first epoch known to the membership (cached at snapshot creation).
-    fn first_epoch(&self) -> Option<EpochNumber>;
+    /// The first epoch of the membership.
+    fn first_epoch(&self) -> EpochNumber;
 
     /// Whether a randomized stake table (DRB result) was available for this
     /// epoch at the time the snapshot was captured.
@@ -129,35 +129,17 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
 
     /// DA quorum threshold for this epoch.
     fn da_success_threshold(&self) -> U256 {
-        let total = self.total_da_stake();
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total < U256::MAX / two {
-            ((total * two) / three) + one
-        } else {
-            ((total / three) * two) + two
-        }
+        supermajority_threshold(self.total_da_stake())
     }
 
     /// Failure threshold (1/3 + 1) for this epoch.
     fn failure_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        (total / U256::from(3)) + U256::ONE
+        one_honest_threshold(self.total_stake())
     }
 
     /// Threshold required for a protocol upgrade.
     fn upgrade_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        let nine = U256::from(9);
-        let ten = U256::from(10);
-        let normal = self.success_threshold();
-        let higher = if total < U256::MAX / nine {
-            (total * nine) / ten
-        } else {
-            (total / ten) * nine
-        };
-        std::cmp::max(higher, normal)
+        upgrade_threshold(self.total_stake())
     }
 
     /// The leader for `view` in this epoch, returning a HotShot-internal
@@ -171,94 +153,91 @@ pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
     }
 }
 
-/// A consistent view of the pre-epoch [`Membership`] state.
+/// The stake tables of views before the first epoch, when epochs were not
+/// enabled yet: the genesis stake table and the genesis DA committee.
 ///
-/// Used when consensus is operating before epochs are enabled (the
-/// `epoch == None` path in the legacy API).
-pub trait NonEpochMembershipSnapshot<T: NodeType>: Clone + Send + Sync {
-    type Error: std::error::Error + Send + Sync + 'static;
+/// Clones share the tables, so cloning is cheap.
+#[derive(Debug, Clone)]
+pub struct GenesisStakeTables<T: NodeType> {
+    tables: Arc<Tables<T>>,
+}
 
-    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_;
-    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_;
-    fn committee_members(
-        &self,
-        view: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_;
-    fn da_committee_members(
-        &self,
-        view: ViewNumber,
-    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_;
-    fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
-    fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
-    fn has_stake(&self, key: &T::SignatureKey) -> bool;
-    fn has_da_stake(&self, key: &T::SignatureKey) -> bool;
-    fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error>;
-
-    fn total_nodes(&self) -> usize {
-        self.stake_table().len()
+impl<T: NodeType> GenesisStakeTables<T> {
+    /// Keeps both tables as given, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a table holds a key twice.
+    pub fn new(
+        stake_table: Vec<PeerConfig<T>>,
+        da_stake_table: Vec<PeerConfig<T>>,
+    ) -> anyhow::Result<Self> {
+        let stake_index = index_keys(&stake_table, "stake table")?;
+        index_keys(&da_stake_table, "DA committee")?;
+        Ok(Self {
+            tables: Arc::new(Tables {
+                stake_table,
+                da_stake_table,
+                stake_index,
+            }),
+        })
     }
 
-    fn da_total_nodes(&self) -> usize {
-        self.da_stake_table().len()
+    pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
+        self.tables.stake_table.iter()
     }
 
-    fn total_stake(&self) -> U256 {
-        self.stake_table()
-            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
+    pub fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_ {
+        self.tables.da_stake_table.iter()
     }
 
-    fn total_da_stake(&self) -> U256 {
-        self.da_stake_table()
-            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
+    pub fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>> {
+        let &position = self.tables.stake_index.get(key)?;
+        Some(self.tables.stake_table[position].clone())
     }
 
-    fn success_threshold(&self) -> U256 {
-        supermajority_threshold(self.total_stake())
+    pub fn success_threshold(&self) -> U256 {
+        supermajority_threshold(
+            self.tables
+                .stake_table
+                .iter()
+                .map(|p| p.stake_table_entry.stake())
+                .sum(),
+        )
     }
+}
 
-    fn da_success_threshold(&self) -> U256 {
-        let total = self.total_da_stake();
-        let one = U256::ONE;
-        let two = U256::from(2);
-        let three = U256::from(3);
-        if total < U256::MAX / two {
-            ((total * two) / three) + one
-        } else {
-            ((total / three) * two) + two
+#[derive(Debug)]
+struct Tables<T: NodeType> {
+    stake_table: Vec<PeerConfig<T>>,
+    da_stake_table: Vec<PeerConfig<T>>,
+    /// The position of each key in `stake_table`.
+    stake_index: HashMap<T::SignatureKey, usize>,
+}
+
+/// The position of each key in `table`, the genesis `name`.
+///
+/// # Errors
+///
+/// Returns an error if `table` holds a key twice.
+fn index_keys<T: NodeType>(
+    table: &[PeerConfig<T>],
+    name: &str,
+) -> anyhow::Result<HashMap<T::SignatureKey, usize>> {
+    let mut index = HashMap::with_capacity(table.len());
+    for (position, peer) in table.iter().enumerate() {
+        let key = peer.stake_table_entry.public_key();
+        if index.insert(key.clone(), position).is_some() {
+            anyhow::bail!("the genesis {name} holds the key {key} twice");
         }
     }
-
-    fn failure_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        (total / U256::from(3)) + U256::ONE
-    }
-
-    fn upgrade_threshold(&self) -> U256 {
-        let total = self.total_stake();
-        let nine = U256::from(9);
-        let ten = U256::from(10);
-        let normal = self.success_threshold();
-        let higher = if total < U256::MAX / nine {
-            (total * nine) / ten
-        } else {
-            (total / ten) * nine
-        };
-        std::cmp::max(higher, normal)
-    }
-
-    fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
-        use hotshot_utils::anytrace::*;
-        self.lookup_leader(view)
-            .wrap()
-            .context(info!("Failed to get leader for view {view} (non-epoch)"))
-    }
+    Ok(index)
 }
 
 /// A protocol for determining membership in and participating in a committee.
 ///
-/// All read access goes through one of two snapshot types:
-/// - [`Self::snapshot`] for per-epoch reads
-/// - [`Self::non_epoch_snapshot`] for pre-epoch reads
+/// Per-epoch reads go through [`Self::snapshot`], and reads of the views
+/// before the first epoch through [`Self::genesis_stake_tables`].
 ///
 /// Each snapshot is a consistent point-in-time view; derived values read from
 /// the same snapshot are guaranteed to come from one logical moment.
@@ -268,19 +247,16 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// A consistent per-epoch view, returned by [`Self::snapshot`].
     type Snapshot: MembershipSnapshot<T, Error = Self::Error>;
 
-    /// A consistent pre-epoch view, returned by [`Self::non_epoch_snapshot`].
-    type NonEpochSnapshot: NonEpochMembershipSnapshot<T, Error = Self::Error>;
-
     /// Capture a consistent per-epoch view.
     ///
     /// Returns `None` if no committee is loaded for `epoch`.
     fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot>;
 
-    /// Capture a consistent pre-epoch view.
-    fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot;
+    /// The stake tables of views before the first epoch.
+    fn genesis_stake_tables(&self) -> GenesisStakeTables<T>;
 
-    /// Get first epoch if epochs are enabled, `None` otherwise.
-    fn first_epoch(&self) -> Option<EpochNumber>;
+    /// The first epoch, which runs on the genesis stake table.
+    fn first_epoch(&self) -> EpochNumber;
 
     /// Get the highest epoch for which a stake table is currently in memory,
     /// or `None` if no stake tables are loaded. It is where catchup resumes
@@ -315,14 +291,12 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
 
     /// Load the committee for `epoch` from local storage.
     ///
-    /// Returns `true` if a snapshot for `epoch` is available afterwards.
-    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
-
-    /// Called to notify the Membership that Epochs are enabled.
-    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
-    /// when this is called. The value of initial_drb_result should be used for DRB
-    /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&self, e: EpochNumber, r: DrbResult);
+    /// Returns the snapshot for `epoch` if one is available afterwards. Use it rather than a
+    /// second [`Self::snapshot`], which a concurrent eviction can empty.
+    fn load_stake_table(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Future<Output = Option<Self::Snapshot>> + Send;
 
     /// Register a DA committee that takes effect starting at `first_epoch`.
     fn add_da_committee(&self, first_epoch: EpochNumber, da_committee: Vec<PeerConfig<T>>);

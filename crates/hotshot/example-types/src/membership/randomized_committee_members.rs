@@ -35,8 +35,6 @@ pub struct RandomizedCommitteeMembers<
 
     da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    first_epoch: Option<u64>,
-
     epochs: BTreeSet<u64>,
 
     drb_results: BTreeMap<u64, DrbResult>,
@@ -105,7 +103,6 @@ impl<
         let result = Self {
             quorum_members,
             da_members,
-            first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
             da_committees: TestCommitteeSchedule::new(),
@@ -122,39 +119,31 @@ impl<
         self.quorum_members.clone()
     }
 
-    fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        if let Some(epoch) = epoch {
-            let filter = self.make_quorum_filter(epoch);
-            self.quorum_members
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| v.clone())
-                .collect()
-        } else {
-            self.quorum_members.clone()
-        }
+    fn stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        let filter = self.make_quorum_filter(epoch);
+        self.quorum_members
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| filter.contains(idx))
+            .map(|(_, v)| v.clone())
+            .collect()
     }
 
-    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+    fn da_stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         let da_members = self
             .da_committees
             .get(epoch)
             .unwrap_or(self.da_members.clone());
-        if let Some(epoch) = epoch {
-            let filter = self.make_da_quorum_filter(epoch);
-            da_members
-                .into_iter()
-                .enumerate()
-                .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| v)
-                .collect()
-        } else {
-            da_members.clone()
-        }
+        let filter = self.make_da_quorum_filter(epoch);
+        da_members
+            .into_iter()
+            .enumerate()
+            .filter(|(idx, _)| filter.contains(idx))
+            .map(|(_, v)| v)
+            .collect()
     }
 
-    fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
+    fn lookup_leader(&self, view_number: u64, epoch: u64) -> anyhow::Result<PubKey> {
         let stake_table = self.stake_table(epoch);
         let mut rng: StdRng = rand::SeedableRng::seed_from_u64(view_number);
 
@@ -164,7 +153,7 @@ impl<
 
         tracing::debug!(
             "RandomizedCommitteeMembers lookup_leader, view_number: {view_number}, epoch: \
-             {epoch:?}, leader: {leader:?}",
+             {epoch}, leader: {leader:?}",
         );
 
         Ok(leader.signature_key)
@@ -187,8 +176,6 @@ impl<
     }
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
-        self.first_epoch = Some(epoch);
-
         self.add_epoch_root(epoch);
         self.add_epoch_root(epoch + 1);
 
@@ -201,10 +188,6 @@ impl<
             .get(&epoch)
             .context("DRB result missing")
             .copied()
-    }
-
-    fn first_epoch(&self) -> Option<u64> {
-        self.first_epoch
     }
 
     fn add_da_committee(

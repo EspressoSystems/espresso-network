@@ -8,8 +8,10 @@ use ark_ff::{BigInteger, PrimeField};
 pub(crate) mod bindings;
 mod copy;
 pub mod evm;
+#[cfg(feature = "jellyfish")]
 pub mod jellyfish;
 pub mod light_client;
+mod points;
 pub mod reward;
 pub mod sol_types;
 pub mod stake_table;

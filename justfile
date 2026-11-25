@@ -1,4 +1,5 @@
 mod py "scripts/py.just"
+mod claude ".github/claude/claude.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
 mod soak "crates/process-metrics/justfile"
 mod bench "scripts/network-bench/justfile"
@@ -10,9 +11,13 @@ doc *args:
     cargo doc --no-deps --document-private-items {{args}}
     echo "file://${CARGO_TARGET_DIR:-$PWD/target}/doc/espresso_node/index.html"
 
+# Render doc/*.puml figures to svg
+[script("scripts/with-tools", "docs", "plantuml", "dot")]
+doc-figures:
+    make doc
+
+[script("scripts/with-tools", "docs", "forge", "mdbook")]
 doc-contracts:
-    #!/usr/bin/env bash
-    set -e
     rm -rf docs
     forge doc
     # Flatten structure: remove nested contracts/ directory
@@ -28,8 +33,8 @@ doc-contracts:
     echo "file://$(pwd)/docs/book/index.html"
 
 # Preview all docs locally with the same structure as the published GitHub Pages site
+[script("scripts/with-tools", "python", "python3")]
 doc-all-serve: doc doc-contracts
-    #!/usr/bin/env bash
     rm -rf ./public
     mkdir -p ./public/contracts
     cp -r "${CARGO_TARGET_DIR:-target}"/doc/* ./public/
@@ -78,6 +83,7 @@ fix *args:
     just clippy --fix {{args}}
 
 # Every workflow's compile-metrics report, as CI renders it: --pr N, --rev REV, --run ID
+[script("scripts/with-tools", "python", "python3")]
 compile-metrics *args:
     scripts/compile-metrics local {{args}}
 
@@ -101,21 +107,26 @@ proto-check $base="origin/main":
     git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
     buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
 
-# postgres and sqlite variants checked separately to cover all code
-clippy *args:
-    cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
-    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
+# Needs `gh extension install github/gh-actions-lock --pin v0.4.0`. `--no-narrow` keeps
+# `@v4` as written instead of rewriting it to `@v4.2.1`. `--relock` advances refs such as
+# `@v4` and `@main` to their latest commit; `--verify` checks without writing.
+# `--verify-local` is the offline coverage check the pre-commit hook runs.
+# Update .github/workflows/actions.lock after changing a `uses:` line or on a conflict in it
+lock-actions *args:
+    gh actions-lock --ignore-local-actions --no-narrow {{args}}
 
-# postgres and sqlite variants checked separately to cover all code
+# slow-tests picks its storage backend at compile time, so check its sqlite variant too
+clippy *args:
+    cargo clippy --workspace --features testing --all-targets {{args}}
+    cargo clippy -p slow-tests --features sqlite --all-targets {{args}}
+
 check *args:
-    cargo check --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node {{args}}
-    cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
+    cargo check --workspace {{args}}
 
 build profile="dev" features="":
-    # postgres
     cargo build --profile {{profile}} {{features}}
-    # embedded-db
-    cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
+    # espresso-dev-node enables the espresso-node testing feature, which release builds reject
+    cargo build --profile {{profile}} -p espresso-dev-node {{features}}
 
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -126,8 +137,9 @@ demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+# A/B the leader's block build and VID work between two git refs (see scripts/bench-block-build)
 [positional-arguments]
+[script("scripts/with-tools", "python", "uv")]
 bench-block-build *args:
     scripts/bench-block-build "$@"
 
@@ -145,14 +157,14 @@ docker-stop-rm:
     docker stop $(docker ps -aq); docker rm $(docker ps -aq)
 
 anvil *args:
-    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
+    docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:v1.8.7 "anvil {{args}}"
 
 # hotshot-new-protocol: tested in hotshot.yml
-# espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
-# espresso-dev-node: enables embedded-db
+# espresso-dev-node: tested by test-dev-node
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
+# espresso-fuzz: `--bins` builds the fuzz targets, whose `main` is libFuzzer's, not the test harness
+nextest_excludes := "--exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper --exclude espresso-fuzz"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -162,16 +174,11 @@ nextest-archive archive-file *args:
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db  {{args}}
     just nextest {{args}}
 
-# These tests stand up whole multi-node networks inline on a single libtest
-# thread, which leaves the largest of them a few KB under the 2 MiB default
-# stack. 4 MiB gives them roughly 2x headroom instead.
 test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
-    RUST_MIN_STACK=4194304 cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
+    cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
@@ -181,13 +188,16 @@ test-dev-node *args:
     cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
 test-all:
-    @echo 'features: "embedded-db"'
-    just nextest --features embedded-db --profile all
     just nextest --profile all
 
-# A pass means the recorded node obeyed `ProtocolHistory` and discharged what it
-# owed within `defaultDelta` (`Prompt`). See `lean/new-protocol-diff/CheckMain.lean`
+# A pass means the recorded node obeyed `ProtocolHistory` and acted on what it
+# owed in the step it owed it in (`StepPrompt`). See `lean/new-protocol-diff/CheckMain.lean`
 # and `crates/hotshot/new-protocol/src/trace.rs`.
+#
+# The suite is recorded at 0.7 (`NP_TEST_VERSION`), whose timeouts sign their
+# lock: the specification covers only lock-signing timeouts. A test of behaviour
+# before 0.7 pins its version, and its traces are out of scope. A test that fails
+# fails the recipe, after the check has run on the traces recorded.
 #
 # Record runs of the new-protocol tests and check each against `lean/new-protocol-spec`.
 test-lean-check dir="":
@@ -203,9 +213,36 @@ test-lean-check dir="":
     # Under `target` because it is build output: gitignored, and cleaned with it.
     traces="$(pwd)/target/np-traces"
     rm -rf "$traces"
-    echo "recording to $traces"
-    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
-    lean/new-protocol-diff/.lake/build/bin/check "$traces"
+    echo "recording at 0.7 to $traces"
+    suite=0
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces" \
+      cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    if [ "$suite" -ne 0 ]; then
+      echo "the test suite failed at 0.7" >&2
+    fi
+    [ "$suite" -eq 0 ] && [ "$checked" -eq 0 ]
+
+# Replay random settings `first` to `first + count - 1` of the Lean simulator to the
+# Rust node and check each trace. Each draws faults, committees, timing and delays.
+test-lean-scenarios first="1" count="48":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build sim check) || exit 1
+    scenarios="$(pwd)/target/np-scenarios"
+    traces="$(pwd)/target/np-scenario-traces"
+    rm -rf "$scenarios" "$traces"
+    lean/new-protocol-diff/.lake/build/bin/sim --scenarios "$scenarios" {{first}} {{count}} || exit 1
+    replayed=0
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces" NP_SCENARIOS="$scenarios" \
+      cargo test -p hotshot-new-protocol --release --lib tests::scenario:: || replayed=$?
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    if [ "$replayed" -ne 0 ]; then
+      echo "replaying the scenarios failed" >&2
+    fi
+    [ "$replayed" -eq 0 ] && [ "$checked" -eq 0 ]
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
@@ -259,6 +296,10 @@ check-features-ci *args:
         --exclude vid \
         {{args}}
 
+# check that no test-only crate or test feature reaches the default-member build
+check-production-deps:
+    scripts/check-production-deps
+
 # requires the succinct toolchain (`sp1up`, https://docs.succinct.xyz/docs/sp1/getting-started/install)
 # check that the zkVM client crates compile for the SP1 target
 check-sp1-target:
@@ -279,7 +320,6 @@ dev-state-relay-server:
 dev-espresso-node:
     target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
-    --cdn-endpoint "127.0.0.1:1738" \
     --state-relay-server-url http://localhost:8083 \
     -- http --port 8083  -- query --storage-path storage
 
@@ -291,9 +331,8 @@ build-docker-images:
 # The empty lease (`<ref>:`) makes the push fail unless the branch does not exist yet;
 # a plain push would fast-forward an existing release branch onto the source ref.
 # Cut the next release branch (PHASE bump); pass a version for a protocol bump. See doc/software-releases.md.
+[script("scripts/with-tools", "python", "python3")]
 release-cut version="" source_ref="main":
-    #!/usr/bin/env bash
-    set -euo pipefail
     requested="{{version}}"
     version=$(scripts/release next-version ${requested:+--version "$requested"})
     git fetch origin "{{source_ref}}"
@@ -305,17 +344,20 @@ release-tag branch tag="":
     gh workflow run tag-release.yml --ref {{branch}} -f tag={{tag}}
 
 # Preview the release edits and tracker comment of `/publish <tag> <network>` without writing to GitHub.
+[script("scripts/with-tools", "python", "python3")]
 release-publish-preview tag network:
     scripts/release publish --dry-run --comment "/publish {{tag}} {{network}}"
 
 # Render the release tracker body for a version without writing to GitHub.
+[script("scripts/with-tools", "python", "python3")]
 release-body version:
     scripts/release refresh --dry-run --version {{version}}
 
 # generate rust bindings for contracts
-VERSIONED := "LightClient(Arbitrum)?(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
-EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable|IRewardClaim|IPlonkVerifier"
+VERSIONED := "LightClient(V\\d+)?(Mock)?|PlonkVerifier(V\\d+)?|StakeTable(V\\d+)?|EspToken(V\\d+)?|RewardClaim(V\\d+)?"
+EXACT := "FeeContract|ERC1967Proxy|OpsTimelock|SafeExitTimelock|OwnableUpgradeable|AccessControlUpgradeable"
 REGEXP := "^(" + VERSIONED + "|" + EXACT + ")$"
+[script("scripts/with-tools", "contracts", "forge", "solc", "abigen", "jq")]
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -350,6 +392,7 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-network/issues/979
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 sol-test *args:
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
     cargo build --release --bin diff-test &&\
@@ -368,10 +411,11 @@ lc-contract-profiling-sepolia:
     echo $LC_CONTRACT_ADDRESS
     forge script contracts/script/LightClientCallNewFinalizedState.s.sol --sig "run(uint32 numInitValidators, address lcContractAddress)" {{NUM_INIT_VALIDATORS}} $LC_CONTRACT_ADDRESS --fork-url ${SEPOLIA_RPC_URL}  --broadcast  --chain-id sepolia
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 gas-benchmarks:
     cargo build --profile test --bin diff-test
     forge snapshot --mt "test_verify_succeeds|testCorrectUpdateBench"
-    @[ -n "$(git diff --name-only .gas-snapshot)" ] && echo "⚠️ Uncommitted gas benchmarks, please stage them before committing." && exit 1 || exit 0
+    [ -n "$(git diff --name-only .gas-snapshot)" ] && echo "⚠️ Uncommitted gas benchmarks, please stage them before committing." && exit 1 || exit 0
 
 # This is meant for local development and produces HTML output. In CI
 # the lcov output is pushed to coveralls.
@@ -393,42 +437,49 @@ dev-download-srs:
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
 
+[script("scripts/with-tools", "contracts", "abigen")]
 gen-go-bindings:
 	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
 	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
 
+[script("scripts/with-tools", "go", "cargo", "jq", "go")]
 build-go-crypto-helper *args:
     ./scripts/build-go-crypto-helper {{args}}
 
+[script("scripts/with-tools", "go", "gofmt")]
 fmt-go:
     gofmt -w sdks/go/
 
+[script("scripts/with-tools", "go", "go")]
 lint-go:
     cd sdks/go && go vet ./...
 
+[script("scripts/with-tools", "go", "go")]
 test-go *args:
-    #!/usr/bin/env bash
-    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:${LD_LIBRARY_PATH:-}
     cd sdks/go && go test -v ./... {{args}}
 
 contracts-test-echidna *args:
     nix develop .#echidna -c echidna contracts/test/StakeTableV2.echidna.sol --contract StakeTableV2EchidnaTest --config contracts/echidna.yaml {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-forge *args='-vv':
     forge test --no-match-test "testFuzz_|invariant_|test_Network_" {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-fuzz *args='-vv':
     forge test --match-test testFuzz {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-invariant *args='-vv':
     forge test --match-test invariant_ {{args}}
 
+[script("scripts/with-tools", "mutation", "dregs")]
 contracts-mutation-test *args:
     dregs run --project . {{args}}
 
+[script("scripts/with-tools", "contracts", "forge", "solc", "python3")]
 contracts-test-network *args='-vv':
-    #!/usr/bin/env bash
-    set -euo pipefail
     if [ -z "${ETHERSCAN_API_KEY:-}" ]; then
         echo "Error: ETHERSCAN_API_KEY must be set to run network tests" >&2
         echo "Set it in your environment or in .env file" >&2

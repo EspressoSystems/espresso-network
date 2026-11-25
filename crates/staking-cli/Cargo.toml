@@ -6,7 +6,13 @@ edition = { workspace = true }
 description = "A CLI to interact with the Espresso stake table contract"
 
 [features]
-testing = ["warp", "test-server", "test-utils"]
+testing = [
+    "hotshot-state-prover",
+    "hotshot-state-prover/testing",
+    "warp",
+    "test-server",
+    "test-utils",
+]
 
 [dependencies]
 alloy = { workspace = true }
@@ -14,7 +20,6 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-clap-serde = { workspace = true }
 clap-serde-derive = { workspace = true }
 derive_more = { workspace = true }
 directories = { workspace = true }
@@ -27,7 +32,7 @@ espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures-util = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-state-prover = { workspace = true }
+hotshot-state-prover = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-signature = { workspace = true }
@@ -35,8 +40,6 @@ prometheus-parse = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 reqwest = { workspace = true }
-rstest = { workspace = true }
-rstest_reuse = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -56,6 +59,8 @@ warp = { workspace = true, optional = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }

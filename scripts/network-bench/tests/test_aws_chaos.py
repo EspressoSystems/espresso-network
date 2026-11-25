@@ -964,6 +964,11 @@ def test_chaos_run_end_to_end(run_harness: RunHarness):
     assert "chaos: kill node" in log and "chaos: restart node" in log
     assert "caught up after" in log and "rejoined after" in log
     assert (run_harness.run_dir / "hosts/node0/recreate.sh").exists()
+    assert (run_harness.run_dir / "hosts/ctl/stake.env").exists()
+    starts = [" ".join(c) for c in runner.calls if "docker start" in c[-1]]
+    stake = next(i for i, c in enumerate(starts) if "docker start stake" in c)
+    node = next(i for i, c in enumerate(starts) if "docker start espresso-node" in c)
+    assert stake < node
 
 
 @pytest.mark.usefixtures("valid")
@@ -1149,6 +1154,21 @@ def test_jitter_ratio_flag_needs_netem_full():
         awsb.config_from_args(parse("--latency", "mainnet", "--jitter-ratio", "0.1"))
 
 
-def test_epoch_height_flag_defaults_to_the_template():
-    assert awsb.config_from_args(parse("--chaos")).epoch_height is None
+def test_epoch_height_defaults_to_the_template_and_to_300_under_chaos():
+    assert awsb.config_from_args(parse()).epoch_height is None
+    assert (
+        awsb.config_from_args(parse("--chaos")).epoch_height == awsb.SHORT_EPOCH_HEIGHT
+    )
+    assert awsb.SHORT_EPOCH_HEIGHT == 300
     assert awsb.config_from_args(parse("--epoch-height", "3000")).epoch_height == 3000
+
+
+def test_chaos_keeps_an_explicit_epoch_height():
+    cfg = awsb.config_from_args(parse("--chaos", "--epoch-height", "3000"))
+    assert cfg.epoch_height == 3000
+    assert awsb.staking(cfg)
+
+
+def test_the_fleet_path_gets_the_chaos_epoch_height():
+    assert awsb.fleet_config_from_args(parse("--chaos")).epoch_height == 300
+    assert awsb.fleet_config_from_args(parse()).epoch_height is None

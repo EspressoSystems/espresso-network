@@ -6,10 +6,8 @@
 
 //! Common traits for the `HotShot` protocol
 pub mod block_contents;
-pub mod consensus_api;
 pub mod election;
 pub mod leaf_fetcher_network;
-pub mod metrics;
 pub mod network;
 pub mod node_implementation;
 pub mod qc;
@@ -18,4 +16,6 @@ pub mod states;
 pub mod storage;
 
 pub use block_contents::{BlockPayload, EncodeBytes};
+/// The metrics traits live in their own leaf crate; this keeps the `traits::metrics` paths working.
+pub use hotshot_metrics as metrics;
 pub use states::ValidatedState;

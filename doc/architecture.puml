@@ -2,16 +2,6 @@
 
 package "Espresso Network" as Network #MistyRose {
     component "Other\nEspresso\nNodes" as Nodes
-    package CDN {
-        component Broker
-        component Marshal
-        database KeyDB
-    }
-
-    'CDN Layout
-    Broker -> KeyDB: state
-    KeyDB -> Marshal: state
-
     component "Espresso Node" as Seq #Bisque {
         database "Postgres" as DB
         package APIs #LightCyan {
@@ -24,7 +14,6 @@ package "Espresso Network" as Network #MistyRose {
         package HotShot {
             component "Networking"{
                 component Libp2p
-                component "CDN Client"
             }
             component "HotShot Events" as Events
         }
@@ -42,8 +31,6 @@ package "Espresso Network" as Network #MistyRose {
 ' Network
 Nodes <-up- Catchup: "missing\nstate" " "
 Nodes <-> Libp2p: consensus\nmessages
-"CDN Client" <--> CDN: consensus\nmessages
-Nodes <--> CDN: consensus\nmessages
 note top of link
     4. HotShot consensus
 end note

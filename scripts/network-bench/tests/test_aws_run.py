@@ -944,10 +944,23 @@ def test_hostmon_samples_postgres_unless_sqlite(isolated: Path):
     sample = {}
     for engine in ("postgres", "sqlite"):
         runner = Scripted({})
-        awsb.start_hostmon(remote(runner, isolated), engine)
+        awsb.start_hostmon(
+            remote(runner, isolated), awsb.RunConfig(tag="t", query_engine=engine)
+        )
         sample[engine] = [c[-1] for c in runner.calls if "--role query" in c[-1]]
     assert f"--pg {awsb.PG_JSON}" in sample["postgres"][0]
     assert "--pg" not in sample["sqlite"][0]
+
+
+def test_hostmon_samples_the_trace_with_leader_trace(isolated: Path):
+    sample = {}
+    for leader_trace in (False, True):
+        runner = Scripted({})
+        cfg = awsb.RunConfig(tag="t", query_engine="sqlite", leader_trace=leader_trace)
+        awsb.start_hostmon(remote(runner, isolated), cfg)
+        sample[leader_trace] = [c[-1] for c in runner.calls if "--role query" in c[-1]]
+    assert "--leader-trace" not in sample[False][0]
+    assert sample[True][0].endswith("--role query --leader-trace")
 
 
 def test_collect_hosts_skips_postgres_statistics_on_sqlite(isolated: Path):
@@ -1247,3 +1260,60 @@ def test_a_ramp_run_records_no_search(run_harness: RunHarness):
     run_harness.run(FakeRunner(states=[DONE_STATE]))
     agent = netbench.read_json(run_harness.run_dir / "hosts" / "ctl" / "agent.json")
     assert agent["search"] is None
+
+
+def test_staking_runs_after_the_contract_checks_and_before_the_orchestrator():
+    plan = awsb.support_plan("colocated", ["0xabc"], stake=True)
+    whats = [step["what"] for step in plan]
+    assert whats[:7] == [
+        "anvil eth_chainId",
+        "deploy",
+        "eth_getCode 0xabc",
+        "stake",
+        "wait-for-l1-finalized",
+        "orchestrator healthcheck",
+        "relay healthcheck",
+    ]
+    assert plan[3]["kind"] == "deploy"
+    assert plan[3]["container"] == "stake"
+    assert plan[3]["timeout_s"] == awsb.STAKE_TIMEOUT_S
+    finalized = plan[4]
+    assert finalized["kind"] == "gate"
+    assert finalized["container"] is None
+    assert "/opt/bench/wait-for-l1-finalized" in finalized["gate_cmd"]
+    assert finalized["timeout_s"] == awsb.L1_FINALIZED_TIMEOUT_S
+
+
+def test_the_support_plan_is_unchanged_without_staking():
+    assert awsb.support_plan("colocated", ["0xabc"]) == awsb.support_plan(
+        "colocated", ["0xabc"], stake=False
+    )
+    assert "stake" not in [step["what"] for step in awsb.support_plan("rds", [])]
+
+
+@pytest.mark.usefixtures("valid")
+def test_epochs_start_stake_between_deploy_and_orchestrator(run_harness: RunHarness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    assert run_harness.run(runner, "--epoch-height", "3000") == awsb.EXIT_OK
+    started = [
+        call[-1].rpartition("docker start ")[2]
+        for call in runner.calls
+        if call[0] == "ssh" and "docker start" in call[-1]
+    ]
+    support = [
+        c
+        for c in started
+        if c in ("anvil", "deploy", "stake", "orchestrator", "state-relay-server")
+    ]
+    assert support == ["anvil", "deploy", "stake", "orchestrator", "state-relay-server"]
+    assert runner.ran("docker wait stake")
+    assert (run_harness.run_dir / "hosts/ctl/stake.env").exists()
+
+
+@pytest.mark.usefixtures("valid")
+def test_a_plain_run_never_starts_stake(run_harness: RunHarness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    assert run_harness.run(runner) == awsb.EXIT_OK
+    assert not runner.ran("docker start stake")
+    assert not runner.ran("sh /opt/bench/wait-for-l1-finalized")
+    assert not (run_harness.run_dir / "hosts/ctl/stake.env").exists()

@@ -187,12 +187,16 @@ class ReleaseInfo:
     body: str
 
 
+EditAction = Literal["create", "edit", "recreate"]
+
+
 @dataclass(frozen=True)
 class ReleaseEdit:
     tag: str
     title: str
     body: str
-    create: bool = False
+    action: EditAction = "edit"
+    old: ReleaseInfo | None = None  # set for a recreate; logged before the delete
 
     @property
     def make_latest(self) -> bool:
@@ -721,7 +725,8 @@ def plan_publish(
 ) -> tuple[Tag | None, list[ReleaseEdit]]:
     """Edits that make `target` the release for `network`: the target first, so its block carries
     prev before any holder is superseded and a rerun after a partial failure finds it. The first
-    edit creates the release when the tag has none. Returns the previous holder and the edits.
+    edit creates the release when the tag has none. Mainnet recreates a release whose title lacks
+    `[mainnet]`, since only creation sends a GitHub alert. Returns the previous holder and the edits.
     Rerunning for the current holder keeps its prev and date, and its notes unless new ones are given.
     """
     existing = find_release(releases, str(target))
@@ -741,14 +746,24 @@ def plan_publish(
         network, prev, target, since, network_notes, fragments, repo, base
     )
     body = with_block(release.body, network, block)
+    action = _publish_action(existing, network)
     edit = ReleaseEdit(
         release.tag,
         render_title(release.tag, title_networks(release.title) | {network}),
         refresh_whats_changed(body, target, tags, whats_changed),
-        existing is None,
+        action,
+        existing if action == "recreate" else None,
     )
     superseded = [_supersede(other, network, release.tag, date) for other in others]
     return prev, [edit, *superseded]
+
+
+def _publish_action(existing: ReleaseInfo | None, network: Network) -> EditAction:
+    if existing is None:
+        return "create"
+    if network == "mainnet" and "mainnet" not in title_networks(existing.title):
+        return "recreate"
+    return "edit"
 
 
 def refresh_whats_changed(
@@ -1502,6 +1517,21 @@ class Gh:
                 ]
             )
 
+    def release_recreate(self, edit: ReleaseEdit) -> None:
+        """Keeps the tag; the old body goes to the log in case the create and its restore fail."""
+        old = cast(ReleaseInfo, edit.old)
+        print(
+            f"# old release {old.tag}: {old.title}\n{old.body}\n# end old release",
+            flush=True,
+        )
+        self._run(["gh", "release", "delete", edit.tag, "--yes"])
+        try:
+            self.release_create(edit)
+        except RuntimeError:
+            # best effort, so a rerun still sees the decaf state
+            self.release_create(ReleaseEdit(old.tag, old.title, old.body, "create"))
+            raise
+
     def release_edit(self, edit: ReleaseEdit) -> None:
         with _body_file(edit.body) as path:
             self._run(
@@ -1935,8 +1965,7 @@ def _collect_fragments(git: Git, base: Tag, target: Tag) -> list[Fragment]:
 
 def _print_publish(plan: PublishPlan) -> None:
     for edit in plan.edits:
-        action = "create" if edit.create else "edit"
-        flags = f"{action}, make_latest={edit.make_latest}"
+        flags = f"{edit.action}, make_latest={edit.make_latest}"
         print(f"# {edit.tag}: {edit.title} ({flags})\n")
     print(f"{plan.edits[0].body}\n\n---\n{plan.comment}", end="")
 
@@ -1944,7 +1973,13 @@ def _print_publish(plan: PublishPlan) -> None:
 def apply_publish(gh: Gh, plan: PublishPlan, issue: int | None) -> None:
     """The writes of a publish, in rerun-safe order: releases, tracker."""
     for edit in plan.edits:
-        (gh.release_create if edit.create else gh.release_edit)(edit)
+        match edit.action:
+            case "create":
+                gh.release_create(edit)
+            case "recreate":
+                gh.release_recreate(edit)
+            case "edit":
+                gh.release_edit(edit)
     gh.workflow_run("update-release-tracker.yml", None, {})
     if issue is not None:
         gh.issue_comment(issue, plan.comment)

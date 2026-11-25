@@ -3026,36 +3026,63 @@ error NotInitializing()
             topics: &[alloy_sol_types::Word],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            <Self as alloy_sol_types::SolEventInterface>::decode_raw_log_with_config(
+                topics,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        fn decode_raw_log_with_config(
+            topics: &[alloy_sol_types::Word],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             match topics.first().copied() {
                 Some(<Initialized as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <Initialized as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <Initialized as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::Initialized)
                 }
                 Some(<RoleAdminChanged as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RoleAdminChanged as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <RoleAdminChanged as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::RoleAdminChanged)
                 }
                 Some(<RoleGranted as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RoleGranted as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <RoleGranted as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::RoleGranted)
                 }
                 Some(<RoleRevoked as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
-                    <RoleRevoked as alloy_sol_types::SolEvent>::decode_raw_log(
+                    <RoleRevoked as alloy_sol_types::SolEvent>::decode_raw_log_with_config(
                             topics,
                             data,
+                            config,
                         )
                         .map(Self::RoleRevoked)
                 }
                 _ => {
+                    if topics
+                        .len()
+                        .checked_mul(alloy_sol_types::Word::len_bytes())
+                        .and_then(|len| len.checked_add(data.len()))
+                        .is_none_or(|len| len > config.get_memory_limit())
+                    {
+                        return alloy_sol_types::private::Err(
+                            alloy_sol_types::Error::MemoryLimitExceeded(
+                                config.get_memory_limit(),
+                            ),
+                        );
+                    }
                     alloy_sol_types::private::Err(alloy_sol_types::Error::InvalidLog {
                         name: <Self as alloy_sol_types::SolEventInterface>::NAME,
                         log: alloy_sol_types::private::Box::new(

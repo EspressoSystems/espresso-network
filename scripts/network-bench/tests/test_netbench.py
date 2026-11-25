@@ -3,6 +3,7 @@ import base64
 import collections
 import dataclasses
 import functools
+import http.client
 import inspect
 import itertools
 import json
@@ -360,6 +361,27 @@ def test_closing_the_pool_stops_retries(caplog: pytest.LogCaptureFixture):
     levels = [record.levelname for record in caplog.records]
     assert levels[0] == "WARNING"
     assert set(levels[1:]) == {"DEBUG"}
+
+
+def closed_mid_response() -> netbench.ResponseLost:
+    lost = netbench.ResponseLost("GET http://x: Remote end closed connection")
+    lost.__cause__ = http.client.RemoteDisconnected("Remote end closed connection")
+    return lost
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [ConnectionRefusedError(111, "refused"), closed_mid_response()],
+    ids=["refused", "closed"],
+)
+def test_a_node_going_down_retries_quietly(
+    caplog: pytest.LogCaptureFixture, failure: OSError
+):
+    clock = fakes.FakeClock()
+    pool = ScriptedPool(clock, failure, (200, b"7"))
+    with caplog.at_level(logging.DEBUG, netbench.log.name):
+        assert netbench.get_ok(pool, "http://x") == b"7"
+    assert [record.levelname for record in caplog.records] == ["DEBUG"]
 
 
 def test_not_found_is_not_retried():
@@ -798,21 +820,6 @@ def test_result_json_is_finite(tmp_path: Path):
     netbench.write_json(tmp_path / "result.json", analyze(tmp_path))
     with pytest.raises(ValueError):
         netbench.write_json(tmp_path / "bad.json", {"x": math.inf})
-
-
-def test_report_keeps_the_ramp_verdict(tmp_path: Path):
-    write_run_dir(tmp_path)
-    path = tmp_path / "steps.json"
-    steps = netbench.read_json(path)
-    steps[0]["consensus_fails"] = ["decided 10% of offered"]
-    netbench.write_json(path, steps)
-    result = analyze(tmp_path)
-    assert not result["steps"][0]["passed"]
-    assert result["capacity"]["overall"] == {
-        "mb_s": None,
-        "bounded": True,
-        "failed_at_mb_s": 1.0,
-    }
 
 
 def test_no_scrapes_is_invalid_not_a_crash(tmp_path: Path):
@@ -2938,3 +2945,734 @@ def test_pruned_heights_reach_the_summary_when_pruning_is_on(tmp_path: Path):
     assert "- prune: retention 60 s; pruned to height: node0 data 1120, state 480" in (
         netbench.render(result, None)
     )
+
+
+def test_summary_names_the_epoch_height_only_when_nodes_were_staked(tmp_path: Path):
+    write_run_dir(tmp_path)
+    result = analyze(tmp_path)
+    result["deployment"] = deployment()
+    assert "epoch height" not in netbench.render(result, None)
+    result["deployment"] = deployment() | {"epoch_height": 300, "staking": True}
+    assert "- epoch height: 300, every node staked on L1" in netbench.render(
+        result, None
+    )
+
+
+def test_summary_names_how_far_the_prover_got(tmp_path: Path):
+    write_run_dir(tmp_path)
+    result = analyze(tmp_path)
+    result["deployment"] = deployment()
+    assert "prover" not in netbench.render(result, None)
+    result["deployment"] = deployment() | {"prover": "prover-started"}
+    assert "- light-client prover: prover-started" in netbench.render(result, None)
+
+
+# Consensus latency while the payload scan falls behind (#5473).
+
+
+def height_record(
+    height: int, validator: float | None, scanned: float | None
+) -> dict[str, Any]:
+    """A heights.jsonl record; the query node shows the height 0.1 s after a validator."""
+    return {
+        "height": height,
+        "validator": validator,
+        "query": None if validator is None else validator + 0.1,
+        "scanned": scanned,
+    }
+
+
+def unmatched(t_submit: float) -> dict[str, Any]:
+    """A tx the payload scan has not matched to a height."""
+    return {"t_submit": t_submit, "height": None, "status": "pending"}
+
+
+def consensus_latency(
+    txs: list[dict[str, Any]], heights: list[dict[str, Any]], now: float
+) -> netbench.Quantiles | None:
+    """Over the measured half of `step_window()`, 15 to 30, as known at `now`."""
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, [], now
+    )
+    return m["consensus_latency_ms"]
+
+
+def samples(q: netbench.Quantiles | None) -> int:
+    return 0 if q is None else q["n"]
+
+
+def test_a_scan_behind_does_not_fail_consensus_on_blocks_decided_in_time():
+    """At 10 MB/s each block decides 200 ms after its tx, but at the step's end the scan has
+    finished only the heights up to t 10: no tx of the measured half has a height yet."""
+    txs = [
+        {"t_submit": i / 10, "height": i, "status": "included"}
+        if i < 100
+        else unmatched(i / 10)
+        for i in range(300)
+    ]
+    heights = [
+        height_record(i, i / 10 + 0.2, i / 10 + 1.0 if i < 100 else None)
+        for i in range(299)
+    ]
+    counters = [
+        {"ts": float(t), "decided_bytes": 10e6 * t, "timeouts": 0} for t in range(31)
+    ]
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, counters, 30.0
+    )
+    assert fails(m) == ([], [])
+    assert samples(m["consensus_latency_ms"]) == 0
+
+
+def test_an_unmatched_tx_counts_from_the_decision_of_the_lowest_unscanned_height():
+    """Heights up to 5 scanned, height 6 decided at 25: a tx sent at 20 that none of them
+    holds was decided at 25 or later, so it counts 5000 ms however late `now` is."""
+    heights = [
+        height_record(h, 19.0 + h, 21.0 + h if h < 6 else None) for h in range(10)
+    ]
+    latency = some(consensus_latency([unmatched(20.0)], heights, 100.0))
+    assert (latency["n"], latency["p50"]) == (1, pytest.approx(5000.0))
+
+
+def test_the_lowest_unscanned_height_is_found_in_any_record_order():
+    """The records of the test above in reverse: still bounded by height 6, not by 9."""
+    heights = [
+        height_record(h, 19.0 + h, 21.0 + h if h < 6 else None)
+        for h in reversed(range(10))
+    ]
+    latency = some(consensus_latency([unmatched(20.0)], heights, 100.0))
+    assert latency["p50"] == pytest.approx(5000.0)
+
+
+def test_a_height_scanned_after_now_counts_as_unscanned():
+    """Judged at 30 from the final files: height 1, decided at 23, was scanned only at 40,
+    so at 30 the tx sent at 20 may be in it."""
+    heights = [
+        height_record(0, 21.0, 22.0),
+        height_record(1, 23.0, 40.0),
+        height_record(2, 26.0, None),
+    ]
+    latency = some(consensus_latency([unmatched(20.0)], heights, 30.0))
+    assert latency["p50"] == pytest.approx(3000.0)
+
+
+def test_an_unmatched_tx_whose_bound_is_within_the_target_is_left_out():
+    """The lowest unscanned height decided 500 ms after the unmatched tx was sent: it may
+    have been on time, so only the matched tx, 300 ms, counts."""
+    txs = [{"t_submit": 20.0, "height": 0, "status": "included"}, unmatched(20.0)]
+    heights = [height_record(0, 20.3, 21.0), height_record(1, 20.5, None)]
+    latency = some(consensus_latency(txs, heights, 60.0))
+    assert (latency["n"], latency["p50"]) == (1, pytest.approx(300.0))
+
+
+@pytest.mark.parametrize(
+    "heights",
+    [
+        pytest.param(
+            [height_record(0, 21.0, 22.0), height_record(1, 23.0, 24.0)],
+            id="every-height-scanned",
+        ),
+        pytest.param(
+            [
+                height_record(0, 21.0, 22.0),
+                {"height": 1, "validator": None, "query": 23.0, "scanned": None},
+            ],
+            id="lowest-unscanned-height-without-validator-time",
+        ),
+    ],
+)
+def test_an_unmatched_tx_counts_its_time_so_far_when_the_scan_bounds_nothing(heights):
+    """A tx sent at 20 and unmatched at 30 counts 10 s, as before the fix."""
+    latency = some(consensus_latency([unmatched(20.0)], heights, 30.0))
+    assert latency["p50"] == pytest.approx(10000.0)
+
+
+# The query node shows the heights below the count at the time.
+Shown = tuple[float, int]
+Event = tuple[float, Callable[[], object]]
+
+# Past the deadline, a tracker may finish the scans it has started and its poll.
+TRACKER_SLACK_S = 1.0
+
+
+def submit_at(state: netbench.LoadState, tx_id: int, t_submit: float) -> netbench.Tx:
+    tx = netbench.Tx(id=tx_id, node=0, t_queued=t_submit, t_submit=t_submit)
+    state.submitted(tx)
+    return tx
+
+
+def show_query(heights: netbench.Heights, clock: fakes.FakeClock, count: int) -> None:
+    heights.saw("query", count, clock.time())
+
+
+def shows(
+    heights: netbench.Heights, clock: fakes.FakeClock, *shown: Shown
+) -> list[Event]:
+    return [(t, functools.partial(show_query, heights, clock, n)) for t, n in shown]
+
+
+def run_tracker(
+    cfg: netbench.BenchConfig,
+    state: netbench.LoadState,
+    heights: netbench.Heights,
+    scan: netbench.Scan,
+    done: asyncio.Event,
+    clock: fakes.FakeClock,
+    events: list[Event],
+) -> float:
+    """`track_inclusion` while each event's action runs at its time (awaited if it returns
+    an awaitable); returns the time the tracker returned."""
+
+    async def tracked() -> float:
+        await netbench.track_inclusion(cfg, state, scan, heights, [], done, clock)
+        return clock.time()
+
+    async def main() -> float:
+        tracker = asyncio.create_task(tracked())
+        for at, action in sorted(events, key=lambda e: e[0]):
+            await clock.asleep(max(0.0, at - clock.time()))
+            if inspect.isawaitable(outcome := action()):
+                await outcome
+        return await tracker
+
+    return clock.run(main())
+
+
+LAG = netbench.PAYLOAD_LAG_BLOCKS
+
+
+def test_a_tx_timed_out_while_its_block_waited_for_the_scan_is_included_when_found():
+    """Sent at 0 with a 2 s timeout; its block, height 0, shows at 0.5 but is scanned only
+    once the next height shows at 3. The timeout frees its room; the late find includes it
+    at 0.5."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+    room: list[bool] = []
+
+    async def scan(height: int) -> list[int] | None:
+        return [0] if height == 0 else []
+
+    async def check_room() -> None:
+        room.append(await state.wait_for_room(clock.time(), clock))
+
+    events = [
+        *shows(heights, clock, (0.5, 1), (3.0, 1 + LAG)),
+        (2.5, check_room),
+        (4.0, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert room == [True]
+    assert (tx.status, tx.height) == ("included", 0)
+    assert tx.t_included == pytest.approx(0.5)
+    assert state.timeouts == 0
+
+
+def test_a_late_find_is_included_only_if_its_block_showed_within_the_timeout():
+    """Both sent at 0 with a 2 s timeout and found after it: tx 0's block showed at 0.5,
+    tx 1's at 2.5, too late to count."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    early, late = submit_at(state, 0, 0.0), submit_at(state, 1, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        return {0: [0], 1: [1]}.get(height, [])
+
+    events = [
+        *shows(heights, clock, (0.5, 1), (2.5, 2), (3.0, 2 + LAG)),
+        (4.0, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert [(tx.status, tx.height) for tx in (early, late)] == [
+        ("included", 0),
+        ("timeout", 1),
+    ]
+    assert early.t_included == pytest.approx(0.5)
+    assert late.t_included is None
+    assert state.timeouts == 1
+
+
+def test_after_done_with_nothing_pending_the_tracker_still_scans_the_backlog():
+    """tx 0, sent at 0 with a 2 s timeout, is in height 2, shown at 0.5. Slow scans of
+    heights 0 and 1 run until about 3.3: by then the tx timed out, the load was done at 2.5
+    and height 2 became scannable at 2.6. Nothing is pending, yet the tracker scans height 2
+    and includes the tx."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+    slow_s = {0: 2.05, 1: 1.0}
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(slow_s.get(height, 0.0))
+        return [0] if height == 2 else []
+
+    events = [
+        *shows(heights, clock, (0.0, 1 + LAG), (0.5, 2 + LAG), (2.6, 3 + LAG)),
+        (2.5, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert (tx.status, tx.height) == ("included", 2)
+    assert tx.t_included == pytest.approx(0.5)
+
+
+def test_after_done_the_tracker_scans_the_last_height_shown_once_the_next_one_shows():
+    """tx 0 times out at 2 and the load is done at 2.5; its block, the last height shown,
+    at 0.5, can be scanned only once the next height shows at 3. The tracker waits for it
+    and includes the tx."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        return [0] if height == 0 else []
+
+    events = [*shows(heights, clock, (0.5, 1), (3.0, 1 + LAG)), (2.5, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert (tx.status, tx.height) == ("included", 0)
+    assert tx.t_included == pytest.approx(0.5)
+
+
+def test_after_done_the_tracker_scans_until_the_timeout_when_the_scan_never_catches_up():
+    """tx 0, sent at 0 with a 2 s timeout, is in height 99. The load is done at 1.5, when
+    the query node shows nothing yet; at 1.8 it shows 100 heights, then one more every
+    0.1 s. A scan takes 0.5 s, so after tx 0 times out at 2 the scan never reaches its
+    block: the tracker scans until 2 s after done, checking between scans, and returns."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(0.5)
+        return [0] if height == 99 else []
+
+    done_at = 1.5
+    feed = shows(heights, clock, *((1.8 + k / 10, 100 + k) for k in range(80)))
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(
+        cfg, state, heights, scan, done, clock, [*feed, (done_at, done.set)]
+    )
+    deadline = done_at + cfg.tx_timeout_s
+    assert deadline - 0.5 <= returned <= deadline + TRACKER_SLACK_S
+    assert any((h["scanned"] or 0.0) > done_at for h in heights.records())
+
+
+def test_after_done_with_no_tx_timed_out_the_tracker_leaves_the_backlog():
+    """Guard: tx 0 is included at once. At 1 the load is done just as the query node shows
+    98 more heights: no tx timed out, so the tracker returns within 0.5 s and scans none of
+    them."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(0.5 if height > 0 else 0.0)
+        return [0] if height == 0 else []
+
+    def backlog_and_done() -> None:
+        show_query(heights, clock, 100)
+        done.set()
+
+    events = [*shows(heights, clock, (0.2, 1 + LAG)), (1.0, backlog_and_done)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert tx.status == "included"
+    assert returned <= 1.0 + 0.5
+    assert [h["height"] for h in heights.records() if h["scanned"] is not None] == [0]
+
+
+def test_a_payload_given_up_as_lost_shows_as_scanned_when_given_up():
+    """Height 0's payload is missing on every query node: given up past MISSING_PAYLOAD_S,
+    it shows as scanned at that last attempt, is listed missing, and its tx times out."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+    calls: collections.defaultdict[int, list[float]] = collections.defaultdict(list)
+
+    async def scan(height: int) -> list[int] | None:
+        calls[height].append(clock.time())
+        return None if height == 0 else []
+
+    end = netbench.MISSING_PAYLOAD_S + 2.0
+    events = [*shows(heights, clock, (0.0, 3)), (end, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    run_tracker(cfg, state, heights, scan, done, clock, events)
+    lost = next(h for h in heights.records() if h["height"] == 0)
+    assert state.missing_payloads == [0]
+    assert tx.status == "timeout"
+    assert lost["scanned"] == pytest.approx(calls[0][-1])
+    assert lost["scanned"] >= netbench.MISSING_PAYLOAD_S
+
+
+def scan_every_height(out: Path, scanned: float = 131.0) -> None:
+    """Gives each height of heights.jsonl that the scan never finished the scan time
+    `scanned`."""
+    path = out / "heights.jsonl"
+    heights = [
+        h | {"scanned": scanned} if h["scanned"] is None else h
+        for h in netbench.read_jsonl(path)
+    ]
+    netbench.write_jsonl(path, iter(heights))
+
+
+def test_analyze_judges_a_step_from_the_final_files_not_the_in_run_verdict(
+    tmp_path: Path,
+):
+    """In the run the scan had matched nothing, so steps.json failed the 1 MB/s step on
+    consensus latency; in the final files every tx is in a block decided 200 ms after it
+    was sent, and every height is scanned. Only the run's own fields stay."""
+    write_run_dir(tmp_path)
+    txs: list[dict[str, Any]] = [
+        {
+            "id": i,
+            "node": 0,
+            "t_queued": t - 0.01,
+            "t_submit": t,
+            "t_done": t + 0.05,
+            "t_included": t + 0.8,
+            "height": 1000 + i,
+            "status": "included",
+        }
+        for i, t in enumerate(range(110, 151))
+    ]
+    heights = [
+        height_record(tx["height"], tx["t_submit"] + 0.2, tx["t_included"] + 1.1)
+        for tx in txs
+    ]
+    netbench.write_jsonl(tmp_path / "load.jsonl", iter(txs))
+    netbench.write_jsonl(tmp_path / "heights.jsonl", iter(heights))
+    steps = netbench.read_json(tmp_path / "steps.json")
+    steps[0] |= {
+        "consensus_latency_ms": quantiles(15000.0, 15000.0),
+        "consensus_fails": ["consensus latency p50 15000 ms > 1000 ms"],
+        "cap_waits": 7,
+    }
+    steps[1]["stopped_early"] = True
+    netbench.write_json(tmp_path / "steps.json", steps)
+    result = analyze(tmp_path)
+    one, two = result["steps"]
+    assert one["passed"]
+    assert one["consensus_fails"] == []
+    assert some(one["consensus_latency_ms"])["p50"] == pytest.approx(200.0)
+    assert result["capacity"]["overall"] == {
+        "mb_s": 1.0,
+        "bounded": True,
+        "failed_at_mb_s": 2.0,
+    }
+    assert (one["cap_waits"], two.get("stopped_early")) == (7, True)
+
+
+def test_analyze_takes_the_query_verdict_from_the_final_files(tmp_path: Path):
+    """steps.json failed the 1 MB/s step on a growing query lag; the final files show a
+    steady 300 ms."""
+    write_run_dir(tmp_path)
+    steps = netbench.read_json(tmp_path / "steps.json")
+    steps[0] |= {
+        "query_lag_ms": quantiles(5000.0, 9000.0),
+        "query_lag_slope_ms_s": 300.0,
+        "query_fails": ["query lag grows 300 ms/s", "query lag p50 5000 ms > 1000 ms"],
+    }
+    netbench.write_json(tmp_path / "steps.json", steps)
+    one = analyze(tmp_path)["steps"][0]
+    assert one["query_fails"] == []
+    assert some(one["query_lag_ms"])["p50"] == pytest.approx(300.0)
+    assert some(one["query_lag_slope_ms_s"]) == pytest.approx(0.0)
+    assert one["passed"]
+
+
+def test_analyze_fails_a_step_whose_txs_timed_out_with_every_height_scanned(
+    tmp_path: Path,
+):
+    """steps.json passed the 1 MB/s step, but in the final files every tx of its measured
+    half timed out with no height while the scan finished every height."""
+    write_run_dir(tmp_path)
+    txs = [
+        tx | {"status": "timeout", "height": None, "t_included": None}
+        if 115.0 <= tx["t_submit"] <= 130.0
+        else tx
+        for tx in netbench.read_jsonl(tmp_path / "load.jsonl")
+    ]
+    netbench.write_jsonl(tmp_path / "load.jsonl", iter(txs))
+    scan_every_height(tmp_path)
+    one = analyze(tmp_path)["steps"][0]
+    assert not one["passed"]
+    assert some(one["consensus_latency_ms"])["p50"] > 1000.0
+    assert any("latency" in rule for rule in one["consensus_fails"])
+
+
+@pytest.mark.parametrize("latest", ["run", "consensus", "heights"])
+def test_analyze_judges_at_the_end_of_the_evidence(tmp_path: Path, latest: str):
+    """With every height scanned, a tx sent at 150 that timed out with no height, its 30 s
+    timeout still running, counts until 165, whichever of run.json t1, the last consensus
+    sample and the last heights.jsonl time reaches it."""
+    write_run_dir(tmp_path)
+    txs = list(netbench.read_jsonl(tmp_path / "load.jsonl"))
+    late = {"id": 98, "node": 0, "t_queued": 149.99, "t_submit": 150.0}
+    txs.append(
+        late
+        | {"t_done": 150.05, "t_included": None, "height": None, "status": "timeout"}
+    )
+    netbench.write_jsonl(tmp_path / "load.jsonl", iter(txs))
+    scan_every_height(tmp_path, 165.0 if latest == "heights" else 131.0)
+    if latest == "run":
+        run = netbench.read_json(tmp_path / "run.json")
+        netbench.write_json(tmp_path / "run.json", run | {"t1": 165.0})
+    if latest == "consensus":
+        counters = list(netbench.read_jsonl(tmp_path / "consensus.jsonl"))
+        counters.append(counters[-1] | {"ts": 165.0})
+        netbench.write_jsonl(tmp_path / "consensus.jsonl", iter(counters))
+    latency = some(analyze(tmp_path)["steps"][1]["consensus_latency_ms"])
+    assert latency["max"] == pytest.approx((165.0 - 150.0) * 1000)
+
+
+# Fixes from the review of #5493.
+
+
+def test_done_during_a_backlog_scan_starts_the_deadline_when_done_is_set():
+    """The query node shows 200 heights at 0 and a scan takes 0.5 s: the backlog takes 25 s.
+    The load is done at 3 while it is being scanned, and tx 0 is never found: the tracker
+    returns about 2 s after done, not after the backlog."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(0.5)
+        return []
+
+    done_at = 3.0
+    events = [*shows(heights, clock, (0.0, 200)), (done_at, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(cfg, state, heights, scan, done, clock, events)
+    deadline = done_at + cfg.tx_timeout_s
+    assert deadline - 0.5 <= returned <= deadline + TRACKER_SLACK_S
+
+
+UNKNOWN_RULE = "consensus latency unknown"
+
+
+def unreached_from(out: Path, t: float) -> None:
+    """In the final files every tx sent from `t` on timed out with no height, and every
+    height a validator showed from `t` on is unscanned: the scans never reached them."""
+    txs = [
+        tx | {"status": "timeout", "height": None, "t_included": None}
+        if tx["t_submit"] >= t
+        else tx
+        for tx in netbench.read_jsonl(out / "load.jsonl")
+    ]
+    netbench.write_jsonl(out / "load.jsonl", iter(txs))
+    heights = [
+        h | {"scanned": None} if h["validator"] >= t else h
+        for h in netbench.read_jsonl(out / "heights.jsonl")
+    ]
+    netbench.write_jsonl(out / "heights.jsonl", iter(heights))
+
+
+def test_a_step_the_scans_never_reached_fails_as_latency_unknown(tmp_path: Path):
+    """The scans stopped below the height decided at 112.5, before the 1 MB/s step: the
+    latency of its 17 txs is unknown, and the final verdict fails the step."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 112.0)
+    result = analyze(tmp_path)
+    one = result["steps"][0]
+    assert one["consensus_fails"] == [
+        "consensus latency unknown for 17 of 17 txs: the payload scans never reached them"
+    ]
+    assert not one["passed"]
+    assert result["capacity"]["overall"] == {
+        "mb_s": None,
+        "bounded": True,
+        "failed_at_mb_s": 1.0,
+    }
+
+
+def test_a_step_without_a_known_majority_fails_as_latency_unknown(tmp_path: Path):
+    """The scans stopped at the height decided at 123.5: of the step's 17 txs, 8 are on
+    time, the one sent at 120.5 is late (3 s) and 8 are unknown. Neither side holds a
+    majority, so the final verdict fails the step."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 123.0)
+    one = analyze(tmp_path)["steps"][0]
+    assert one["consensus_fails"] == [
+        "consensus latency unknown for 8 of 17 txs: the payload scans never reached them"
+    ]
+    assert not one["passed"]
+
+
+def test_a_few_unknown_latencies_under_an_on_time_majority_pass(tmp_path: Path):
+    """Guard: the scans stopped at the height decided at 128.5: of the step's 17 txs, 13
+    are on time, 1 is late and 3 are unknown. The on-time majority passes the step."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 128.0)
+    one = analyze(tmp_path)["steps"][0]
+    assert not [r for r in one["consensus_fails"] if r.startswith(UNKNOWN_RULE)]
+    assert one["passed"]
+
+
+def test_the_in_run_verdict_has_no_latency_unknown_rule(tmp_path: Path):
+    """Guard: `judge_step` on the files of the first latency-unknown test, at the same
+    `now`, does not fail the step as latency unknown."""
+    write_run_dir(tmp_path)
+    unreached_from(tmp_path, 112.0)
+    step = netbench.read_json(tmp_path / "steps.json")[0]
+    judged = netbench.judge_step(
+        step,
+        netbench.BenchConfig(),
+        list(netbench.read_jsonl(tmp_path / "load.jsonl")),
+        list(netbench.read_jsonl(tmp_path / "heights.jsonl")),
+        list(netbench.read_jsonl(tmp_path / "consensus.jsonl")),
+        160.0,
+    )
+    assert not [r for r in judged["consensus_fails"] if r.startswith(UNKNOWN_RULE)]
+
+
+def test_a_timed_out_unmatched_tx_counts_at_most_its_timeout():
+    """Every height scanned and `now` at 100: an unmatched tx sent at 20 that timed out
+    counts its 30 s timeout; one still pending counts its 80 s so far."""
+    heights = [height_record(h, 19.0 + h, 21.0 + h) for h in range(5)]
+    timed_out = unmatched(20.0) | {"status": "timeout"}
+    assert some(consensus_latency([timed_out], heights, 100.0))["p50"] == pytest.approx(
+        30000.0
+    )
+    assert some(consensus_latency([unmatched(20.0)], heights, 100.0))[
+        "p50"
+    ] == pytest.approx(80000.0)
+
+
+def test_analyze_counts_a_timed_out_unmatched_tx_at_most_its_timeout(tmp_path: Path):
+    """Every height scanned and the evidence ending at 160: the tx sent at 120.5 that timed
+    out with no height counts its 30 s timeout, not 39.5 s."""
+    write_run_dir(tmp_path)
+    scan_every_height(tmp_path)
+    latency = some(analyze(tmp_path)["steps"][0]["consensus_latency_ms"])
+    assert latency["max"] == pytest.approx(30000.0)
+
+
+def test_a_late_find_does_not_make_the_progress_timeouts_negative(
+    caplog: pytest.LogCaptureFixture,
+):
+    """tx 0, sent at 7 with a 2 s timeout, times out at 9, in the first progress window. Its
+    block showed at 8 but is scanned only at 12, in the second window, and includes it: the
+    second line shows 0 timed out, not -1."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 7.0)
+
+    async def scan(height: int) -> list[int] | None:
+        return [0] if height == 0 else []
+
+    events = [*shows(heights, clock, (8.0, 1), (12.0, 1 + LAG)), (21.0, done.set)]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    with caplog.at_level(logging.INFO, netbench.log.name):
+        run_tracker(cfg, state, heights, scan, done, clock, events)
+    timed_out = [
+        int(line.split(" pend ")[1].split(" to ")[1].split(" |")[0])
+        for line in caplog.messages
+        if " pend " in line
+    ]
+    assert tx.status == "included"
+    assert timed_out == [1, 0]
+
+
+# Fixes from the second review of #5493.
+
+LATENCY_P50_RULE = "consensus latency p50"
+
+
+def test_a_stall_after_the_newest_unscanned_height_does_not_hide_the_latency():
+    """Consensus stalls after height 149, decided at 15.1; the scans have finished every
+    height below it, and the payload lag keeps 149 unscanned. The txs sent from 15.2 on
+    cannot be in it, so at 30 they count their time so far and fail the latency rule."""
+    txs = [
+        {"t_submit": i / 10, "height": i, "status": "included"}
+        if i < 149
+        else unmatched(i / 10)
+        for i in range(300)
+    ]
+    heights = [
+        height_record(i, i / 10 + 0.2, i / 10 + 0.5 if i < 149 else None)
+        for i in range(150)
+    ]
+    counters = [
+        {"ts": float(t), "decided_bytes": 10e6 * min(t, 15.1), "timeouts": 0}
+        for t in range(31)
+    ]
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, counters, 30.0
+    )
+    assert [r for r in fails(m)[0] if r.startswith(LATENCY_P50_RULE)]
+    assert some(m["consensus_latency_ms"])["p50"] > 1000.0
+
+
+def test_an_unscanned_height_decided_before_a_tx_was_sent_does_not_bound_it():
+    """Unscanned heights decided at 18 and 25: the tx sent at 20 cannot be in the first,
+    so the second bounds it, and it counts 5000 ms at 100."""
+    heights = [
+        height_record(0, 17.0, 17.5),
+        height_record(1, 18.0, None),
+        height_record(2, 25.0, None),
+    ]
+    latency = consensus_latency([unmatched(20.0)], heights, 100.0)
+    assert samples(latency) == 1
+    assert some(latency)["p50"] == pytest.approx(5000.0)
+
+
+def add_late_scan(out: Path, lost: bool) -> None:
+    """Height 3000, ready to scan at 140.5 once 3001 showed, scanned 12 s later; listed in
+    load-meta.json's missing_payloads if `lost`."""
+    heights = list(netbench.read_jsonl(out / "heights.jsonl"))
+    heights += [
+        {"height": 3000, "validator": 139.5, "query": 140.0, "scanned": 152.5},
+        {"height": 3001, "validator": 140.0, "query": 140.5, "scanned": None},
+    ]
+    netbench.write_jsonl(out / "heights.jsonl", iter(heights))
+    meta = netbench.read_json(out / "load-meta.json")
+    netbench.write_json(
+        out / "load-meta.json", meta | {"missing_payloads": [3000] if lost else []}
+    )
+
+
+def test_tracker_lag_leaves_out_a_payload_given_up_as_lost(tmp_path: Path):
+    """A lost payload is stamped scanned when given up, 12 s after it could be scanned:
+    that is no tracker lag, so the lag stays the fixture's 100 ms."""
+    write_run_dir(tmp_path)
+    add_late_scan(tmp_path, lost=True)
+    lag = some(analyze(tmp_path)["load"]["tracker_lag_ms"])
+    assert lag["max"] == pytest.approx(100.0)
+    assert lag["p99"] == pytest.approx(100.0)
+
+
+def test_tracker_lag_counts_a_late_scan_that_found_its_payload(tmp_path: Path):
+    """Guard: the same height scanned 12 s late but not lost counts in the tracker lag."""
+    write_run_dir(tmp_path)
+    add_late_scan(tmp_path, lost=False)
+    lag = some(analyze(tmp_path)["load"]["tracker_lag_ms"])
+    assert lag["max"] == pytest.approx(12000.0)
+
+
+def test_after_done_the_tracker_returns_once_every_timed_out_tx_was_found():
+    """tx 0, sent at 0 with a 2 s timeout, is in height 2, shown at 0.5. A slow scan of
+    height 0 holds the tracker past the timeout; at 2.6 a late scan includes the tx. 200
+    heights shown at 1.5 are still being scanned when the load is done at 3, far behind the
+    tx's old timeout, but no timed-out tx is left to find: the tracker returns at once."""
+    clock, done = fakes.FakeClock(), asyncio.Event()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    tx = submit_at(state, 0, 0.0)
+
+    async def scan(height: int) -> list[int] | None:
+        await clock.asleep(2.1 if height == 0 else 0.3)
+        return [0] if height == 2 else []
+
+    done_at = 3.0
+    events = [
+        *shows(heights, clock, (0.0, 2), (0.5, 3), (1.5, 203)),
+        (done_at, done.set),
+    ]
+    cfg = netbench.BenchConfig(tx_timeout_s=2)
+    returned = run_tracker(cfg, state, heights, scan, done, clock, events)
+    assert (tx.status, tx.height) == ("included", 2)
+    assert any(h["scanned"] is None for h in heights.records() if h["query"] == 1.5)
+    assert returned <= done_at + 0.5

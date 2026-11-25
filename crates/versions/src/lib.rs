@@ -24,7 +24,9 @@ pub const TIMEOUT_EPOCH_VERSION: Version = version(0, 7);
 pub const NO_BUILDER_COMMITMENT_VERSION: Version = version(0, 7);
 // The LargeBlock chain-config change ships in the same upgrade as the timeout-epoch binding.
 pub const LARGE_BLOCK_VERSION: Version = TIMEOUT_EPOCH_VERSION;
-pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
+// The stake table's canonical order also ships in that upgrade: from it on, equal stakes are
+// ranked by account address and the active validators are listed by address.
+pub const CANONICAL_STAKE_TABLE_ORDER_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 pub const MAX_SUPPORTED_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 
 // Known upgrade hashes:

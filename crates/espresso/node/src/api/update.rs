@@ -15,7 +15,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::new_protocol::CoordinatorEvent;
 
-use super::{StorageState, context::ApiContext, data_source::SequencerDataSource};
+use super::{StorageState, data_source::SequencerDataSource};
 use crate::{EventConsumer, SeqTypes};
 
 #[async_trait]
@@ -62,17 +62,13 @@ impl DecideSink for NullEventConsumer {
 
 #[derive(Derivative, From)]
 #[derivative(Clone(bound = ""), Debug(bound = "D: Debug"))]
-pub(crate) struct ApiEventConsumer<C, D>
-where
-    C: ApiContext,
-{
-    inner: Arc<StorageState<C, D>>,
+pub(crate) struct ApiEventConsumer<D> {
+    inner: Arc<StorageState<D>>,
 }
 
 #[async_trait]
-impl<C, D> EventConsumer for ApiEventConsumer<C, D>
+impl<D> EventConsumer for ApiEventConsumer<D>
 where
-    C: ApiContext,
     D: SequencerDataSource + Debug + Send + Sync + 'static,
 {
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
@@ -84,9 +80,8 @@ where
 }
 
 #[async_trait]
-impl<C, D> DecideSink for ApiEventConsumer<C, D>
+impl<D> DecideSink for ApiEventConsumer<D>
 where
-    C: ApiContext,
     D: SequencerDataSource + UpdateAvailabilityData<SeqTypes> + Debug + Send + Sync + 'static,
 {
     async fn append(&self, info: BlockInfo<SeqTypes>) -> anyhow::Result<()> {

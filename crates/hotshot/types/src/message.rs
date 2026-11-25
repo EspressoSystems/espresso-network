@@ -15,7 +15,6 @@ use std::{
     sync::Arc,
 };
 
-use committable::Committable;
 use hotshot_utils::anytrace::*;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -30,11 +29,10 @@ pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
 
 use crate::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposal2Legacy, QuorumProposalWrapper, UpgradeProposal, VidDisperseShare0,
-        VidDisperseShare1, VidDisperseShare2, ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        QuorumProposal2Legacy, UpgradeProposal, VidDisperseShare0, VidDisperseShare1,
+        VidDisperseShare2, ViewNumber,
     },
-    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     request_response::ProposalRequestPayload,
     simple_certificate::{
         DaCertificate, DaCertificate2, EpochRootQuorumCertificateV1, EpochRootQuorumCertificateV2,
@@ -49,7 +47,6 @@ use crate::{
         ViewSyncPreCommitVote2,
     },
     traits::{
-        election::{Membership, NonEpochMembershipSnapshot},
         network::{DataRequest, ResponseMessage, ViewMessage},
         node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -89,37 +86,6 @@ impl<TYPES: NodeType> HasViewNumber for Message<TYPES> {
 #[derive(Clone, Debug)]
 pub struct Messages<TYPES: NodeType>(pub Vec<Message<TYPES>>);
 
-/// A message type agnostic description of a message's purpose
-#[derive(PartialEq, Copy, Clone)]
-pub enum MessagePurpose {
-    /// Message with a [quorum/DA] proposal.
-    Proposal,
-    /// Message with most recent [quorum/DA] proposal the server has
-    LatestProposal,
-    /// Message with most recent view sync certificate the server has
-    LatestViewSyncCertificate,
-    /// Message with a quorum vote.
-    Vote,
-    /// Message with a view sync vote.
-    ViewSyncVote,
-    /// Message with a view sync certificate.
-    ViewSyncCertificate,
-    /// Message with a DAC.
-    DaCertificate,
-    /// Message for internal use
-    Internal,
-    /// Data message
-    Data,
-    /// VID disperse, like [`Proposal`].
-    VidDisperse,
-    /// Message with an upgrade proposal.
-    UpgradeProposal,
-    /// Upgrade vote.
-    UpgradeVote,
-    /// A message to be passed through to external listeners
-    External,
-}
-
 // TODO (da) make it more customized to the consensus layer, maybe separating the specific message
 // data from the kind enum.
 /// Enum representation of any message type
@@ -132,16 +98,6 @@ pub enum MessageKind<TYPES: NodeType> {
     Data(DataMessage<TYPES>),
     /// A (still serialized) message to be passed through to external listeners
     External(#[serde(with = "serde_bytes")] Vec<u8>),
-}
-
-/// List of keys to send a message to, or broadcast to all known keys
-pub enum RecipientList<K: SignatureKey> {
-    /// Broadcast to all
-    Broadcast,
-    /// Send a message directly to a key
-    Direct(K),
-    /// Send a message directly to many keys
-    Many(Vec<K>),
 }
 
 impl<TYPES: NodeType> MessageKind<TYPES> {
@@ -586,77 +542,6 @@ where
     }
 }
 
-impl<TYPES> Proposal<TYPES, QuorumProposal<TYPES>>
-where
-    TYPES: NodeType,
-{
-    /// Checks that the signature of the quorum proposal is valid.
-    /// # Errors
-    /// Returns an error when the proposal signature is invalid.
-    pub fn validate_signature(
-        &self,
-        membership: &TYPES::Membership,
-        _epoch_height: u64,
-        upgrade_lock: &UpgradeLock<TYPES>,
-    ) -> Result<()> {
-        let view_number = self.data.view_number();
-        let view_leader_key = membership.non_epoch_snapshot().leader(view_number)?;
-        let proposed_leaf = Leaf::from_quorum_proposal(&self.data);
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit(upgrade_lock).as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
-    }
-}
-
-impl<TYPES> Proposal<TYPES, QuorumProposalWrapper<TYPES>>
-where
-    TYPES: NodeType,
-{
-    /// Checks that the signature of the quorum proposal is valid.
-    /// # Errors
-    /// Returns an error when the proposal signature is invalid.
-    pub fn validate_signature(&self, membership: &EpochMembership<TYPES>) -> Result<()> {
-        let view_number = self.data.proposal.view_number();
-        let view_leader_key = membership.leader(view_number)?;
-        let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
-    }
-}
-
-impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
-where
-    TYPES: NodeType,
-{
-    pub fn validate_signature(
-        &self,
-        membership_coordinator: &EpochMembershipCoordinator<TYPES>,
-    ) -> Result<()> {
-        let view_number = self.data.view_number();
-        let epoch = self.data.epoch().ok_or(error!("Epoch is not set"))?;
-        let membership = membership_coordinator.membership_for_epoch(Some(epoch))?;
-        let view_leader_key = membership.leader(view_number)?;
-        let proposed_leaf =
-            Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(self.data.clone()));
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
-    }
-}
-
 /// A lock for an upgrade certificate decided by HotShot.
 #[derive(Clone, Debug)]
 pub struct UpgradeLock<TYPES: NodeType> {
@@ -780,6 +665,18 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
     pub fn timeout_epoch_bound(&self, timed_out_view: ViewNumber) -> bool {
         let v = ViewNumber::new(timed_out_view.u64().saturating_add(1));
         self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
+    }
+
+    /// Whether the certificate rule governs votes at `view`.
+    ///
+    /// Under it a node does not vote2 at a view it has sent a timeout vote
+    /// for, and a vote1 for a proposal after a timeout checks the proposal's
+    /// parent against the lock its timeout certificate carries instead of
+    /// against the voter's own votes. The certificates that carry a lock are
+    /// the epoch-binding ones, so the rule starts with them:
+    /// `certificate_rule(v) == timeout_epoch_bound(v - 1)`.
+    pub fn certificate_rule(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= TIMEOUT_EPOCH_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()`

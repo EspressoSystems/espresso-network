@@ -33,8 +33,6 @@ pub struct TwoStakeTables<
     epochs: BTreeSet<u64>,
 
     drb_results: BTreeMap<u64, DrbResult>,
-
-    first_epoch: Option<u64>,
 }
 
 impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
@@ -73,14 +71,12 @@ where
                 .filter(|(idx, _)| idx % 2 == 1)
                 .map(|(_, entry)| entry.clone())
                 .collect(),
-            first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
         }
     }
 
-    fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
+    fn stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         if epoch != 0 && epoch.is_multiple_of(2) {
             self.quorum_1_members.clone()
         } else {
@@ -88,8 +84,7 @@ where
         }
     }
 
-    fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStakeTables");
+    fn da_stake_table(&self, epoch: u64) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
         if epoch != 0 && epoch.is_multiple_of(2) {
             self.da_1_members.clone()
         } else {
@@ -105,7 +100,7 @@ where
             .collect()
     }
 
-    fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
+    fn lookup_leader(&self, view_number: u64, epoch: u64) -> anyhow::Result<PubKey> {
         let stake_table = self.stake_table(epoch);
 
         let index = view_number as usize % stake_table.len();
@@ -131,8 +126,6 @@ where
     }
 
     fn set_first_epoch(&mut self, epoch: u64, initial_drb_result: DrbResult) {
-        self.first_epoch = Some(epoch);
-
         self.add_epoch_root(epoch);
         self.add_epoch_root(epoch + 1);
 
@@ -145,10 +138,6 @@ where
             .get(&epoch)
             .context("DRB result missing")
             .copied()
-    }
-
-    fn first_epoch(&self) -> Option<u64> {
-        self.first_epoch
     }
 
     fn add_da_committee(

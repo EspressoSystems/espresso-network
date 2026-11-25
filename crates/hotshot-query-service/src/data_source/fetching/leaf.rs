@@ -196,7 +196,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                 Ok(mut tx) => {
                     // Don't bother fetching a pruned leaf.
                     if let Ok(pruned_height) = tx.load_pruned_height().await
-                        && pruned_height.is_some_and(|ph| height <= ph)
+                        && pruned_height.is_some_and(|ph| height - 1 <= ph)
                     {
                         tracing::info!(height, ?pruned_height, "not fetching pruned parent leaf");
                         return;

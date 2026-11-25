@@ -1,7 +1,7 @@
 version: "3"
 
 # Benchmark network: 3 equal-stake validators, so every certificate needs all 3.
-# node0: espresso-node on Postgres with the query service. node1, node2: espresso-node-sqlite.
+# node0: espresso-node on Postgres with the query service. node1, node2: espresso-node on SQLite.
 # node0 is the only availability provider, so it has no API peers to fetch missing data from.
 # Started by scripts/network-bench/bench from the repo root with BENCH_OUT and
 # ESPRESSO_BASE_STORAGE_PATH set. Keys, ports and addresses come from the repo .env.
@@ -18,7 +18,6 @@ x-availability:
     restart: exit_on_failure
 
 environment:
-  - ESPRESSO_NODE_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
   - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
@@ -98,7 +97,7 @@ processes:
     availability: *run-forever
 
   espresso-node-0:
-    command: RUST_LOG=info,libp2p=off RUST_LOG_FORMAT=json espresso-node -- storage-sql -- http -- query -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json espresso-node -- storage-sql -- http -- query -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node0.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
@@ -106,8 +105,6 @@ processes:
       - ESPRESSO_NODE_IS_DA=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_0_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT},http://localhost:${ESPRESSO_NODE_2_API_PORT}
@@ -142,7 +139,7 @@ processes:
     availability: *run-forever
 
   espresso-node-1:
-    command: RUST_LOG=info,libp2p=off RUST_LOG_FORMAT=json espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node1.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
@@ -150,8 +147,6 @@ processes:
       - ESPRESSO_NODE_IS_DA=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_2_API_PORT}
@@ -174,7 +169,7 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: RUST_LOG=info,libp2p=off RUST_LOG_FORMAT=json espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info RUST_LOG_FORMAT=json ESPRESSO_NODE_EMBEDDED_DB=true espresso-node -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node2.log
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
@@ -182,8 +177,6 @@ processes:
       - ESPRESSO_NODE_IS_DA=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_2_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_2_TONIC_PORT}
-      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
-      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}

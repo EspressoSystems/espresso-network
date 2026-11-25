@@ -22,7 +22,7 @@
 //! In any case, the query service is able to fetch missing data asynchronously and out of
 //! chronological order, and pending [`Fetch`](crate::availability::Fetch) requests for the missing
 //! data will resolve as soon as the data is available. Data can be fetched from any external data
-//! availability service, including the HotShot CDN, the data availability committee which is
+//! availability service, including the data availability committee which is
 //! responsible for providing a particular payload, or another instance of this same query service.
 //!
 //! This module defines an abstract interface [`Provider`], which allows data to be fetched from any

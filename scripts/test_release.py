@@ -1912,7 +1912,7 @@ class PlanPublish(unittest.TestCase):
     def test_release_plan_missing_release_creates_ok(self):
         prev, (create,) = plan([release("0.7.0.0")], "0.7.0.5")
         self.assertIsNone(prev)
-        self.assertTrue(create.create)
+        self.assertEqual(create.action, "create")
         self.assertEqual(create.title, "0.7.0.5 [decaf]")
         self.assertTrue(create.body.startswith("<!-- publish:decaf prev=none"))
         self.assertIn(f"{rel.WHATS_CHANGED_OPEN}\n{GENERATED}\n", create.body)
@@ -1982,7 +1982,7 @@ class PlanPublish(unittest.TestCase):
     def test_release_plan_whats_changed_create_rollback_has_no_section_ok(self):
         releases = published([release("0.7.0.3")], "0.7.0.3")
         _prev, (create, _old) = plan(releases, "0.7.0.1")
-        self.assertTrue(create.create)
+        self.assertEqual(create.action, "create")
         self.assertNotIn(rel.WHATS_CHANGED_OPEN, create.body)
 
     def test_release_plan_whats_changed_rerun_idempotent_ok(self):
@@ -1996,7 +1996,56 @@ class PlanPublish(unittest.TestCase):
 
     def test_release_plan_existing_release_is_edited_ok(self):
         _prev, (edit,) = plan([release("0.7.0.1")], "0.7.0.1")
-        self.assertFalse(edit.create)
+        self.assertEqual(edit.action, "edit")
+
+    def test_release_plan_mainnet_promotion_recreates_ok(self):
+        releases = published([release("0.7.0.1"), release("0.7.0.2")], "0.7.0.2")
+        _prev, (target,) = plan(releases, "0.7.0.2", "mainnet")
+        self.assertEqual(target.action, "recreate")
+        self.assertEqual(target.old, releases[1])
+
+    def test_release_plan_mainnet_rollback_recreates_ok(self):
+        releases = published(
+            [release("0.7.0.1"), release("0.7.0.2")], "0.7.0.2", "mainnet"
+        )
+        _prev, (target, superseded) = plan(releases, "0.7.0.1", "mainnet")
+        self.assertEqual(target.action, "recreate")
+        self.assertEqual(superseded.action, "edit")
+
+    def test_release_plan_rerun_after_delete_before_create_creates_ok(self):
+        releases = published([release("0.7.0.1"), release("0.7.0.2")], "0.7.0.2")
+        deleted = [releases[0]]
+        _prev, (target,) = plan(
+            deleted, "0.7.0.2", "mainnet", tags=[t("0.7.0.1"), t("0.7.0.2")]
+        )
+        self.assertEqual(target.action, "create")
+        self.assertEqual(target.title, "0.7.0.2 [mainnet]")
+        self.assertNotIn("publish:decaf", target.body)
+
+    def test_release_plan_rerun_after_recreate_before_supersede_edits_ok(self):
+        releases = published(
+            [release("0.7.0.1"), release("0.7.0.2")], "0.7.0.1", "mainnet"
+        )
+        releases = published(releases, "0.7.0.2", "decaf")
+        _prev, edits = plan(releases, "0.7.0.2", "mainnet")
+        self.assertEqual(edits[0].action, "recreate")
+        partial = apply(releases, edits[:1])
+        _prev, again = plan(partial, "0.7.0.2", "mainnet")
+        self.assertEqual(
+            [(e.tag, e.action) for e in again],
+            [("0.7.0.2", "edit"), ("0.7.0.1", "edit")],
+        )
+        self.assertNotIn("mainnet", rel.title_networks(again[1].title))
+
+    def test_release_plan_mainnet_rerun_of_holder_edits_ok(self):
+        releases = published([release("0.7.0.1")], "0.7.0.1", "mainnet")
+        _prev, (target,) = plan(releases, "0.7.0.1", "mainnet")
+        self.assertEqual(target.action, "edit")
+
+    def test_release_plan_decaf_existing_release_edits_ok(self):
+        releases = published([release("0.7.0.1")], "0.7.0.1", "mainnet")
+        _prev, (target,) = plan(releases, "0.7.0.1", "decaf")
+        self.assertEqual(target.action, "edit")
 
     def test_release_plan_rerun_keeps_prev_date_and_notes_ok(self):
         releases = published(
@@ -2214,14 +2263,64 @@ class CmdPublish(unittest.TestCase):
         comments = [c for c in runner.calls if c[:3] == ["gh", "issue", "comment"]]
         self.assertIn("Published `0.7.0.2` on `decaf`", comments[0][-1])
 
-    def test_release_cmd_publish_mainnet_sends_latest_ok(self):
+    def test_release_cmd_publish_mainnet_promotion_recreates_ok(self):
         runner = self._runner()
+        runner.responses[("gh", "release", "delete")] = ""
+        runner.responses[("gh", "release", "create")] = ""
         code = rel.cmd_publish(
             self._args("/publish 0.7.0.2 mainnet"), rel.Git(runner), rel.Gh(runner)
         )
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0, runner.calls)
+        delete = next(c for c in runner.calls if c[:3] == ["gh", "release", "delete"])
+        self.assertEqual(delete[3], "0.7.0.2")
+        self.assertNotIn("--cleanup-tag", delete)
+        create = next(c for c in runner.calls if c[:3] == ["gh", "release", "create"])
+        self.assertIn("--latest=true", create)
+        self.assertLess(runner.calls.index(delete), runner.calls.index(create))
+        self.assertFalse(runner.ran("gh", "release", "edit", "0.7.0.2"))
+
+    def test_release_cmd_publish_mainnet_recreate_prints_old_body_ok(self):
+        rows = [release_row("0.7.0.1"), release_row("0.7.0.2", body="old decaf block")]
+        runner = self._runner(releases=rows)
+        runner.responses[("gh", "release", "delete")] = ""
+        runner.responses[("gh", "release", "create")] = ""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rel.cmd_publish(
+                self._args("/publish 0.7.0.2 mainnet"), rel.Git(runner), rel.Gh(runner)
+            )
+        self.assertEqual(code, 0, runner.calls)
+        self.assertIn("old decaf block", out.getvalue())
+
+    def test_release_cmd_publish_mainnet_rollback_orders_calls_ok(self):
+        held = published([release("0.7.0.1"), release("0.7.0.2")], "0.7.0.2", "mainnet")
+        rows = [release_row(r.tag, r.title, r.body) for r in held]
+        runner = self._runner(releases=rows)
+        runner.responses[("gh", "release", "delete")] = ""
+        runner.responses[("gh", "release", "create")] = ""
+        code = rel.cmd_publish(
+            self._args("/publish 0.7.0.1 mainnet"), rel.Git(runner), rel.Gh(runner)
+        )
+        self.assertEqual(code, 0, runner.calls)
+        create = next(c for c in runner.calls if c[:3] == ["gh", "release", "create"])
+        edit = next(c for c in runner.calls if c[:3] == ["gh", "release", "edit"])
+        self.assertIn("--latest=true", create)
+        self.assertEqual(edit[3], "0.7.0.2")
+        self.assertIn("--latest=false", edit)
+        self.assertLess(runner.calls.index(create), runner.calls.index(edit))
+
+    def test_release_cmd_publish_mainnet_rerun_edits_ok(self):
+        held = published([release("0.7.0.1"), release("0.7.0.2")], "0.7.0.2", "mainnet")
+        rows = [release_row(r.tag, r.title, r.body) for r in held]
+        runner = self._runner(releases=rows)
+        code = rel.cmd_publish(
+            self._args("/publish 0.7.0.2 mainnet"), rel.Git(runner), rel.Gh(runner)
+        )
+        self.assertEqual(code, 0, runner.calls)
         edit_call = next(c for c in runner.calls if c[:3] == ["gh", "release", "edit"])
         self.assertIn("--latest=true", edit_call)
+        self.assertFalse(runner.ran("gh", "release", "delete"))
+        self.assertFalse(runner.ran("gh", "release", "create"))
 
     def test_release_cmd_publish_bot_marker_fails(self):
         runner = self._runner()
@@ -2347,6 +2446,8 @@ class CmdPublish(unittest.TestCase):
         ]
         runner = self._runner(releases=rows)
         runner.responses[("git", "tag", "--list", "0.7.1.*")] = "0.7.1.0\n0.7.1.1\n"
+        runner.responses[("gh", "release", "delete")] = ""
+        runner.responses[("gh", "release", "create")] = ""
         runner.responses[("gh", "issue", "view")] = json.dumps(
             {"title": "Release 0.7.1", "body": ""}
         )
@@ -2502,7 +2603,7 @@ class GhReleaseEdit(unittest.TestCase):
 class GhReleaseCreate(unittest.TestCase):
     def test_release_gh_release_create_flags_ok(self):
         runner = FakeRunner({("gh", "release", "create"): ""})
-        edit = rel.ReleaseEdit("0.7.0.1", "0.7.0.1 [mainnet]", "body", True)
+        edit = rel.ReleaseEdit("0.7.0.1", "0.7.0.1 [mainnet]", "body", "create")
         rel.Gh(runner).release_create(edit)
         call = runner.calls[-1]
         self.assertEqual(call[:4], ["gh", "release", "create", "0.7.0.1"])
@@ -2512,6 +2613,60 @@ class GhReleaseCreate(unittest.TestCase):
         self.assertNotIn("--notes-start-tag", call)
         self.assertEqual(call[call.index("--title") + 1], "0.7.0.1 [mainnet]")
         self.assertNotIn("--prerelease", call)
+
+    def test_release_gh_release_recreate_order_ok(self):
+        out = io.StringIO()
+
+        def run(argv):
+            if argv[:3] == ["gh", "release", "delete"]:
+                out.write("<delete>")
+            return runner(argv)
+
+        runner = FakeRunner(
+            {("gh", "release", "delete"): "", ("gh", "release", "create"): ""}
+        )
+        old = rel.ReleaseInfo("0.7.0.1", "0.7.0.1 [decaf]", "old body")
+        edit = rel.ReleaseEdit(
+            "0.7.0.1", "0.7.0.1 [decaf, mainnet]", "new", "recreate", old
+        )
+        with contextlib.redirect_stdout(out):
+            rel.Gh(run).release_recreate(edit)
+        logged = out.getvalue()
+        self.assertRegex(
+            logged, r"# old release 0\.7\.0\.1: 0\.7\.0\.1 \[decaf\]\nold body\n# end"
+        )
+        self.assertLess(logged.index("old body"), logged.index("<delete>"))
+        self.assertEqual(
+            runner.calls[0], ["gh", "release", "delete", "0.7.0.1", "--yes"]
+        )
+        self.assertEqual(runner.calls[1][:4], ["gh", "release", "create", "0.7.0.1"])
+        self.assertIn("--verify-tag", runner.calls[1])
+
+    def test_release_gh_release_recreate_restores_old_on_create_failure_fails(self):
+        creates = []
+
+        def run(argv):
+            if argv[:3] == ["gh", "release", "create"]:
+                creates.append(argv)
+                if len(creates) == 1:
+                    raise RuntimeError("create failed")
+            return runner(argv)
+
+        runner = FakeRunner(
+            {("gh", "release", "delete"): "", ("gh", "release", "create"): ""}
+        )
+        old = rel.ReleaseInfo("0.7.0.1", "0.7.0.1 [decaf]", "old body")
+        edit = rel.ReleaseEdit(
+            "0.7.0.1", "0.7.0.1 [decaf, mainnet]", "new", "recreate", old
+        )
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(RuntimeError, "create failed"),
+        ):
+            rel.Gh(run).release_recreate(edit)
+        restore = creates[1]
+        self.assertEqual(restore[restore.index("--title") + 1], "0.7.0.1 [decaf]")
+        self.assertIn("--latest=false", restore)
 
     def test_release_gh_generate_notes_argv_ok(self):
         prefix = ("gh", "api", "repos/{owner}/{repo}/releases/generate-notes")

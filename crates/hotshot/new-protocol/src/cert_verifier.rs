@@ -10,13 +10,16 @@ use std::{
 use alloy::primitives::U256;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch::EpochLength,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{
         Certificate1, Certificate2, SimpleCertificate, Threshold, TimeoutCertificate2,
         TimeoutCertificate3,
     },
-    simple_vote::{HasEpoch, QuorumData2, TimeoutData2, TimeoutData3, Vote2Data, Voteable},
+    simple_vote::{
+        HasEpoch, LockView, QuorumData2, TimeoutData2, TimeoutLock, Vote2Data, Voteable,
+    },
     stake_table::StakeTableEntries,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber},
@@ -25,7 +28,10 @@ use hotshot_utils::anytrace::{Result, Wrap, bail, ensure};
 use tokio_util::task::JoinMap;
 use tracing::{error, warn};
 
-use crate::message::{EpochChangeMessage, Unchecked, Validated};
+use crate::{
+    helpers::ViewEpoch,
+    message::{EpochChangeMessage, ReVoteMessage, Unchecked, Validated},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValidCert<C> {
@@ -83,12 +89,20 @@ pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
 
     fn key(&self) -> Option<Self::Key>;
 
+    /// The epochs whose committees [`Self::check`] reads.
+    ///
+    /// The item waits until every one of them is known.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        self.epoch().into_iter()
+    }
+
     fn check(
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         upgrade_lock: &UpgradeLock<T>,
+        memberships: &EpochMembershipCoordinator<T>,
     ) -> Result<Self::Output>;
 }
 
@@ -99,22 +113,23 @@ where
     V: Threshold<T>,
     Self: Certificate<T, D> + Send + 'static,
 {
-    type Key = ViewNumber;
+    type Key = ViewEpoch;
     type Output = Self;
 
-    fn key(&self) -> Option<ViewNumber> {
-        Some(self.view_number())
+    fn key(&self) -> Option<ViewEpoch> {
+        Some(ViewEpoch(self.view_number(), self.epoch()?))
     }
 
     fn check(
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         upgrade_lock: &UpgradeLock<T>,
+        _: &EpochMembershipCoordinator<T>,
     ) -> Result<Self> {
         ensure! {
-            self.data.consistent_with(self.view_number(), epoch_height),
+            self.data.consistent_with(self.view_number(), epoch_length),
             "certificate data is inconsistent"
         }
         if self.view_number() == ViewNumber::genesis() && D::UNSIGNED_AT_GENESIS_ALLOWED {
@@ -134,7 +149,7 @@ trait Meta {
     /// Checked in `check`, so a certificate failing it is never recorded as
     /// verified and cannot retire its key for other senders. It runs before the
     /// genesis exemption, which therefore cannot skip it.
-    fn consistent_with(&self, view: ViewNumber, epoch_height: u64) -> bool;
+    fn consistent_with(&self, view: ViewNumber, epoch_length: EpochLength) -> bool;
 }
 
 impl<T: NodeType> Meta for QuorumData2<T> {
@@ -143,25 +158,19 @@ impl<T: NodeType> Meta for QuorumData2<T> {
     // as at any other, so none of them gets this exception.
     const UNSIGNED_AT_GENESIS_ALLOWED: bool = true;
 
-    fn consistent_with(&self, _: ViewNumber, epoch_height: u64) -> bool {
-        self.is_well_formed(epoch_height)
+    fn consistent_with(&self, _: ViewNumber, epoch_length: EpochLength) -> bool {
+        self.is_well_formed(epoch_length)
     }
 }
 
 impl<T: NodeType> Meta for Vote2Data<T> {
-    fn consistent_with(&self, _: ViewNumber, epoch_height: u64) -> bool {
-        self.is_well_formed(epoch_height)
+    fn consistent_with(&self, _: ViewNumber, epoch_length: EpochLength) -> bool {
+        self.is_well_formed(epoch_length)
     }
 }
 
 impl Meta for TimeoutData2 {
-    fn consistent_with(&self, view: ViewNumber, _: u64) -> bool {
-        self.view == view
-    }
-}
-
-impl Meta for TimeoutData3 {
-    fn consistent_with(&self, view: ViewNumber, _: u64) -> bool {
+    fn consistent_with(&self, view: ViewNumber, _: EpochLength) -> bool {
         self.view == view
     }
 }
@@ -201,14 +210,135 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         upgrade_lock: &UpgradeLock<T>,
+        _: &EpochMembershipCoordinator<T>,
     ) -> Result<Self::Output> {
-        self.well_formed(epoch_height).wrap()?;
+        self.well_formed(epoch_length).wrap()?;
         verify_signatures(&self.cert1, stake_table, threshold, upgrade_lock)?;
         verify_signatures(&self.cert2, stake_table, threshold, upgrade_lock)?;
         Ok(self.into_validated())
     }
+}
+
+impl<T: NodeType> Verifiable<T> for TimeoutCertificate3<T> {
+    type Key = ViewNumber;
+    type Output = Self;
+
+    fn key(&self) -> Option<ViewNumber> {
+        Some(self.view_number())
+    }
+
+    /// Its own epoch, and its lock's if the lock is recent: the lock
+    /// certificate is verified against that epoch's committee.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        std::iter::once(self.epoch).chain(self.timeout_lock().verified_in())
+    }
+
+    fn check(
+        self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        epoch_length: EpochLength,
+        upgrade_lock: &UpgradeLock<T>,
+        memberships: &EpochMembershipCoordinator<T>,
+    ) -> Result<Self> {
+        verify_timeout3(
+            &self,
+            stake_table,
+            threshold,
+            epoch_length,
+            upgrade_lock,
+            memberships,
+        )?;
+        Ok(self)
+    }
+}
+
+impl<T: NodeType> Verifiable<T> for ReVoteMessage<T, Unchecked> {
+    type Key = ViewNumber;
+    type Output = ReVoteMessage<T, Validated>;
+
+    fn key(&self) -> Option<ViewNumber> {
+        Some(self.view_number())
+    }
+
+    /// Its own epoch, and the lock's of its timeout certificate if that lock
+    /// is recent: the lock certificate is verified against that epoch's
+    /// committee.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        let lock = self
+            .revote
+            .timeout
+            .as_ref()
+            .and_then(|tc| tc.timeout_lock().verified_in());
+        std::iter::once(self.revote.epoch).chain(lock)
+    }
+
+    fn check(
+        self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        epoch_length: EpochLength,
+        upgrade_lock: &UpgradeLock<T>,
+        memberships: &EpochMembershipCoordinator<T>,
+    ) -> Result<Self::Output> {
+        let revote = &self.revote;
+        ensure! {
+            upgrade_lock.certificate_rule(revote.view),
+            "re-vote request for view {} before the certificate rule", revote.view
+        }
+        revote.well_formed(epoch_length).wrap()?;
+        let leader = memberships
+            .membership_for_epoch(revote.epoch)
+            .wrap()?
+            .leader(revote.view)?;
+        ensure! {
+            self.signed_by(&leader),
+            "re-vote request not signed by its leader"
+        }
+        verify_signatures(&revote.cert1, stake_table, threshold, upgrade_lock)?;
+        if let Some(timeout) = &revote.timeout {
+            verify_timeout3(
+                timeout,
+                stake_table,
+                threshold,
+                epoch_length,
+                upgrade_lock,
+                memberships,
+            )?;
+        }
+        Ok(self.into_validated())
+    }
+}
+
+/// Verify a lock-carrying timeout certificate: its groups against the
+/// committee given, and its lock certificate against the committee of the
+/// lock's own epoch.
+pub(crate) fn verify_timeout3<T: NodeType>(
+    tc: &TimeoutCertificate3<T>,
+    stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+    threshold: U256,
+    epoch_length: EpochLength,
+    upgrade_lock: &UpgradeLock<T>,
+    memberships: &EpochMembershipCoordinator<T>,
+) -> Result<()> {
+    ensure! {
+        upgrade_lock.timeout_epoch_bound(tc.view_number()),
+        "timeout certificate for view {} must not bind its epoch", tc.view_number()
+    }
+    tc.check_signatures(stake_table, threshold, upgrade_lock)?;
+    let TimeoutLock::Recent(cert) = tc.timeout_lock() else {
+        return Ok(());
+    };
+    ensure! {
+        cert.data.is_well_formed(epoch_length),
+        "timeout certificate lock is not well formed"
+    }
+    let epoch = LockView::of(cert).epoch;
+    let membership = memberships.membership_for_epoch(epoch).wrap()?;
+    let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+    verify_signatures(cert, &entries, membership.success_threshold(), upgrade_lock)
 }
 
 /// Verifies certificates off the main coordinator thread.
@@ -287,21 +417,32 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
             return None;
         }
 
-        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+        let Ok(membership) = self.membership.membership_for_epoch(epoch) else {
             self.pending_membership
                 .entry(key)
                 .or_default()
                 .insert(sender, cert);
             return Some(epoch);
         };
+        let missing = cert
+            .epochs()
+            .find(|epoch| self.membership.membership_for_epoch(*epoch).is_err());
+        if let Some(missing) = missing {
+            self.pending_membership
+                .entry(key)
+                .or_default()
+                .insert(sender, cert);
+            return Some(missing);
+        }
 
         let lock = self.upgrade_lock.clone();
-        let epoch_height = *self.membership.epoch_height();
+        let epoch_length = self.membership.epoch_length();
+        let memberships = self.membership.clone();
 
         self.tasks.spawn_blocking(key, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
-            match cert.check(&entries, threshold, epoch_height, &lock) {
+            match cert.check(&entries, threshold, epoch_length, &lock, &memberships) {
                 Ok(valid) => Some(ValidCert::new(valid, epoch)),
                 Err(err) => {
                     warn!(%key, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
@@ -505,19 +646,27 @@ where
             return None;
         }
 
-        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+        let Ok(membership) = self.membership.membership_for_epoch(epoch) else {
             self.pending.insert(sender, cert);
             return Some(epoch);
         };
+        let missing = cert
+            .epochs()
+            .find(|epoch| self.membership.membership_for_epoch(*epoch).is_err());
+        if let Some(missing) = missing {
+            self.pending.insert(sender, cert);
+            return Some(missing);
+        }
 
         let lock = self.upgrade_lock.clone();
-        let epoch_height = *self.membership.epoch_height();
+        let epoch_length = self.membership.epoch_length();
+        let memberships = self.membership.clone();
 
         self.in_flight.insert(key, sender.clone());
         self.tasks.spawn_blocking(sender, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
-            match cert.check(&entries, threshold, epoch_height, &lock) {
+            match cert.check(&entries, threshold, epoch_length, &lock, &memberships) {
                 Ok(valid) => (key, Some(ValidCert::new(valid, epoch))),
                 Err(err) => {
                     warn!(%view, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
@@ -667,6 +816,7 @@ pub struct CertVerifiers<T: NodeType> {
     pub timeout3: CertBySenderVerifier<T, TimeoutCertificate3<T>>,
     pub advance: CertBySenderVerifier<T, Certificate1<T>>,
     pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
+    pub revote: CertVerifier<T, ReVoteMessage<T, Unchecked>>,
 }
 
 impl<T: NodeType> CertVerifiers<T> {
@@ -689,7 +839,8 @@ impl<T: NodeType> CertVerifiers<T> {
                 upgrade_lock.clone(),
                 Completion::PerViewAndEpoch,
             ),
-            epoch_change: CertVerifier::new(membership, upgrade_lock),
+            epoch_change: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
+            revote: CertVerifier::new(membership, upgrade_lock),
         }
     }
 
@@ -715,15 +866,19 @@ impl<T: NodeType> CertVerifiers<T> {
         for epoch in self.epoch_change.retry_pending() {
             request(epoch);
         }
+        for epoch in self.revote.retry_pending() {
+            request(epoch);
+        }
     }
 
     pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.cert1.gc(view);
-        self.cert2.gc(view);
+        self.cert1.gc(ViewEpoch::start(view));
+        self.cert2.gc(ViewEpoch::start(view));
         self.timeout.gc(view);
         self.timeout3.gc(view);
         self.advance.gc(view);
         self.epoch_change.gc(epoch);
+        self.revote.gc(view);
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
@@ -734,6 +889,7 @@ impl<T: NodeType> CertVerifiers<T> {
             .saturating_add(self.timeout3.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
             .saturating_add(self.epoch_change.num_invalid_certs())
+            .saturating_add(self.revote.num_invalid_certs())
     }
 }
 
@@ -747,7 +903,7 @@ mod tests {
         data::{EpochNumber, ViewNumber},
         signature_key::BLSPubKey,
         simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
-        simple_vote::{TimeoutData2, TimeoutData3},
+        simple_vote::TimeoutData2,
         traits::signature_key::SignatureKey as _,
         vote::HasViewNumber,
     };
@@ -755,7 +911,10 @@ mod tests {
     use super::{CertBySenderVerifier, Completion, CompletionKey};
     use crate::{
         helpers::{test_timeout_epoch_lock, test_upgrade_lock},
-        tests::common::utils::{build_timeout_cert, mock_membership},
+        tests::common::utils::{
+            TEST_DRB_RESULT, build_cert1, build_timeout_cert, build_timeout_cert3_with_lock,
+            mock_membership,
+        },
     };
 
     fn sender(i: u64) -> BLSPubKey {
@@ -783,7 +942,7 @@ mod tests {
 
     fn valid_tc(view: u64) -> TimeoutCertificate2<TestTypes> {
         let epoch = EpochNumber::genesis();
-        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         match build_timeout_cert(
             ViewNumber::new(view),
@@ -815,8 +974,93 @@ mod tests {
     }
 
     fn junk_tc3(view: ViewNumber, epoch: EpochNumber) -> TimeoutCertificate3<TestTypes> {
-        let data = TimeoutData3 { view, epoch };
-        TimeoutCertificate3::new(data.clone(), data.commit(), view, None, PhantomData)
+        // Signed by a quorum, but over another view than the one it is for.
+        let membership = mock_membership().membership_for_epoch(epoch).unwrap();
+        let mut cert = build_timeout_cert3_with_lock(view + 1, epoch, None, &membership);
+        cert.view_number = view;
+        cert
+    }
+
+    /// Certificates of two epochs at one view are both verified: the outgoing
+    /// committee may certify a re-vote at a view the incoming one certifies
+    /// as well.
+    #[tokio::test]
+    async fn certificates_of_two_epochs_at_one_view_are_both_verified() {
+        let coordinator = mock_membership();
+        let mut verifier = super::CertVerifier::<TestTypes, super::Certificate1<TestTypes>>::new(
+            coordinator.clone(),
+            test_upgrade_lock(),
+        );
+        let view = ViewNumber::new(12);
+        let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let cert = |epoch: u64, block: u64| {
+            let epoch = EpochNumber::new(epoch);
+            let membership = coordinator.membership_for_epoch(epoch).unwrap();
+            let leaf = committable::RawCommitmentBuilder::new("leaf")
+                .u64(block)
+                .finalize();
+            build_cert1(leaf, epoch, block, &membership, view, &pk, &sk)
+        };
+        let (older, newer) = (cert(1, 10), cert(2, 11));
+        assert!(verifier.verify(pk, older.clone()).is_none());
+        assert_eq!(verifier.next().await.map(|c| c.into_cert()), Some(older));
+        assert!(verifier.verify(pk, newer.clone()).is_none());
+        assert_eq!(verifier.next().await.map(|c| c.into_cert()), Some(newer));
+    }
+
+    /// A certificate whose lock is of an epoch whose committee is not known yet
+    /// waits until it is, as one of an unknown epoch of its own does, and is
+    /// then verified.
+    #[tokio::test]
+    async fn certificate_with_a_lock_of_an_unknown_epoch_waits() {
+        let (lock_epoch, epoch) = (EpochNumber::new(3), EpochNumber::new(4));
+        let known = mock_membership();
+        for e in [lock_epoch, epoch] {
+            known.membership().register_epoch(e, TEST_DRB_RESULT);
+        }
+        let lock_membership = known.membership_for_epoch(lock_epoch).unwrap();
+        let membership = known.membership_for_epoch(epoch).unwrap();
+        let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let leaf = committable::RawCommitmentBuilder::new("leaf")
+            .u64(29)
+            .finalize();
+        let lock = build_cert1(
+            leaf,
+            lock_epoch,
+            29,
+            &lock_membership,
+            ViewNumber::new(30),
+            &pk,
+            &sk,
+        );
+        let tc = build_timeout_cert3_with_lock(ViewNumber::new(31), epoch, Some(lock), &membership);
+
+        let coordinator = mock_membership();
+        coordinator
+            .membership()
+            .register_epoch(epoch, TEST_DRB_RESULT);
+        assert!(
+            coordinator.membership_for_epoch(epoch).is_ok()
+                && coordinator.membership_for_epoch(lock_epoch).is_err(),
+            "setup: the certificate's committee is known, the lock's is not"
+        );
+        let mut verifier = CertBySenderVerifier::<TestTypes, TimeoutCertificate3<TestTypes>>::new(
+            coordinator.clone(),
+            test_timeout_epoch_lock(),
+            Completion::PerViewAndEpoch,
+        );
+        assert_eq!(verifier.verify(sender(1), tc.clone()), Some(lock_epoch));
+        assert!(verifier.tasks.is_empty(), "nothing is checked yet");
+
+        coordinator
+            .membership()
+            .register_epoch(lock_epoch, TEST_DRB_RESULT);
+        assert!(verifier.retry_pending().is_empty());
+        let valid = verifier
+            .next()
+            .await
+            .expect("verified once the lock's committee is known");
+        assert_eq!(valid.into_cert(), tc);
     }
 
     // ==================== Parking ====================
@@ -824,6 +1068,8 @@ mod tests {
     /// Same-view copies park instead of spawning redundant tasks.
     #[tokio::test]
     async fn test_same_view_copies_are_parked() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let mut verifier = verifier();
         let view = ViewNumber::new(1);
         let tc = valid_tc(1);
@@ -844,6 +1090,8 @@ mod tests {
     /// A sender can't park a second copy behind its own in-flight one.
     #[tokio::test]
     async fn test_same_sender_resubmit_is_dropped() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let mut verifier = verifier();
         let view = ViewNumber::new(1);
         let tc = valid_tc(1);
@@ -861,6 +1109,8 @@ mod tests {
     /// A parked copy is verified when the in-flight one proves invalid.
     #[tokio::test]
     async fn test_parked_copy_promoted_after_invalid() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let mut verifier = verifier();
         let view = ViewNumber::new(1);
 
@@ -879,6 +1129,8 @@ mod tests {
     /// Certificates for distinct views still verify concurrently.
     #[tokio::test]
     async fn test_distinct_views_verify_concurrently() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let mut verifier = verifier();
 
         verifier.verify(sender(1), valid_tc(1));
@@ -935,6 +1187,8 @@ mod tests {
     /// submissions for the view.
     #[tokio::test]
     async fn test_mark_completed_clears_view() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let mut verifier = verifier();
         let view = ViewNumber::new(1);
 
@@ -956,6 +1210,8 @@ mod tests {
     /// stale resubmits, and leaves views at or above the cutoff live.
     #[tokio::test]
     async fn test_gc_clears_stale_state() {
+        // Tests behaviour before 0.7.
+        crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
         let mut verifier = verifier();
         let live = ViewNumber::new(5);
 

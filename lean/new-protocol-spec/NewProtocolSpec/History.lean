@@ -185,14 +185,33 @@ def InEpoch (e : EpochNumber) : Prop :=
   EpochGround cfg h e ∧ ∀ e', EpochGround cfg h e' → e' ≤ e
 
 /--
-The node has given up view `v`: it timed out on `v` or a later view, or holds a
-timeout certificate for one.
+At step `n`, the node took a timer or the one-honest indication for view `v`.
+
+The timer fires for the view the node is in. The one-honest indication may be for
+a later view, since the node is following others who already left. Both are read
+from the history before the step (`h.upTo n`), not after it.
+-/
+def TimerAt (n : Nat) (v : ViewNumber) : Prop :=
+  ∃ st, h[n]? = some st
+    ∧ ((st.input = .timeout v ∧ (h.upTo n).InView cfg v)
+      ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, (h.upTo n).InView cfg w ∧ w ≤ v))
+
+/--
+The node has given up view `v`: it timed out on `v` or a later view, holds a
+timeout certificate for one, or took a timer or one-honest indication for one.
+
+The timer is where the node gives the view up, not the timeout vote it sends to
+answer it: the vote names the lock the node held at the timer
+(`ProtocolHistory.timeoutJustified`), so from then on the node may vote2 at the
+vote's view or an earlier one only for a block that lock covers
+(`SafeHistory.timeoutLock`).
 
 Moving ahead on a later certificate does not count. A node can be shown a later
 certificate before its own view's arrives, and should still vote2 there.
 -/
 def PastView (v : ViewNumber) : Prop :=
-  h.TimedOut v ∨ ∃ tc, h.Received (.timeoutCertificate tc) ∧ v ≤ tc.view
+  h.TimedOut v ∨ (∃ tc, h.Received (.timeoutCertificate tc) ∧ v ≤ tc.view)
+    ∨ ∃ n w, h.TimerAt cfg n w ∧ v ≤ w
 
 /--
 View `v` is after the decide floor: later than the anchor's, and later than

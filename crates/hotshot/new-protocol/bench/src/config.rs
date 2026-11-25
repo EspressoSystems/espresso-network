@@ -37,6 +37,10 @@ pub struct NodeConfig {
     /// Block payload size in bytes.
     #[arg(long, default_value_t = 0)]
     pub block_size: usize,
+
+    /// Write `leader_trace_node{N}.csv` next to the output file.
+    #[arg(long)]
+    pub leader_trace: bool,
 }
 
 impl NodeConfig {

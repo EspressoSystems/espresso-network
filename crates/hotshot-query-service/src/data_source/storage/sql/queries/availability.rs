@@ -490,18 +490,18 @@ where
 #[cfg(test)]
 mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::{data::VidCommon, vid::advz::advz_scheme};
-    use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
 
-    use super::*;
+    use super::{
+        super::super::{SqlStorage, testing::TmpDb},
+        *,
+    };
     use crate::{
         data_source::{
             Transaction, VersionedDataSource,
-            sql::testing::TmpDb,
-            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            storage::{StorageConnectionType, UpdateAvailabilityStorage},
         },
-        testing::mocks::MockTypes,
+        testing::{chain::genesis_vid, mocks::MockTypes},
     };
 
     #[tokio::test]
@@ -511,7 +511,6 @@ mod test {
         let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
             .await
             .unwrap();
-        let mut vid = advz_scheme(2);
 
         // Create two blocks with the same (empty) payload.
         let mut leaves = vec![
@@ -530,17 +529,16 @@ mod test {
             )
             .await,
         ];
-        let dispersal = vid.disperse([]).unwrap();
+        let (common, _) = genesis_vid(leaves[0].header());
         let mut vid = vec![VidCommonQueryData::<MockTypes>::new(
             leaves[0].header().clone(),
-            VidCommon::V0(dispersal.common.clone()),
+            common.clone(),
         )];
 
         let mut leaf = leaves[0].clone();
         leaf.leaf.block_header_mut().block_number += 1;
         let block = BlockQueryData::new(leaf.header().clone(), blocks[0].payload().clone());
-        let common =
-            VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(dispersal.common));
+        let common = VidCommonQueryData::new(leaf.header().clone(), common);
         leaves.push(leaf);
         blocks.push(block);
         vid.push(common);
@@ -593,7 +591,6 @@ mod test {
         let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
             .await
             .unwrap();
-        let mut vid = advz_scheme(2);
 
         // Create two blocks with byte-identical payloads, but different namespace tables (meaning
         // the interpretation of the payload is different).
@@ -614,18 +611,17 @@ mod test {
             )
             .await,
         ];
-        let dispersal = vid.disperse([]).unwrap();
+        let (common, _) = genesis_vid(leaves[0].header());
         let mut vid = vec![VidCommonQueryData::<MockTypes>::new(
             leaves[0].header().clone(),
-            VidCommon::V0(dispersal.common.clone()),
+            common.clone(),
         )];
 
         let mut leaf = leaves[0].clone();
         leaf.leaf.block_header_mut().block_number += 1;
         leaf.leaf.block_header_mut().metadata.num_transactions += 1;
         let block = BlockQueryData::new(leaf.header().clone(), blocks[0].payload().clone());
-        let common =
-            VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(dispersal.common));
+        let common = VidCommonQueryData::new(leaf.header().clone(), common);
         leaves.push(leaf);
         blocks.push(block);
         vid.push(common);

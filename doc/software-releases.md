@@ -1,5 +1,21 @@
 # Software Releases
 
+## Operators
+
+- The latest release for a network has the network in its title, e.g. `0.6.3.16 [decaf]`.
+- Mainnet: <https://github.com/EspressoSystems/espresso-network/releases/latest>
+- Both:
+
+  ```sh
+  curl -fsS 'https://api.github.com/repos/EspressoSystems/espresso-network/releases?per_page=100' | jq -r '.[] | select(.name | test("\\[")) | .name'
+  ```
+
+- Image: `ghcr.io/espressosystems/espresso-network/espresso-node:<tag>`.
+- Required actions: the release body, section for your network.
+- Alerts: Watch > Custom > Releases. An alert means the release is ready to deploy on the network in its title.
+
+## Tags
+
 Release tags have the form `MAJOR.MINOR.PHASE.PATCH`, for example `0.6.0.7`.
 
 | Part          | Meaning                                                                                                         |
@@ -21,7 +37,8 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
   validation. CI builds docker images for them. Release automation ignores them.
 - Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
   backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
-  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Manual backports use
+  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Both need a squash-merged PR: the
+  workflow refuses a merge commit or a rebase merge, which then needs a manual backport. Manual backports use
   `git cherry-pick -x`.
 
 ## Tracker issue
@@ -69,21 +86,39 @@ again.
 ### Publishing to a network
 
 `/publish X.Y.Z.N decaf|mainnet` makes the tag the release operators deploy on that network. It creates the GitHub
-release when the tag has none, and edits it otherwise. Every publish regenerates the "What's Changed" section
-(`<!-- whats-changed -->` markers) from the previous holder on mainnet once the release has a mainnet block, else on
-decaf. A rollback leaves it as is. Lines 2..n are notes for that network only, such as an upgrade deadline. Tags that
-are never published have no release.
+release when the tag has none, deletes and recreates it on mainnet when its title lacks `[mainnet]`, and edits it
+otherwise. Every publish regenerates the "What's Changed" section (`<!-- whats-changed -->` markers) from the previous
+holder on mainnet once the release has a mainnet block, else on decaf. A rollback leaves it as is. Lines 2..n are notes
+for that network only, such as an upgrade deadline. Tags that are never published have no release.
 
 - The title gets `[decaf]`, `[mainnet]` or both. The previous release on that network loses its marker and is marked
   superseded. Latest always follows mainnet.
 - Refused, with a tracker comment, unless `ghcr.io/espressosystems/espresso-network/espresso-node:<tag>` exists.
 - Rerun to recover from a failed run. `/publish <older tag> <network>` rolls back.
-- Do not edit release titles or the bot's `<!-- ... -->` markers by hand: they record what each network runs.
+- Do not edit release titles or the bot's `<!-- ... -->` markers by hand: they record what each network runs. The one
+  exception is restoring a deleted release, see below.
 - Preview without writing: `just release-publish-preview X.Y.Z.N decaf`.
 
-Operators follow releases with Watch > Custom > Releases. The alert fires when a tag's first `/publish` creates the
-release. A second network's `/publish` of the same tag only edits it: the marker appears in the title and API, no alert.
-Look for the network marker in the title, or poll `GET /repos/EspressoSystems/espresso-network/releases`.
+GitHub sends Watch > Releases alerts on release creation only. Editing a release, or flipping it to draft and back,
+sends none (tested 2026-10-21). Without a separate mainnet tag, delete and recreate is the only way to alert mainnet
+operators for a release decaf already created.
+
+| Case                                                                 | GitHub release        | Alert |
+| -------------------------------------------------------------------- | --------------------- | ----- |
+| decaf, tag has no release                                            | created               | yes   |
+| mainnet, tag has no release                                          | created               | yes   |
+| mainnet, title lacks `[mainnet]` (promotion from decaf, or rollback) | deleted and recreated | yes   |
+| mainnet rerun for the current holder                                 | edited                | no    |
+| decaf, release exists                                                | edited                | no    |
+| superseded previous holder                                           | edited                | no    |
+
+- A recreate keeps the tag and the URL `/releases/tag/<tag>`. Reactions, uploaded assets and the release id are lost,
+  and `published_at` resets.
+- If the create fails after the delete, the script recreates the old release. If that also fails, the tag has no release
+  and the workflow log holds the old title and body between `# old release` and `# end old release`. A plain rerun then
+  recreates the release without the decaf block. Restore it first with
+  `gh release create <tag> --verify-tag --latest=false --title "<logged title>" --notes-file <logged body>`, then rerun
+  `/publish`.
 
 ## Process
 
@@ -106,20 +141,21 @@ Look for the network marker in the title, or poll `GET /repos/EspressoSystems/es
 
 ## Workflows
 
-| Workflow                     | Trigger                                                      | Runs                                         |
-| ---------------------------- | ------------------------------------------------------------ | -------------------------------------------- |
-| `release-branch.yml`         | `workflow_dispatch`, branch `delete`                         | `scripts/release cut`, `teardown`            |
-| `tag-release.yml`            | `/tag`, `/backport`, `/publish` comment, `workflow_dispatch` | `scripts/release tag`, `backport`, `publish` |
-| `update-release-tracker.yml` | push to `main`/`release-*`, mark comments, dispatch          | `scripts/release refresh`                    |
-| `build.yml`                  | dispatched by `cut` and `tag` for the new tag                | docker images                                |
+| Workflow                     | Trigger                                                                | Runs                                         |
+| ---------------------------- | ---------------------------------------------------------------------- | -------------------------------------------- |
+| `release-branch.yml`         | `workflow_dispatch`, branch `delete`                                   | `scripts/release cut`, `teardown`            |
+| `tag-release.yml`            | `/tag`, `/backport`, `/publish` comment, `workflow_dispatch`           | `scripts/release tag`, `backport`, `publish` |
+| `update-release-tracker.yml` | push to `main`/`release-*`, PR on `release-*`, mark comments, dispatch | `scripts/release refresh`                    |
+| `build.yml`                  | dispatched by `cut` and `tag` for the new tag                          | docker images                                |
 
-Tags pushed by workflows do not fire `push` events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
-explicitly.
+Tags pushed and PRs opened by workflows fire no events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
+explicitly, and `backport.yml` dispatches one refresh of all open trackers after opening backport PRs.
 
-Tracker refreshes run only on `main`. A run on a release branch (push, backport PR, dispatch) re-dispatches
+Tracker refreshes run only on `main`. A run on a release branch (push, dispatch) re-dispatches
 `update-release-tracker.yml` on `main` with the original ref, so the refresh always uses `main`'s workflow and
-`scripts/release` and still targets that branch's tracker. Dispatching from a feature branch also runs `main`'s copy;
-test changes to `scripts/release` with the local commands below.
+`scripts/release` and still targets that branch's tracker. PR events need no re-dispatch: GitHub runs
+`pull_request_target` on the default branch. Dispatching from a feature branch also runs `main`'s copy; test changes to
+`scripts/release` with the local commands below.
 
 ## Local use
 

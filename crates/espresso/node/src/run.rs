@@ -1,3 +1,4 @@
+use ::light_client::LightClientMetrics;
 use anyhow::Context;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
@@ -52,7 +53,7 @@ impl<P: SequencerPersistence> NodeContext<P> {
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
-    let (opt, ignored_network_options) = Options::parse_with_ignored();
+    let opt = <Options as clap::Parser>::parse();
     let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -115,13 +116,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tracing::error!("{e:#}; continuing without telemetry");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
-    if !ignored_network_options.is_empty() {
-        tracing::warn!(
-            ?ignored_network_options,
-            "the CDN and libp2p options are deprecated and ignored: consensus has run over \
-             cliquenet since protocol 0.6. Remove them from the command line and environment."
-        );
-    }
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
 
     tracing::warn!(?modules, "sequencer starting up");
@@ -135,6 +129,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
              (ESPRESSO_NODE_API_PEERS)"
         );
     }
+    warn_of_storage_changes(&modules);
 
     let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
 
@@ -151,15 +146,30 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         )
         .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
+        match storage.into_backend() {
+            persistence::sql::SqlBackendOptions::Sqlite(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+            persistence::sql::SqlBackendOptions::Postgres(storage) => {
+                run_with_storage(
+                    genesis,
+                    modules,
+                    opt,
+                    storage,
+                    public_node_config,
+                    telemetry_handle.as_mut(),
+                )
+                .await
+            },
+        }
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -177,6 +187,31 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         h.shutdown();
     }
     result
+}
+
+/// Error level, so that operators see these before the release that changes their node.
+fn warn_of_storage_changes(modules: &Modules) {
+    // The same order as `main`, which runs on the file system when both are set.
+    let Some(sql) = modules
+        .storage_sql
+        .as_ref()
+        .filter(|_| modules.storage_fs.is_none())
+    else {
+        tracing::error!(
+            "This node uses file-system storage. A future release will replace it with SQLite, \
+             and query nodes will then prune block data by default. Do not switch to SQLite by \
+             hand before that release: the node would start without its consensus state."
+        );
+        return;
+    };
+    if modules.query.is_some() && !sql.prune && !sql.archive {
+        tracing::error!(
+            "Neither --prune nor --archive is set, so this node keeps all block data. A future \
+             release will prune by default. To keep all block data after that release, set \
+             --archive (ESPRESSO_NODE_ARCHIVE=true). To prune now, set --prune \
+             (ESPRESSO_NODE_DATABASE_PRUNE=true)."
+        );
+    }
 }
 
 async fn run_with_storage<S>(
@@ -267,11 +302,11 @@ where
             local_timeout: opt.local_catchup_timeout,
             http_delay: opt.http_catchup_delay,
         },
-        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
+    let leader_trace_dir = opt.leader_trace_dir.clone();
 
     if modules.query.is_none() {
         storage_opt.set_consensus_only();
@@ -285,7 +320,7 @@ where
         Some(http_opt) => {
             let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
             http_opt
-                .serve(move |metrics, consumer, storage| {
+                .serve(move |metrics, consumer, storage, _| {
                     async move {
                         init_node(
                             genesis,
@@ -299,6 +334,7 @@ where
                             opt.identity,
                             proposal_fetcher_config,
                             empty_block_delay,
+                            leader_trace_dir,
                         )
                         .await
                     }
@@ -319,6 +355,7 @@ where
                 opt.identity,
                 proposal_fetcher_config,
                 empty_block_delay,
+                leader_trace_dir,
             )
             .await?
         },
@@ -346,9 +383,18 @@ where
     let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
     let persistence = storage_opt.create().await?;
     http_opt
-        .serve(move |metrics, sink, _storage| {
+        .serve(move |metrics, sink, _storage, registry| {
             async move {
-                init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                init_follower_node(
+                    genesis,
+                    params,
+                    metrics,
+                    LightClientMetrics::new(&*registry),
+                    persistence,
+                    l1_params,
+                    sink,
+                )
+                .await
             }
             .boxed()
         })
@@ -384,8 +430,11 @@ fn api_options<S: DataSourceOptions>(
     if let Some(explorer) = modules.explorer {
         http_opt = http_opt.explorer(explorer);
     }
-    if let Some(light_client) = modules.light_client {
-        http_opt = http_opt.light_client(light_client);
+    if modules.light_client.is_some() {
+        tracing::warn!(
+            "the light-client module is deprecated and ignored: every node with SQL storage and \
+             the query module serves /light-client. Remove it from the command line."
+        );
     }
     if let Some(config) = modules.config {
         http_opt = http_opt
@@ -490,11 +539,6 @@ mod test {
             &format!("127.0.0.1:{port2}"),
             "--cliquenet-advertise-address",
             &format!("127.0.0.1:{port2}"),
-            // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
-            // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
-            // address.
-            "--libp2p-advertise-address",
-            "127.0.0.1:0",
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);

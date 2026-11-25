@@ -19,7 +19,6 @@
 //! transaction.
 
 use std::{
-    collections::HashMap,
     fmt::{Debug, Display},
     marker::PhantomData,
     time::Instant,
@@ -30,8 +29,6 @@ use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
 use futures::future::Future;
-#[cfg(feature = "embedded-db")]
-use futures::stream::TryStreamExt;
 use hotshot_types::{
     data::VidShare,
     traits::{
@@ -47,16 +44,9 @@ pub use sqlx::Executor;
 use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
 use tracing::instrument;
 
-#[cfg(not(feature = "embedded-db"))]
-use super::queries::state::batch_insert_hashes;
-#[cfg(feature = "embedded-db")]
-use super::queries::state::build_hash_batch_insert;
 use super::{
-    Database, Db,
-    queries::{
-        self,
-        state::{Node, collect_nodes_from_proofs},
-    },
+    Backend as _, Database, Db, DbKind, StateQueries as _,
+    queries::{self, state::collect_nodes_from_proofs},
 };
 use crate::{
     Header, Payload, QueryError, QueryResult,
@@ -75,7 +65,6 @@ use crate::{
 /// When set to `true`, read transactions begin with
 /// `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY` (no `DEFERRABLE`),
 /// so they start immediately instead of waiting for a safe serializable snapshot.
-#[cfg(not(feature = "embedded-db"))]
 static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 
@@ -85,7 +74,6 @@ static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
 /// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
 /// serializable snapshot. Default: `true`. Call this once at startup based on the operator's
 /// chosen configuration.
-#[cfg(not(feature = "embedded-db"))]
 pub fn set_no_deferrable_on_read(value: bool) {
     NO_DEFERRABLE_ON_READ.store(value, std::sync::atomic::Ordering::Relaxed);
 }
@@ -129,7 +117,6 @@ pub trait TransactionMode: Send + Sync {
 }
 
 impl TransactionMode for Write {
-    #[allow(unused_variables)]
     async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
         // SQLite automatically sets the read/write mode of a transactions based on the statements
         // in it. However, there is still a good reason to explicitly enable write mode right from
@@ -159,15 +146,14 @@ impl TransactionMode for Write {
         // any read statement, ensuring that the first lock we acquire is exclusive. A write
         // statement that has no actual effect on the database is suitable for this purpose, hence
         // the `WHERE false`.
-        #[cfg(feature = "embedded-db")]
-        conn.execute("UPDATE pruned_height SET id = id WHERE false")
-            .await?;
-
+        //
         // With Postgres things are much more straightforward: just tell Postgres we want a write
         // transaction immediately after opening it.
-        #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-            .await?;
+        let sql = match Db::KIND {
+            DbKind::Sqlite => "UPDATE pruned_height SET id = id WHERE false",
+            DbKind::Postgres => "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        };
+        conn.execute(sql).await?;
 
         Ok(())
     }
@@ -178,19 +164,17 @@ impl TransactionMode for Write {
 }
 
 impl TransactionMode for Prune {
-    #[allow(unused_variables)]
     async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
         // SQLite: same as Write -- acquire an exclusive lock immediately to avoid deadlocks.
-        #[cfg(feature = "embedded-db")]
-        conn.execute("UPDATE pruned_height SET id = id WHERE false")
-            .await?;
-
+        //
         // Postgres: use READ COMMITTED to avoid predicate lock conflicts between pruning
         // DELETE and concurrent consensus INSERT operations. Pruning does not need SERIALIZABLE
         // guarantees since it only removes old data that is no longer read by consensus.
-        #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-            .await?;
+        let sql = match Db::KIND {
+            DbKind::Sqlite => "UPDATE pruned_height SET id = id WHERE false",
+            DbKind::Postgres => "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+        };
+        conn.execute(sql).await?;
 
         Ok(())
     }
@@ -211,16 +195,13 @@ impl TransactionMode for Prune {
 pub struct Backfill;
 
 impl TransactionMode for Backfill {
-    #[allow(unused_variables)]
     async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
         // SQLite: same as Write -- acquire an exclusive lock immediately to avoid deadlocks.
-        #[cfg(feature = "embedded-db")]
-        conn.execute("UPDATE pruned_height SET id = id WHERE false")
-            .await?;
-
-        #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-            .await?;
+        let sql = match Db::KIND {
+            DbKind::Sqlite => "UPDATE pruned_height SET id = id WHERE false",
+            DbKind::Postgres => "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+        };
+        conn.execute(sql).await?;
 
         Ok(())
     }
@@ -231,7 +212,6 @@ impl TransactionMode for Backfill {
 }
 
 impl TransactionMode for Read {
-    #[allow(unused_variables)]
     async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
         // With Postgres, we explicitly set the transaction mode to specify that we want the
         // strongest possible consistency semantics in case of competing transactions
@@ -246,8 +226,7 @@ impl TransactionMode for Read {
         // With SQLite, there is nothing to be done here, as SQLite automatically starts
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
-        #[cfg(not(feature = "embedded-db"))]
-        {
+        if Db::KIND == DbKind::Postgres {
             let sql = if NO_DEFERRABLE_ON_READ.load(std::sync::atomic::Ordering::Relaxed) {
                 "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY"
             } else {
@@ -538,8 +517,14 @@ impl Transaction<Prune> {
     /// and re-evaluates with a fresh snapshot after the insert commits. If the payload was
     /// already deleted, the inserting SERIALIZABLE transaction gets a serialization error
     /// and retries, recreating the payload.
+    ///
+    /// Deletes at most `cert2_limit` cert2s at or below `height`, the lowest first.
     #[instrument(skip(self))]
-    pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+    pub(super) async fn delete_batch(
+        &mut self,
+        height: u64,
+        cert2_limit: u64,
+    ) -> anyhow::Result<()> {
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
@@ -553,6 +538,8 @@ impl Transaction<Prune> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+
+        self.delete_cert2s(height, cert2_limit).await?;
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -599,6 +586,27 @@ impl Transaction<Prune> {
             "garbage collected VID common"
         );
 
+        Ok(())
+    }
+
+    /// Delete the lowest `limit` cert2s at or below `height`.
+    ///
+    /// Every reader of a cert2 needs the leaf at its height too, so cert2s are pruned with the
+    /// leaves. The limit keeps a batch small on a node that has a backlog of cert2s from versions
+    /// that did not prune them.
+    async fn delete_cert2s(&mut self, height: u64, limit: u64) -> anyhow::Result<()> {
+        // Neither backend has a portable `DELETE ... LIMIT`.
+        let res = query(
+            "DELETE FROM cert2 WHERE height IN (
+                SELECT height FROM cert2 WHERE height <= $1 ORDER BY height LIMIT $2
+             )",
+        )
+        .bind(height as i64)
+        .bind(limit as i64)
+        .execute(self.as_mut())
+        .await
+        .context("deleting cert2")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned cert2");
         Ok(())
     }
 
@@ -649,44 +657,48 @@ impl Transaction<Prune> {
                 continue;
             }
 
-            // Postgres underestimates how many distinct paths a state table has, so it would
-            // hash-join the window against a full scan of the table. `OFFSET 0` stops it from
-            // flattening the lateral lookup into that join, keeping one primary key range scan per
-            // path. Dropping it makes the batch cost grow with the table again.
-            //
-            // The lookup stops at `from` instead of reading every older version of the path. A
-            // deleted row stays in the index until vacuum, so a range from the start of a path
-            // rewritten every block walks every version earlier batches deleted, and each batch is
-            // slower than the last. Below `from` only the newest version is left, and a backward
-            // scan reaches it first.
-            #[cfg(not(feature = "embedded-db"))]
-            let delete = format!(
-                "DELETE FROM {state_table} WHERE ctid = ANY (ARRAY(
-                   SELECT old.ctid
-                   FROM (SELECT path, max(created) AS latest FROM {state_table}
-                         WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
-                   CROSS JOIN LATERAL (
-                     (SELECT o.ctid FROM {state_table} AS o
-                      WHERE o.path = n.path AND o.created >= $1 AND o.created < n.latest
-                      OFFSET 0)
-                     UNION ALL
-                     (SELECT o.ctid FROM {state_table} AS o
-                      WHERE o.path = n.path AND o.created < $1
-                      ORDER BY o.created DESC LIMIT 1)
-                   ) AS old
-                 ))"
-            );
-            // SQLite removes a deleted row's index entries in the same statement, so its unbounded
-            // range only ever reads live versions.
-            #[cfg(feature = "embedded-db")]
-            let delete = format!(
-                "DELETE FROM {state_table} WHERE (path, created) IN (
-                   SELECT old.path, old.created
-                   FROM (SELECT path, max(created) AS latest FROM {state_table}
-                         WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
-                   JOIN {state_table} AS old ON old.path = n.path AND old.created < n.latest
-                 )"
-            );
+            let delete = match Db::KIND {
+                DbKind::Sqlite => {
+                    // SQLite removes a deleted row's index entries in the same statement, so its
+                    // unbounded range only ever reads live versions.
+                    format!(
+                        "DELETE FROM {state_table} WHERE (path, created) IN (
+                       SELECT old.path, old.created
+                       FROM (SELECT path, max(created) AS latest FROM {state_table}
+                             WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
+                       JOIN {state_table} AS old ON old.path = n.path AND old.created < n.latest
+                     )"
+                    )
+                },
+                DbKind::Postgres => {
+                    // Postgres underestimates how many distinct paths a state table has, so it would
+                    // hash-join the window against a full scan of the table. `OFFSET 0` stops it from
+                    // flattening the lateral lookup into that join, keeping one primary key range scan
+                    // per path. Dropping it makes the batch cost grow with the table again.
+                    //
+                    // The lookup stops at `from` instead of reading every older version of the path. A
+                    // deleted row stays in the index until vacuum, so a range from the start of a path
+                    // rewritten every block walks every version earlier batches deleted, and each
+                    // batch is slower than the last. Below `from` only the newest version is left, and
+                    // a backward scan reaches it first.
+                    format!(
+                        "DELETE FROM {state_table} WHERE ctid = ANY (ARRAY(
+                       SELECT old.ctid
+                       FROM (SELECT path, max(created) AS latest FROM {state_table}
+                             WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
+                       CROSS JOIN LATERAL (
+                         (SELECT o.ctid FROM {state_table} AS o
+                          WHERE o.path = n.path AND o.created >= $1 AND o.created < n.latest
+                          OFFSET 0)
+                         UNION ALL
+                         (SELECT o.ctid FROM {state_table} AS o
+                          WHERE o.path = n.path AND o.created < $1
+                          ORDER BY o.created DESC LIMIT 1)
+                       ) AS old
+                     ))"
+                    )
+                },
+            };
             self.execute(query(&delete).bind(from as i64).bind(to as i64))
                 .await?;
         }
@@ -696,22 +708,44 @@ impl Transaction<Prune> {
 }
 
 impl<Mode> Transaction<Mode> {
-    pub(super) const PRUNED_HEIGHT_ID: i32 = 1;
-    pub(super) const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+    pub const PRUNED_HEIGHT_ID: i32 = 1;
+    pub const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+    pub(super) const STATE_START_HEIGHT_ID: i32 = 3;
 }
 
 /// Query service specific mutations.
 impl Transaction<Write> {
-    /// Record the height of the latest pruned header.
-    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        self.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(Self::PRUNED_HEIGHT_ID, height as i64)],
-        )
-        .await
-        .context("updating pruned height")
+    /// Record the height of the latest pruned header, and return the height now stored.
+    ///
+    /// A lower height than the stored one leaves it as is. The pruner and a fresh pruned start both
+    /// write it, and a pruner run reads its starting height long before it writes. If a fresh
+    /// pruned start saves its height in between, a plain overwrite would move the height back down,
+    /// and the fetches of missing parents would then download the whole history. The plain
+    /// `upsert` helper can neither keep the larger value nor return the stored one.
+    pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<u64> {
+        let stmt = format!(
+            "INSERT INTO pruned_height (id, last_height) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE SET last_height = {MAX_FN}(pruned_height.last_height, \
+             excluded.last_height)
+             RETURNING last_height",
+            MAX_FN = Db::MAX_FN,
+        );
+        let (stored,) = query_as::<(i64,)>(&stmt)
+            .bind(Self::PRUNED_HEIGHT_ID)
+            .bind(height as i64)
+            .fetch_one(self.as_mut())
+            .await
+            .context("updating pruned height")?;
+        Ok(stored as u64)
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl crate::testing::consensus::SavePrunedHeight for Transaction<Write> {
+    async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        Transaction::<Write>::save_pruned_height(self, height).await?;
+        Ok(())
     }
 }
 
@@ -950,6 +984,28 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         Ok(())
     }
 
+    async fn set_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        self.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
+        )
+        .await
+        .context("updating state pruned height")
+    }
+
+    async fn set_state_start_height(&mut self, height: u64) -> anyhow::Result<()> {
+        self.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(Self::STATE_START_HEIGHT_ID, height as i64)],
+        )
+        .await
+        .context("updating state start height")
+    }
+
     async fn insert_merkle_nodes(
         &mut self,
         proof: MerkleProof<State::Entry, State::Key, State::T, ARITY>,
@@ -977,29 +1033,12 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
             return Ok(());
         }
 
-        let name = State::state_type();
         let block_number = block_number as i64;
 
         let (mut all_nodes, all_hashes) = collect_nodes_from_proofs(&proofs)?;
         let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
 
-        #[cfg(not(feature = "embedded-db"))]
-        let nodes_hash_ids: HashMap<Vec<u8>, i64> = batch_insert_hashes(hashes, self).await?;
-
-        #[cfg(feature = "embedded-db")]
-        let nodes_hash_ids: HashMap<Vec<u8>, i64> = {
-            let mut hash_ids: HashMap<Vec<u8>, i64> = HashMap::with_capacity(hashes.len());
-            for hash_chunk in hashes.chunks(20) {
-                let (query, sql) = build_hash_batch_insert(hash_chunk)?;
-                let chunk_ids: HashMap<Vec<u8>, i64> = query
-                    .query_as(&sql)
-                    .fetch(self.as_mut())
-                    .try_collect()
-                    .await?;
-                hash_ids.extend(chunk_ids);
-            }
-            hash_ids
-        };
+        let nodes_hash_ids = Db::insert_hashes(self, hashes).await?;
 
         for (node, children, hash) in &mut all_nodes {
             node.created = block_number;
@@ -1020,7 +1059,11 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
             }
         }
 
-        Node::upsert(name, all_nodes.into_iter().map(|(n, ..)| n), self).await?;
+        Db::upsert_nodes::<Types, State, ARITY>(
+            all_nodes.into_iter().map(|(n, ..)| n).collect(),
+            self,
+        )
+        .await?;
 
         Ok(())
     }
@@ -1126,11 +1169,12 @@ impl PoolMetrics {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::{
+        super::{SqlStorage, testing::TmpDb},
+        *,
+    };
     use crate::data_source::{
-        Transaction as _, VersionedDataSource,
-        sql::testing::TmpDb,
-        storage::{SqlStorage, StorageConnectionType},
+        Transaction as _, VersionedDataSource, storage::sql::StorageConnectionType,
     };
 
     #[tokio::test]

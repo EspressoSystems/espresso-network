@@ -1,40 +1,20 @@
 [advisories]
 ignore = [
-    # DoS in WebPKI that comes with tide_disco
-    "RUSTSEC-2023-0052",
-    # Tungstenite allows remote attackers to cause a denial of service
-    # Dependency of async-tungstenite -> tide-websockets
-    "RUSTSEC-2023-0065",
     # Unfixed "Marvin" vulnerability in `RSA`, unused in sqlite dependency
     "RUSTSEC-2023-0071",
-    # rustls is busted, dependency of unmaintained tide
-    "RUSTSEC-2024-0336",
-    # Some AES functions may panic when overflow checking is enabled.
-    # To upgrade async-tungstenite we need a new release of tide-websockets, which seems unlikely
-    # https://github.com/http-rs/tide-websockets
-    "RUSTSEC-2025-0009",
     # Still here because of `ark-relations` crate.
     "RUSTSEC-2025-0055",
-    # hickory-proto NSEC3 loop. Only reachable via libp2p-mdns; mdns feature is not enabled in our
-    # libp2p config, so not compiled in.
-    "RUSTSEC-2026-0118",
-    # hickory-proto O(n^2) name compression on encode. libp2p does lookups one name at a time, not
-    # vulnerable, no patch release in libp2p available yet
-    "RUSTSEC-2026-0119",
-    # rkyv OOB read, only fixed in 0.8 while Push-CDN pins 0.7. Needs unsized `Rc`/`Arc` pointees,
-    # which the CDN archived types don't have.
-    "RUSTSEC-2026-0235",
-    # h2 queues unbounded empty DATA frames (low severity DoS), fixed only in 0.4.16, which the
-    # hyper 1.x stack here already uses. The vulnerable 0.3 copy comes via Push-CDN -> warp ->
-    # hyper 0.14 and serves only the CDN metrics endpoint; no patched 0.3.x release exists.
-    "RUSTSEC-2026-0258",
     # `LruCache::pop()` leaves a dangling node when a stored key's `Drop` panics. Our direct `lru`
     # is 0.18.2 (patched); the only affected copy is lru 0.7.8 pinned by memoize, whose single use
     # here (`advz_scheme`) is keyed on `usize`. `usize` has no `Drop`, so the panic that arms this
     # cannot occur.
     "RUSTSEC-2026-0253",
-    # smartstring is unmaintained (repo archived 2026-05-03), no patched release exists. Reached
-    # only via routefinder -> tide-disco, the legacy HTTP stack being retired; it goes away with
-    # the last tide-disco consumer.
-    "RUSTSEC-2026-0249",
+    # crypto-bigint 0.5.5 timing variability. Pulled in by elliptic-curve 0.13 (k256, ecdsa,
+    # alloy-signer, ethers-core); the fix is only in 0.7.6+, which needs elliptic-curve 0.14.
+    # Latest alloy (2.5.0) still requires k256/elliptic-curve 0.13.
+    # https://github.com/alloy-rs/alloy/issues/4445
+    "RUSTSEC-2026-0387",
+    # libsqlite3-sys 0.30.1 (bundled SQLite) pinned by sqlx 0.8.6; the fix (>=0.39.0) needs a sqlx
+    # release. https://github.com/transact-rs/sqlx/issues/4516
+    "RUSTSEC-2026-0459",
 ]

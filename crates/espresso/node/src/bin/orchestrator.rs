@@ -6,10 +6,7 @@ use derive_more::From;
 use espresso_types::{Ratio, SeqTypes, parse_duration};
 use espresso_utils::logging;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_types::{
-    PeerConfig,
-    network::{Libp2pConfig, NetworkConfig},
-};
+use hotshot_types::{PeerConfig, network::NetworkConfig};
 use snafu::Snafu;
 use url::Url;
 use vec1::Vec1;
@@ -65,15 +62,6 @@ struct Args {
         value_parser = parse_duration
     )]
     round_start_delay: Duration,
-
-    /// The number of nodes a Libp2p node should try to maintain
-    /// a connection with at one time.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_LIBP2P_MESH_N",
-        default_value = "20"
-    )]
-    libp2p_mesh_n: usize,
 
     /// Seed to use for generating node keys.
     ///
@@ -136,16 +124,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
         ..Default::default()
     };
 
-    // The Libp2p configuration
-    let libp2p_config = Libp2pConfig {
-        bootstrap_nodes: Vec::new(),
-    };
-
     config.config.num_nodes_with_stake = args.num_nodes;
     config.config.known_nodes_with_stake = vec![PeerConfig::test_default(); args.num_nodes.get()];
     config.config.known_da_nodes = Vec::new();
     config.config.next_view_timeout = args.next_view_timeout.as_millis() as u64;
-    config.libp2p_config = Some(libp2p_config);
     config.config.start_threshold = args.start_threshold.into();
     config.config.da_staked_committee_size = args.num_nodes.get();
     if let Ok(builder_urls) = Vec1::try_from_vec(args.builder_urls) {

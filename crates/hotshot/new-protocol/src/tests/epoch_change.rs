@@ -3,14 +3,13 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
-    traits::{block_contents::BlockHeader, signature_key::SignatureKey},
-    utils::is_epoch_transition,
+    traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
 
 use super::common::{
     assertions::{is_send_epoch_change, is_view_changed},
-    utils::{ConsensusHarness, TEST_DRB_RESULT, TestData},
+    utils::{ConsensusHarness, TestData, epoch_length},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
@@ -19,35 +18,19 @@ use crate::{
     proposal::MalformedProposal,
     tests::common::assertions::{
         any, count_matching, has_request_drb_for_epoch, is_leaf_decided, is_proposal,
-        is_request_block_and_header, is_vote1,
+        is_request_block_and_header, is_vote1, is_vote1_for_view,
     },
 };
 
 const EPOCH_HEIGHT: u64 = 10;
 
 /// Run views through the harness fully (proposal, block_reconstructed, cert1, cert2).
-/// Pre-feeds DRB results before epoch transition views so handle_proposal accepts them.
 async fn run_views_full(
     harness: &mut ConsensusHarness,
     test_data: &TestData,
     node_key: &BLSPubKey,
     range: std::ops::Range<usize>,
 ) {
-    // Collect which epochs need DRB results and pre-feed them all up front.
-    let mut drb_epochs = std::collections::BTreeSet::new();
-    for i in range.clone() {
-        let block_number =
-            BlockHeader::<TestTypes>::block_number(&test_data.views[i].proposal.data.block_header);
-        if is_epoch_transition(block_number, EPOCH_HEIGHT) {
-            drb_epochs.insert(test_data.views[i].epoch_number + 1);
-        }
-    }
-    for epoch in drb_epochs {
-        harness
-            .apply(ConsensusInput::DrbResult(epoch, TEST_DRB_RESULT))
-            .await;
-    }
-
     for i in range {
         harness
             .apply_pair(test_data.views[i].proposal_input_consensus(node_key))
@@ -58,6 +41,61 @@ async fn run_views_full(
         harness.apply(test_data.views[i].cert1_input()).await;
         harness.apply(test_data.views[i].cert2_input()).await;
     }
+}
+
+/// Cross from epoch 1 into epoch 2: the epoch change on view 10's block, then
+/// view 11, the first block of epoch 2.
+async fn cross_into_epoch_2(
+    harness: &mut ConsensusHarness,
+    test_data: &TestData,
+    node_key: &BLSPubKey,
+) {
+    let epoch_view = &test_data.views[9];
+    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let epoch_change = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        epoch_proposal,
+    );
+    harness
+        .apply(ConsensusInput::EpochChange(epoch_change))
+        .await;
+    // Parent chain verification needs block_reconstructed for view 10.
+    harness.apply(epoch_view.block_reconstructed_input()).await;
+
+    // ---- First block of epoch 2 (view 11, block 11) ----
+    // This proposal needs next_epoch_justify_qc set because it's the
+    // first proposal after the epoch boundary.
+    let first_e2_view = &test_data.views[10];
+    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone();
+    first_e2_proposal.epoch = EpochNumber::new(2);
+    first_e2_proposal.next_epoch_justify_qc = Some(epoch_view.cert2.clone());
+
+    let signed = SignedProposal {
+        data: first_e2_proposal,
+        signature: first_e2_view.proposal.signature.clone(),
+        _pd: std::marker::PhantomData,
+    };
+    let vid_share = first_e2_view
+        .vid_shares
+        .iter()
+        .find(|s| s.recipient_key == *node_key)
+        .expect("VID share not found")
+        .clone();
+    harness
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_e2_view.leader_public_key,
+                ProposalMessage::validated(signed),
+            ),
+            ConsensusInput::VidShare(vid_share),
+        ))
+        .await;
+    harness
+        .apply(first_e2_view.block_reconstructed_input())
+        .await;
+    harness.apply(first_e2_view.cert1_input()).await;
+    harness.apply(first_e2_view.cert2_input()).await;
 }
 
 /// When the last block of an epoch is decided (block_number % epoch_height == 0),
@@ -74,6 +112,39 @@ async fn test_epoch_change_sent_on_last_block() {
     assert!(
         any(harness.outputs(), is_send_epoch_change),
         "SendEpochChange should be emitted when the last block of an epoch is decided"
+    );
+}
+
+/// The epoch change a node sent when it decided an epoch's last block is the one
+/// it answers a timeout vote of that epoch with: a node still voting in the epoch
+/// has not learnt it ended, and the change sent once may have been lost.
+#[tokio::test]
+async fn test_epoch_change_ending_matches_the_one_sent() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    run_views_full(&mut harness, &test_data, &node_key, 0..10).await;
+
+    let sent = harness
+        .outputs()
+        .iter()
+        .find_map(|o| match o {
+            ConsensusOutput::SendEpochChange(change) => Some(change.clone()),
+            _ => None,
+        })
+        .expect("setup: the epoch change is sent when epoch 1's last block is decided");
+    let epoch = test_data.views[9].epoch_number;
+    let answer = harness
+        .consensus
+        .epoch_change_ending(epoch)
+        .expect("a node that decided the epoch's last block holds its epoch change");
+    assert_eq!(answer.cert1, sent.cert1);
+    assert_eq!(answer.cert2, sent.cert2);
+    assert_eq!(answer.proposal, sent.proposal);
+    assert!(
+        harness.consensus.epoch_change_ending(epoch + 1).is_none(),
+        "no epoch change is held for an epoch that has not ended"
     );
 }
 
@@ -141,7 +212,7 @@ async fn test_epoch_change_mismatched_views_not_well_formed() {
     );
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 }
@@ -163,7 +234,7 @@ async fn test_epoch_change_cross_epoch_certificates_not_well_formed() {
     );
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 }
@@ -181,7 +252,7 @@ async fn test_epoch_change_wrong_block_number_not_well_formed() {
         EpochChangeMessage::validated(mid_view.cert1.clone(), mid_view.cert2.clone(), proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::NotLastBlock)
     ));
 }
@@ -202,7 +273,7 @@ async fn test_epoch_change_proposal_mismatch_not_well_formed() {
     );
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::ProposalMismatch)
     ));
 }
@@ -223,7 +294,7 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
         epoch_view.cert2.clone(),
         proposal.clone(),
     );
-    assert!(genuine.well_formed(EPOCH_HEIGHT).is_ok());
+    assert!(genuine.well_formed(epoch_length(EPOCH_HEIGHT)).is_ok());
 
     proposal.epoch += 1;
     assert_eq!(
@@ -236,7 +307,7 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
         EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(MalformedProposal::Epoch { .. }))
     ));
 }
@@ -272,7 +343,7 @@ async fn test_epoch_change_state_cert_unexpected_not_well_formed() {
         EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(
             MalformedProposal::StateCertUnexpected(_)
         ))
@@ -297,7 +368,7 @@ async fn test_epoch_change_certificates_at_another_view_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::ProposalCertificateMismatch)
     ));
 }
@@ -325,7 +396,7 @@ async fn test_epoch_change_certificates_for_another_block_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::ProposalCertificateMismatch)
     ));
 }
@@ -346,7 +417,7 @@ async fn test_epoch_change_certificates_for_different_blocks_not_well_formed() {
         EpochChangeMessage::validated(cert1, epoch_view.cert2.clone(), proposal.clone());
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 
@@ -355,7 +426,7 @@ async fn test_epoch_change_certificates_for_different_blocks_not_well_formed() {
     let epoch_change =
         EpochChangeMessage::validated(without_block_number, epoch_view.cert2.clone(), proposal);
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::CertificateMismatch)
     ));
 }
@@ -381,7 +452,7 @@ async fn test_epoch_change_proposal_justify_qc_mismatch_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(
             MalformedProposal::JustifyQcEpoch { .. }
         ))
@@ -408,7 +479,7 @@ async fn test_epoch_change_proposal_view_order_not_well_formed() {
     let epoch_change = EpochChangeMessage::validated(cert1, cert2, proposal);
 
     assert!(matches!(
-        epoch_change.well_formed(EPOCH_HEIGHT),
+        epoch_change.well_formed(epoch_length(EPOCH_HEIGHT)),
         Err(EpochChangeError::Proposal(
             MalformedProposal::ParentNotEarlier { .. }
         ))
@@ -580,13 +651,13 @@ async fn test_locking_the_boundary_block_keeps_the_new_epoch() {
         .await;
 
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(boundary.view_number),
         "the lock moved onto the boundary block in the same step"
     );
     assert_eq!(
         harness.consensus.current_epoch(),
-        Some(boundary.epoch_number + 1),
+        boundary.epoch_number + 1,
         "and the node stays in the epoch the epoch change entered"
     );
 }
@@ -750,9 +821,10 @@ async fn test_epoch_change_votes() {
     );
 }
 
-/// In the first two epochs, the leader should be able to propose during the
-/// epoch transition window without a DRB result.  The DRB is only needed
-/// starting from epoch 3 onward.  This test covers epoch 1.
+/// In the first epoch, the leader should be able to propose during the
+/// epoch transition window without a DRB result: the membership seeds the
+/// results of the first two epochs, so a transition proposal carries one
+/// only from epoch 2 onward, for epoch 3.
 #[tokio::test]
 async fn test_first_epoch_leader_proposes_without_drb() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
@@ -765,15 +837,13 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     // handle_proposal skips the DRB check for epoch 1 (genesis epoch),
     // so voting works. After processing view 7, the leader for view 8
     // should propose — but maybe_propose also needs to skip the DRB check.
-    for i in 0..7 {
+    for view in &test_data.views[..7] {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+        harness.apply(view.cert2_input()).await;
     }
 
     assert!(
@@ -782,12 +852,14 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     );
 }
 
-/// Epoch 2 also does not require a DRB result for proposing.  This test
-/// runs through epoch 1, crosses the epoch boundary, advances into
-/// epoch 2's transition window, and verifies the leader proposes without
-/// needing a DRB result pre-fed.
+/// A node in epoch 2's transition window needs the DRB result of epoch 3,
+/// which the transition proposals carry. This test runs through epoch 1,
+/// crosses the epoch boundary and advances into epoch 2's transition window.
+/// The result is the one computed when epoch 1's root was decided, and the
+/// test verifies the node votes for a transition proposal carrying it and,
+/// as the next leader, proposes with it.
 #[tokio::test]
-async fn test_second_epoch_leader_proposes_without_drb() {
+async fn test_second_epoch_node_votes_and_proposes_with_computed_drb() {
     // We need at least 18 views: 10 for epoch 1, 1 epoch boundary, 7 into epoch 2.
     let test_data = TestData::new_with_epoch_height(19, EPOCH_HEIGHT).await;
 
@@ -802,68 +874,21 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // for the genesis epoch.
     run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
-    // ---- Epoch boundary ----
-    let epoch_view = &test_data.views[9];
-    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage::validated(
-        epoch_view.cert1.clone(),
-        epoch_view.cert2.clone(),
-        epoch_proposal,
-    );
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-    // Parent chain verification needs block_reconstructed for view 10.
-    harness.apply(epoch_view.block_reconstructed_input()).await;
-
-    // ---- First block of epoch 2 (view 11, block 11) ----
-    // This proposal needs next_epoch_justify_qc set because it's the
-    // first proposal after the epoch boundary.
-    let first_e2_view = &test_data.views[10];
-    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone();
-    first_e2_proposal.epoch = EpochNumber::new(2);
-    first_e2_proposal.next_epoch_justify_qc = Some(epoch_view.cert2.clone());
-
-    let signed = SignedProposal {
-        data: first_e2_proposal,
-        signature: first_e2_view.proposal.signature.clone(),
-        _pd: std::marker::PhantomData,
-    };
-    let vid_share = first_e2_view
-        .vid_shares
-        .iter()
-        .find(|s| s.recipient_key == node_key)
-        .expect("VID share not found")
-        .clone();
-    harness
-        .apply_pair((
-            ConsensusInput::Proposal(
-                first_e2_view.leader_public_key,
-                ProposalMessage::validated(signed),
-            ),
-            ConsensusInput::VidShare(vid_share),
-        ))
-        .await;
-    harness
-        .apply(first_e2_view.block_reconstructed_input())
-        .await;
-    harness.apply(first_e2_view.cert1_input()).await;
-    harness.apply(first_e2_view.cert2_input()).await;
+    cross_into_epoch_2(&mut harness, &test_data, &node_key).await;
 
     // ---- Epoch 2 views 12-16 (blocks 12-16, before transition window) ----
-    for i in 11..16 {
+    for view in &test_data.views[11..16] {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+        harness.apply(view.cert2_input()).await;
     }
 
     // ---- Epoch 2 transition window (block 17+) ----
-    // No DRB pre-fed — epoch 2 should not require one.
+    // The node holds epoch 3's DRB result since it decided block 5, epoch 1's
+    // root, so it never has to request it.
     // Process view 17 (block 17, first block in transition window).
     // After cert1 for view 17, the leader for view 18 should propose.
     harness
@@ -875,16 +900,31 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     harness.apply(test_data.views[16].cert1_input()).await;
     harness.apply(test_data.views[16].cert2_input()).await;
 
+    let drb = test_data.views[16].proposal.data.next_drb_result;
+    assert!(drb.is_some(), "view 17's proposal carries epoch 3's DRB");
     assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should propose during epoch 2 transition window without a DRB result"
+        !has_request_drb_for_epoch(harness.outputs(), EpochNumber::new(3)),
+        "the node holds epoch 3's DRB result from the decided epoch root"
+    );
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, 17)),
+        "the node votes for a transition proposal carrying the computed DRB result"
+    );
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::SendProposal(p)
+                if p.data.view_number == ViewNumber::new(18) && p.data.next_drb_result == drb
+        )),
+        "the leader of view 18 proposes with the computed DRB result"
     );
 }
 
-/// Starting from epoch 3, when a node receives a transition-window proposal
-/// without a DRB result available, consensus should emit RequestDrbResult
-/// for the next epoch.  Epochs 1 and 2 skip this check; epoch 3 is the
-/// first epoch that requires a real DRB.
+/// When a node receives a transition-window proposal of epoch 2 or later
+/// without holding the next epoch's DRB result, consensus should emit
+/// RequestDrbResult for the next epoch. Here the node is in epoch 2, block
+/// 17's proposal is relabelled into epoch 3, and the node has not decided
+/// epoch 2's root, which epoch 4's result is computed from.
 #[tokio::test]
 async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     let test_data = TestData::new_with_epoch_height(18, EPOCH_HEIGHT).await;
@@ -895,67 +935,25 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     // ---- Epoch 1 (views 1-9, blocks 1-9) ----
     run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
-    // ---- Epoch boundary ----
-    let epoch_view = &test_data.views[9];
-    let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage::validated(
-        epoch_view.cert1.clone(),
-        epoch_view.cert2.clone(),
-        epoch_proposal,
-    );
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-    harness.apply(epoch_view.block_reconstructed_input()).await;
-
-    // ---- First block of epoch 2 (view 11) ----
-    let first_e2_view = &test_data.views[10];
-    let mut first_e2_proposal: Proposal<TestTypes> = first_e2_view.proposal.data.clone();
-    first_e2_proposal.epoch = EpochNumber::new(2);
-    first_e2_proposal.next_epoch_justify_qc = Some(epoch_view.cert2.clone());
-
-    let signed = SignedProposal {
-        data: first_e2_proposal,
-        signature: first_e2_view.proposal.signature.clone(),
-        _pd: std::marker::PhantomData,
-    };
-    let vid_share = first_e2_view
-        .vid_shares
-        .iter()
-        .find(|s| s.recipient_key == node_key)
-        .expect("VID share not found")
-        .clone();
-    harness
-        .apply_pair((
-            ConsensusInput::Proposal(
-                first_e2_view.leader_public_key,
-                ProposalMessage::validated(signed),
-            ),
-            ConsensusInput::VidShare(vid_share),
-        ))
-        .await;
-    harness
-        .apply(first_e2_view.block_reconstructed_input())
-        .await;
-    harness.apply(first_e2_view.cert1_input()).await;
-    harness.apply(first_e2_view.cert2_input()).await;
+    cross_into_epoch_2(&mut harness, &test_data, &node_key).await;
 
     // ---- Epoch 2 views 12-16 (before transition window) ----
-    for i in 11..16 {
+    // No Cert2 from view 15 on, so block 15, epoch 2's root, stays undecided
+    // and the harness has no DRB result for epoch 4.
+    for (i, view) in (11..).zip(&test_data.views[11..16]) {
         harness
-            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(view.proposal_input_consensus(&node_key))
             .await;
-        harness
-            .apply(test_data.views[i].block_reconstructed_input())
-            .await;
-        harness.apply(test_data.views[i].cert1_input()).await;
-        harness.apply(test_data.views[i].cert2_input()).await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+        if i < 14 {
+            harness.apply(view.cert2_input()).await;
+        }
     }
 
-    // Epoch 3's stake table and DRB result should already be registered
-    // in the membership: when block 5 was decided (epoch root), the
-    // harness called add_epoch_root and add_drb_result for the target
-    // epoch (epoch 1 + 2 = 3).
+    // Epoch 3's stake table and DRB result are registered in the membership
+    // since block 5 was decided (epoch 1's root). Epoch 4's are not: block 15,
+    // epoch 2's root, is undecided.
 
     let v17 = &test_data.views[16];
     let mut v17_proposal: Proposal<TestTypes> = v17.proposal.data.clone();
@@ -988,5 +986,49 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         has_request_drb_for_epoch(harness.outputs(), EpochNumber::new(4)),
         "Consensus should request DRB for epoch 4 (current epoch 3 + 1) when processing a \
          transition-window proposal without a DRB result"
+    );
+}
+
+/// A node restarted above epoch 1's root never decides it, so it does not
+/// hold epoch 3's DRB result when epoch 2's transition proposals arrive. It
+/// requests the result, withholds its vote, and votes once it is given the
+/// result the proposal carries.
+#[tokio::test]
+async fn test_restarted_node_requests_drb_and_votes_once_given_it() {
+    let test_data = TestData::new_with_epoch_height(17, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Decided up to view 6, past block 5, epoch 1's root.
+    let anchor = &test_data.views[5];
+    let mut harness =
+        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
+            .await;
+
+    run_views_full(&mut harness, &test_data, &node_key, 6..9).await;
+    cross_into_epoch_2(&mut harness, &test_data, &node_key).await;
+    run_views_full(&mut harness, &test_data, &node_key, 11..16).await;
+
+    let v17 = &test_data.views[16];
+    harness
+        .apply_pair(v17.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(v17.block_reconstructed_input()).await;
+
+    assert!(
+        has_request_drb_for_epoch(harness.outputs(), EpochNumber::new(3)),
+        "the node requests epoch 3's DRB result, which it has no root for"
+    );
+    assert!(
+        !any(harness.outputs(), |o| is_vote1_for_view(o, 17)),
+        "the vote waits for the DRB result"
+    );
+
+    let drb = v17.proposal.data.next_drb_result.expect("a DRB result");
+    harness
+        .apply(ConsensusInput::DrbResult(EpochNumber::new(3), drb))
+        .await;
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, 17)),
+        "the node votes once it has the DRB result the proposal carries"
     );
 }
