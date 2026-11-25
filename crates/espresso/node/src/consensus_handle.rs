@@ -472,7 +472,6 @@ async fn run_coordinator<T, S>(
         }
     }));
 
-
     let mut result = process_outputs(&mut coord, &tx).await;
 
     while result.is_ok() {
