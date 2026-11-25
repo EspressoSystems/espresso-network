@@ -16,6 +16,4 @@ pub mod states;
 pub mod storage;
 
 pub use block_contents::{BlockPayload, EncodeBytes};
-/// The metrics traits live in their own leaf crate; this keeps the `traits::metrics` paths working.
-pub use hotshot_metrics as metrics;
 pub use states::ValidatedState;
