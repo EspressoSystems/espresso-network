@@ -459,8 +459,6 @@ async fn run_coordinator<T, S>(
     let _exited = exited.drop_guard();
     coord.start();
 
-    let mut result = process_outputs(&mut coord, &tx).await;
-
     let _forward = AbortOnDropHandle::new(spawn({
         let tx = tx.clone();
         async move {
@@ -473,6 +471,9 @@ async fn run_coordinator<T, S>(
             }
         }
     }));
+
+
+    let mut result = process_outputs(&mut coord, &tx).await;
 
     while result.is_ok() {
         select! {

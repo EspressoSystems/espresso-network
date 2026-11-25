@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use alloy::{
     network::EthereumWallet,
@@ -287,6 +292,19 @@ struct TestNode<S: TestableSequencerDataSource> {
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
     progress_timeout_factor: u32,
+    events_since_start: EventsSinceStart,
+}
+
+/// A node's events from the start of consensus on, until the first progress check after the
+/// start takes them: a decide published as consensus starts, such as the genesis leaf's, comes
+/// before any later subscription.
+#[derive(Default)]
+struct EventsSinceStart(Mutex<Option<BoxStream<'static, CoordinatorEvent<SeqTypes>>>>);
+
+impl std::fmt::Debug for EventsSinceStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EventsSinceStart")
+    }
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -375,6 +393,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             reference_state: Default::default(),
             wait_for_epoch: EpochNumber::new(3),
             progress_timeout_factor: 4,
+            events_since_start: EventsSinceStart::default(),
         }
     }
 
@@ -430,6 +449,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             };
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
+            *self.events_since_start.0.lock().unwrap() = Some(ctx.event_stream());
             ctx.start_consensus().await;
             self.context = Some(ctx);
         }
@@ -482,7 +502,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
         // A decided leaf proposed by this node proves it both follows consensus and can propose.
-        let mut events = context.event_stream();
+        let events = self.events_since_start.0.lock().unwrap().take();
+        let mut events = events.unwrap_or_else(|| context.event_stream());
         while let Some(event) = events.next().await {
             let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
