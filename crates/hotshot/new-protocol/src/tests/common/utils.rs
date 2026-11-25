@@ -238,9 +238,7 @@ impl TestView {
         let data = hotshot_types::simple_vote::QuorumData2 {
             leaf_commit: proposal_commitment(&self.proposal.data.clone()),
             epoch: self.epoch_number,
-            block_number: Some(BlockHeader::<TestTypes>::block_number(
-                &self.proposal.data.block_header,
-            )),
+            block_number: BlockHeader::<TestTypes>::block_number(&self.proposal.data.block_header),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -1875,7 +1873,7 @@ pub(crate) fn build_cert1(
     let data = hotshot_types::simple_vote::QuorumData2 {
         leaf_commit,
         epoch,
-        block_number: Some(block_number),
+        block_number,
     };
     build_cert::<
         TestTypes,

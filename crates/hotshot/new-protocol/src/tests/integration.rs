@@ -356,7 +356,7 @@ async fn test_unsigned_view_zero_high_qc_does_not_move_the_epoch() {
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
         epoch: forged,
-        block_number: Some(11),
+        block_number: 11,
     };
     let cert = Certificate1::<TestTypes>::new(
         data,
@@ -449,7 +449,7 @@ async fn test_forged_view_zero_high_qc_does_not_shadow_the_genesis_qc() {
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
         epoch,
-        block_number: Some(5),
+        block_number: 5,
     };
     let forged = Certificate1::<TestTypes>::new(
         data,
@@ -501,7 +501,7 @@ fn view_one_proposal_on_forged_genesis_parent(
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
         epoch,
-        block_number: Some(23),
+        block_number: 23,
     };
     let mut proposal = honest.proposal.data.clone();
     assert_eq!(
@@ -2202,7 +2202,7 @@ async fn test_view_zero_certificate1_is_not_delivered() {
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
         epoch: forged_epoch,
-        block_number: Some(11),
+        block_number: 11,
     };
     let forged = Certificate1::<TestTypes>::new(
         data,

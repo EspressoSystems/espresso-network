@@ -7,7 +7,7 @@
 //! fields:
 //!
 //! * a QC is pre-epoch when its data has neither an epoch nor a block number, and an epoch QC
-//!   when it has an epoch. A QC with a block number but no epoch fits neither, and does not decode;
+//!   when it has both. A QC with only one of them fits neither, and does not decode;
 //! * a leaf is pre-epoch when its justify QC is pre-epoch. These are the leaves before the epoch
 //!   upgrade and the first leaf after it.
 //!
@@ -854,7 +854,7 @@ fn historic_qc<TYPES: NodeType>(
     )))
 }
 
-/// `qc` as a [`QuorumCertificate2`], which needs an epoch.
+/// `qc` as a [`QuorumCertificate2`], which needs an epoch and a block number.
 fn qc2<TYPES: NodeType>(
     qc: QuorumCertificateRaw<TYPES>,
 ) -> Result<QuorumCertificate2<TYPES>, &'static str> {
@@ -863,7 +863,9 @@ fn qc2<TYPES: NodeType>(
         epoch,
         block_number,
     } = qc.data;
-    let epoch = epoch.ok_or("a quorum certificate with a block number has no epoch")?;
+    let epoch = epoch.ok_or("a quorum certificate of an epoch has no epoch")?;
+    let block_number =
+        block_number.ok_or("a quorum certificate of an epoch has no block number")?;
     Ok(with_data(
         qc,
         QuorumData2 {

@@ -109,13 +109,12 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
             justify_qc.data().epoch,
             leaf.height()
         );
-        if let Some(block_number) = justify_qc.data().block_number {
-            ensure!(
-                block_number == leaf.height(),
-                "justify QC claims block number {block_number} but certifies the leaf at height {}",
-                leaf.height()
-            );
-        }
+        let block_number = justify_qc.data().block_number;
+        ensure!(
+            block_number == leaf.height(),
+            "justify QC claims block number {block_number} but certifies the leaf at height {}",
+            leaf.height()
+        );
         let membership = coordinator
             .stake_table_for_epoch(qc_epoch)
             .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
@@ -324,7 +323,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
                 epoch: EpochNumber::new(epoch),
-                block_number: Some(last - 1),
+                block_number: last - 1,
             },
             last - 1,
             epoch_quorum,
@@ -335,7 +334,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Committable::commit(&last_leaf),
                 epoch: EpochNumber::new(epoch),
-                block_number: Some(last),
+                block_number: last,
             },
             last,
             epoch_quorum,
@@ -346,7 +345,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Committable::commit(&boundary_leaf),
                 epoch: EpochNumber::new(epoch + 1),
-                block_number: Some(last + 1),
+                block_number: last + 1,
             },
             last + 1,
             deciding_quorum,
@@ -369,7 +368,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
                 epoch: qc_epoch,
-                block_number: Some(first_height - 1),
+                block_number: first_height - 1,
             },
             first_height - 1,
             epoch_quorum,
@@ -387,7 +386,7 @@ mod test {
                 QuorumData2 {
                     leaf_commit: Committable::commit(chain.last().unwrap()),
                     epoch: qc_epoch,
-                    block_number: Some(height - 1),
+                    block_number: height - 1,
                 },
                 height - 1,
                 epoch_quorum,
@@ -559,7 +558,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
                 epoch: EpochNumber::new(epoch),
-                block_number: Some(last - 1),
+                block_number: last - 1,
             },
             last - 1,
             epoch_quorum,
@@ -570,7 +569,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Committable::commit(&last_leaf),
                 epoch: EpochNumber::new(epoch),
-                block_number: Some(last),
+                block_number: last,
             },
             last,
             epoch_quorum,
@@ -658,7 +657,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
                 epoch: EpochNumber::new(epoch),
-                block_number: Some(last - 1),
+                block_number: last - 1,
             },
             last - 1,
             epoch_quorum,

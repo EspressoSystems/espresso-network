@@ -344,7 +344,7 @@ impl World {
         let data = QuorumData2 {
             leaf_commit: key.0,
             epoch: EpochNumber::new(c.epoch),
-            block_number: Some(c.height),
+            block_number: c.height,
         };
         let cert: Certificate1<TestTypes> = self.certify(data, c.epoch, c.view);
         self.cache.cert1s.insert(key, cert.clone());

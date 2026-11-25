@@ -1259,7 +1259,7 @@ mod tests {
         let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
             leaf_commit: leaf.commit(),
             epoch: EpochNumber::new(1),
-            block_number: Some(leaf.height()),
+            block_number: leaf.height(),
         }
         .into();
         let versioned_data =
@@ -1304,7 +1304,7 @@ mod tests {
         // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
-        running_high_qc.data.block_number = Some(epoch_height);
+        running_high_qc.data.block_number = epoch_height;
         storage
             .append_high_qc2(running_high_qc.clone())
             .await

@@ -866,10 +866,8 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     }
 
     /// The block number attached to this certificate.
-    ///
-    /// [`None`] if this certificate originated before epochs were enabled.
     pub fn block_number(&self) -> Option<u64> {
-        self.qc.data.block_number
+        Some(self.qc.data.block_number)
     }
 
     /// Verify that the next epoch QC is present and consistent if required.
@@ -885,10 +883,7 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
         &self,
         epoch_height: u64,
     ) -> Result<Option<&NextEpochQuorumCertificate2<TYPES>>> {
-        let block_number = self.qc.data.block_number.context(warn!(
-            "QC for epoch {:?} has no block number",
-            self.qc.data.epoch
-        ))?;
+        let block_number = self.qc.data.block_number;
         if !is_epoch_transition(block_number, epoch_height) {
             tracing::debug!(
                 block_number,
@@ -923,9 +918,7 @@ pub fn check_qc_state_cert_correspondence<TYPES: NodeType>(
     state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
     epoch_length: EpochLength,
 ) -> bool {
-    qc.data
-        .block_number
-        .is_some_and(|bn| epoch_length.position(bn).is_root())
+    epoch_length.position(qc.data.block_number).is_root()
         && Some(state_cert.epoch) == qc.data.epoch()
         && qc.view_number().u64() == state_cert.light_client_state.view_number
 }

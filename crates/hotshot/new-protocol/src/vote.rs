@@ -828,7 +828,7 @@ mod tests {
                 .u64(42)
                 .finalize(),
             epoch,
-            block_number: Some(1),
+            block_number: 1,
         };
         SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &test_upgrade_lock())
             .expect("Failed to sign vote")
@@ -992,7 +992,7 @@ mod tests {
                 .u64(42)
                 .finalize(),
             epoch,
-            block_number: Some(1),
+            block_number: 1,
         };
 
         for i in 0..THRESHOLD {
@@ -1018,7 +1018,7 @@ mod tests {
                 .u64(42)
                 .finalize(),
             epoch,
-            block_number: Some(1),
+            block_number: 1,
         };
 
         let views = [ViewNumber::new(1), ViewNumber::new(2), ViewNumber::new(3)];
@@ -1538,7 +1538,7 @@ mod tests {
                     .u64(*view)
                     .finalize(),
                 epoch,
-                block_number: Some(*view),
+                block_number: *view,
             };
             let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
                 .expect("failed to sign quorum vote");

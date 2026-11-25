@@ -871,7 +871,7 @@ impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
         proto::QuorumData2 {
             leaf_commit: data.leaf_commit.to_string(),
             epoch: Some(data.epoch.u64()),
-            block_number: data.block_number,
+            block_number: Some(data.block_number),
         }
     }
 }

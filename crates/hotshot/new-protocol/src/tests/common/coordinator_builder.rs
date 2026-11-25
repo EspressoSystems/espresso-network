@@ -314,7 +314,7 @@ pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificat
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
         epoch: EpochNumber::genesis(),
-        block_number: Some(0),
+        block_number: 0,
     };
     Certificate1::new(
         data,

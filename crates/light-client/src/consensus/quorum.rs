@@ -682,7 +682,7 @@ mod test {
             custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
                 // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
                 if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
-                    *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
+                    next_epoch_justify_qc.data.block_number += 1;
                 }
             })
             .await;
@@ -813,7 +813,7 @@ mod test {
         let committing_data = QuorumData2 {
             leaf_commit: leaves[1].leaf().commit(),
             epoch: EpochNumber::new(1),
-            block_number: Some(10),
+            block_number: 10,
         };
         let committing_qc = Certificate::from(CertificatePair::new(
             boundary_signed_qc(
@@ -838,7 +838,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: leaves[2].leaf().commit(),
                 epoch: EpochNumber::new(2),
-                block_number: Some(11),
+                block_number: 11,
             },
             ViewNumber::new(11),
             deciding_quorum,
@@ -900,7 +900,7 @@ mod test {
         let committing_data = QuorumData2 {
             leaf_commit: leaves[1].leaf().commit(),
             epoch: EpochNumber::new(1),
-            block_number: Some(5),
+            block_number: 5,
         };
         let committing_qc = Certificate::from(CertificatePair::new(
             boundary_signed_qc(committing_data, ViewNumber::new(5), &current, EPOCH_VERSION),
@@ -912,7 +912,7 @@ mod test {
             QuorumData2 {
                 leaf_commit: leaves[2].leaf().commit(),
                 epoch: EpochNumber::new(2),
-                block_number: Some(6),
+                block_number: 6,
             },
             ViewNumber::new(6),
             &next,

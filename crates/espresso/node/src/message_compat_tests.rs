@@ -471,7 +471,7 @@ async fn reference_new_protocol_messages(
     let quorum_data = QuorumData2::<SeqTypes> {
         leaf_commit,
         epoch,
-        block_number: Some(0),
+        block_number: 0,
     };
     let cert1: Certificate1<SeqTypes> = SimpleCertificate::new(
         quorum_data,

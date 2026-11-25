@@ -250,7 +250,7 @@ pub async fn custom_leaf_chain(
         qc.data.leaf_commit = leaf.commit();
         pre_epoch = leaf.block_header().version() < EPOCH_VERSION;
         if !pre_epoch {
-            qc.data.block_number = Some(height);
+            qc.data.block_number = height;
         }
         let leaf_qc: HistoricQuorumCertificate<SeqTypes> = if pre_epoch {
             PreEpochQuorumCertificate::from(qc.clone().to_qc()).into()
@@ -269,7 +269,7 @@ pub async fn custom_leaf_chain(
 }
 
 /// `qc` as the justify QC of a [`QuorumProposal2`]. A QC from before epochs gets epoch 1, like
-/// every QC of these chains, and no block number; [`pre_epoch_leaf`] drops both again.
+/// every QC of these chains, and block number 0; [`pre_epoch_leaf`] drops both again.
 fn proposal_qc(qc: &HistoricQuorumCertificate<SeqTypes>) -> QuorumCertificate2<SeqTypes> {
     match qc {
         HistoricQuorumCertificate::Epoch(qc) => qc.clone(),
@@ -277,7 +277,7 @@ fn proposal_qc(qc: &HistoricQuorumCertificate<SeqTypes>) -> QuorumCertificate2<S
             QuorumData2 {
                 leaf_commit: qc.data.leaf_commit,
                 epoch: EpochNumber::new(1),
-                block_number: None,
+                block_number: 0,
             },
             Commitment::from_raw(qc.vote_commitment().into()),
             qc.view_number,
@@ -748,7 +748,7 @@ impl InnerTestClient {
             let quorum_data = QuorumData2 {
                 leaf_commit: leaf.commit(),
                 epoch,
-                block_number: Some(i as u64),
+                block_number: i as u64,
             };
             let quorum_data_comm = VersionedVoteData::new_infallible(
                 quorum_data,

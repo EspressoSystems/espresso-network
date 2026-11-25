@@ -123,7 +123,9 @@ pub async fn verify_leaf_chain<T: NodeType>(
         |qc: &HistoricQuorumCertificate<T>, certified_height: u64| -> anyhow::Result<()> {
             let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
             let (claimed_epoch, claimed_block_number) = match qc {
-                HistoricQuorumCertificate::Epoch(qc) => (Some(qc.data.epoch), qc.data.block_number),
+                HistoricQuorumCertificate::Epoch(qc) => {
+                    (Some(qc.data.epoch), Some(qc.data.block_number))
+                },
                 HistoricQuorumCertificate::PreEpoch(_) => (None, None),
             };
             let (entries, threshold) = match claimed_epoch {

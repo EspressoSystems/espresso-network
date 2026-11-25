@@ -421,7 +421,7 @@ fn build_genesis_cert1(
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
         epoch: EpochNumber::genesis(),
-        block_number: Some(0),
+        block_number: 0,
     };
     hotshot_new_protocol::message::Certificate1::new(
         data,

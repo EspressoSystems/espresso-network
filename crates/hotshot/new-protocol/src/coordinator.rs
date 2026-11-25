@@ -1485,7 +1485,7 @@ where
                         view,
                         crate::leader_trace::LeaderEvent::Vote1VMinus1Arrived
                     );
-                    let bn = vote1.vote.data.block_number.unwrap_or(0);
+                    let bn = vote1.vote.data.block_number;
                     let epoch_length = self.consensus.epoch_length;
                     let is_epoch_root_vote = epoch_length.position(bn).is_root();
                     debug!(

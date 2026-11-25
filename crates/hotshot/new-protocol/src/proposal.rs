@@ -264,9 +264,7 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
             claimed: claimed_epoch,
         });
     }
-    let Some(claimed_block) = proposal.justify_qc.data.block_number else {
-        return Err(MalformedProposal::JustifyQcWithoutBlockNumber(view));
-    };
+    let claimed_block = proposal.justify_qc.data.block_number;
     if claimed_block != parent_block {
         return Err(MalformedProposal::JustifyQcBlockNumber {
             view,
@@ -299,11 +297,9 @@ pub(crate) fn state_cert_matches_parent<T: NodeType>(
     epoch_length: EpochLength,
 ) -> Result<Option<&LightClientStateUpdateCertificateV2<T>>, MalformedProposal> {
     let view = proposal.view_number();
-    let requires_state_cert = proposal
-        .justify_qc
-        .data
-        .block_number
-        .is_some_and(|bn| epoch_length.position(bn).is_root());
+    let requires_state_cert = epoch_length
+        .position(proposal.justify_qc.data.block_number)
+        .is_root();
     match (proposal.state_cert.as_ref(), requires_state_cert) {
         (Some(_), false) => Err(MalformedProposal::StateCertUnexpected(view)),
         (None, true) => Err(MalformedProposal::StateCertMissing(view)),

@@ -249,19 +249,17 @@ async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch
     rejects_justify_qc_epoch(&tampered, EPOCH_HEIGHT, 1);
 }
 
-/// A justify QC must certify the block below the proposal. It names its epoch
-/// and block number together, so one that has passed the epoch check and names
-/// no block does not describe a parent at all.
+/// A justify QC must certify the block below the proposal.
 #[tokio::test]
 async fn justify_qc_certifying_another_block_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
     let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
     let parent_block = proposal.block_header.block_number - 1;
-    assert_eq!(proposal.justify_qc.data.block_number, Some(parent_block));
+    assert_eq!(proposal.justify_qc.data.block_number, parent_block);
 
     for claimed in [proposal.block_header.block_number, parent_block - 1] {
         let mut tampered = proposal.clone();
-        tampered.justify_qc.data.block_number = Some(claimed);
+        tampered.justify_qc.data.block_number = claimed;
         match justify_qc_matches_parent(&tampered, epoch_length(EPOCH_HEIGHT)) {
             Err(MalformedProposal::JustifyQcBlockNumber {
                 expected,
@@ -274,13 +272,6 @@ async fn justify_qc_certifying_another_block_is_rejected() {
             other => panic!("expected MalformedProposal::JustifyQcBlockNumber, got {other:?}"),
         }
     }
-
-    let mut without_block_number = proposal.clone();
-    without_block_number.justify_qc.data.block_number = None;
-    assert!(matches!(
-        justify_qc_matches_parent(&without_block_number, epoch_length(EPOCH_HEIGHT)),
-        Err(MalformedProposal::JustifyQcWithoutBlockNumber(_))
-    ));
 }
 
 /// Every proposal of a chain that crosses epoch boundaries carries either no
@@ -778,7 +769,7 @@ async fn genesis_justify_qc_certifying_a_later_block_is_rejected() {
     );
     assert!(justify_qc_matches_parent(&proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
 
-    proposal.justify_qc.data.block_number = Some(23);
+    proposal.justify_qc.data.block_number = 23;
     proposal.justify_qc.data.epoch = EpochNumber::new(3);
     proposal.block_header.block_number = 24;
     proposal.epoch = EpochNumber::new(3);

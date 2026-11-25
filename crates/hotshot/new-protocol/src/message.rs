@@ -408,7 +408,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         if self.cert1.view_number() > self.cert2.view_number()
             || self.cert1.epoch() != self.cert2.epoch()
             || self.cert1.data.leaf_commit != self.cert2.data.leaf_commit
-            || self.cert1.data.block_number != Some(block_number)
+            || self.cert1.data.block_number != block_number
         {
             return Err(EpochChangeError::CertificateMismatch);
         }
@@ -516,9 +516,7 @@ impl<T: NodeType> ReVote<T> {
         if data.epoch != self.epoch {
             return Err(ReVoteError::Epoch);
         }
-        let Some(block) = data.block_number else {
-            return Err(ReVoteError::NotLastBlock);
-        };
+        let block = data.block_number;
         if !epoch_length.position(block).is_last() || epoch_length.epoch_of(block) != self.epoch {
             return Err(ReVoteError::NotLastBlock);
         }

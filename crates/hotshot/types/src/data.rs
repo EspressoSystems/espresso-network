@@ -806,10 +806,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
     pub fn is_validate_block_height(&self) -> bool {
-        self.justify_qc
-            .data()
-            .block_number
-            .is_some_and(|bn| bn + 1 == self.block_header.block_number())
+        self.justify_qc.data().block_number + 1 == self.block_header.block_number()
     }
 }
 
@@ -1258,7 +1255,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
             epoch: EpochNumber::genesis(),
-            block_number: Some(0),
+            block_number: 0,
         };
 
         let justify_qc = QuorumCertificate2::new(
@@ -1635,7 +1632,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let data = QuorumData2 {
             leaf_commit: genesis_leaf.commit(),
             epoch: EpochNumber::genesis(),
-            block_number: Some(genesis_leaf.height()),
+            block_number: genesis_leaf.height(),
         };
 
         let versioned_data =

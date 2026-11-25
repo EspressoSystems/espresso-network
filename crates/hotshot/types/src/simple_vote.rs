@@ -53,16 +53,14 @@ pub struct QuorumData2<TYPES: NodeType> {
     /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
     #[serde(with = "crate::always_some")]
     pub epoch: EpochNumber,
-    /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
-    pub block_number: Option<u64>,
+    /// Block number of the leaf.
+    #[serde(with = "crate::always_some")]
+    pub block_number: u64,
 }
 
 impl<T: NodeType> QuorumData2<T> {
     pub fn is_well_formed(&self, epoch_length: EpochLength) -> bool {
-        let Some(block) = self.block_number else {
-            return false;
-        };
-        self.epoch == epoch_length.epoch_of(block)
+        self.epoch == epoch_length.epoch_of(self.block_number)
     }
 }
 
@@ -494,14 +492,14 @@ impl<TYPES: NodeType> Committable for QuorumData<TYPES> {
 
 impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        quorum_data_commit(&self.leaf_commit, Some(self.epoch), self.block_number)
+        quorum_data_commit(&self.leaf_commit, Some(self.epoch), Some(self.block_number))
     }
 }
 
 impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
         let NextEpochQuorumData2(data) = self;
-        quorum_data_commit(&data.leaf_commit, Some(data.epoch), data.block_number)
+        quorum_data_commit(&data.leaf_commit, Some(data.epoch), Some(data.block_number))
     }
 }
 

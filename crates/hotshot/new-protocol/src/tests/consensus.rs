@@ -1038,34 +1038,27 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
 fn test_quorum_data_well_formedness() {
     let height = 10;
     let leaf_commit = Commitment::default_commitment_no_preimage();
-    let vote1 = |epoch: u64, block_number: Option<u64>| QuorumData2::<TestTypes> {
+    let vote1 = |epoch: u64, block_number: u64| QuorumData2::<TestTypes> {
         leaf_commit,
         epoch: EpochNumber::new(epoch),
         block_number,
     };
+    assert!(vote1(1, 0).is_well_formed(epoch_length(height)), "genesis");
     assert!(
-        vote1(1, Some(0)).is_well_formed(epoch_length(height)),
-        "genesis"
-    );
-    assert!(
-        vote1(1, Some(10)).is_well_formed(epoch_length(height)),
+        vote1(1, 10).is_well_formed(epoch_length(height)),
         "an epoch's last block"
     );
     assert!(
-        vote1(2, Some(11)).is_well_formed(epoch_length(height)),
+        vote1(2, 11).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote1(2, Some(10)).is_well_formed(epoch_length(height)),
+        !vote1(2, 10).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
     assert!(
-        !vote1(1, Some(11)).is_well_formed(epoch_length(height)),
+        !vote1(1, 11).is_well_formed(epoch_length(height)),
         "an epoch its height has left"
-    );
-    assert!(
-        !vote1(1, None).is_well_formed(epoch_length(height)),
-        "no block number"
     );
 
     let vote2 = |epoch: u64, block_number: u64| Vote2Data::<TestTypes> {
@@ -4291,8 +4284,8 @@ async fn test_unvalidated_state_cert_is_not_stored() {
     // Precondition: a non-epoch-root parent QC is what makes the validator skip entirely.
     let parent_block = view.proposal.data.justify_qc.data.block_number;
     assert!(
-        parent_block.is_none_or(|bn| !epoch_length(EPOCH_HEIGHT).position(bn).is_root()),
-        "fixture precondition: parent QC must not be an epoch root, got {parent_block:?}"
+        !epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
+        "fixture precondition: parent QC must not be an epoch root, got {parent_block}"
     );
     assert!(
         view.proposal.data.state_cert.is_none(),
@@ -4368,13 +4361,7 @@ async fn test_validated_state_cert_is_stored() {
              no longer covers an epoch-root parent and this test proves nothing",
         );
 
-    let parent_block = view
-        .proposal
-        .data
-        .justify_qc
-        .data
-        .block_number
-        .expect("a state_cert-bearing proposal must have a parent block number");
+    let parent_block = view.proposal.data.justify_qc.data.block_number;
     assert!(
         epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
         "fixture precondition: parent QC must be an epoch root, got block {parent_block}"

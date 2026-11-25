@@ -1303,7 +1303,7 @@ impl<T: NodeType> Consensus<T> {
         let certified = self
             .certs1
             .range(ViewEpoch::at_view(*view))
-            .map(|(_, cert)| (cert.data.leaf_commit, cert.data.block_number))
+            .map(|(_, cert)| (cert.data.leaf_commit, Some(cert.data.block_number)))
             .chain(
                 self.certs2
                     .range(ViewEpoch::at_view(*view))
@@ -2672,7 +2672,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let leaf_commit = cert.data.leaf_commit;
-        let block_number = cert.data.block_number;
+        let block_number = Some(cert.data.block_number);
         let later = self.lock_view().is_none_or(|own| own < lock);
         if later
             && self
@@ -2835,7 +2835,7 @@ impl<T: NodeType> Consensus<T> {
             .certified_proposal(
                 parent_cert.view_number(),
                 parent_cert.data.leaf_commit,
-                parent_cert.data.block_number,
+                Some(parent_cert.data.block_number),
             )
             .map(|(view, proposal)| (view, proposal.clone()))
         else {
@@ -3004,7 +3004,7 @@ impl<T: NodeType> Consensus<T> {
         // By the atomicity invariant (enforced by `EpochRootTally`),
         // if we hold the epoch-root Cert1 then `state_certs` also holds the
         // matching cert.
-        let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
+        let parent_block_number = parent_cert.data.block_number;
         let state_cert = if self.epoch_length.position(parent_block_number).is_root() {
             let Some(parent_epoch) = parent_cert.data.epoch() else {
                 warn!("epoch-root parent QC has no epoch; cannot propose");
@@ -3779,7 +3779,7 @@ impl<T: NodeType> Consensus<T> {
             QuorumData2 {
                 leaf_commit: proposal_commit,
                 epoch: proposal.epoch,
-                block_number: Some(proposal.block_header.block_number()),
+                block_number: proposal.block_header.block_number(),
             },
             view,
             &self.public_key,
@@ -3870,7 +3870,7 @@ impl<T: NodeType> Consensus<T> {
         // A re-vote certifies a block of an earlier view; its payload is the
         // one at the block's own view.
         let Some((block_view, proposal)) =
-            self.certified_proposal(view, cert1.data.leaf_commit, cert1.data.block_number)
+            self.certified_proposal(view, cert1.data.leaf_commit, Some(cert1.data.block_number))
         else {
             if self.proposals.at(view).next().is_some() {
                 warn!(%view, "cert1 commitment does not match proposal commitment");
@@ -4106,7 +4106,7 @@ impl<T: NodeType> Consensus<T> {
         // The request may name a re-vote's certificate, at a later view than
         // the block.
         let Some((block_view, block)) =
-            self.certified_proposal(cert_view, leaf_commit, data.block_number)
+            self.certified_proposal(cert_view, leaf_commit, Some(data.block_number))
         else {
             if self.revote_fetches.insert((view, RevoteFetch::Proposal)) {
                 debug!(%view, %cert_view, "re-vote proposal missing; requesting fetch");
@@ -4438,7 +4438,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
 
-        let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
+        let parent_block_number = parent_cert.data.block_number;
         if self.epoch_length.position(parent_block_number).is_root() {
             match parent_cert.data.epoch() {
                 None => missing.push("parent_cert_epoch"),
