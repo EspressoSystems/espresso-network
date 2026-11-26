@@ -541,7 +541,9 @@ impl SqlStorage {
 
         // Only reuse the same pool if we're using sqlite
         if Db::KIND == DbKind::Sqlite || connection_type == StorageConnectionType::Sequencer {
-            // re-use the same pool if present and return early
+            // re-use the same pool if present and return early. This skips the migrations and the
+            // archive checks below, so the pool must come from an earlier `connect` with the same
+            // config, which ran them: a different `archive` setting would bypass the refusal.
             if let Some(pool) = config.pool {
                 return Ok(Self {
                     metrics,
