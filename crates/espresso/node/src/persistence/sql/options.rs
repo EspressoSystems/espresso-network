@@ -239,8 +239,7 @@ pub struct Options {
     /// Archive mode needs merklized state from genesis. A node whose state started from a recent
     /// epoch boundary, as with `--prune`, refuses to start in this mode: complete trees need a
     /// replay from genesis, which runs only on a database with no merklized state. Reset the
-    /// storage first. On a node with stake, run a separate archive node instead, because a reset
-    /// also deletes the consensus state.
+    /// storage first.
     #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
 
