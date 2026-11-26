@@ -110,6 +110,9 @@ pub mod state;
 pub mod unlock_schedule;
 mod update;
 
+#[cfg(test)]
+mod slh_dsa_light_client_tests;
+
 pub use options::Options;
 pub use update::{ApiSink, DecideSink};
 

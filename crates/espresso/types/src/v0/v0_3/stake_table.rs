@@ -9,10 +9,13 @@ use async_lock::OnceCell;
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
-use hotshot_contract_adapter::sol_types::StakeTableV3::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
-    Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
-    ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
+use hotshot_contract_adapter::sol_types::{
+    StakeTableV3::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
+        Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
+        ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
+    },
+    StakeTableV4::SlhDsaKeyUpdated,
 };
 use hotshot_types::{
     PeerConfig,
@@ -486,6 +489,7 @@ pub enum StakeTableEvent {
     RegisterV3(ValidatorRegisteredV3),
     X25519KeyUpdate(X25519KeyUpdated),
     P2pAddrUpdate(P2pAddrUpdated),
+    SlhDsaKeyUpdate(SlhDsaKeyUpdated),
 }
 
 #[derive(Debug, Error)]
@@ -522,6 +526,8 @@ pub enum StakeTableError {
     X25519KeyAlreadyUsed(String),
     #[error("Invalid x25519 key: {0}")]
     InvalidX25519Key(String),
+    #[error("SLH-DSA key already used: {0}")]
+    SlhDsaKeyAlreadyUsed(String),
     #[error("Stake table event decode error {0}")]
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]

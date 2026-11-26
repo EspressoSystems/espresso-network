@@ -9,6 +9,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use hotshot_types::{
     light_client::{StateKeyPair, StateSignature, StateVerKey, hash_bytes_to_field},
     signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
+    slh_dsa,
     traits::signature_key::SignatureKey,
 };
 use jf_signature::{
@@ -135,6 +136,14 @@ pub fn sign_address_schnorr(schnorr_key_pair: &StateKeyPair, address: Address) -
     schnorr_key_pair.sign(&msg, CS_ID_SCHNORR)
 }
 
+/// FIPS 205 context string of the SLH-DSA proof of possession in the stake table.
+pub const SLH_DSA_POP_CONTEXT: &[u8] = b"espresso stake table slh-dsa proof of possession";
+
+/// Sign the proof of possession of an SLH-DSA key for `address`.
+pub fn sign_address_slh_dsa(keypair: &slh_dsa::Keypair, address: Address) -> slh_dsa::Signature {
+    keypair.sign(SLH_DSA_POP_CONTEXT, &address.abi_encode())
+}
+
 /// Authenticate a Schnorr signature over an Ethereum address
 pub fn authenticate_schnorr_sig(
     schnorr_vk: &StateVerKey,
@@ -157,6 +166,17 @@ pub fn authenticate_bls_sig(
         return Err(StakeTableSolError::InvalidBlsSignature);
     }
     Ok(())
+}
+
+/// Authenticate an SLH-DSA signature over an Ethereum address
+pub fn authenticate_slh_dsa_sig(
+    slh_dsa_key: &slh_dsa::PublicKey,
+    address: Address,
+    slh_dsa_sig: &slh_dsa::Signature,
+) -> Result<(), StakeTableSolError> {
+    slh_dsa_key
+        .verify(SLH_DSA_POP_CONTEXT, &address.abi_encode(), slh_dsa_sig)
+        .map_err(|_| StakeTableSolError::InvalidSlhDsaSignature)
 }
 
 fn authenticate_stake_table_validator_event(
@@ -195,6 +215,10 @@ pub enum StakeTableSolError {
     InvalidBlsKey,
     #[error("Invalid Schnorr key")]
     InvalidSchnorrKey,
+    #[error("Invalid SLH-DSA key")]
+    InvalidSlhDsaKey,
+    #[error("SLH-DSA signature invalid")]
+    InvalidSlhDsaSignature,
 }
 
 impl StakeTableV3::ValidatorRegisteredV3 {
@@ -220,6 +244,18 @@ impl StakeTableV3::ValidatorRegisteredV2 {
             self.blsSig.into(),
             &self.schnorrSig,
         )
+    }
+}
+
+impl StakeTableV4::SlhDsaKeyUpdated {
+    /// Verify the SLH-DSA proof of possession in the event and return the parsed key.
+    pub fn authenticate(&self) -> Result<slh_dsa::PublicKey, StakeTableSolError> {
+        let key = slh_dsa::PublicKey::try_from(self.slhDsaVK.as_ref())
+            .map_err(|_| StakeTableSolError::InvalidSlhDsaKey)?;
+        let sig = slh_dsa::Signature::try_from(self.slhDsaSig.as_ref())
+            .map_err(|_| StakeTableSolError::InvalidSlhDsaSignature)?;
+        authenticate_slh_dsa_sig(&key, self.validator, &sig)?;
+        Ok(key)
     }
 }
 
@@ -539,5 +575,153 @@ mod proptest_p2p_addr {
                 Ok(())
             })
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod slh_dsa_test {
+    use alloy::{
+        primitives::{Address, Bytes},
+        sol_types::SolValue,
+    };
+    use hotshot_types::slh_dsa::{Keypair, PUBLIC_KEY_LEN, SIGNATURE_LEN};
+
+    use super::{
+        SLH_DSA_POP_CONTEXT, StakeTableSolError, authenticate_slh_dsa_sig, sign_address_slh_dsa,
+    };
+    use crate::sol_types::StakeTableV4::SlhDsaKeyUpdated;
+
+    /// The proof of possession is a plain FIPS 205 signature with `SLH_DSA_POP_CONTEXT` over the
+    /// 32-byte ABI encoding of the address, the message of the BLS proof of possession. Tools
+    /// outside this crate can produce it.
+    #[test]
+    fn pop_is_signature_over_abi_encoded_address() {
+        let keypair = Keypair::generate();
+        let address = Address::random();
+        let message = address.abi_encode();
+        assert_eq!(message.len(), 32);
+
+        let signature = keypair.sign(SLH_DSA_POP_CONTEXT, &message);
+
+        let result = authenticate_slh_dsa_sig(&keypair.public_key(), address, &signature);
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn authenticate_slh_dsa_sig_accepts_only_same_key_and_address() {
+        let keypair = Keypair::generate();
+        let public_key = keypair.public_key();
+        let address = Address::random();
+        let signature = sign_address_slh_dsa(&keypair, address);
+
+        assert!(
+            public_key
+                .verify(SLH_DSA_POP_CONTEXT, &address.abi_encode(), &signature)
+                .is_ok()
+        );
+        let result = authenticate_slh_dsa_sig(&public_key, address, &signature);
+        assert!(result.is_ok(), "{result:?}");
+
+        assert_invalid_signature(authenticate_slh_dsa_sig(
+            &public_key,
+            Address::random(),
+            &signature,
+        ));
+        assert_invalid_signature(authenticate_slh_dsa_sig(
+            &Keypair::generate().public_key(),
+            address,
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn authenticate_slh_dsa_sig_rejects_other_context() {
+        let keypair = Keypair::generate();
+        let address = Address::random();
+        let signature = keypair.sign(b"other context", &address.abi_encode());
+
+        assert_invalid_signature(authenticate_slh_dsa_sig(
+            &keypair.public_key(),
+            address,
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn slh_dsa_key_updated_authenticate_returns_key() {
+        let keypair = Keypair::generate();
+        let validator = Address::random();
+        let event = key_updated(
+            validator,
+            keypair.public_key().as_bytes(),
+            sign_address_slh_dsa(&keypair, validator).as_bytes(),
+        );
+
+        let key = event.authenticate();
+        assert!(
+            matches!(&key, Ok(key) if *key == keypair.public_key()),
+            "{:?}",
+            key.map(|_| ())
+        );
+    }
+
+    #[test]
+    fn slh_dsa_key_updated_authenticate_rejects_wrong_signer() {
+        let keypair = Keypair::generate();
+        let validator = Address::random();
+        let signature = sign_address_slh_dsa(&keypair, validator);
+
+        // The signature is for `validator`, not for another address.
+        let other_validator = key_updated(
+            Address::random(),
+            keypair.public_key().as_bytes(),
+            signature.as_bytes(),
+        );
+        assert_invalid_signature(other_validator.authenticate().map(|_| ()));
+
+        // The signature is from `keypair`, not from the key in the event.
+        let other_key = key_updated(
+            validator,
+            Keypair::generate().public_key().as_bytes(),
+            signature.as_bytes(),
+        );
+        assert_invalid_signature(other_key.authenticate().map(|_| ()));
+    }
+
+    #[test]
+    fn slh_dsa_key_updated_authenticate_rejects_wrong_key_length() {
+        let signature = [0u8; SIGNATURE_LEN];
+        for len in [0, PUBLIC_KEY_LEN - 1, PUBLIC_KEY_LEN + 1, 64] {
+            let event = key_updated(Address::random(), &vec![1u8; len], &signature);
+            let result = event.authenticate().map(|_| ());
+            assert!(
+                matches!(result, Err(StakeTableSolError::InvalidSlhDsaKey)),
+                "key length {len}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn slh_dsa_key_updated_authenticate_rejects_wrong_signature_length() {
+        let key = [1u8; PUBLIC_KEY_LEN];
+        for len in [0, 64, SIGNATURE_LEN - 1, SIGNATURE_LEN + 1] {
+            let event = key_updated(Address::random(), &key, &vec![0u8; len]);
+            assert_invalid_signature(event.authenticate().map(|_| ()));
+        }
+    }
+
+    fn key_updated(validator: Address, key: &[u8], signature: &[u8]) -> SlhDsaKeyUpdated {
+        SlhDsaKeyUpdated {
+            validator,
+            slhDsaVK: Bytes::copy_from_slice(key),
+            slhDsaSig: Bytes::copy_from_slice(signature),
+        }
+    }
+
+    fn assert_invalid_signature(result: Result<(), StakeTableSolError>) {
+        assert!(
+            matches!(result, Err(StakeTableSolError::InvalidSlhDsaSignature)),
+            "{result:?}"
+        );
     }
 }

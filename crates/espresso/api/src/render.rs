@@ -1294,6 +1294,8 @@ impl From<&StakeTableEvent> for proto::StakeTableEvent {
                 validator: format!("{:#x}", event.validator),
                 p2p_addr: event.p2pAddr.clone(),
             }),
+            // The light client API filters these out, and v2 has no message for them yet.
+            StakeTableEvent::SlhDsaKeyUpdate(_) => return proto::StakeTableEvent { event: None },
         };
         proto::StakeTableEvent { event: Some(arm) }
     }

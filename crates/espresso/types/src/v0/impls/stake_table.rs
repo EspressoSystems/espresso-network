@@ -41,10 +41,14 @@ use hotshot_contract_adapter::sol_types::{
     LightClientStateSol, LightClientV3, StakeTableV3,
 };
 use hotshot_contract_adapter::{
-    sol_types::StakeTableV3::{
-        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
-        StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
-        ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
+    sol_types::{
+        StakeTableV3::{
+            CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
+            P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
+            ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
+            X25519KeyUpdated,
+        },
+        StakeTableV4::SlhDsaKeyUpdated,
     },
     stake_table::StakeTableSolError,
 };
@@ -54,6 +58,7 @@ use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     signature_key::{BLSPubKey, SchnorrPubKey},
+    slh_dsa,
     traits::signature_key::SignatureKey as _,
     x25519,
 };
@@ -214,8 +219,8 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
 
 /// Order decoded logs by their place on L1: block number, then index in the block.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
-fn sort_stake_table_events(
-    event_logs: Vec<(StakeTableV3Events, Log)>,
+fn sort_stake_table_events<E: TryInto<StakeTableEvent>>(
+    event_logs: Vec<(E, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
     let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
 
@@ -246,6 +251,10 @@ pub struct StakeTableState {
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
     used_x25519_keys: HashSet<x25519::PublicKey>,
+    /// Not part of `commit()` or of the RLP form: nodes that do not read SLH-DSA key events must
+    /// compute the same stake table.
+    slh_dsa_keys: HashMap<Address, slh_dsa::PublicKey>,
+    used_slh_dsa_keys: HashSet<slh_dsa::PublicKey>,
 }
 
 #[cfg(feature = "rlp")]
@@ -338,6 +347,7 @@ mod stake_table_state_rlp {
                     .map(|bytes| bincode::deserialize(bytes))
                     .collect::<Result<HashSet<_>, _>>()
                     .context("deserializing used_x25519_keys")?,
+                ..Default::default()
             })
         }
     }
@@ -431,6 +441,7 @@ impl StakeTableState {
             used_bls_keys,
             used_schnorr_keys,
             used_x25519_keys,
+            ..Default::default()
         }
     }
 
@@ -456,6 +467,14 @@ impl StakeTableState {
 
     pub fn validator_exits(&self) -> &HashSet<Address> {
         &self.validator_exits
+    }
+
+    /// The SLH-DSA key of `validator`, if it set one.
+    ///
+    /// The key is not part of [`Committable::commit`]: nodes that do not read SLH-DSA key events
+    /// must compute the same stake table hash.
+    pub fn slh_dsa_key(&self, validator: &Address) -> Option<&slh_dsa::PublicKey> {
+        self.slh_dsa_keys.get(validator)
     }
 
     /// Applies a stake table event to this state.
@@ -955,6 +974,27 @@ impl StakeTableState {
                     },
                 }
             },
+
+            StakeTableEvent::SlhDsaKeyUpdate(SlhDsaKeyUpdated {
+                validator,
+                ref slhDsaVK,
+                ..
+            }) => {
+                if !self.validators.contains_key(&validator) {
+                    return Err(StakeTableError::ValidatorNotFound(validator));
+                }
+                // The contract checks the length, so this means a contract bug. Ignore the
+                // event instead of halting stake table processing on every node.
+                let Ok(key) = slh_dsa::PublicKey::try_from(slhDsaVK.as_ref()) else {
+                    tracing::warn!(?validator, len = slhDsaVK.len(), "Invalid SLH-DSA key");
+                    return Ok(Ok(()));
+                };
+                if self.used_slh_dsa_keys.contains(&key) {
+                    return Err(StakeTableError::SlhDsaKeyAlreadyUsed(format!("{key:?}")));
+                }
+                self.used_slh_dsa_keys.insert(key);
+                self.slh_dsa_keys.insert(validator, key);
+            },
         }
 
         Ok(Ok(()))
@@ -1188,6 +1228,9 @@ impl std::fmt::Debug for StakeTableEvent {
             },
             StakeTableEvent::P2pAddrUpdate(event) => {
                 write!(f, "P2pAddrUpdate({:?})", event.validator)
+            },
+            StakeTableEvent::SlhDsaKeyUpdate(event) => {
+                write!(f, "SlhDsaKeyUpdate({:?})", event.validator)
             },
         }
     }
@@ -1622,6 +1665,7 @@ impl Fetcher {
                 CommissionUpdated::SIGNATURE,
                 X25519KeyUpdated::SIGNATURE,
                 P2pAddrUpdated::SIGNATURE,
+                SlhDsaKeyUpdated::SIGNATURE,
             ])
             .address(contract)
             .from_block(from_block)
@@ -1630,18 +1674,54 @@ impl Fetcher {
 
     /// Decode logs, dropping the ones that fail authentication.
     #[cfg(feature = "node")]
-    fn decode_events(logs: Vec<Log>) -> Result<Vec<(StakeTableV3Events, Log)>, StakeTableError> {
+    fn decode_events(logs: Vec<Log>) -> Result<Vec<(StakeTableEvent, Log)>, StakeTableError> {
         logs.into_iter()
-            .filter_map(|log| {
-                let event =
-                    StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                match Self::validate_event(&event, &log) {
-                    Ok(true) => Some(Ok((event, log))),
-                    Ok(false) => None,
-                    Err(e) => Some(Err(e)),
-                }
-            })
+            .filter_map(|log| Self::decode_event(log).transpose())
             .collect()
+    }
+
+    /// Decode and validate one log. `None` if it is not a stake table event or fails
+    /// authentication.
+    ///
+    /// `SlhDsaKeyUpdated` is only in the V4 bindings, whose copies of the V3 event types are
+    /// distinct Rust types, so it is decoded on its own.
+    #[cfg(feature = "node")]
+    fn decode_event(log: Log) -> Result<Option<(StakeTableEvent, Log)>, StakeTableError> {
+        let (topics, data) = (log.topics(), &log.data().data);
+        if log.topic0() == Some(&SlhDsaKeyUpdated::SIGNATURE_HASH) {
+            let Ok(event) = SlhDsaKeyUpdated::decode_raw_log(topics, data) else {
+                return Ok(None);
+            };
+            return Ok(
+                Self::authenticate_slh_dsa_key_event(&event, &log).then(|| (event.into(), log))
+            );
+        }
+        let Ok(event) = StakeTableV3Events::decode_raw_log(topics, data) else {
+            return Ok(None);
+        };
+        if !Self::validate_event(&event, &log)? {
+            return Ok(None);
+        }
+        let event = event
+            .try_into()
+            .map_err(|_| EventSortingError::InvalidStakeTableEvent)?;
+        Ok(Some((event, log)))
+    }
+
+    /// Check the proof of possession, which L1 does not check.
+    #[cfg(feature = "node")]
+    fn authenticate_slh_dsa_key_event(event: &SlhDsaKeyUpdated, log: &Log) -> bool {
+        match event.authenticate() {
+            Ok(_) => true,
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    "Failed to authenticate SlhDsaKeyUpdated event: {}",
+                    log.display()
+                );
+                false
+            },
+        }
     }
 
     /// Fetch all stake table events in a single request.
@@ -2476,6 +2556,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod corpus;
+#[cfg(test)]
+mod slh_dsa_tests;
 
 #[cfg(test)]
 mod tests {
@@ -5929,6 +6011,7 @@ mod rlp_tests {
             used_bls_keys: used_bls_keys1,
             used_schnorr_keys: used_schnorr_keys1,
             used_x25519_keys: used_x25519_keys1,
+            ..Default::default()
         };
         let state2 = StakeTableState {
             validators: [
@@ -5941,6 +6024,7 @@ mod rlp_tests {
             used_bls_keys: used_bls_keys2,
             used_schnorr_keys: used_schnorr_keys2,
             used_x25519_keys: used_x25519_keys2,
+            ..Default::default()
         };
         assert_eq!(state1, state2);
         assert_eq!(state1.commit(), state2.commit());

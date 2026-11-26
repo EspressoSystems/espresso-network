@@ -686,6 +686,9 @@ fn contract_event(event: &StakeTableEvent) -> StakeTableV3Events {
         StakeTableEvent::CommissionUpdate(e) => StakeTableV3Events::CommissionUpdated(e),
         StakeTableEvent::X25519KeyUpdate(e) => StakeTableV3Events::X25519KeyUpdated(e),
         StakeTableEvent::P2pAddrUpdate(e) => StakeTableV3Events::P2pAddrUpdated(e),
+        StakeTableEvent::SlhDsaKeyUpdate(_) => {
+            unreachable!("the corpus does not generate SLH-DSA key events")
+        },
     }
 }
 
@@ -1235,6 +1238,9 @@ fn abstract_event(event: &StakeTableEvent) -> Event {
         StakeTableEvent::P2pAddrUpdate(update) => Event::P2pAddrUpdate {
             validator: address(&update.validator),
             addr: parse_p2p_addr(&update.p2pAddr),
+        },
+        StakeTableEvent::SlhDsaKeyUpdate(_) => {
+            unreachable!("the corpus does not generate SLH-DSA key events")
         },
     }
 }
