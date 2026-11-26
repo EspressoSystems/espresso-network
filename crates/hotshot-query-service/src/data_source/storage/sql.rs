@@ -662,8 +662,8 @@ async fn refuse_state_started_from_snapshot(
     match start {
         Some((start,)) => Err(Error::msg(format!(
             "archive mode needs merklized state from genesis, but the state in this database \
-             started from a snapshot at height {start}. Reset the database to rebuild it from \
-             genesis, or start without archive mode."
+             started from a snapshot at height {start}. Start without archive mode, or reset the \
+             database to rebuild the state from genesis."
         ))),
         None => Ok(()),
     }
