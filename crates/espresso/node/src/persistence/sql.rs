@@ -2422,9 +2422,12 @@ mod testing {
 mod test {
     use std::time::Duration;
 
-    use espresso_types::{Leaf, NodeState, PubKey, ValidatedState, traits::NullEventConsumer};
+    use espresso_types::{
+        BlockMerkleTree, Leaf, NodeState, PubKey, ValidatedState, traits::NullEventConsumer,
+    };
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_query_service::merklized_state::UpdateStateData;
     use hotshot_types::{
         data::{
             EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
@@ -2436,6 +2439,7 @@ mod test {
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
     };
+    use jf_merkle_tree_compat::MerkleTreeScheme as _;
 
     use super::*;
     use crate::{BLSPubKey, persistence::tests::TestablePersistence as _};
@@ -3095,5 +3099,43 @@ mod test {
             storage.load_processed_view().await.unwrap(),
             Some(ViewNumber::new(10))
         );
+    }
+
+    /// The consensus storage connection, which a node opens first, refuses archive mode on a
+    /// database whose merklized state started from a snapshot.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_persistence_refuses_state_started_from_snapshot() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&*Persistence::options(&tmp)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_state_start_height(
+            &mut tx, 40,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        let mut opt = Persistence::options(&tmp);
+        opt.archive = true;
+        let Err(err) = opt.create().await else {
+            panic!("the archive persistence opened state that started from a snapshot");
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.split(|c: char| !c.is_ascii_digit()).any(|n| n == "40"),
+            "the error does not name the state start height 40: {msg}"
+        );
+
+        for prune in [true, false] {
+            let mut opt = Persistence::options(&tmp);
+            opt.prune = prune;
+            opt.create().await.unwrap();
+        }
     }
 }
