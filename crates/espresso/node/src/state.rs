@@ -11,7 +11,10 @@ use espresso_types::{
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::{Delta, PermittedRewardMerkleTreeV2},
 };
-use futures::{StreamExt, future::Future};
+use futures::{
+    StreamExt,
+    future::{Future, join_all},
+};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource},
     data_source::{Transaction, VersionedDataSource, storage::pruning::PrunedHeightDataSource},
@@ -19,7 +22,10 @@ use hotshot_query_service::{
     status::StatusDataSource,
     types::HeightIndexed,
 };
-use hotshot_types::{traits::ValidatedState as HotShotState, utils::is_last_block};
+use hotshot_types::{
+    traits::ValidatedState as HotShotState,
+    utils::{epoch_from_block_number, is_last_block},
+};
 use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
@@ -361,6 +367,16 @@ const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 /// start from a recent epoch boundary.
 const BOUNDARY_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
+/// The most epoch boundaries below its start whose reward trees a loop that starts from a recent
+/// boundary fetches. A peer whose newest boundary is the start keeps the trees of the 5
+/// boundaries below it: `save_and_gc_reward_tree_v2` deletes only the trees strictly below
+/// `start - 5 * epoch_height`.
+const REWARD_TREES_BELOW_START: u64 = 5;
+
+/// How long a loop that starts from a recent boundary tries to fetch the reward tree at one
+/// boundary below its start, before it goes on without it.
+const REWARD_TREE_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// How long the loop waits on a local catchup read. Consensus cuts local reads short, so that it
 /// can still vote in time. The loop has no such deadline, while peers may have pruned the heights
 /// it reads, so a slow read cut short on every try would stall it.
@@ -560,6 +576,8 @@ where
 /// against the boundary header. Peers serve fee accounts only by address, and the loop cannot know
 /// them all, so the fee tree starts empty and the catchup in [`apply_leaf`] fetches each account
 /// from peers when the loop first needs it. From V0.6 on no block reads one, so it stays empty.
+/// The node also fetches the reward trees at the boundaries between the one the L1 light client
+/// has finalized and the snapshot's (see [`store_reward_trees_below`]), to store reward proofs.
 ///
 /// Returns `None`, which leaves the loop to replay from genesis, when there is no boundary yet, or
 /// when it predates epoch rewards and so has no reward tree stored at it.
@@ -611,6 +629,9 @@ where
         }
     };
     let height = leaf.height();
+    // Before the snapshot: a start that fails in between starts from a boundary again next time,
+    // and so fetches these trees again.
+    store_reward_trees_below(storage, instance, provider, height, epoch_height).await;
     // Every write is an upsert, so a retry after a partial store is safe.
     retry_until_ok(
         &format!("storing the boundary snapshot at height {height}"),
@@ -623,6 +644,108 @@ where
         "state loop starts from a snapshot at a recent epoch boundary"
     );
     Some(height)
+}
+
+/// Store the reward trees at the epoch boundaries below `start` that `persist_reward_proofs` needs
+/// until the L1 light client reaches `start`: it stores reward proofs for the boundary the light
+/// client has finalized, which right after a start often lies below `start`. A tree that cannot be
+/// fetched is skipped, and the node then stores no proofs for that boundary.
+async fn store_reward_trees_below<T>(
+    storage: &Arc<T>,
+    instance: &NodeState,
+    provider: &LightClientProvider,
+    start: u64,
+    epoch_height: u64,
+) where
+    T: SequencerStateDataSource,
+{
+    let finalized = match instance.finalized_hotshot_height().await {
+        Ok(finalized) => finalized,
+        Err(err) => {
+            tracing::warn!(
+                err = %format_args!("{err:#}"),
+                "failed to get the L1-finalized height; storing no reward trees below the state \
+                 start"
+            );
+            return;
+        },
+    };
+    // All at once, so that peers that hang delay the start by one timeout, not one per boundary.
+    let stores = reward_boundaries_below(start, finalized, epoch_height)
+        .into_iter()
+        .map(|height| async move {
+            let store = store_reward_tree(storage, instance, provider, height);
+            match timeout(REWARD_TREE_FETCH_TIMEOUT, store).await {
+                Ok(Ok(())) => tracing::info!(
+                    height,
+                    finalized,
+                    "stored the reward tree at a boundary below the state start"
+                ),
+                Ok(Err(err)) => tracing::warn!(
+                    height,
+                    finalized,
+                    err = %format_args!("{err:#}"),
+                    "failed to store the reward tree at a boundary below the state start"
+                ),
+                Err(_) => tracing::warn!(
+                    height,
+                    finalized,
+                    "timed out fetching the reward tree at a boundary below the state start"
+                ),
+            }
+        });
+    join_all(stores).await;
+}
+
+/// Fetch the reward tree at the epoch boundary `height` from peers, check it against the root in
+/// the boundary header, and store it.
+async fn store_reward_tree<T>(
+    storage: &Arc<T>,
+    instance: &NodeState,
+    provider: &LightClientProvider,
+    height: u64,
+) -> anyhow::Result<()>
+where
+    T: SequencerStateDataSource,
+{
+    let leaf = leaf_at(storage, provider, height).await;
+    let reward_root = leaf
+        .block_header()
+        .reward_merkle_tree_root()
+        .right()
+        .context("the boundary predates epoch rewards, so it has no v2 reward root")?;
+    let tree = SingleAttemptCatchup::new(instance.state_catchup.clone(), 0)
+        .fetch_reward_merkle_tree_v2(height, leaf.view_number(), reward_root, Default::default())
+        .await
+        .context("fetching the reward tree")?
+        .tree;
+    storage.save_reward_tree_v2(height, &tree).await
+}
+
+/// The epoch boundaries below `start`, oldest first, whose reward trees a node whose state starts
+/// at the boundary `start` must fetch from peers, so that it can store reward proofs for the
+/// boundary the L1 light client has finalized at `finalized`, as `persist_reward_proofs` does.
+/// None while the light client has not finalized past the first epoch, as no proofs are stored
+/// then, and at most [`REWARD_TREES_BELOW_START`].
+fn reward_boundaries_below(start: u64, finalized: u64, epoch_height: u64) -> Vec<u64> {
+    let Some(proof_boundary) = reward_proof_boundary(finalized, epoch_height) else {
+        return Vec::new();
+    };
+    let lowest = proof_boundary.max(start.saturating_sub(REWARD_TREES_BELOW_START * epoch_height));
+    (lowest..start).step_by(epoch_height as usize).collect()
+}
+
+/// The epoch boundary whose reward tree `persist_reward_proofs` stores reward proofs from when the
+/// L1 light client has finalized the HotShot height `finalized`: `finalized` itself when it ends
+/// an epoch, else the newest boundary below it. None while that is genesis, as no proofs are
+/// stored for the first epoch, and without epochs.
+pub(crate) fn reward_proof_boundary(finalized: u64, epoch_height: u64) -> Option<u64> {
+    let boundary = if is_last_block(finalized, epoch_height) {
+        finalized
+    } else {
+        epoch_from_block_number(finalized, epoch_height).saturating_sub(1) * epoch_height
+    };
+    (boundary > 0).then_some(boundary)
 }
 
 /// The height of the newest block in local storage, once it is above `pruned`.
@@ -978,4 +1101,119 @@ impl<T> SequencerStateUpdate for T where
         + UpdateStateData<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
         + ChainConfigPersistence
 {
+}
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+
+    use super::{reward_boundaries_below, reward_proof_boundary};
+
+    /// A node whose state starts at the boundary `start` needs the reward trees from the boundary
+    /// the L1 light client has finalized, where it stores reward proofs, up to `start`: the newest
+    /// boundary at or below `finalized`, or `finalized` itself when it ends an epoch. It needs at
+    /// most the 5 boundaries below `start`, as peers keep the trees of the 5 epochs below their
+    /// newest boundary only, never the first epoch's, for which no proofs are stored, and none
+    /// once the light client has reached `start`.
+    #[rstest]
+    #[case::finalized_two_epochs_below(100, 75, 10, vec![70, 80, 90])]
+    #[case::finalized_in_epoch_below_start(100, 95, 10, vec![90])]
+    #[case::finalized_just_past_boundary(100, 81, 10, vec![80, 90])]
+    #[case::finalized_at_last_block_of_epoch(100, 80, 10, vec![80, 90])]
+    #[case::finalized_last_block_below_start(100, 90, 10, vec![90])]
+    #[case::finalized_just_below_last_block(100, 89, 10, vec![80, 90])]
+    #[case::finalized_just_below_start(100, 99, 10, vec![90])]
+    #[case::capped_at_five_boundaries(100, 15, 10, vec![50, 60, 70, 80, 90])]
+    #[case::capped_finalized_first_boundary(100, 10, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_at_start(100, 100, 10, vec![])]
+    #[case::finalized_above_start(100, 105, 10, vec![])]
+    #[case::finalized_genesis(100, 0, 10, vec![])]
+    #[case::finalized_in_first_epoch(100, 5, 10, vec![])]
+    #[case::start_less_than_four_epochs_up(30, 15, 10, vec![10, 20])]
+    #[case::start_four_epochs_up(50, 15, 10, vec![10, 20, 30, 40])]
+    #[case::window_reaches_genesis(40, 15, 10, vec![10, 20, 30])]
+    #[case::start_at_first_boundary(10, 5, 10, vec![])]
+    #[case::water_devnet(1_542_000, 1_537_500, 3000, vec![1_536_000, 1_539_000])]
+    fn test_reward_boundaries_below(
+        #[case] start: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: Vec<u64>,
+    ) {
+        assert_eq!(
+            reward_boundaries_below(start, finalized, epoch_height),
+            expected,
+            "start {start}, L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
+
+    /// The window of boundaries below `start` holds 5 boundaries, down to `start - 5 * eh`: a peer
+    /// whose newest boundary is `start` deletes only the reward trees strictly below
+    /// `start - 5 * eh`, so it still serves the tree at `start - 5 * eh`, and the node needs that
+    /// tree whenever the L1 light client has finalized a height in
+    /// `[start - 5 * eh, start - 4 * eh)`. The window never reaches below `start - 5 * eh`.
+    #[rstest]
+    #[case::finalized_at_fifth_boundary(100, 50, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_inside_epoch_above_fifth_boundary(100, 55, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_just_below_fourth_boundary(100, 59, 10, vec![50, 60, 70, 80, 90])]
+    #[case::finalized_just_below_fifth_boundary(100, 49, 10, vec![50, 60, 70, 80, 90])]
+    #[case::capped_at_five_boundaries(70, 15, 10, vec![20, 30, 40, 50, 60])]
+    #[case::start_five_epochs_above_proof_boundary(60, 15, 10, vec![10, 20, 30, 40, 50])]
+    #[case::water_devnet_fifth_boundary(
+        1_542_000,
+        1_528_500,
+        3000,
+        vec![1_527_000, 1_530_000, 1_533_000, 1_536_000, 1_539_000]
+    )]
+    #[case::mainnet_fifth_boundary(
+        31_880_000,
+        31_700_000,
+        40_000,
+        vec![31_680_000, 31_720_000, 31_760_000, 31_800_000, 31_840_000]
+    )]
+    fn test_reward_boundaries_below_keeps_the_fifth_boundary(
+        #[case] start: u64,
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: Vec<u64>,
+    ) {
+        assert_eq!(
+            reward_boundaries_below(start, finalized, epoch_height),
+            expected,
+            "start {start}, L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
+
+    /// Reward proofs for the L1-finalized height `finalized` come from the tree at `finalized`
+    /// itself when it is the last block of an epoch, else from the newest epoch boundary below it.
+    /// There is none in the first epoch, where that boundary would be genesis, and none without
+    /// epochs.
+    #[rstest]
+    #[case::genesis(0, 10, None)]
+    #[case::inside_first_epoch(5, 10, None)]
+    #[case::last_block_before_first_boundary(9, 10, None)]
+    #[case::first_boundary(10, 10, Some(10))]
+    #[case::just_past_first_boundary(11, 10, Some(10))]
+    #[case::just_below_second_boundary(19, 10, Some(10))]
+    #[case::second_boundary(20, 10, Some(20))]
+    #[case::inside_later_epoch(75, 10, Some(70))]
+    #[case::epoch_height_one(5, 1, Some(5))]
+    #[case::water_devnet_inside_epoch(1_537_500, 3000, Some(1_536_000))]
+    #[case::water_devnet_at_boundary(1_539_000, 3000, Some(1_539_000))]
+    #[case::mainnet_inside_epoch(31_700_000, 40_000, Some(31_680_000))]
+    #[case::mainnet_at_boundary(31_840_000, 40_000, Some(31_840_000))]
+    #[case::no_epochs_genesis(0, 0, None)]
+    #[case::no_epochs(31_700_000, 0, None)]
+    #[case::no_epochs_max_height(u64::MAX, 0, None)]
+    fn test_reward_proof_boundary(
+        #[case] finalized: u64,
+        #[case] epoch_height: u64,
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(
+            reward_proof_boundary(finalized, epoch_height),
+            expected,
+            "L1-finalized height {finalized}, epoch height {epoch_height}"
+        );
+    }
 }
