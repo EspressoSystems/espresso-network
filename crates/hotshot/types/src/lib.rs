@@ -50,6 +50,7 @@ pub mod request_response;
 pub mod signature_key;
 pub mod simple_certificate;
 pub mod simple_vote;
+pub mod slh_dsa;
 pub mod stake_table;
 pub mod traits;
 

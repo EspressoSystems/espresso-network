@@ -35,6 +35,7 @@ committable = { workspace = true }
 derive_more = { workspace = true }
 digest = { workspace = true }
 displaydoc = { workspace = true }
+fips205 = { workspace = true }
 futures = { workspace = true }
 generic-array = { workspace = true }
 hotshot-metrics = { workspace = true }

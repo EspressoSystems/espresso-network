@@ -24,3 +24,4 @@ pub mod safe_exit_timelock;
 pub mod stake_table;
 pub mod stake_table_v2;
 pub mod stake_table_v3;
+pub mod stake_table_v4;

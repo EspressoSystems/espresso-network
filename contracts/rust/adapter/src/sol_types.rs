@@ -54,6 +54,7 @@ pub use crate::bindings::{
         self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         StakeTableV3,
     },
+    stake_table_v4::{self, StakeTableV4},
 };
 
 // For types that we need to interact with some functions but their bindings are not generated

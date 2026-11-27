@@ -3302,7 +3302,19 @@ where
             0
         };
 
-        StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block).await
+        let events =
+            StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block).await?;
+        // Light clients on older releases cannot parse SLH-DSA key events, and the stake table
+        // hash they check does not depend on them.
+        Ok(events
+            .into_iter()
+            .filter(|event| {
+                !matches!(
+                    event,
+                    espresso_types::v0_3::StakeTableEvent::SlhDsaKeyUpdate(_)
+                )
+            })
+            .collect())
     }
 
     async fn get_payload_proof(

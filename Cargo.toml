@@ -191,6 +191,7 @@ espresso-telemetry = { path = "crates/espresso/telemetry" }
 espresso-types = { path = "crates/espresso/types" }
 espresso-utils = { path = "crates/espresso/utils" }
 ethers-core = "2.0"
+fips205 = { version = "0.5", default-features = false, features = ["default-rng", "slh-dsa-sha2-128s"] }
 fluent-asserter = "0.1.9"
 futures = { version = "0.3", features = ["alloc"] }
 futures-util = "0.3.31"
