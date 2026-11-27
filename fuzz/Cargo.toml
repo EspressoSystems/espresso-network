@@ -28,16 +28,27 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "light_client_proofs"
+path = "fuzz_targets/light_client_proofs.rs"
+test = false
+doc = false
+bench = false
+
 [dependencies]
+anyhow = { workspace = true }
 arbitrary = { version = "1", features = ["derive"] }
 bincode = { workspace = true }
 espresso-types = { workspace = true }
+futures = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
 libfuzzer-sys = "0.4"
+light-client = { workspace = true, features = ["testing"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+versions = { workspace = true }
 vid = { workspace = true }
 
 [lints]
