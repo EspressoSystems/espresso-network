@@ -45,6 +45,7 @@ use crate::{
     coordinator::{Coordinator, error::Severity},
     message::{ConsensusMessage, Message, MessageType, OpaqueMessage, Unchecked},
     network::Cliquenet,
+    pq::PqVoting,
     tests::common::{
         coordinator_builder::{UpgradeSetup, build_test_coordinator},
         utils::{
@@ -212,6 +213,11 @@ pub struct TestRunner {
     /// Extra inbound-message drop predicate installed on every node's
     /// network, combined with `starved_of_shares`.
     drop_inbound: Option<DropInbound>,
+
+    /// Per-node SLH-DSA settings for upgrade votes, kept across restarts. A
+    /// node without an entry runs with `pq: None`, as 0.7.x does.
+    #[builder(default)]
+    pq_voting: BTreeMap<usize, PqVoting<TestTypes>>,
 
     /// Each node's `UpgradeLock`, exposed so tests can assert on decided
     /// upgrades after a run.
@@ -545,6 +551,7 @@ impl TestRunner {
                 UpgradeSetup {
                     lock: upgrade_lock,
                     config: self.upgrade_config.clone(),
+                    pq: self.pq_voting.get(&i).cloned(),
                 },
                 external_tx,
             )
@@ -684,6 +691,7 @@ impl TestRunner {
                                     UpgradeSetup {
                                         lock: upgrade_lock,
                                         config: self.upgrade_config.clone(),
+                                        pq: self.pq_voting.get(&change.idx).cloned(),
                                     },
                                     external_tx,
                                 )

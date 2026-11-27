@@ -10,6 +10,7 @@ mod failures;
 mod held_back;
 mod integration;
 mod liveness;
+mod pq_upgrade;
 mod proposal;
 mod random;
 mod restarts;

@@ -11,6 +11,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
+    slh_dsa,
     traits::{
         metrics::{Counter, CounterFamily, Gauge, GaugeFamily, Metrics},
         node_implementation::NodeType,
@@ -21,7 +22,10 @@ use hotshot_utils::anytrace;
 use parking_lot::RwLock;
 use tracing::{error, info};
 
-use crate::message::{Message, MessageType, Unchecked, Validated};
+use crate::{
+    message::{Message, MessageType, Unchecked, Validated},
+    pq,
+};
 
 /// A predicate that discards inbound messages.
 ///
@@ -178,7 +182,11 @@ impl<T: NodeType> Cliquenet<T> {
         self.ifilter = filter;
     }
 
-    pub async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
+    /// Like [`Self::receive`], plus the SLH-DSA signature in the message's trailer, if any (see
+    /// [`crate::pq`]).
+    pub async fn receive_with_trailer(
+        &mut self,
+    ) -> Result<(Message<T, Unchecked>, Option<slh_dsa::Signature>), NetworkError> {
         #[allow(clippy::never_loop)]
         loop {
             let (src, bytes) = self
@@ -207,8 +215,13 @@ impl<T: NodeType> Cliquenet<T> {
             if (self.ifilter)(&msg) {
                 continue;
             }
-            return Ok(msg);
+            return Ok((msg, pq::read_trailer(&bytes)));
         }
+    }
+
+    pub async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
+        let (msg, _) = self.receive_with_trailer().await?;
+        Ok(msg)
     }
 
     pub async fn shutdown(&mut self) {
@@ -479,6 +492,20 @@ impl<T: NodeType> Sender<T> {
 
     pub fn broadcast(&self, v: ViewNumber, m: &Message<T, Validated>) -> Result<(), NetworkError> {
         let bytes = self.serialize(m)?;
+        self.sender.broadcast(Slot::new(*v), bytes)?;
+        Ok(())
+    }
+
+    /// Like [`Self::broadcast`], with `trailer` appended after the encoded message (see
+    /// [`crate::pq`]).
+    pub fn broadcast_with_trailer(
+        &self,
+        v: ViewNumber,
+        m: &Message<T, Validated>,
+        trailer: &slh_dsa::Signature,
+    ) -> Result<(), NetworkError> {
+        let mut bytes = self.serialize(m)?;
+        pq::append_trailer(&mut bytes, trailer);
         self.sender.broadcast(Slot::new(*v), bytes)?;
         Ok(())
     }

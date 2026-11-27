@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::U256;
 use bon::{Builder, bon};
 use committable::{Commitment, Committable};
 use hotshot_types::{
@@ -25,12 +26,13 @@ use hotshot_types::{
         TimeoutEvidence, UpgradeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
+    slh_dsa,
     traits::{
         BlockPayload,
         block_contents::BlockHeader,
         metrics::Metrics,
         node_implementation::NodeType,
-        signature_key::{SignatureKey, StateSignatureKey},
+        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
     },
     upgrade_config::UpgradeConfig,
     vote::{HasViewNumber, Vote},
@@ -60,10 +62,12 @@ use crate::{
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
         MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
-        TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
+        TransactionMessage, Unchecked, UpgradeVoteMessage, Validated, Vote2,
+        payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
+    pq::{self, PqTally, PqVoting},
     proposal::{MalformedProposal, ProposalValidator, VidShareValidator, well_formed},
     serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
@@ -130,6 +134,9 @@ pub struct Coordinator<T: NodeType, S> {
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     upgrade_vote_collector: VoteCollector<T, UpgradeTally<T>>,
     upgrade_protocol: UpgradeProtocol<T>,
+    /// SLH-DSA signatures on upgrade votes. `None` behaves as 0.7.x: no trailer is sent, and
+    /// received trailers are ignored.
+    pq: Option<PqVoting<T>>,
     cert_verifiers: CertVerifiers<T>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
@@ -532,9 +539,9 @@ where
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
         loop {
             select! {
-                message = self.network.receive() => match message {
-                    Ok(m) => {
-                        if let Some(input) = self.on_network_message(m) {
+                message = self.network.receive_with_trailer() => match message {
+                    Ok((m, trailer)) => {
+                        if let Some(input) = self.on_network_message_with_trailer(m, trailer) {
                             return Ok(input)
                         }
                     }
@@ -1386,9 +1393,19 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn on_network_message(
         &mut self,
         message: Message<T, Unchecked>,
+    ) -> Option<ConsensusInput<T>> {
+        self.on_network_message_with_trailer(message, None)
+    }
+
+    /// `trailer` is the SLH-DSA signature that followed the message on the wire, if any.
+    pub(crate) fn on_network_message_with_trailer(
+        &mut self,
+        message: Message<T, Unchecked>,
+        trailer: Option<slh_dsa::Signature>,
     ) -> Option<ConsensusInput<T>> {
         let sender = KeyPrefix::from(&message.sender);
         let node = self.node_id;
@@ -1732,11 +1749,8 @@ where
                         leader.as_ref(),
                         current_view,
                         current_epoch,
-                    ) && let Err(err) = self.broadcast_in(
-                        self.slot_for(view),
-                        ConsensusMessage::UpgradeVote(vote),
-                        "upgrade vote",
-                    ) {
+                    ) && let Err(err) = self.broadcast_upgrade_vote(self.slot_for(view), vote)
+                    {
                         warn!(%node, %err, "network error while broadcasting upgrade vote");
                     }
                     None
@@ -1762,6 +1776,7 @@ where
                         return None;
                     }
                     debug!(%node, %sender, %view, "recv upgrade vote");
+                    self.record_pq_vote(&vote, trailer.as_ref());
                     self.upgrade_vote_collector.accumulate_vote(vote);
                     None
                 },
@@ -1933,6 +1948,87 @@ where
     /// never below that bound.
     fn slot_for(&self, view: ViewNumber) -> ViewNumber {
         view.max(self.consensus.current_view())
+    }
+
+    /// Broadcast an upgrade vote, with an SLH-DSA signature in a trailer when this node has a
+    /// keypair (see [`crate::pq`]).
+    fn broadcast_upgrade_vote(
+        &self,
+        slot: ViewNumber,
+        vote: UpgradeVoteMessage<T>,
+    ) -> Result<(), CoordinatorError> {
+        let keypair = self.pq.as_ref().and_then(|pq| pq.keypair.as_ref());
+        let signature = keypair.and_then(|keypair| {
+            pq::sign_upgrade_vote(keypair, &vote, self.consensus.upgrade_lock())
+                .inspect_err(|err| warn!(%err, "failed to sign upgrade vote with SLH-DSA"))
+                .ok()
+        });
+        let Some(signature) = signature else {
+            return self.broadcast_in(slot, ConsensusMessage::UpgradeVote(vote), "upgrade vote");
+        };
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: ConsensusMessage::UpgradeVote(vote).into(),
+        };
+        self.network
+            .sender()
+            .broadcast_with_trailer(slot, &message, &signature)
+            .map_err(|e| CoordinatorError::from(e).context("upgrade vote"))
+    }
+
+    /// Record an upgrade vote whose trailer verifies against the voter's registered SLH-DSA
+    /// key. Votes without a valid trailer still count through their BLS signature.
+    fn record_pq_vote(&self, vote: &UpgradeVoteMessage<T>, trailer: Option<&slh_dsa::Signature>) {
+        let (Some(pq), Some(signature)) = (&self.pq, trailer) else {
+            return;
+        };
+        let node = self.node_id;
+        let view = vote.view_number();
+        let voter = vote.signing_key();
+        let Some(epoch) = vote.epoch() else {
+            return;
+        };
+        let Some(key) = pq.keys.slh_dsa_key(epoch, &voter) else {
+            debug!(%node, %view, "upgrade vote trailer from a voter without an SLH-DSA key");
+            return;
+        };
+        if let Err(err) =
+            pq::verify_upgrade_vote(&key, vote, signature, self.consensus.upgrade_lock())
+        {
+            warn!(%node, %view, %err, "invalid SLH-DSA signature on upgrade vote");
+            return;
+        }
+        let signers = pq.tally.record(view, voter);
+        info!(
+            %node, %view, signers,
+            stake_share_bps = ?self.pq_stake_share_bps(&pq.tally, view, epoch),
+            "SLH-DSA upgrade votes"
+        );
+    }
+
+    /// The share of `epoch`'s stake, in basis points, behind the SLH-DSA signers of the upgrade
+    /// proposed at `view`.
+    fn pq_stake_share_bps(
+        &self,
+        tally: &PqTally<T>,
+        view: ViewNumber,
+        epoch: EpochNumber,
+    ) -> Option<U256> {
+        let membership = self
+            .membership_coordinator
+            .membership_for_epoch(epoch)
+            .ok()?;
+        let total: U256 = membership
+            .stake_table()
+            .map(|peer| peer.stake_table_entry.stake())
+            .sum();
+        let signed: U256 = tally
+            .signers(view)
+            .iter()
+            .filter_map(|key| membership.stake(key))
+            .map(|peer| peer.stake_table_entry.stake())
+            .sum();
+        (!total.is_zero()).then(|| signed * U256::from(10_000u64) / total)
     }
 
     fn broadcast_in(
