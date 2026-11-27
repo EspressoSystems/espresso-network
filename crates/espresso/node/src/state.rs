@@ -486,9 +486,9 @@ where
     Ok(())
 }
 
-/// Archive nodes and nodes without a pruner are meant to have complete trees, which a state that
-/// started from a boundary snapshot, as on a node that was pruned before, never gets: the loop only
-/// moves forward. So say so.
+/// Nodes without a pruner are meant to have complete trees, which a state that started from a
+/// boundary snapshot, as on a node that was pruned before, never gets: the loop only moves forward.
+/// So say so. Archive nodes never get here: they refuse to start on such a state.
 async fn report_incomplete_trees<T>(storage: &T)
 where
     T: SequencerStateDataSource,

@@ -58,9 +58,9 @@ just demo-native                      # local network via process-compose
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
   `crates/espresso/node/src/state.rs`: a loop that replays every leaf from its newest snapshot. With no state, it first
   stores a snapshot at a recent epoch boundary, from peers, on a pruned node; archive nodes and nodes without a pruner
-  replay from genesis, which gives complete trees. A state that started at a boundary stays incomplete after a switch to
-  `--archive`, and the loop logs an error at start. Leaves the data pruner has already deleted, and state the local
-  snapshot lacks, come from peers; the state pruner never passes that snapshot.
+  replay from genesis, which gives complete trees. A state that started at a boundary stays incomplete: the node refuses
+  to start with `--archive` on it, and without a pruner the loop logs an error at start. Leaves the data pruner has
+  already deleted, and state the local snapshot lacks, come from peers; the state pruner never passes that snapshot.
 - **Coordinator** (`crates/hotshot/new-protocol/src/coordinator.rs`): the consensus protocol.
   `EpochMembershipCoordinator` (`crates/hotshot/types/src/epoch_membership.rs`) manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
