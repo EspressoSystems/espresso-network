@@ -13,10 +13,10 @@
 #![cfg(feature = "metrics-data-source")]
 
 use async_trait::async_trait;
+use hotshot_metrics::prometheus::PrometheusMetrics;
 
 use crate::{
     QueryError, QueryResult,
-    metrics::PrometheusMetrics,
     status::{HasMetrics, StatusDataSource},
 };
 

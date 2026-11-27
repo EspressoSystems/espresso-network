@@ -10,6 +10,7 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
+use hotshot_metrics::Metrics;
 #[cfg(feature = "node")]
 use hotshot_new_protocol::storage::NewProtocolStorage;
 #[cfg(feature = "node")]
@@ -24,10 +25,7 @@ use hotshot_types::{
     simple_certificate::{
         CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
-    traits::{
-        ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
-        storage::Storage,
-    },
+    traits::{ValidatedState as HotShotState, node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
 };
 use hotshot_types::{

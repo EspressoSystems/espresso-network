@@ -6,15 +6,13 @@ use std::{
 
 pub use cliquenet::{Config as CliquenetConfig, NetAddr, Role};
 use cliquenet::{NetworkReceiver, NetworkSender, Slot, noise::Protocol, x25519::PublicKey};
+use hotshot_metrics::{Counter, CounterFamily, Gauge, GaugeFamily, Metrics};
 use hotshot_types::{
     PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
-    traits::{
-        metrics::{Counter, CounterFamily, Gauge, GaugeFamily, Metrics},
-        node_implementation::NodeType,
-    },
+    traits::node_implementation::NodeType,
     x25519::{self, Keypair},
 };
 use hotshot_utils::anytrace;

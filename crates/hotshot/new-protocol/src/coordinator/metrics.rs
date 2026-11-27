@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
-use hotshot_types::{consensus::ConsensusMetricsValue, traits::metrics::Histogram};
+use hotshot_metrics::Histogram;
+use hotshot_types::consensus::ConsensusMetricsValue;
 
 pub struct Metrics {
     pub(crate) consensus: ConsensusMetricsValue,

@@ -23,6 +23,7 @@ use espresso_types::{
         StakeTableEvent,
     },
 };
+use hotshot_metrics::Metrics;
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
     data::{
@@ -41,7 +42,6 @@ use hotshot_types::{
     simple_vote::LockView,
     traits::{
         block_contents::{BlockHeader, BlockPayload},
-        metrics::Metrics,
         node_implementation::NodeType,
     },
     vote::HasViewNumber,
@@ -2073,7 +2073,8 @@ mod test {
     use committable::Committable;
     use espresso_types::{Leaf, NodeState, PubKey};
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
+    use hotshot_metrics::prometheus::PrometheusMetrics;
+    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
     use hotshot_types::{
         data::QuorumProposal2, simple_vote::Vote2Data, traits::signature_key::SignatureKey,
     };

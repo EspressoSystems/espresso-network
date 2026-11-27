@@ -20,6 +20,7 @@ use std::{
 use async_lock::Mutex;
 use async_trait::async_trait;
 use futures::future::Future;
+use hotshot_metrics::prometheus::PrometheusMetrics;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
 use super::{
@@ -38,7 +39,6 @@ use crate::{
         storage::{PayloadMetadata, VidCommonMetadata},
         update,
     },
-    metrics::PrometheusMetrics,
     node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
 };

@@ -29,14 +29,10 @@ use async_trait::async_trait;
 use committable::Committable;
 use derive_more::{Deref, DerefMut};
 use futures::future::Future;
+use hotshot_metrics::{Counter, Gauge, Histogram, Metrics};
 use hotshot_types::{
     data::VidShare,
-    traits::{
-        EncodeBytes,
-        block_contents::BlockHeader,
-        metrics::{Counter, Gauge, Histogram, Metrics},
-        node_implementation::NodeType,
-    },
+    traits::{EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType},
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;

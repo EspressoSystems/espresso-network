@@ -28,6 +28,7 @@ use async_trait::async_trait;
 use atomic_store::{AtomicStore, AtomicStoreLoader, PersistenceError};
 use committable::Committable;
 use futures::future::Future;
+use hotshot_metrics::prometheus::PrometheusMetrics;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
@@ -52,7 +53,6 @@ use crate::{
         },
     },
     data_source::{VersionedDataSource, update},
-    metrics::PrometheusMetrics,
     node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     types::HeightIndexed,

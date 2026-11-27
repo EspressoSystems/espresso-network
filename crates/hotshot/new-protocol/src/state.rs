@@ -4,13 +4,13 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
+use hotshot_metrics::Histogram;
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     message::UpgradeLock,
     traits::{
         BlockPayload, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
-        metrics::Histogram,
         node_implementation::NodeType,
     },
     utils::BuilderCommitment,

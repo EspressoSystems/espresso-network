@@ -41,16 +41,13 @@ use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
     stream::{Peekable, StreamExt},
 };
+use hotshot_metrics::{Counter, Gauge, Histogram, Metrics as _, prometheus::PrometheusMetrics};
 use hotshot_query_service::{
     availability::{self, ADVZCommonQueryData, BlockQueryData, LeafQueryData, PayloadQueryData},
-    metrics::PrometheusMetrics,
     node::TimeWindowQueryData,
     types::HeightIndexed,
 };
-use hotshot_types::traits::{
-    block_contents::BlockHeader,
-    metrics::{Counter, Gauge, Histogram, Metrics as _},
-};
+use hotshot_types::traits::block_contents::BlockHeader;
 use http_client::{StatusCode, Url, error::ClientErr, socket};
 use http_wire::{cors_layer, healthcheck_response};
 use jf_merkle_tree_compat::{

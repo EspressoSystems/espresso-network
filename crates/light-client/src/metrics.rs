@@ -9,11 +9,9 @@ use std::{
 };
 
 #[cfg(feature = "client")]
-use hotshot_types::traits::metrics::Histogram;
-use hotshot_types::{
-    data::EpochNumber,
-    traits::metrics::{Counter, Gauge, Metrics, NoMetrics},
-};
+use hotshot_metrics::Histogram;
+use hotshot_metrics::{Counter, Gauge, Metrics, NoMetrics};
+use hotshot_types::data::EpochNumber;
 
 /// Metrics reported by a [`LightClient`](crate::LightClient).
 ///

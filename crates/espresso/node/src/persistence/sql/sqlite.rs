@@ -131,8 +131,7 @@ mod test {
     use std::path::{Path, PathBuf};
 
     use espresso_types::traits::{PersistenceOptions as _, SequencerPersistence as _};
-    use hotshot_query_service::metrics::PrometheusMetrics;
-    use hotshot_types::traits::metrics::Metrics;
+    use hotshot_metrics::{Metrics, prometheus::PrometheusMetrics};
 
     use super::{
         Config, SqlOptions, SqliteOptions, imp::Persistence, read_pragmas, sqlite_probe_dir,

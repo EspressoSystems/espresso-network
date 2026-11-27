@@ -30,12 +30,10 @@ use espresso_node::{
 use espresso_types::{AuthenticatedValidatorMap, PubKey, ValidatedState};
 use futures::future::join_all;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
-    addr::NetAddr,
-    light_client::StateKeyPair,
-    signature_key::BLSKeyPair,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
-    x25519,
+    addr::NetAddr, light_client::StateKeyPair, signature_key::BLSKeyPair,
+    traits::signature_key::SignatureKey, x25519,
 };
 use http_client::{Client, error::ClientErr};
 use staking_cli::{

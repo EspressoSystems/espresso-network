@@ -131,7 +131,7 @@
 //! #   LeafQueryData, PayloadMetadata, PayloadQueryData, TransactionFromBlock, TransactionHash,
 //! #   VidCommonMetadata, VidCommonQueryData,
 //! # };
-//! # use hotshot_query_service::metrics::PrometheusMetrics;
+//! # use hotshot_metrics::prometheus::PrometheusMetrics;
 //! # use hotshot_query_service::node::{
 //! #   NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart,
 //! # };
@@ -299,8 +299,6 @@ pub mod testing;
 pub mod types;
 
 pub use error::Error;
-/// The Prometheus backend lives in `hotshot-metrics`; this keeps the `metrics::` paths working.
-pub use hotshot_metrics::prometheus as metrics;
 pub use hotshot_query_service_types::{
     ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
     QueryResult, QuorumCertificate, SignatureKey, Transaction,

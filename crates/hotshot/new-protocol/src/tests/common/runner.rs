@@ -13,17 +13,11 @@ use hotshot_example_types::{
     block_types::TestTransaction, membership::fetcher::ExternalMessage, node_types::TestTypes,
     storage_types::TestStorage,
 };
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
-    PeerConnectInfo,
-    addr::NetAddr,
-    data::ViewNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    message::UpgradeLock,
-    signature_key::BLSPubKey,
-    simple_certificate::TimeoutEvidence,
-    simple_vote::HasEpoch,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
-    vote::HasViewNumber,
+    PeerConnectInfo, addr::NetAddr, data::ViewNumber, epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock, signature_key::BLSPubKey, simple_certificate::TimeoutEvidence,
+    simple_vote::HasEpoch, traits::signature_key::SignatureKey, vote::HasViewNumber,
     x25519::Keypair,
 };
 use tokio::{

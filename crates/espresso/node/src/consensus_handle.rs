@@ -5,6 +5,7 @@ use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use committable::Commitment;
 use espresso_api::error::SubmitError;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
+use hotshot_metrics::{Gauge, Metrics};
 use hotshot_new_protocol::{
     block,
     client::{ClientApi, QueryError},
@@ -24,12 +25,7 @@ use hotshot_types::{
     initializer::HotShotInitializer,
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     new_protocol::CoordinatorEvent,
-    traits::{
-        ValidatedState,
-        metrics::{Gauge, Metrics},
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
 use parking_lot::RwLock;

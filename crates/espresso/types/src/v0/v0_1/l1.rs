@@ -24,8 +24,8 @@ use clap::Parser;
 use derive_more::Deref;
 use espresso_utils::redact::redact_urls;
 #[cfg(feature = "node")]
-use hotshot_types::traits::metrics::{Counter, Gauge};
-use hotshot_types::traits::metrics::{Metrics, NoMetrics};
+use hotshot_metrics::{Counter, Gauge};
+use hotshot_metrics::{Metrics, NoMetrics};
 #[cfg(feature = "node")]
 use lru::LruCache;
 #[cfg(feature = "node")]

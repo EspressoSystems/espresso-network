@@ -2,6 +2,7 @@ use std::{marker::PhantomData, net::Ipv4Addr, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
@@ -11,7 +12,7 @@ use hotshot_types::{
     simple_certificate::{TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2},
     stake_table::StakeTableEntries,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    traits::signature_key::SignatureKey,
     vote::HasViewNumber,
     x25519::Keypair,
 };

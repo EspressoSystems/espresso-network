@@ -8,11 +8,11 @@ use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::v0::traits::NullEventConsumer;
 use futures::{channel::oneshot, future::BoxFuture};
+use hotshot_metrics::{Metrics, NoMetrics};
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
     status::HasMetrics,
 };
-use hotshot_types::traits::metrics::{Metrics, NoMetrics};
 use process_metrics::ProcessMetrics;
 use url::Url;
 

@@ -12,6 +12,7 @@ use hotshot_example_types::{
     node_types::TestTypes,
     storage_types::TestStorage,
 };
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
     addr::NetAddr,
@@ -19,7 +20,7 @@ use hotshot_types::{
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     signature_key::{BLSPubKey, SchnorrPubKey},
-    traits::{election::Membership, metrics::NoMetrics},
+    traits::election::Membership,
     x25519::Keypair,
 };
 use tokio::time::timeout;

@@ -10,6 +10,7 @@ use std::{
 
 use bon::{Builder, bon};
 use committable::{Commitment, Committable};
+use hotshot_metrics::Metrics;
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{
@@ -28,7 +29,6 @@ use hotshot_types::{
     traits::{
         BlockPayload,
         block_contents::BlockHeader,
-        metrics::Metrics,
         node_implementation::NodeType,
         signature_key::{SignatureKey, StateSignatureKey},
     },

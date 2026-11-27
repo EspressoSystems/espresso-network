@@ -13,6 +13,7 @@
 use std::ops::{Bound, Range, RangeBounds};
 
 use async_trait::async_trait;
+use hotshot_metrics::prometheus::PrometheusMetrics;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
@@ -32,7 +33,6 @@ use crate::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
         UpdateStateData,
     },
-    metrics::PrometheusMetrics,
     node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
 };

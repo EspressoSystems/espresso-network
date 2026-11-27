@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use committable::Commitment;
 #[cfg(any(test, feature = "testing"))]
 use hotshot_example_types::storage_types::TestStorage;
+use hotshot_metrics::{Histogram, Metrics};
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
@@ -14,10 +15,7 @@ use hotshot_types::{
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     simple_vote::LockView,
     traits::{
-        BlockPayload, EncodeBytes,
-        metrics::{Histogram, Metrics},
-        node_implementation::NodeType,
-        signature_key::SignatureKey,
+        BlockPayload, EncodeBytes, node_implementation::NodeType, signature_key::SignatureKey,
         storage::Storage as StorageTrait,
     },
     utils::EpochTransitionIndicator,

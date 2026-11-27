@@ -276,7 +276,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use hotshot_query_service::{metrics::PrometheusMetrics, types::HeightIndexed};
+    use hotshot_metrics::prometheus::PrometheusMetrics;
+    use hotshot_query_service::types::HeightIndexed;
 
     use super::*;
     use crate::{metrics::LightClientMetrics, storage::SqlStorage, testing::TestClient};

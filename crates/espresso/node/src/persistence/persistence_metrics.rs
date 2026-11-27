@@ -1,4 +1,4 @@
-use hotshot_types::traits::metrics::{Histogram, Metrics, NoMetrics};
+use hotshot_metrics::{Histogram, Metrics, NoMetrics};
 
 /// Metrics for the persistence layer
 #[derive(Clone, Debug)]

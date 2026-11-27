@@ -9,6 +9,7 @@ use hotshot_example_types::{
     node_types::TestTypes,
     state_types::TestInstanceState,
 };
+use hotshot_metrics::NoMetrics;
 use hotshot_types::{
     addr::NetAddr,
     consensus::{ConsensusMetricsValue, PayloadWithMetadata},
@@ -19,7 +20,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
-    traits::{BlockPayload, metrics::NoMetrics, signature_key::SignatureKey},
+    traits::{BlockPayload, signature_key::SignatureKey},
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };

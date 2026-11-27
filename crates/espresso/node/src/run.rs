@@ -3,7 +3,7 @@ use anyhow::Context;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
 use futures::future::FutureExt;
-use hotshot_types::traits::metrics::NoMetrics;
+use hotshot_metrics::NoMetrics;
 use process_metrics::log_cpu_probe;
 use url::Url;
 

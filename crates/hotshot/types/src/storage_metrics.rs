@@ -1,4 +1,4 @@
-use crate::traits::metrics::{Histogram, Metrics, NoMetrics};
+use hotshot_metrics::{Histogram, Metrics, NoMetrics};
 
 /// Storage metrics
 #[derive(Clone, Debug)]

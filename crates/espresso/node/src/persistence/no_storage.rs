@@ -10,6 +10,7 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCertPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
+use hotshot_metrics::Metrics;
 use hotshot_types::{
     data::{DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::{DrbInput, DrbResult},
@@ -21,7 +22,6 @@ use hotshot_types::{
         Certificate2, CertificatePair, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
-    traits::metrics::Metrics,
 };
 
 use crate::{SeqTypes, ViewNumber};

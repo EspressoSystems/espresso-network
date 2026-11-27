@@ -73,13 +73,10 @@ use futures::{
     future::{self, BoxFuture, Either, Future, FutureExt, join_all, select},
     stream::{self, BoxStream, StreamExt},
 };
+use hotshot_metrics::{Counter, Gauge, Histogram, Metrics, prometheus::PrometheusMetrics};
 use hotshot_types::{
     data::VidShare,
-    traits::{
-        block_contents::BlockHeader,
-        metrics::{Counter, Gauge, Histogram, Metrics},
-        node_implementation::NodeType,
-    },
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
@@ -115,7 +112,6 @@ use crate::{
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
-    metrics::PrometheusMetrics,
     node::{
         NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
         WindowStart,
