@@ -324,6 +324,37 @@ pub mod arc_bytes {
     }
 }
 
+/// Serde for a required field that older encodings wrote as an `Option`.
+///
+/// Writes the value as `Some(value)`, so the bytes stay the same: in bincode the tag `01` and
+/// then the value, in JSON the bare value. Reading `None` (tag `00`, or JSON `null`) is an error.
+pub mod always_some {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+
+    /// # Errors
+    ///
+    /// Errors if the underlying serializer does.
+    pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        T: Serialize,
+        S: Serializer,
+    {
+        serializer.serialize_some(value)
+    }
+
+    /// # Errors
+    ///
+    /// Errors if the encoded value is `None`, or if the underlying deserializer errors.
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Option::<T>::deserialize(deserializer)?
+            .ok_or_else(|| D::Error::custom("a required value is encoded as None"))
+    }
+}
+
 pub mod version_ser {
 
     use serde::{Deserialize, Deserializer, Serializer, de};

@@ -3,6 +3,7 @@
 use std::{
     cmp::max,
     collections::{HashMap, HashSet},
+    marker::PhantomData,
     ops::Range,
     sync::Arc,
 };
@@ -29,7 +30,11 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     addr::NetAddr,
     data::{
-        EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
+        EpochNumber, Leaf, QuorumProposal, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        VidCommon, ViewNumber,
+        history::{
+            HistoricLeaf, HistoricQuorumCertificate, PreEpochLeaf, PreEpochQuorumCertificate,
+        },
         vid_commitment,
     },
     message::UpgradeLock,
@@ -196,6 +201,10 @@ impl UpgradeStep {
 }
 
 /// Construct a customized leaf chain for the given height range.
+///
+/// A QC is from before epochs when the leaf it signs has a version below [`EPOCH_VERSION`], and a
+/// leaf is when its justify QC is. Those leaves and QCs are built as the first protocol versions
+/// built them. `map` sees every proposal as a [`QuorumProposal2`].
 pub async fn custom_leaf_chain(
     upgrade: Upgrade,
     range: impl IntoIterator<Item = u64>,
@@ -204,15 +213,16 @@ pub async fn custom_leaf_chain(
     let node_state = NodeState::mock()
         .with_genesis_version(upgrade.base)
         .with_current_version(upgrade.base);
-    let genesis_leaf: Leaf2 = Leaf2::genesis(&Default::default(), &node_state, upgrade.base).await;
-    tracing::info!(?genesis_leaf, "leaf chain");
+    let genesis = LeafQueryData::genesis(&Default::default(), &node_state, upgrade).await;
+    tracing::info!(genesis_leaf = ?genesis.leaf(), "leaf chain");
 
-    let mut qc = QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade).await;
+    let mut pre_epoch = matches!(genesis.qc(), HistoricQuorumCertificate::PreEpoch(_));
+    let mut qc = proposal_qc(genesis.qc());
     let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
         proposal: QuorumProposal2::<SeqTypes> {
-            epoch: None,
-            block_header: genesis_leaf.block_header().clone(),
-            view_number: genesis_leaf.view_number(),
+            epoch: EpochNumber::new(1),
+            block_header: genesis.header().clone(),
+            view_number: genesis.leaf().view_number(),
             justify_qc: qc.clone(),
             upgrade_certificate: None,
             view_change_evidence: None,
@@ -232,25 +242,65 @@ pub async fn custom_leaf_chain(
             .block_merkle_tree_root_mut() = block_merkle_tree.commitment();
         quorum_proposal.proposal.view_number = ViewNumber::new(height);
         map(&mut quorum_proposal.proposal);
-        let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+        let leaf: HistoricLeaf<SeqTypes> = if pre_epoch {
+            pre_epoch_leaf(&quorum_proposal.proposal).into()
+        } else {
+            let mut leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            leaf.with_epoch = false;
+            leaf.into()
+        };
 
         qc.view_number = leaf.view_number();
-        qc.data.leaf_commit = Committable::commit(&leaf);
-        if leaf.block_header().version() >= EPOCH_VERSION {
-            qc.data.block_number = Some(height);
-            // Only the QC gets an epoch, pinned at 1 since these chains are indexed by view; the
-            // proposal's `epoch` stays `None`, so the leaves carry none.
-            qc.data.epoch.get_or_insert(EpochNumber::new(1));
+        qc.data.leaf_commit = leaf.commit();
+        pre_epoch = leaf.block_header().version() < EPOCH_VERSION;
+        if !pre_epoch {
+            qc.data.block_number = height;
         }
+        let leaf_qc: HistoricQuorumCertificate<SeqTypes> = if pre_epoch {
+            PreEpochQuorumCertificate::from(qc.clone().to_qc()).into()
+        } else {
+            qc.clone().into()
+        };
 
         block_merkle_tree
             .push(leaf.block_header().commit())
             .unwrap();
-        leaves.push(LeafQueryData::new(leaf, qc.clone()).unwrap());
+        leaves.push(LeafQueryData::new(leaf, leaf_qc).unwrap());
         quorum_proposal.proposal.justify_qc = qc.clone();
     }
 
     leaves
+}
+
+/// `qc` as the justify QC of a [`QuorumProposal2`]. A QC from before epochs gets epoch 1, like
+/// every QC of these chains, and block number 0; [`pre_epoch_leaf`] drops both again.
+fn proposal_qc(qc: &HistoricQuorumCertificate<SeqTypes>) -> QuorumCertificate2<SeqTypes> {
+    match qc {
+        HistoricQuorumCertificate::Epoch(qc) => qc.clone(),
+        HistoricQuorumCertificate::PreEpoch(qc) => QuorumCertificate2::new(
+            QuorumData2 {
+                leaf_commit: qc.data.leaf_commit,
+                epoch: EpochNumber::new(1),
+                block_number: 0,
+            },
+            Commitment::from_raw(qc.vote_commitment().into()),
+            qc.view_number,
+            qc.signatures.clone(),
+            PhantomData,
+        ),
+    }
+}
+
+/// The leaf of `proposal`, built as the first protocol versions built it.
+fn pre_epoch_leaf(proposal: &QuorumProposal2<SeqTypes>) -> PreEpochLeaf<SeqTypes> {
+    Leaf::from_quorum_proposal(&QuorumProposal {
+        block_header: proposal.block_header.clone(),
+        view_number: proposal.view_number,
+        justify_qc: proposal.justify_qc.clone().to_qc(),
+        upgrade_certificate: proposal.upgrade_certificate.clone(),
+        proposal_certificate: None,
+    })
+    .into()
 }
 
 /// Construct a valid leaf chain during which the epoch advances.
@@ -353,12 +403,15 @@ impl Quorum for AlwaysFalseQuorum {
 /// signatures.
 #[derive(Clone, Debug, Default)]
 pub struct VersionCheckQuorum {
-    leaves: HashMap<Commitment<Leaf2>, Leaf2>,
+    leaves: HashMap<Commitment<Leaf2>, HistoricLeaf<SeqTypes>>,
     epoch_height: u64,
 }
 
 impl VersionCheckQuorum {
-    pub fn new(leaves: impl IntoIterator<Item = Leaf2>, epoch_height: u64) -> Self {
+    pub fn new(
+        leaves: impl IntoIterator<Item = HistoricLeaf<SeqTypes>>,
+        epoch_height: u64,
+    ) -> Self {
         Self {
             leaves: leaves
                 .into_iter()
@@ -417,7 +470,9 @@ impl Quorum for EpochChangeQuorum {
         cert: &Certificate,
     ) -> anyhow::Result<()> {
         if V::version() >= EpochVersion::version() {
-            cert.verify_next_epoch_qc(self.epoch_height)?;
+            cert.as_certificate_pair()
+                .context("pre-epoch QC in a chain with epochs")?
+                .verify_next_epoch_qc(self.epoch_height)?;
         }
         Ok(())
     }
@@ -603,7 +658,7 @@ impl InnerTestClient {
                 let parent = &self.leaves[i - 1];
                 let mut mt = self.merkle_trees[i - 1].clone();
                 mt.push(parent.block_hash()).unwrap();
-                (parent.qc().clone(), mt)
+                (parent.qc().as_qc2().unwrap().clone(), mt)
             };
 
             let random_transactions = vec![Transaction::random(&mut rand::thread_rng())];
@@ -644,7 +699,7 @@ impl InnerTestClient {
                 && self.version_at(i as u64) < NEW_PROTOCOL_VERSION
                 && is_epoch_transition(i as u64 - 1, epoch_height)
             {
-                let parent_qc = self.leaves[i - 1].qc().clone();
+                let parent_qc = self.leaves[i - 1].qc().as_qc2().unwrap().clone();
                 let parent_epoch = epoch_from_block_number(i as u64 - 1, epoch_height);
                 let parent_upgrade = Upgrade::trivial(self.version_at(i as u64 - 1));
                 let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
@@ -699,7 +754,7 @@ impl InnerTestClient {
             };
             let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: Some(epoch),
+                    epoch,
                     block_header,
                     view_number,
                     justify_qc,
@@ -713,8 +768,8 @@ impl InnerTestClient {
             let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
             let quorum_data = QuorumData2 {
                 leaf_commit: leaf.commit(),
-                epoch: Some(epoch),
-                block_number: Some(i as u64),
+                epoch,
+                block_number: i as u64,
             };
             let quorum_data_comm = VersionedVoteData::new_infallible(
                 quorum_data,
@@ -1065,7 +1120,7 @@ impl Client for TestClient {
                 .get(&height)
                 .with_context(|| format!("missing cert2 for new-protocol leaf {height}"))?
                 .clone();
-            proof.add_certificate(Arc::new(cert2), leaf.qc().clone());
+            proof.add_certificate(Arc::new(cert2), leaf.qc().as_qc2().unwrap().clone());
             return Ok(proof);
         }
 

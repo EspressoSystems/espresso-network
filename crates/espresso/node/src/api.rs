@@ -31,7 +31,7 @@ use espresso_api::{
 };
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    FeeMerkleTree, NodeState, PubKey, Transaction,
     config::PublicNetworkConfig,
     retain_accounts,
     traits::{EventsPersistenceRead, MembershipPersistence},
@@ -53,7 +53,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
-    data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber, history::HistoricLeaf},
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
@@ -815,10 +815,10 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // state.
 
         let handle = self.as_ref().consensus().await;
-        if let Err(err) = add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        match add_fee_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
+            Ok(()) => tracing::info!(?view, "updated with fetched account state"),
+            Err(err) => tracing::warn!(?view, "cannot update fetched account state: {err:#}"),
         }
-        tracing::info!(?view, "updated with fetched account state");
 
         Ok(tree)
     }
@@ -857,7 +857,7 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // Try storage.
         self.inner().get_chain_config(commitment).await
     }
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         self.inner().get_leaf_chain(height).await
     }
 
@@ -898,12 +898,10 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
         let handle = self.as_ref().consensus().await;
-        if let Err(err) =
-            add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        match add_v2_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
+            Ok(()) => tracing::info!(?view, "updated with fetched account state"),
+            Err(err) => tracing::warn!(?view, "cannot update fetched account state: {err:#}"),
         }
-        tracing::info!(?view, "updated with fetched account state");
 
         Ok(tree)
     }
@@ -938,12 +936,10 @@ impl<D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<D> {
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
         let handle = self.as_ref().consensus().await;
-        if let Err(err) =
-            add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await
-        {
-            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        match add_v1_reward_accounts_to_state(&*handle, &view, accounts, &tree, leaf).await {
+            Ok(()) => tracing::info!(?view, "updated with fetched account state"),
+            Err(err) => tracing::warn!(?view, "cannot update fetched account state: {err:#}"),
         }
-        tracing::info!(?view, "updated with fetched account state");
 
         Ok(tree)
     }
@@ -1810,7 +1806,7 @@ pub mod test_helpers {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        NamespaceId, TEST_UPGRADE, ValidatedState,
+        Leaf2, NamespaceId, TEST_UPGRADE, ValidatedState,
         v0::traits::{NullEventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     };
     use futures::{
@@ -3258,7 +3254,7 @@ mod api_tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -3299,8 +3295,8 @@ mod api_tests {
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
-                epoch: Some(EpochNumber::new(0)),
-                target_epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
+                target_epoch: EpochNumber::new(0),
                 common: common.clone(),
             }
             .into();
@@ -3317,7 +3313,7 @@ mod api_tests {
                 encoded_transactions: payload_bytes_arc.clone(),
                 metadata: payload.ns_table().clone(),
                 view_number: leaf.view_number(),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             };
             let da_proposal = Proposal {
@@ -3372,8 +3368,8 @@ mod api_tests {
         for (leaf, cert) in chain1.iter().chain(&chain2) {
             tracing::info!(height = leaf.height(), "check archive");
             let qd = data_source.get_leaf(leaf.height() as usize).await.await;
-            let stored_leaf: Leaf2 = qd.leaf().clone();
-            let stored_qc = qd.qc().clone();
+            let stored_leaf: Leaf2 = qd.leaf().as_leaf2().unwrap().clone();
+            let stored_qc = qd.qc().as_qc2().unwrap().clone();
             assert_eq!(&stored_leaf, leaf);
             assert_eq!(&stored_qc, cert.qc());
 
@@ -3490,7 +3486,7 @@ mod api_tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -3514,7 +3510,17 @@ mod api_tests {
             .unwrap();
 
         // Check that we still processed the leaf.
-        assert_eq!(leaf, data_source.get_leaf(1).await.await.leaf().clone());
+        assert_eq!(
+            leaf,
+            data_source
+                .get_leaf(1)
+                .await
+                .await
+                .leaf()
+                .as_leaf2()
+                .unwrap()
+                .clone()
+        );
         assert!(data_source.get_vid_common(1).await.is_pending());
         assert!(data_source.get_block(1).await.is_pending());
     }
@@ -15261,6 +15267,97 @@ mod test {
         check_light_client_proofs(&replay.client, &leaves, &blocks, heights, epoch_height).await;
         check_light_client_stake_table(&replay.client, &replay.persistence().await?, first_epoch)
             .await;
+        Ok(())
+    }
+
+    /// Catching-up nodes still fetch and verify mainnet's leaves from before its 0.3 upgrade and
+    /// across it, over the query API and over request-response. Their QCs carry no epoch, so they
+    /// are checked against the genesis stake table. A node that follows the legacy chain takes the
+    /// upgrade from the certificate the pre-epoch leaves carry.
+    #[apply(sql_data_sources)]
+    async fn test_legacy_leaf_catchup<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
+        use ::request_response::Serializable;
+
+        use crate::{catchup::verify_legacy_leaf_chain, request_response::request::Response};
+
+        let chain = LegacyChain::load("v2-v3")?;
+        let replay = chain.replay::<D>().await?;
+        let coordinator = replay.node.node_state().coordinator;
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![replay.url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        );
+        let upgraded = chain
+            .blocks
+            .iter()
+            .find(|block| block.leaf.header().version() >= EPOCH_VERSION)
+            .context("the chain upgrades to 0.3")?
+            .leaf
+            .height();
+
+        // A leaf near genesis, the last leaf of the first epoch, the last pre-epoch leaf, the first
+        // 0.3 leaf (whose justify QC is pre-epoch) and the leaf after it.
+        for height in [
+            1,
+            chain.epoch_height(),
+            upgraded - 1,
+            upgraded,
+            upgraded + 1,
+        ] {
+            let expected = &chain.blocks[height as usize].leaf;
+
+            let leaf = peers
+                .try_fetch_leaf(0, coordinator.clone(), height)
+                .await
+                .with_context(|| format!("catching up leaf {height} over the query API"))?;
+            ensure!(
+                leaf.height() == height && leaf.commit() == expected.hash(),
+                "catchup of leaf {height} returned leaf {}",
+                leaf.height()
+            );
+
+            let served = replay
+                .client
+                .get(&format!("catchup/{height}/leafchain"))
+                .send()
+                .await?;
+            let bytes = Response::Leaf(served).to_bytes()?;
+            let Response::Leaf(leaves) = Response::from_bytes(&bytes)? else {
+                bail!("the leaf chain for {height} decodes as another response");
+            };
+            ensure!(
+                Response::Leaf(leaves.clone()).to_bytes()? == bytes,
+                "the leaf chain for {height} encodes differently after a round trip"
+            );
+            let leaf = verify_legacy_leaf_chain(leaves, &coordinator, height)
+                .await
+                .with_context(|| format!("verifying leaf {height} from request-response"))?;
+            ensure!(
+                leaf.height() == height && leaf.commit() == expected.hash(),
+                "request-response catchup of leaf {height} returned leaf {}",
+                leaf.height()
+            );
+        }
+
+        let upgrade = replay
+            .persistence()
+            .await?
+            .load_upgrade_certificate()
+            .await?
+            .context("the follower stored no upgrade certificate")?;
+        ensure!(
+            upgrade.data.new_version == EPOCH_VERSION,
+            "the follower stored the upgrade to {}",
+            upgrade.data.new_version
+        );
+        ensure!(
+            replay.node.decided_leaf().await.height() == chain.tip(),
+            "the follower did not decide the tip"
+        );
         Ok(())
     }
 

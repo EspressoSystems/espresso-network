@@ -29,7 +29,7 @@ use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
 use super::{
-    Leaf2, NodeState, ValidatedState,
+    NodeState, StateLeaf, ValidatedState,
     v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, RewardAmount},
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardMerkleCommitmentV2,
@@ -835,7 +835,7 @@ impl RewardDistributor {
 pub async fn distribute_block_reward(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
-    parent_leaf: &Leaf2,
+    parent_leaf: &impl StateLeaf,
     view_number: ViewNumber,
     version: Version,
 ) -> anyhow::Result<Option<RewardDistributor>> {
@@ -936,7 +936,7 @@ pub async fn distribute_block_reward(
 pub async fn get_leader_and_fetch_missing_rewards(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
-    parent_leaf: &Leaf2,
+    parent_leaf: &impl StateLeaf,
     view: ViewNumber,
 ) -> anyhow::Result<AuthenticatedValidator<BLSPubKey>> {
     let parent_height = parent_leaf.height();

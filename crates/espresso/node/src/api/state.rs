@@ -56,7 +56,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, VidShare, history::HistoricLeaf},
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -2415,7 +2415,7 @@ where
             .map_err(|err| not_found(format!("{err:#}")))
     }
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_leaf_chain(height)
             .await
@@ -5406,7 +5406,7 @@ mod tests {
         let timeout = TimeoutCertificate2::<SeqTypes>::new(
             TimeoutData2 {
                 view: ViewNumber::new(9),
-                epoch: Some(EpochNumber::new(2)),
+                epoch: EpochNumber::new(2),
             },
             Commitment::from_raw([1; 32]),
             ViewNumber::new(9),
@@ -5439,7 +5439,7 @@ mod tests {
             ViewSyncFinalizeData2 {
                 relay: 3,
                 round: ViewNumber::new(10),
-                epoch: None,
+                epoch: EpochNumber::new(4),
             },
             Commitment::from_raw([2; 32]),
             ViewNumber::new(10),
@@ -5452,7 +5452,7 @@ mod tests {
             panic!("a view sync certificate must select the view_sync arm");
         };
         let data = converted.data.unwrap();
-        assert_eq!((data.relay, data.round, data.epoch), (3, 10, None));
+        assert_eq!((data.relay, data.round, data.epoch), (3, 10, Some(4)));
         assert!(converted.signatures.is_none());
 
         let upgrade = UpgradeCertificate::<SeqTypes>::new(
@@ -5961,6 +5961,144 @@ mod tests {
         );
         // The vector's certificates are unsigned, so absence must map to absence.
         assert!(qc.signatures.is_none());
+    }
+
+    /// Checks a converted QC against its v1 JSON, including that a QC from before epochs keeps
+    /// its epoch and block number absent.
+    fn assert_qc_mirrors(converted: &proto::QuorumCertificate2, json: &serde_json::Value) {
+        assert_eq!(converted.view_number, json["view_number"].as_u64().unwrap());
+        assert_eq!(converted.vote_commitment, json["vote_commitment"]);
+        let data = converted.data.as_ref().unwrap();
+        assert_eq!(data.leaf_commit, json["data"]["leaf_commit"]);
+        assert_eq!(data.epoch, json["data"]["epoch"].as_u64());
+        assert_eq!(data.block_number, json["data"]["block_number"].as_u64());
+        assert_eq!(
+            converted.signatures.is_some(),
+            !json["signatures"].is_null()
+        );
+    }
+
+    fn assert_leaf_mirrors(converted: &proto::Leaf2, json: &serde_json::Value) {
+        assert_eq!(converted.view_number, json["view_number"].as_u64().unwrap());
+        assert_eq!(converted.parent_commitment, json["parent_commitment"]);
+        assert_eq!(converted.with_epoch, json["with_epoch"].as_bool().unwrap());
+        assert_qc_mirrors(converted.justify_qc.as_ref().unwrap(), &json["justify_qc"]);
+        assert_eq!(
+            converted.next_epoch_justify_qc.is_some(),
+            !json["next_epoch_justify_qc"].is_null()
+        );
+        assert_eq!(
+            converted.upgrade_certificate.is_some(),
+            !json["upgrade_certificate"].is_null()
+        );
+    }
+
+    /// The certificate pair a finality proof carries for the leaf at `height`: the justify QC of
+    /// the leaf after it, with no next-epoch QC on these heights.
+    fn assert_pair_mirrors(
+        converted: &Option<proto::CertificatePair>,
+        leaves: &[serde_json::Value],
+        height: usize,
+    ) {
+        let pair = converted.as_ref().unwrap();
+        assert!(pair.next_epoch_qc.is_none(), "QC on leaf {height}");
+        assert_qc_mirrors(
+            pair.qc.as_ref().unwrap(),
+            &leaves[height + 1]["leaf"]["justify_qc"],
+        );
+    }
+
+    /// Mainnet history before 0.3 converts with its pre-epoch QCs: a 0.2 leaf carrying the
+    /// upgrade certificate, and the first 0.3 leaf, whose justify QC is pre-epoch while the QC on
+    /// it is not.
+    #[test]
+    fn legacy_leaves_mirror_the_recorded_chain() {
+        let chain = crate::legacy_chain::LegacyChain::load("v2-v3").unwrap();
+        let upgraded = chain
+            .blocks
+            .iter()
+            .position(|block| block.leaf.header().version() >= versions::EPOCH_VERSION)
+            .unwrap();
+        for height in [upgraded - 1, upgraded] {
+            let leaf = &chain.blocks[height].leaf;
+            let json = serde_json::to_value(leaf).unwrap();
+            assert_same_fields("Leaf2", &json["leaf"]);
+            let converted = proto::LeafResponse::from(leaf);
+            assert_leaf_mirrors(converted.leaf.as_ref().unwrap(), &json["leaf"]);
+            assert_qc_mirrors(converted.qc.as_ref().unwrap(), &json["qc"]);
+        }
+        let last_pre_epoch = serde_json::to_value(&chain.blocks[upgraded - 1].leaf).unwrap();
+        assert!(!last_pre_epoch["leaf"]["upgrade_certificate"].is_null());
+        assert!(last_pre_epoch["qc"]["data"]["epoch"].is_null());
+        let boundary = serde_json::to_value(&chain.blocks[upgraded].leaf).unwrap();
+        assert!(boundary["leaf"]["justify_qc"]["data"]["epoch"].is_null());
+        assert!(!boundary["qc"]["data"]["epoch"].is_null());
+    }
+
+    /// The light client proves 0.2 leaves by a HotStuff 3-chain of pre-epoch QCs, and the first
+    /// 0.3 leaf by a HotStuff2 2-chain whose leaf chain starts at the last 0.2 leaf. Both proofs
+    /// convert with their pre-epoch leaves and QCs.
+    #[test]
+    fn legacy_leaf_proofs_mirror_the_recorded_chain() {
+        use ::light_client::consensus::leaf::{FinalityProof, LeafProof};
+        use proto::finality_proof::Proof;
+
+        let chain = crate::legacy_chain::LegacyChain::load("v2-v3").unwrap();
+        let upgraded = chain
+            .blocks
+            .iter()
+            .position(|block| block.leaf.header().version() >= versions::EPOCH_VERSION)
+            .unwrap();
+        let leaves: Vec<_> = chain
+            .blocks
+            .iter()
+            .map(|block| serde_json::to_value(&block.leaf).unwrap())
+            .collect();
+        let prove = |heights: std::ops::RangeInclusive<usize>| {
+            let mut proof = LeafProof::default();
+            let last = *heights.end();
+            for height in heights {
+                assert_eq!(
+                    proof.push(chain.blocks[height].leaf.clone()),
+                    height == last,
+                    "pushing leaf {height}"
+                );
+            }
+            proof
+        };
+
+        let proof = prove(1..=4);
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff { .. }));
+        let converted = proto::LightClientLeafProofResponse::from(&proof);
+        assert_eq!(converted.leaves.len(), 1);
+        assert_leaf_mirrors(&converted.leaves[0], &leaves[1]["leaf"]);
+        let Some(Proof::HotStuff(finality)) = converted.proof.unwrap().proof else {
+            panic!("a 3-chain of 0.2 leaves must convert to the HotStuff arm");
+        };
+        assert_pair_mirrors(&finality.precommit_qc, &leaves, 1);
+        assert_pair_mirrors(&finality.committing_qc, &leaves, 2);
+        assert_pair_mirrors(&finality.deciding_qc, &leaves, 3);
+        assert_leaf_mirrors(
+            finality.committing_leaf.as_ref().unwrap(),
+            &leaves[2]["leaf"],
+        );
+        assert_leaf_mirrors(finality.deciding_leaf.as_ref().unwrap(), &leaves[3]["leaf"]);
+
+        let proof = prove(upgraded - 1..=upgraded + 2);
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        let converted = proto::LightClientLeafProofResponse::from(&proof);
+        assert_eq!(converted.leaves.len(), 2);
+        assert_leaf_mirrors(&converted.leaves[0], &leaves[upgraded - 1]["leaf"]);
+        assert_leaf_mirrors(&converted.leaves[1], &leaves[upgraded]["leaf"]);
+        let Some(Proof::HotStuff2(finality)) = converted.proof.unwrap().proof else {
+            panic!("a 2-chain of 0.3 leaves must convert to the HotStuff2 arm");
+        };
+        assert_pair_mirrors(&finality.committing_qc, &leaves, upgraded);
+        assert_pair_mirrors(&finality.deciding_qc, &leaves, upgraded + 1);
+        assert_leaf_mirrors(
+            finality.deciding_leaf.as_ref().unwrap(),
+            &leaves[upgraded + 1]["leaf"],
+        );
     }
 
     /// A 0.1 header has no reward tree, no millisecond timestamp and no leader counts, so the V1

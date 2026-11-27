@@ -2,11 +2,14 @@
 
 use async_trait::async_trait;
 use espresso_types::{
-    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, SeqTypes,
+    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, SeqTypes,
     v0_3::{ChainConfig, RewardAccountQueryDataV1, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::RewardAccountQueryDataV2,
 };
-use hotshot_types::simple_certificate::{Certificate2, LightClientStateUpdateCertificateV2};
+use hotshot_types::{
+    data::history::HistoricLeaf,
+    simple_certificate::{Certificate2, LightClientStateUpdateCertificateV2},
+};
 use jf_merkle_tree_compat::MerkleTreeScheme;
 
 #[async_trait]
@@ -33,7 +36,7 @@ pub trait CatchupApi {
 
     async fn get_chain_config(&self, commitment: String) -> anyhow::Result<ChainConfig>;
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>>;
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>>;
 
     async fn get_cert2(&self, height: u64) -> anyhow::Result<Certificate2<SeqTypes>>;
 

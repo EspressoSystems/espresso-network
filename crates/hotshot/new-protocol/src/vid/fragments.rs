@@ -32,13 +32,10 @@ pub enum VidFragmentError {
     #[error("fragment contains no namespaces")]
     Empty,
 
-    #[error("fragment names no epoch")]
-    MissingEpoch,
-
-    #[error("fragment target epoch {target_epoch:?} does not match its epoch {epoch:?}")]
+    #[error("fragment target epoch {target_epoch} does not match its epoch {epoch}")]
     TargetEpochMismatch {
-        epoch: Option<EpochNumber>,
-        target_epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
+        target_epoch: EpochNumber,
     },
 }
 
@@ -191,7 +188,7 @@ fn well_formed<T: NodeType>(
             target_epoch: fragment.target_epoch,
         });
     }
-    fragment.epoch.ok_or(VidFragmentError::MissingEpoch)
+    Ok(fragment.epoch)
 }
 
 /// A view's partially-collected namespace pieces, keyed by namespace index.
@@ -248,10 +245,10 @@ impl<T: NodeType> PendingShare<T> {
         }
         VidDisperseShare2 {
             view_number: view,
-            epoch: Some(self.epoch),
+            epoch: self.epoch,
             // Equal to `epoch` by `well_formed`; reusing it is what keeps the
             // two from diverging in the assembled share.
-            target_epoch: Some(self.epoch),
+            target_epoch: self.epoch,
             payload_commitment: self.payload_commitment,
             share: ns_shares.into(),
             recipient_key: self.recipient_key,

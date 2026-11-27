@@ -129,7 +129,7 @@ impl<T: NodeType> HasViewNumber for TimeoutVote<T> {
 impl<T: NodeType> HasEpoch for TimeoutVote<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         match self {
-            Self::V2(vote) => vote.data.epoch,
+            Self::V2(vote) => Some(vote.data.epoch),
             Self::V3(ballot) => Some(ballot.vote.data.epoch),
         }
     }
@@ -282,7 +282,7 @@ impl<T: NodeType> TimeoutVoteMessage3<T> {
             if cert.view_number() > self.view {
                 return Err("the lock is later than the view timed out");
             }
-            if cert.data.epoch.is_some_and(|epoch| epoch > self.epoch) {
+            if cert.data.epoch > self.epoch {
                 return Err("the lock is later than the vote's epoch");
             }
         }
@@ -408,7 +408,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         if self.cert1.view_number() > self.cert2.view_number()
             || self.cert1.epoch() != self.cert2.epoch()
             || self.cert1.data.leaf_commit != self.cert2.data.leaf_commit
-            || self.cert1.data.block_number != Some(block_number)
+            || self.cert1.data.block_number != block_number
         {
             return Err(EpochChangeError::CertificateMismatch);
         }
@@ -513,12 +513,10 @@ impl<T: NodeType> ReVote<T> {
     /// Structural validity, independent of signatures.
     pub fn well_formed(&self, epoch_length: EpochLength) -> Result<(), ReVoteError> {
         let data = &self.cert1.data;
-        if data.epoch != Some(self.epoch) {
+        if data.epoch != self.epoch {
             return Err(ReVoteError::Epoch);
         }
-        let Some(block) = data.block_number else {
-            return Err(ReVoteError::NotLastBlock);
-        };
+        let block = data.block_number;
         if !epoch_length.position(block).is_last() || epoch_length.epoch_of(block) != self.epoch {
             return Err(ReVoteError::NotLastBlock);
         }

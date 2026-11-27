@@ -251,9 +251,7 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
     epoch_length: EpochLength,
 ) -> Result<EpochNumber, MalformedProposal> {
     let view = proposal.view_number();
-    let Some(claimed_epoch) = proposal.justify_qc.epoch() else {
-        return Err(MalformedProposal::JustifyQcWithoutEpoch(view));
-    };
+    let claimed_epoch = proposal.justify_qc.data.epoch;
     let parent_block = proposal.block_header.block_number().saturating_sub(1);
     let expected_epoch = epoch_length.epoch_of(parent_block);
     if claimed_epoch != expected_epoch {
@@ -264,9 +262,7 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
             claimed: claimed_epoch,
         });
     }
-    let Some(claimed_block) = proposal.justify_qc.data.block_number else {
-        return Err(MalformedProposal::JustifyQcWithoutBlockNumber(view));
-    };
+    let claimed_block = proposal.justify_qc.data.block_number;
     if claimed_block != parent_block {
         return Err(MalformedProposal::JustifyQcBlockNumber {
             view,
@@ -299,11 +295,9 @@ pub(crate) fn state_cert_matches_parent<T: NodeType>(
     epoch_length: EpochLength,
 ) -> Result<Option<&LightClientStateUpdateCertificateV2<T>>, MalformedProposal> {
     let view = proposal.view_number();
-    let requires_state_cert = proposal
-        .justify_qc
-        .data
-        .block_number
-        .is_some_and(|bn| epoch_length.position(bn).is_root());
+    let requires_state_cert = epoch_length
+        .position(proposal.justify_qc.data.block_number)
+        .is_root();
     match (proposal.state_cert.as_ref(), requires_state_cert) {
         (Some(_), false) => Err(MalformedProposal::StateCertUnexpected(view)),
         (None, true) => Err(MalformedProposal::StateCertMissing(view)),
@@ -432,10 +426,7 @@ impl<T: NodeType> Validator<T> {
         vid_proposal: &SignedProposal<T, VidDisperseShare2<T>>,
     ) -> Result<()> {
         let view = vid_proposal.data.view_number();
-        let epoch = vid_proposal
-            .data
-            .epoch
-            .ok_or(ValidationError::MissingEpoch(view, "vid share"))?;
+        let epoch = vid_proposal.data.epoch;
         let membership = self.membership(epoch).await?;
         let stake_table = membership.stake_table();
         let leader = match membership.leader(view) {
@@ -731,12 +722,6 @@ pub enum MalformedProposal {
         expected: EpochNumber,
         claimed: EpochNumber,
     },
-
-    #[error("justify_qc of proposal at view {0} names no epoch")]
-    JustifyQcWithoutEpoch(ViewNumber),
-
-    #[error("justify_qc of proposal at view {0} names no block number")]
-    JustifyQcWithoutBlockNumber(ViewNumber),
 
     #[error(
         "justify_qc of proposal at view {view} is at the genesis view but certifies block \

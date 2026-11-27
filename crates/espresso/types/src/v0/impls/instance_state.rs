@@ -643,14 +643,15 @@ pub mod mock {
     use async_trait::async_trait;
     use committable::Commitment;
     use hotshot_types::{
-        data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
+        data::{ViewNumber, history::HistoricLeaf},
+        simple_certificate::LightClientStateUpdateCertificateV2,
     };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
     use crate::{
         BackoffParams, BlockMerkleCommitment, BlockMerkleTree, FeeAccount, FeeAccountProof,
-        FeeMerkleCommitment, LcContractFinalizedState, Leaf2, retain_accounts,
+        FeeMerkleCommitment, LcContractFinalizedState, retain_accounts,
         v0_3::{RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
         v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
     };
@@ -741,7 +742,7 @@ pub mod mock {
             _retry: usize,
             _coordinator: EpochMembershipCoordinator<SeqTypes>,
             _height: u64,
-        ) -> anyhow::Result<Leaf2> {
+        ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
             Err(anyhow::anyhow!("todo"))
         }
 

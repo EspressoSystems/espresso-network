@@ -51,20 +51,16 @@ pub struct QuorumData2<TYPES: NodeType> {
     /// Commitment to the leaf
     pub leaf_commit: Commitment<Leaf2<TYPES>>,
     /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-    pub epoch: Option<EpochNumber>,
-    /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
-    pub block_number: Option<u64>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
+    /// Block number of the leaf.
+    #[serde(with = "crate::always_some")]
+    pub block_number: u64,
 }
 
 impl<T: NodeType> QuorumData2<T> {
     pub fn is_well_formed(&self, epoch_length: EpochLength) -> bool {
-        let Some(epoch) = self.epoch else {
-            return false;
-        };
-        let Some(block) = self.block_number else {
-            return false;
-        };
-        epoch == epoch_length.epoch_of(block)
+        self.epoch == epoch_length.epoch_of(self.block_number)
     }
 }
 
@@ -80,17 +76,6 @@ pub struct DaData {
     pub payload_commit: VidCommitment,
 }
 
-/// Data used for a DA vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct DaData2 {
-    /// Commitment to a block payload
-    pub payload_commit: VidCommitment,
-    /// An optional commitment to a block payload calculated for the next epoch (epoch + 1)
-    pub next_epoch_payload_commit: Option<VidCommitment>,
-    /// Epoch number
-    pub epoch: Option<EpochNumber>,
-}
-
 /// Data used for a timeout vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData {
@@ -104,7 +89,8 @@ pub struct TimeoutData2 {
     /// View the timeout is for
     pub view: ViewNumber,
     /// Epoch number
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 }
 
 /// Data used for a timeout vote, binding the epoch the vote was cast in and
@@ -134,7 +120,7 @@ impl LockView {
     /// The position of the lock a `Certificate1` (`QuorumCertificate2`) gives.
     pub fn of<T: NodeType>(cert: &crate::simple_certificate::QuorumCertificate2<T>) -> Self {
         Self {
-            epoch: cert.data.epoch.unwrap_or_else(EpochNumber::genesis),
+            epoch: cert.data.epoch,
             view: cert.view_number(),
         }
     }
@@ -206,17 +192,6 @@ pub struct ViewSyncPreCommitData {
     pub round: ViewNumber,
 }
 
-/// Data used for a Pre Commit vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct ViewSyncPreCommitData2 {
-    /// The relay this vote is intended for
-    pub relay: u64,
-    /// The view number we are trying to sync on
-    pub round: ViewNumber,
-    /// Epoch number
-    pub epoch: Option<EpochNumber>,
-}
-
 /// Data used for a Commit vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncCommitData {
@@ -224,17 +199,6 @@ pub struct ViewSyncCommitData {
     pub relay: u64,
     /// The view number we are trying to sync on
     pub round: ViewNumber,
-}
-
-/// Data used for a Commit vote.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct ViewSyncCommitData2 {
-    /// The relay this vote is intended for
-    pub relay: u64,
-    /// The view number we are trying to sync on
-    pub round: ViewNumber,
-    /// Epoch number
-    pub epoch: Option<EpochNumber>,
 }
 
 /// Data used for a Finalize vote.
@@ -254,7 +218,8 @@ pub struct ViewSyncFinalizeData2 {
     /// The view number we are trying to sync on
     pub round: ViewNumber,
     /// Epoch number
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 }
 
 /// Data used for a Upgrade vote.
@@ -388,8 +353,6 @@ impl QuorumMarker for TimeoutData3 {}
 impl QuorumMarker for ViewSyncPreCommitData {}
 impl QuorumMarker for ViewSyncCommitData {}
 impl QuorumMarker for ViewSyncFinalizeData {}
-impl QuorumMarker for ViewSyncPreCommitData2 {}
-impl QuorumMarker for ViewSyncCommitData2 {}
 impl QuorumMarker for ViewSyncFinalizeData2 {}
 impl QuorumMarker for UpgradeProposalData {}
 impl QuorumMarker for UpgradeProposalData2 {}
@@ -529,47 +492,14 @@ impl<TYPES: NodeType> Committable for QuorumData<TYPES> {
 
 impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        let QuorumData2 {
-            leaf_commit,
-            epoch,
-            block_number,
-        } = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
-            .var_size_bytes(leaf_commit.as_ref());
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        if let Some(ref block_number) = *block_number {
-            cb = cb.u64_field("block number", *block_number);
-        }
-
-        cb.finalize()
+        quorum_data_commit(&self.leaf_commit, Some(self.epoch), Some(self.block_number))
     }
 }
 
 impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        let NextEpochQuorumData2(QuorumData2 {
-            leaf_commit,
-            epoch,
-            block_number,
-        }) = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
-            .var_size_bytes(leaf_commit.as_ref());
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        if let Some(ref block_number) = *block_number {
-            cb = cb.u64_field("block number", *block_number);
-        }
-
-        cb.finalize()
+        let NextEpochQuorumData2(data) = self;
+        quorum_data_commit(&data.leaf_commit, Some(data.epoch), Some(data.block_number))
     }
 }
 
@@ -617,29 +547,6 @@ impl Committable for DaData {
     }
 }
 
-impl Committable for DaData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let DaData2 {
-            payload_commit,
-            next_epoch_payload_commit,
-            epoch,
-        } = self;
-
-        let mut cb = committable::RawCommitmentBuilder::new("DA data")
-            .var_size_bytes(payload_commit.as_ref());
-
-        if let Some(ref next_epoch_payload_commit) = *next_epoch_payload_commit {
-            cb = cb.var_size_bytes(next_epoch_payload_commit.as_ref());
-        }
-
-        if let Some(ref epoch) = *epoch {
-            cb = cb.u64_field("epoch number", **epoch);
-        }
-
-        cb.finalize()
-    }
-}
-
 impl Committable for UpgradeProposalData {
     fn commit(&self) -> Commitment<Self> {
         let builder = committable::RawCommitmentBuilder::new("Upgrade data");
@@ -674,7 +581,27 @@ impl Committable for UpgradeProposalData2 {
 }
 
 /// This implements commit for all the types which contain a view and relay public key.
-fn view_and_relay_commit<T: Committable>(
+/// The commitment of quorum data: the leaf, then the epoch and the block number when present.
+///
+/// The pre-epoch types in [`crate::data::history`] commit through it too, so a QC read from
+/// history keeps the commitment its signers signed.
+pub(crate) fn quorum_data_commit<T: Committable, TYPES: NodeType>(
+    leaf_commit: &Commitment<Leaf2<TYPES>>,
+    epoch: Option<EpochNumber>,
+    block_number: Option<u64>,
+) -> Commitment<T> {
+    let mut cb =
+        committable::RawCommitmentBuilder::new("Quorum data").var_size_bytes(leaf_commit.as_ref());
+    if let Some(epoch) = epoch {
+        cb = cb.u64_field("epoch number", *epoch);
+    }
+    if let Some(block_number) = block_number {
+        cb = cb.u64_field("block number", block_number);
+    }
+    cb.finalize()
+}
+
+pub(crate) fn view_and_relay_commit<T: Committable>(
     view: ViewNumber,
     relay: u64,
     epoch: Option<EpochNumber>,
@@ -696,18 +623,6 @@ impl Committable for ViewSyncPreCommitData {
     }
 }
 
-impl Committable for ViewSyncPreCommitData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let ViewSyncPreCommitData2 {
-            relay,
-            round,
-            epoch,
-        } = self;
-
-        view_and_relay_commit(*round, *relay, *epoch, "View Sync Precommit")
-    }
-}
-
 impl Committable for ViewSyncFinalizeData {
     fn commit(&self) -> Commitment<Self> {
         view_and_relay_commit(self.round, self.relay, None, "View Sync Finalize")
@@ -722,25 +637,13 @@ impl Committable for ViewSyncFinalizeData2 {
             epoch,
         } = self;
 
-        view_and_relay_commit(*round, *relay, *epoch, "View Sync Finalize")
+        view_and_relay_commit(*round, *relay, Some(*epoch), "View Sync Finalize")
     }
 }
 
 impl Committable for ViewSyncCommitData {
     fn commit(&self) -> Commitment<Self> {
         view_and_relay_commit(self.round, self.relay, None, "View Sync Commit")
-    }
-}
-
-impl Committable for ViewSyncCommitData2 {
-    fn commit(&self) -> Commitment<Self> {
-        let ViewSyncCommitData2 {
-            relay,
-            round,
-            epoch,
-        } = self;
-
-        view_and_relay_commit(*round, *relay, *epoch, "View Sync Commit")
     }
 }
 
@@ -766,13 +669,25 @@ macro_rules! impl_has_epoch {
 
 impl<NODE: NodeType> HasEpoch for QuorumData2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for NextEpochQuorumData2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.0.epoch
+        Some(self.0.epoch)
+    }
+}
+
+impl HasEpoch for TimeoutData2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
+    }
+}
+
+impl HasEpoch for ViewSyncFinalizeData2 {
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.epoch)
     }
 }
 
@@ -787,14 +702,6 @@ impl HasEpoch for UpgradeProposalData2 {
         Some(self.epoch)
     }
 }
-
-impl_has_epoch!(
-    DaData2,
-    TimeoutData2,
-    ViewSyncPreCommitData2,
-    ViewSyncCommitData2,
-    ViewSyncFinalizeData2
-);
 
 /// Helper macro for trivial implementation of the `HasEpoch` trait for types that have no epoch
 #[macro_export]
@@ -851,8 +758,6 @@ pub type QuorumVote2<TYPES> = SimpleVote<TYPES, QuorumData2<TYPES>>;
 pub type NextEpochQuorumVote2<TYPES> = SimpleVote<TYPES, NextEpochQuorumData2<TYPES>>;
 /// DA vote type alias
 pub type DaVote<TYPES> = SimpleVote<TYPES, DaData>;
-/// DA vote 2 type alias
-pub type DaVote2<TYPES> = SimpleVote<TYPES, DaData2>;
 
 /// Timeout Vote type alias
 pub type TimeoutVote<TYPES> = SimpleVote<TYPES, TimeoutData>;
@@ -863,16 +768,12 @@ pub type TimeoutVote3<TYPES> = SimpleVote<TYPES, TimeoutData3>;
 
 /// View Sync Pre Commit Vote type alias
 pub type ViewSyncPreCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncPreCommitData>;
-/// View Sync Pre Commit Vote 2 type alias
-pub type ViewSyncPreCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncPreCommitData2>;
 /// View Sync Finalize Vote type alias
 pub type ViewSyncFinalizeVote<TYPES> = SimpleVote<TYPES, ViewSyncFinalizeData>;
 /// View Sync Finalize Vote 2 type alias
 pub type ViewSyncFinalizeVote2<TYPES> = SimpleVote<TYPES, ViewSyncFinalizeData2>;
 /// View Sync Commit Vote type alias
 pub type ViewSyncCommitVote<TYPES> = SimpleVote<TYPES, ViewSyncCommitData>;
-/// View Sync Commit Vote 2 type alias
-pub type ViewSyncCommitVote2<TYPES> = SimpleVote<TYPES, ViewSyncCommitData2>;
 /// Upgrade proposal vote
 pub type UpgradeVote<TYPES> = SimpleVote<TYPES, UpgradeProposalData>;
 /// Upgrade vote binding its epoch

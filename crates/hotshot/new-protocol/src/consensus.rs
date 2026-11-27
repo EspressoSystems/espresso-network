@@ -201,7 +201,11 @@ pub enum ConsensusOutput<T: NodeType> {
 ///
 /// That makes the share's epoch exactly as trustworthy as the proposal's, and
 /// no more.
-type PairingKey = (ViewNumber, Option<EpochNumber>, VidCommitment2);
+type PairingKey = (ViewNumber, EpochNumber, VidCommitment2);
+
+/// Below every real epoch (they start at 1), so `(view, KEY_FLOOR_EPOCH, _)` sorts before every
+/// [`PairingKey`] of `view`.
+const KEY_FLOOR_EPOCH: EpochNumber = EpochNumber::new(0);
 
 type UnpairedProposals<T> =
     BTreeMap<PairingKey, (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>)>;
@@ -317,7 +321,7 @@ pub struct Consensus<T: NodeType> {
     /// this node's share has its payload rebuilt from the shares the votes
     /// carry, which a fetch would only race. One taken from an epoch change is
     /// an epoch's last block, whose payload its only child does not need.
-    lock_block_fetches: BTreeMap<Commitment<Leaf2<T>>, (LockView, Option<u64>)>,
+    lock_block_fetches: BTreeMap<Commitment<Leaf2<T>>, (LockView, u64)>,
 
     /// The latest boundary certificate this node asked storage to persist (see
     /// [`ConsensusOutput::PersistBoundaryQc`]), so that it is asked for once.
@@ -707,15 +711,14 @@ impl<T: NodeType> Consensus<T> {
         &self,
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
-        block_number: Option<u64>,
+        block_number: u64,
     ) -> Option<(ViewNumber, &Proposal<T>)> {
-        let numbered = |proposal: &&Proposal<T>| {
-            block_number.is_none_or(|bn| bn == proposal.block_header.block_number())
-        };
+        let numbered =
+            |proposal: &&Proposal<T>| block_number == proposal.block_header.block_number();
         if let Some(proposal) = self.proposals.get(view, leaf_commit).filter(numbered) {
             return Some((view, proposal));
         }
-        if !block_number.is_some_and(|bn| self.epoch_length.position(bn).is_last()) {
+        if !self.epoch_length.position(block_number).is_last() {
             return None;
         }
         self.proposals
@@ -1273,7 +1276,7 @@ impl<T: NodeType> Consensus<T> {
                     return None;
                 }
                 let (block_view, proposal) =
-                    self.certified_proposal(*view, cert2.data.leaf_commit, Some(block_number))?;
+                    self.certified_proposal(*view, cert2.data.leaf_commit, block_number)?;
                 let cert1 = self
                     .certs1
                     .get(&ViewEpoch(block_view, epoch))
@@ -1303,7 +1306,7 @@ impl<T: NodeType> Consensus<T> {
             .chain(
                 self.certs2
                     .range(ViewEpoch::at_view(*view))
-                    .map(|(_, cert)| (cert.data.leaf_commit, Some(cert.data.block_number))),
+                    .map(|(_, cert)| (cert.data.leaf_commit, cert.data.block_number)),
             )
             .filter_map(|(leaf_commit, block_number)| {
                 let (block_view, _) = self.certified_proposal(*view, leaf_commit, block_number)?;
@@ -1354,9 +1357,12 @@ impl<T: NodeType> Consensus<T> {
                 self.certs2 = self.certs2.split_off(&ViewEpoch::start(keep_from));
                 self.decided_views = self.decided_views.split_off(&keep_from);
                 self.proposals.retain_from(keep_from);
-                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, None, vc));
+                self.unpaired_proposals =
+                    self.unpaired_proposals
+                        .split_off(&(keep_from, KEY_FLOOR_EPOCH, vc));
                 self.unpaired_vid_shares =
-                    self.unpaired_vid_shares.split_off(&(keep_from, None, vc));
+                    self.unpaired_vid_shares
+                        .split_off(&(keep_from, KEY_FLOOR_EPOCH, vc));
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 let c = Commitment::default_commitment_no_preimage();
                 self.leaves = self.leaves.split_off(&(view, c));
@@ -1456,7 +1462,7 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "proposal payload commitment is not V2, discarding");
             return Protocol::Abort;
         };
-        let key = (view, Some(proposal.proposal.data.epoch), commit);
+        let key = (view, proposal.proposal.data.epoch, commit);
         let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
             let leaf_commit = proposal_commitment(&proposal.proposal.data);
             self.unpaired_proposals.insert(key, (sender, proposal));
@@ -1546,13 +1552,7 @@ impl<T: NodeType> Consensus<T> {
         let proposal = proposal.proposal.data;
         let epoch = proposal.epoch;
         // QC can be for a different epoch
-        let Some(qc_epoch) = proposal.justify_qc.epoch() else {
-            warn!(
-                %view, %proposer, block = %block_number, %epoch, %qc_view,
-                "proposal has no epoch number"
-            );
-            return Protocol::Abort;
-        };
+        let qc_epoch = proposal.justify_qc.data.epoch;
 
         // Under the certificate rule a vote1 is checked against the proposal's
         // timeout certificate, not against this node's lock (`maybe_vote_1`).
@@ -1851,10 +1851,14 @@ impl<T: NodeType> Consensus<T> {
                 .find(certified)
                 .cloned()
         };
-        parked((view, None, vc)..(view + 1, None, vc)).or_else(|| {
+        parked((view, KEY_FLOOR_EPOCH, vc)..(view + 1, KEY_FLOOR_EPOCH, vc)).or_else(|| {
             block_number
                 .is_some_and(|bn| self.epoch_length.position(bn).is_last())
-                .then(|| parked((ViewNumber::genesis(), None, vc)..(view, None, vc)))
+                .then(|| {
+                    parked(
+                        (ViewNumber::genesis(), KEY_FLOOR_EPOCH, vc)..(view, KEY_FLOOR_EPOCH, vc),
+                    )
+                })
                 .flatten()
         })
     }
@@ -1890,7 +1894,7 @@ impl<T: NodeType> Consensus<T> {
             return Some(share.payload_byte_len());
         }
         self.unpaired_vid_shares
-            .get(&(view, Some(proposal.epoch), commitment))
+            .get(&(view, proposal.epoch, commitment))
             .map(|share| share.payload_byte_len())
     }
 
@@ -2011,7 +2015,7 @@ impl<T: NodeType> Consensus<T> {
         &mut self,
         lock: LockView,
         leaf_commit: Commitment<Leaf2<T>>,
-        block_number: Option<u64>,
+        block_number: u64,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let Some((block_view, proposal)) =
@@ -2116,13 +2120,13 @@ impl<T: NodeType> Consensus<T> {
             ));
         }
         let leaf_commit = certificate.data.leaf_commit;
-        let block_number = Some(certificate.data.block_number);
+        let block_number = certificate.data.block_number;
         self.insert_cert2(certificate.into_cert());
         if !self.decided_or_past(view)
             && self
                 .certified_proposal(view, leaf_commit, block_number)
                 .is_none()
-            && !self.adopt_unpaired_proposal(view, leaf_commit, block_number, outbox)
+            && !self.adopt_unpaired_proposal(view, leaf_commit, Some(block_number), outbox)
         {
             warn!(%view, "have certificate2 but no proposal; requesting fetch");
             outbox.push_back(ConsensusOutput::RequestMissingProposal { view, leaf_commit });
@@ -2442,10 +2446,7 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let vote = SimpleVote::create_signed_vote(
-            TimeoutData2 {
-                view,
-                epoch: Some(epoch),
-            },
+            TimeoutData2 { view, epoch },
             view,
             &self.public_key,
             &self.private_key,
@@ -2673,7 +2674,7 @@ impl<T: NodeType> Consensus<T> {
         {
             // Held before a parked block is adopted, which decides it if it can.
             self.insert_cert1(cert.clone());
-            self.adopt_unpaired_proposal(lock.view, leaf_commit, block_number, outbox);
+            self.adopt_unpaired_proposal(lock.view, leaf_commit, Some(block_number), outbox);
         }
         self.advance_on(cert.clone(), lock.epoch, outbox);
         if !later {
@@ -2690,7 +2691,7 @@ impl<T: NodeType> Consensus<T> {
         // block is then that epoch's last, which the leader of the next epoch's
         // first block builds on, though its payload is not needed.
         let decided_number = self.last_decided_leaf.block_header().block_number();
-        if lock.view >= self.last_decided_view && block_number.is_none_or(|n| n > decided_number) {
+        if lock.view >= self.last_decided_view && block_number > decided_number {
             debug!(view = %lock.view, "timeout certificate lock without its block; requesting fetch");
             self.lock_block_fetches
                 .insert(leaf_commit, (lock, block_number));
@@ -2996,12 +2997,9 @@ impl<T: NodeType> Consensus<T> {
         // By the atomicity invariant (enforced by `EpochRootTally`),
         // if we hold the epoch-root Cert1 then `state_certs` also holds the
         // matching cert.
-        let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
+        let parent_block_number = parent_cert.data.block_number;
         let state_cert = if self.epoch_length.position(parent_block_number).is_root() {
-            let Some(parent_epoch) = parent_cert.data.epoch() else {
-                warn!("epoch-root parent QC has no epoch; cannot propose");
-                return;
-            };
+            let parent_epoch = parent_cert.data.epoch;
             let Some(sc) = self.state_certs.get(&parent_epoch).cloned() else {
                 warn!(
                     %view,
@@ -3106,7 +3104,7 @@ impl<T: NodeType> Consensus<T> {
                 let (block_view, _) = self.certified_proposal(
                     view.0,
                     cert2.data.leaf_commit,
-                    Some(cert2.data.block_number),
+                    cert2.data.block_number,
                 )?;
                 self.certs1
                     .get(&ViewEpoch(block_view, cert2.data.epoch))
@@ -3175,7 +3173,7 @@ impl<T: NodeType> Consensus<T> {
             _ => return,
         };
         let leaf_commit = proposal_commitment(block);
-        if cert1.data.leaf_commit != leaf_commit || cert1.data.epoch != Some(epoch) {
+        if cert1.data.leaf_commit != leaf_commit || cert1.data.epoch != epoch {
             debug!(%block_view, "the certificate built on is not over the last block of its epoch");
             return;
         }
@@ -3246,7 +3244,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
         let Some((block_view, proposal)) =
-            self.certified_proposal(view, cert2.data.leaf_commit, Some(cert2.data.block_number))
+            self.certified_proposal(view, cert2.data.leaf_commit, cert2.data.block_number)
         else {
             debug!(%view, "proposal not available");
             return;
@@ -3770,8 +3768,8 @@ impl<T: NodeType> Consensus<T> {
         let inner_vote = match SimpleVote::create_signed_vote(
             QuorumData2 {
                 leaf_commit: proposal_commit,
-                epoch: proposal.epoch(),
-                block_number: Some(proposal.block_header.block_number()),
+                epoch: proposal.epoch,
+                block_number: proposal.block_header.block_number(),
             },
             view,
             &self.public_key,
@@ -4430,16 +4428,11 @@ impl<T: NodeType> Consensus<T> {
             }
         }
 
-        let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
-        if self.epoch_length.position(parent_block_number).is_root() {
-            match parent_cert.data.epoch() {
-                None => missing.push("parent_cert_epoch"),
-                Some(parent_epoch) => {
-                    if !self.state_certs.contains_key(&parent_epoch) {
-                        missing.push("state_cert");
-                    }
-                },
-            }
+        let parent_block_number = parent_cert.data.block_number;
+        if self.epoch_length.position(parent_block_number).is_root()
+            && !self.state_certs.contains_key(&parent_cert.data.epoch)
+        {
+            missing.push("state_cert");
         }
 
         missing

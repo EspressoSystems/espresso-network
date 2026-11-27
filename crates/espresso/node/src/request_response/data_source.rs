@@ -8,8 +8,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
-    retain_accounts,
+    Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, NodeState, SeqTypes, retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
@@ -21,7 +20,7 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::data::{VidShare, ViewNumber};
+use hotshot_types::data::{VidShare, ViewNumber, history::HistoricLeaf};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
@@ -54,7 +53,7 @@ pub trait RequestStorage: Send + Sync {
         height: u64,
         view: ViewNumber,
         accounts: &[FeeAccount],
-    ) -> Result<(FeeMerkleTree, Leaf2)>;
+    ) -> Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)>;
 
     async fn get_reward_accounts_v1(
         &self,
@@ -62,7 +61,7 @@ pub trait RequestStorage: Send + Sync {
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV1],
-    ) -> Result<(RewardMerkleTreeV1, Leaf2)>;
+    ) -> Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)>;
 
     async fn get_reward_accounts_v2(
         &self,
@@ -70,7 +69,7 @@ pub trait RequestStorage: Send + Sync {
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV2],
-    ) -> Result<(RewardMerkleTreeV2, Leaf2)>;
+    ) -> Result<(RewardMerkleTreeV2, HistoricLeaf<SeqTypes>)>;
 
     async fn get_frontier(
         &self,
@@ -81,7 +80,7 @@ pub trait RequestStorage: Send + Sync {
 
     async fn get_chain_config(&self, commitment: Commitment<ChainConfig>) -> Result<ChainConfig>;
 
-    async fn get_leaf_chain(&self, height: u64) -> Result<Vec<Leaf2>>;
+    async fn get_leaf_chain(&self, height: u64) -> Result<Vec<HistoricLeaf<SeqTypes>>>;
 
     async fn load_cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>>;
 

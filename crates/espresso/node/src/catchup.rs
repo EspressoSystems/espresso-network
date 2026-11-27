@@ -34,7 +34,7 @@ use futures::{
 use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     ValidatorConfig,
-    data::ViewNumber,
+    data::{ViewNumber, history::HistoricLeaf},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -281,14 +281,29 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
 
 /// Verify a legacy (pre-V6) leaf chain
 pub(crate) async fn verify_legacy_leaf_chain(
-    leaf_chain: Vec<Leaf2>,
+    leaf_chain: Vec<HistoricLeaf<SeqTypes>>,
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     height: u64,
-) -> anyhow::Result<Leaf2> {
+) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
     let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
     verify_leaf_chain(leaf_chain, coordinator, height, &upgrade_lock)
         .await
         .with_context(|| format!("failed to verify leaf chain at height {height}"))
+}
+
+/// The leaves of a new-protocol leaf chain, which all have epochs.
+pub(crate) fn new_protocol_leaves(
+    leaf_chain: Vec<HistoricLeaf<SeqTypes>>,
+) -> anyhow::Result<Vec<Leaf2>> {
+    leaf_chain
+        .into_iter()
+        .map(|leaf| {
+            let height = leaf.height();
+            leaf.into_leaf2().with_context(|| {
+                format!("leaf {height} of a new-protocol chain has a justify QC from before epochs")
+            })
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -381,14 +396,14 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         retry: usize,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         // Fetch the leaf chain. For new protocol heights this is a leaf range
         // `[height..=cert2_height]`
         // for legacy-protocol heights it's a 3-chain.
         let leaf_chain = self
             .fetch(retry, |client| async move {
                 let chain = client
-                    .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
+                    .get::<Vec<HistoricLeaf<SeqTypes>>>(&paths::catchup_leafchain(height))
                     .send()
                     .await?;
                 anyhow::Ok(chain)
@@ -421,11 +436,16 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .await
                 .with_context(|| format!("failed to fetch cert2 for height {cert2_height}"))?;
 
-            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
-                .await
-                .with_context(|| {
-                    format!("failed to verify leaf chain with cert2 at height {height}")
-                })
+            verify_new_protocol_leaf_chain(
+                new_protocol_leaves(leaf_chain)?,
+                &coordinator,
+                height,
+                &upgrade_lock,
+                cert2,
+            )
+            .await
+            .map(Into::into)
+            .with_context(|| format!("failed to verify leaf chain with cert2 at height {height}"))
         } else {
             verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await
         }
@@ -605,7 +625,7 @@ pub(crate) trait CatchupStorage: Sync {
         _height: u64,
         _view: ViewNumber,
         _accounts: &[FeeAccount],
-    ) -> impl Send + Future<Output = anyhow::Result<(FeeMerkleTree, Leaf2)>> {
+    ) -> impl Send + Future<Output = anyhow::Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)>> {
         // Merklized state catchup is only supported by persistence backends that provide merklized
         // state storage. This default implementation is overridden for those that do. Otherwise,
         // catchup can still be provided by fetching undecided merklized state from consensus
@@ -638,7 +658,8 @@ pub(crate) trait CatchupStorage: Sync {
         _height: u64,
         _view: ViewNumber,
         _accounts: &[RewardAccountV1],
-    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeV1, Leaf2)>> {
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)>>
+    {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -650,7 +671,8 @@ pub(crate) trait CatchupStorage: Sync {
         _height: u64,
         _view: ViewNumber,
         _accounts: &[RewardAccountV2],
-    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeV2, Leaf2)>> {
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTreeV2, HistoricLeaf<SeqTypes>)>>
+    {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -703,7 +725,7 @@ pub(crate) trait CatchupStorage: Sync {
     fn get_leaf_chain(
         &self,
         _height: u64,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<HistoricLeaf<SeqTypes>>>> {
         async {
             bail!("leaf chain catchup is not supported for this data source");
         }
@@ -718,7 +740,10 @@ pub(crate) trait CatchupStorage: Sync {
     }
 
     /// Load a decided leaf at the given height.
-    fn get_leaf(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Leaf2>> {
+    fn get_leaf(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<HistoricLeaf<SeqTypes>>> {
         async {
             bail!("leaf fetch is not supported for this data source");
         }
@@ -748,7 +773,7 @@ where
         height: u64,
         view: ViewNumber,
         accounts: &[FeeAccount],
-    ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+    ) -> anyhow::Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)> {
         self.inner()
             .get_accounts(instance, height, view, accounts)
             .await
@@ -769,7 +794,7 @@ where
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+    ) -> anyhow::Result<(RewardMerkleTreeV2, HistoricLeaf<SeqTypes>)> {
         self.inner()
             .get_reward_accounts_v2(instance, height, view, accounts)
             .await
@@ -781,7 +806,7 @@ where
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+    ) -> anyhow::Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)> {
         self.inner()
             .get_reward_accounts_v1(instance, height, view, accounts)
             .await
@@ -810,7 +835,7 @@ where
     ) -> anyhow::Result<ChainConfig> {
         self.inner().get_chain_config(commitment).await
     }
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         self.inner().get_leaf_chain(height).await
     }
 
@@ -818,7 +843,7 @@ where
         self.inner().load_cert2(height).await
     }
 
-    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         self.inner().get_leaf(height).await
     }
 
@@ -851,7 +876,7 @@ where
         _retry: usize,
         _coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         // Leaves in our local DB were verified before they were stored, so we can return the leaf
         // at `height` directly without re-verifying.
         self.db
@@ -1069,7 +1094,7 @@ impl StateCatchup for NullStateCatchup {
         _retry: usize,
         _coordinator: EpochMembershipCoordinator<SeqTypes>,
         _height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         bail!("state catchup is disabled")
     }
 
@@ -1182,7 +1207,7 @@ impl<C: StateCatchup> StateCatchup for SingleAttemptCatchup<C> {
         retry: usize,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         self.inner
             .try_fetch_leaf(self.retry + retry, coordinator, height)
             .await
@@ -1440,7 +1465,7 @@ impl StateCatchup for ParallelStateCatchup {
         retry: usize,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         self.on_providers(clone! {(coordinator) move |provider| {
             clone!{(coordinator) async move {
                 provider
@@ -1619,7 +1644,7 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-    ) -> anyhow::Result<Leaf2> {
+    ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         self.on_providers(clone! {(coordinator) move |provider| {
             clone! {(coordinator) async move {
                 provider.fetch_leaf(coordinator, height).await
@@ -1742,8 +1767,11 @@ pub async fn add_fee_accounts_to_state(
     view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
-    leaf: Leaf2,
+    leaf: HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<()> {
+    let Some(leaf) = consensus_leaf(leaf, view) else {
+        return Ok(());
+    };
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1789,8 +1817,11 @@ pub async fn add_v2_reward_accounts_to_state(
     view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
-    leaf: Leaf2,
+    leaf: HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<()> {
+    let Some(leaf) = consensus_leaf(leaf, view) else {
+        return Ok(());
+    };
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1836,8 +1867,11 @@ pub async fn add_v1_reward_accounts_to_state(
     view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
-    leaf: Leaf2,
+    leaf: HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<()> {
+    let Some(leaf) = consensus_leaf(leaf, view) else {
+        return Ok(());
+    };
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1876,6 +1910,22 @@ pub async fn add_v1_reward_accounts_to_state(
     Ok(())
 }
 
+/// `leaf` as the [`Leaf2`] that fetched accounts join the consensus state at.
+///
+/// Consensus holds no state for a leaf whose justify QC is from before epochs, so the accounts
+/// fetched at such a leaf stay out of it, as they did when consensus dropped them on update.
+fn consensus_leaf(leaf: HistoricLeaf<SeqTypes>, view: &ViewNumber) -> Option<Leaf2> {
+    let leaf = leaf.into_leaf2();
+    if leaf.is_none() {
+        tracing::debug!(
+            ?view,
+            "not adding fetched accounts to the consensus state: the leaf's justify QC is from \
+             before epochs"
+        );
+    }
+    leaf
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -1883,12 +1933,16 @@ mod test {
         time::Instant,
     };
 
-    use espresso_types::v0::mock::MockStateCatchup;
-    use hotshot_types::traits::metrics::NoMetrics;
+    use espresso_types::{PubKey, Transaction, v0::mock::MockStateCatchup};
+    use hotshot_types::{
+        data::{EpochNumber, history::PreEpochLeaf},
+        traits::metrics::NoMetrics,
+        utils::StateAndDelta,
+    };
     use test_utils::reserve_tcp_port;
 
     use super::*;
-    use crate::SequencerApiVersion;
+    use crate::{SequencerApiVersion, api::context::Delta};
 
     /// A peer that never answers keeps the `fetch_*` methods of a [`ParallelStateCatchup`] retrying
     /// for good, so a caller that retries on its own never gets an error to retry from.
@@ -2072,7 +2126,7 @@ mod test {
             _retry: usize,
             _coordinator: EpochMembershipCoordinator<SeqTypes>,
             _height: u64,
-        ) -> anyhow::Result<Leaf2> {
+        ) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
             bail!("unsupported")
         }
 
@@ -2290,5 +2344,164 @@ mod test {
         catchup.fetch_chain_config(config.commit()).await.unwrap();
         assert_eq!(start.elapsed(), FALLBACK_DELAY);
         assert_eq!(fallback_calls.load(AtomicOrdering::SeqCst), 2);
+    }
+
+    /// Holds no state for any view, and records each leaf that `update_leaf` gets.
+    #[derive(Default)]
+    struct RecordingConsensus {
+        updated_leaves: Mutex<Vec<Leaf2>>,
+    }
+
+    #[async_trait]
+    impl ConsensusSource for RecordingConsensus {
+        async fn decided_leaf(&self) -> HistoricLeaf<SeqTypes> {
+            unimplemented!()
+        }
+
+        async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
+            unimplemented!()
+        }
+
+        async fn state(&self, _view: ViewNumber) -> Option<Arc<ValidatedState>> {
+            None
+        }
+
+        async fn state_and_delta(&self, _view: ViewNumber) -> StateAndDelta<SeqTypes> {
+            (None, None)
+        }
+
+        async fn undecided_leaves(&self) -> Vec<Leaf2> {
+            unimplemented!()
+        }
+
+        async fn current_epoch(&self) -> Option<EpochNumber> {
+            unimplemented!()
+        }
+
+        async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+            unimplemented!()
+        }
+
+        async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+            unimplemented!()
+        }
+
+        async fn submit_transaction(
+            &self,
+            _tx: Transaction,
+        ) -> anyhow::Result<Commitment<Transaction>> {
+            unimplemented!()
+        }
+
+        async fn update_leaf(
+            &self,
+            leaf: Leaf2,
+            _state: Arc<ValidatedState>,
+            _delta: Option<Arc<Delta>>,
+        ) -> anyhow::Result<()> {
+            self.updated_leaves.lock().push(leaf);
+            Ok(())
+        }
+
+        async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+
+        async fn proposal_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+
+        async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+
+        async fn vote_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+    }
+
+    async fn pre_epoch_genesis() -> HistoricLeaf<SeqTypes> {
+        PreEpochLeaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            versions::FEE_VERSION,
+        )
+        .await
+        .into()
+    }
+
+    /// Consensus never holds state for a leaf from before epochs, so fee accounts read at such a
+    /// leaf stay out of the consensus state, and that is not an error.
+    #[tokio::test]
+    async fn fee_accounts_at_pre_epoch_leaf_skip_consensus_state() {
+        let consensus = RecordingConsensus::default();
+        let tree = ValidatedState::default().fee_merkle_tree;
+        add_fee_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            pre_epoch_genesis().await,
+        )
+        .await
+        .expect("a leaf from before epochs is skipped, not an error");
+        assert!(consensus.updated_leaves.lock().is_empty());
+    }
+
+    /// Like [`fee_accounts_at_pre_epoch_leaf_skip_consensus_state`], for v2 reward accounts.
+    #[tokio::test]
+    async fn v2_reward_accounts_at_pre_epoch_leaf_skip_consensus_state() {
+        let consensus = RecordingConsensus::default();
+        let tree = ValidatedState::default().reward_merkle_tree_v2;
+        add_v2_reward_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            pre_epoch_genesis().await,
+        )
+        .await
+        .expect("a leaf from before epochs is skipped, not an error");
+        assert!(consensus.updated_leaves.lock().is_empty());
+    }
+
+    /// Like [`fee_accounts_at_pre_epoch_leaf_skip_consensus_state`], for v1 reward accounts.
+    #[tokio::test]
+    async fn v1_reward_accounts_at_pre_epoch_leaf_skip_consensus_state() {
+        let consensus = RecordingConsensus::default();
+        let tree = ValidatedState::default().reward_merkle_tree_v1;
+        add_v1_reward_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            pre_epoch_genesis().await,
+        )
+        .await
+        .expect("a leaf from before epochs is skipped, not an error");
+        assert!(consensus.updated_leaves.lock().is_empty());
+    }
+
+    /// Fee accounts read at a leaf with epochs join the consensus state at that leaf.
+    #[tokio::test]
+    async fn fee_accounts_at_epoch_leaf_update_that_leaf() {
+        let consensus = RecordingConsensus::default();
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            EPOCH_VERSION,
+        )
+        .await;
+        let tree = ValidatedState::default().fee_merkle_tree;
+        add_fee_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            leaf.clone().into(),
+        )
+        .await
+        .expect("accounts at a leaf with epochs join the consensus state");
+        assert_eq!(*consensus.updated_leaves.lock(), vec![leaf]);
     }
 }

@@ -1,0 +1,106 @@
+{
+  "view_number": 5,
+  "justify_qc": {
+    "data": {
+      "leaf_commit": "COMMIT~d-9mx4_lTsdlaOtkEtbNexdksVaEDv5E7jugW9jQ67cX",
+      "epoch": 1,
+      "block_number": 4
+    },
+    "vote_commitment": "COMMIT~aYfcXjKmdXErng4CAmEMZuAqK82izW0mQMrXJ8XxcFSX",
+    "view_number": 4,
+    "signatures": [
+      "BLS_SIG~up2cP_wFhb2KG9GupMNGyShzIuM_YsPr8J_sXzePIiNISkztY-yHh_qxG7AR2Jg_nA80euFx5wZ1BtGLrkgoq8I",
+      {
+        "order": "bitvec::order::Lsb0",
+        "head": {
+          "width": 64,
+          "index": 0
+        },
+        "bits": 5,
+        "data": [
+          30
+        ]
+      }
+    ],
+    "_pd": null
+  },
+  "next_epoch_justify_qc": null,
+  "parent_commitment": "COMMIT~d-9mx4_lTsdlaOtkEtbNexdksVaEDv5E7jugW9jQ67cX",
+  "block_header": {
+    "version": {
+      "Version": {
+        "major": 0,
+        "minor": 3
+      }
+    },
+    "fields": {
+      "chain_config": {
+        "chain_config": {
+          "Left": {
+            "chain_id": "35353",
+            "max_block_size": "30720",
+            "base_fee": "0",
+            "fee_contract": null,
+            "fee_recipient": "0x0000000000000000000000000000000000000000",
+            "stake_table_contract": "0x0dcd1bf9a1b36ce34237eeafef220932846bcd82"
+          }
+        }
+      },
+      "height": 5,
+      "timestamp": 1791573743,
+      "l1_head": 29,
+      "l1_finalized": {
+        "number": 29,
+        "timestamp": "0x6ac93eee",
+        "hash": "0xd82c2c371bc5faae9bbb681f307377e907dd4ea1980d4599f47b45754db8a33a"
+      },
+      "payload_commitment": "AvidMCommit~PV6S6UssTrxg0Ba7Lub8nQXgXLJO8S5O6_m8NR94ue7I",
+      "builder_commitment": "BUILDER_COMMITMENT~xyqJpKQXPj3trcliIy8tjmzYXjiyOKFGkx8E6el3NNBS",
+      "ns_table": {
+        "bytes": "AQAAAGYAAAAQAAAA"
+      },
+      "block_merkle_tree_root": "MERKLE_COMM~RgH3WzDXftRezwVQVyuyfIU1fNaGm1j6Pzrtz7YwowEgAAAAAAAAAAUAAAAAAAAAfQ",
+      "fee_merkle_tree_root": "MERKLE_COMM~PduS9-KEWlMgC2LXn6yXYJg-b8zSetQTlp231NcOG9wUAAAAAAAAAAIAAAAAAAAAxw",
+      "fee_info": {
+        "account": "0x7103f704ee6272ad0228343b362eeb3199f7e2b1",
+        "amount": "123"
+      },
+      "builder_signature": {
+        "r": "0x3bfc84b224ae9387844765e3b16bf9394f656f829d58c60620d55c1824c133f7",
+        "s": "0x796f244e08fcfcbe34db0e32919c0177a3e5f94f425cddb3b34958a291110442",
+        "v": 28
+      },
+      "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA"
+    }
+  },
+  "upgrade_certificate": null,
+  "block_payload": null,
+  "view_change_evidence": {
+    "ViewSync": {
+      "data": {
+        "relay": 0,
+        "round": 5,
+        "epoch": 1
+      },
+      "vote_commitment": "COMMIT~D7lTLgYg3YAKY_wm1ni3S02PdiVAA7neFv8aB36V5s35",
+      "view_number": 5,
+      "signatures": [
+        "BLS_SIG~up2cP_wFhb2KG9GupMNGyShzIuM_YsPr8J_sXzePIiNISkztY-yHh_qxG7AR2Jg_nA80euFx5wZ1BtGLrkgoq8I",
+        {
+          "order": "bitvec::order::Lsb0",
+          "head": {
+            "width": 64,
+            "index": 0
+          },
+          "bits": 5,
+          "data": [
+            30
+          ]
+        }
+      ],
+      "_pd": null
+    }
+  },
+  "next_drb_result": null,
+  "with_epoch": true
+}

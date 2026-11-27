@@ -12,8 +12,8 @@ use anyhow::{Context, Result, anyhow, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    Certificate2, ChainId, DECAF_CHAIN_ID, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId,
-    PubKey, SeqTypes, StakeTableState, Transaction, ValidatorSet,
+    Certificate2, ChainId, DECAF_CHAIN_ID, DrbAndHeaderUpgradeVersion, Header, NamespaceId, PubKey,
+    SeqTypes, StakeTableState, Transaction, ValidatorSet,
 };
 use futures::future::try_join;
 use hotshot_query_service_types::{
@@ -21,7 +21,11 @@ use hotshot_query_service_types::{
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
 };
-use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
+use hotshot_types::{
+    data::{EpochNumber, history::HistoricLeaf},
+    stake_table::StakeTableEntry,
+    utils::root_block_in_epoch,
+};
 use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersionType, Version};
 
@@ -1109,7 +1113,7 @@ where
     fn fetch_leaf_from_server<'a, 'b, Q>(
         &'a self,
         id: impl Send + Into<LeafRequest> + 'a,
-        known_finalized: Option<&'b Leaf2>,
+        known_finalized: Option<&'b HistoricLeaf<SeqTypes>>,
         make_quorum: impl 'a + Send + FnOnce(EpochNumber) -> Q,
     ) -> impl 'b + Send + Future<Output = Result<LeafQueryData<SeqTypes>>>
     where
@@ -1135,7 +1139,7 @@ where
     /// The genesis QC is unsigned, so the genesis leaf is proven through its child instead.
     async fn fetch_genesis_leaf_from_server<Q>(
         &self,
-        known_finalized: Option<&Leaf2>,
+        known_finalized: Option<&HistoricLeaf<SeqTypes>>,
         make_quorum: impl Send + FnOnce(EpochNumber) -> Q,
     ) -> Result<LeafQueryData<SeqTypes>>
     where
@@ -1154,7 +1158,7 @@ where
     fn fetch_proven_leaf_from_server<'a, 'b, Q>(
         &'a self,
         id: impl Send + Into<LeafRequest> + 'a,
-        known_finalized: Option<&'b Leaf2>,
+        known_finalized: Option<&'b HistoricLeaf<SeqTypes>>,
         make_quorum: impl 'a + Send + FnOnce(EpochNumber) -> Q,
     ) -> impl 'b + Send + Future<Output = Result<LeafQueryData<SeqTypes>>>
     where
@@ -1165,7 +1169,7 @@ where
             let id = id.into();
             let proof = self
                 .server
-                .leaf_proof(id, known_finalized.map(Leaf2::height))
+                .leaf_proof(id, known_finalized.map(HistoricLeaf::height))
                 .await?;
             let quorum;
             let hint = match proof.epoch(self.epoch_height)? {
@@ -2772,8 +2776,8 @@ mod test {
         let view = ViewNumber::new(1);
         let data = QuorumData2 {
             leaf_commit: Commitment::from_raw([7; 32]),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(1),
+            epoch: EpochNumber::new(1),
+            block_number: 1,
         };
         let commit = VersionedVoteData::new_infallible(
             data,

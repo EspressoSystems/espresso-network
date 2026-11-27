@@ -23,10 +23,11 @@ where
 {
     fn from_row(row: &'r R) -> sqlx::Result<Self> {
         let leaf = row.try_get("leaf")?;
-        let leaf: Leaf2<Types> = serde_json::from_value(leaf).decode_error("malformed leaf")?;
+        let leaf: HistoricLeaf<Types> =
+            serde_json::from_value(leaf).decode_error("malformed leaf")?;
 
         let qc = row.try_get("qc")?;
-        let qc: QuorumCertificate2<Types> =
+        let qc: HistoricQuorumCertificate<Types> =
             serde_json::from_value(qc).decode_error("malformed QC")?;
 
         Ok(Self { leaf, qc })

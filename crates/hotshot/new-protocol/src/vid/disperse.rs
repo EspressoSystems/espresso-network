@@ -480,8 +480,8 @@ fn fragments<T: NodeType>(
         .zip(pieces)
         .map(|(recipient, pieces)| AvidmGf2DisperseShareFragment {
             view_number: view,
-            epoch: Some(epoch),
-            target_epoch: Some(epoch),
+            epoch,
+            target_epoch: epoch,
             payload_commitment,
             recipient_key: recipient.clone(),
             param: params.param.clone(),

@@ -118,8 +118,8 @@ impl TestViewGenerator {
         >(
             QuorumData2 {
                 leaf_commit: last.leaf.commit(),
-                epoch: Some(EpochNumber::genesis()),
-                block_number: Some(last.leaf.height()),
+                epoch: EpochNumber::genesis(),
+                block_number: last.leaf.height(),
             },
             &membership,
             last.view_number,
@@ -169,7 +169,7 @@ impl TestViewGenerator {
             &membership.coordinator,
             view_number,
             EpochNumber::genesis(),
-            Some(EpochNumber::genesis()),
+            EpochNumber::genesis(),
             &metadata,
         )
         .await
@@ -180,7 +180,7 @@ impl TestViewGenerator {
             proposal: QuorumProposal2::<TestTypes> {
                 block_header,
                 view_number,
-                epoch: Some(EpochNumber::genesis()),
+                epoch: EpochNumber::genesis(),
                 justify_qc,
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,

@@ -1,0 +1,24 @@
+{
+  "data": {
+    "relay": 0,
+    "round": 5,
+    "epoch": 1
+  },
+  "vote_commitment": "COMMIT~D7lTLgYg3YAKY_wm1ni3S02PdiVAA7neFv8aB36V5s35",
+  "view_number": 5,
+  "signatures": [
+    "BLS_SIG~up2cP_wFhb2KG9GupMNGyShzIuM_YsPr8J_sXzePIiNISkztY-yHh_qxG7AR2Jg_nA80euFx5wZ1BtGLrkgoq8I",
+    {
+      "order": "bitvec::order::Lsb0",
+      "head": {
+        "width": 64,
+        "index": 0
+      },
+      "bits": 5,
+      "data": [
+        30
+      ]
+    }
+  ],
+  "_pd": null
+}

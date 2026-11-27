@@ -1,0 +1,107 @@
+{
+  "leaf": {
+    "view_number": 333,
+    "justify_qc": {
+      "data": {
+        "leaf_commit": "COMMIT~RH_NZa1kq3OdQYIUo4_oYFUl_mJWgeiJCqv01xWIqms9",
+        "epoch": 2,
+        "block_number": null
+      },
+      "vote_commitment": "COMMIT~1nMddBrrdbtn082vFYVPT7zVGQZ4PCF0ye3RhiZJlVXk",
+      "view_number": 332,
+      "signatures": [
+        "BLS_SIG~4l8gpAF8Ab8pe1RwrvKz10l9Gda0BfHlUQhxJ43yTgH2Ych6_mfPLNZkXjkpgYbmd7CQNAvYNFktpZpJNchuodc",
+        {
+          "order": "bitvec::order::Lsb0",
+          "head": {
+            "width": 64,
+            "index": 0
+          },
+          "bits": 1,
+          "data": [
+            1
+          ]
+        }
+      ],
+      "_pd": null
+    },
+    "next_epoch_justify_qc": null,
+    "parent_commitment": "COMMIT~RH_NZa1kq3OdQYIUo4_oYFUl_mJWgeiJCqv01xWIqms9",
+    "block_header": {
+      "version": {
+        "Version": {
+          "major": 0,
+          "minor": 3
+        }
+      },
+      "fields": {
+        "chain_config": {
+          "chain_config": {
+            "Left": {
+              "chain_id": "35353",
+              "max_block_size": "30720",
+              "base_fee": "0",
+              "fee_contract": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+              "fee_recipient": "0x0000000000000000000000000000000000000000",
+              "stake_table_contract": "0x0b306bf915c4d645ff596e518faf3f9669b97016"
+            }
+          }
+        },
+        "height": 333,
+        "timestamp": 1791564744,
+        "l1_head": 29,
+        "l1_finalized": {
+          "number": 29,
+          "timestamp": "0x6ac91b1c",
+          "hash": "0xc2074703b8056bf65b994a508ed5ec7a64167c54b733168492c312dab9cc1fd8"
+        },
+        "payload_commitment": "AvidMCommit~DIxP_HzUsvidt8cD7GnbicDvDDtzfTApG1s0NBGVf4NS",
+        "builder_commitment": "BUILDER_COMMITMENT~1aopqZBr7raVo7KnQzMVRrvg67rgq7bD4a24ydDXWIgH",
+        "ns_table": {
+          "bytes": "AQAAAGYAAAAQAAAA"
+        },
+        "block_merkle_tree_root": "MERKLE_COMM~e-0ZpxvvZCt_CyWvuFOwUoAHKmLbzJ4cXrvLMpQTQykgAAAAAAAAAE0BAAAAAAAAmg",
+        "fee_merkle_tree_root": "MERKLE_COMM~fsx2CHo9pJpuM0JeoSDLImJmScj0t2YWo5NmbUVj86wUAAAAAAAAAAIAAAAAAAAAlQ",
+        "fee_info": {
+          "account": "0x7103f704ee6272ad0228343b362eeb3199f7e2b1",
+          "amount": "123"
+        },
+        "builder_signature": {
+          "r": "0x3bfc84b224ae9387844765e3b16bf9394f656f829d58c60620d55c1824c133f7",
+          "s": "0x796f244e08fcfcbe34db0e32919c0177a3e5f94f425cddb3b34958a291110442",
+          "v": 28
+        },
+        "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA"
+      }
+    },
+    "upgrade_certificate": null,
+    "block_payload": null,
+    "view_change_evidence": null,
+    "next_drb_result": null,
+    "with_epoch": true
+  },
+  "qc": {
+    "data": {
+      "leaf_commit": "COMMIT~Gw9RF38upEioRNBzLUrT9tyWDPryAOwdzZxQxjww79Sm",
+      "epoch": 2,
+      "block_number": 333
+    },
+    "vote_commitment": "COMMIT~zI0QuToPu5A7H_4-_wSNyo8-OFgCpAwBi9PO7sYXTXP8",
+    "view_number": 333,
+    "signatures": [
+      "BLS_SIG~8Pq5yJV-_Aucu5uvZaAqWxEXKZa_DDK5eNkMZZT9Yy3XmTkpoDeJDOEUClQvc9bYUrhReALLY2Dwd8fc0Fbvq8o",
+      {
+        "order": "bitvec::order::Lsb0",
+        "head": {
+          "width": 64,
+          "index": 0
+        },
+        "bits": 1,
+        "data": [
+          1
+        ]
+      }
+    ],
+    "_pd": null
+  }
+}

@@ -501,8 +501,8 @@ async fn test_carried_later_timeout_certificate_raises_the_epoch() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
     let mut share = block.vid_share_for(&node_key);
     share.view_number = entered;
-    share.epoch = Some(ahead);
-    share.target_epoch = Some(ahead);
+    share.epoch = ahead;
+    share.target_epoch = ahead;
     // Sent by the leader of the view it is for, in its epoch.
     let leader = harness
         .consensus
@@ -1038,38 +1038,27 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
 fn test_quorum_data_well_formedness() {
     let height = 10;
     let leaf_commit = Commitment::default_commitment_no_preimage();
-    let vote1 = |epoch: Option<u64>, block_number: Option<u64>| QuorumData2::<TestTypes> {
+    let vote1 = |epoch: u64, block_number: u64| QuorumData2::<TestTypes> {
         leaf_commit,
-        epoch: epoch.map(EpochNumber::new),
+        epoch: EpochNumber::new(epoch),
         block_number,
     };
+    assert!(vote1(1, 0).is_well_formed(epoch_length(height)), "genesis");
     assert!(
-        vote1(Some(1), Some(0)).is_well_formed(epoch_length(height)),
-        "genesis"
-    );
-    assert!(
-        vote1(Some(1), Some(10)).is_well_formed(epoch_length(height)),
+        vote1(1, 10).is_well_formed(epoch_length(height)),
         "an epoch's last block"
     );
     assert!(
-        vote1(Some(2), Some(11)).is_well_formed(epoch_length(height)),
+        vote1(2, 11).is_well_formed(epoch_length(height)),
         "the next epoch's first block"
     );
     assert!(
-        !vote1(Some(2), Some(10)).is_well_formed(epoch_length(height)),
+        !vote1(2, 10).is_well_formed(epoch_length(height)),
         "an epoch its height is not in"
     );
     assert!(
-        !vote1(Some(1), Some(11)).is_well_formed(epoch_length(height)),
+        !vote1(1, 11).is_well_formed(epoch_length(height)),
         "an epoch its height has left"
-    );
-    assert!(
-        !vote1(None, Some(10)).is_well_formed(epoch_length(height)),
-        "no epoch"
-    );
-    assert!(
-        !vote1(Some(1), None).is_well_formed(epoch_length(height)),
-        "no block number"
     );
 
     let vote2 = |epoch: u64, block_number: u64| Vote2Data::<TestTypes> {
@@ -1106,10 +1095,7 @@ fn test_timeout_vote_naming_another_view_is_not_well_formed() {
     let unbound = |named: ViewNumber| {
         TimeoutVote::V2(
             SimpleVote::<TestTypes, TimeoutData2>::create_signed_vote(
-                TimeoutData2 {
-                    view: named,
-                    epoch: Some(epoch),
-                },
+                TimeoutData2 { view: named, epoch },
                 view,
                 &public_key,
                 &private_key,
@@ -3084,8 +3070,8 @@ async fn test_node_votes_once_in_a_view_it_has_left() {
     )
     .expect("sign the rival proposal");
     let mut rival_share = view.vid_share_for(&node_key);
-    rival_share.epoch = Some(next_epoch);
-    rival_share.target_epoch = Some(next_epoch);
+    rival_share.epoch = next_epoch;
+    rival_share.target_epoch = next_epoch;
     rival_share.payload_commitment = rival_payload;
     harness
         .apply_pair((
@@ -4161,7 +4147,7 @@ async fn vid_share_pairs_only_within_the_proposals_epoch() {
 
     let (proposal, honest_share) = view.proposal_input_consensus(&node_key);
     let mut relabelled = view.vid_share_for(&node_key);
-    relabelled.epoch = relabelled.epoch.map(|epoch| epoch + 1);
+    relabelled.epoch += 1;
     relabelled.target_epoch = relabelled.epoch;
 
     harness.apply(proposal).await;
@@ -4298,8 +4284,8 @@ async fn test_unvalidated_state_cert_is_not_stored() {
     // Precondition: a non-epoch-root parent QC is what makes the validator skip entirely.
     let parent_block = view.proposal.data.justify_qc.data.block_number;
     assert!(
-        parent_block.is_none_or(|bn| !epoch_length(EPOCH_HEIGHT).position(bn).is_root()),
-        "fixture precondition: parent QC must not be an epoch root, got {parent_block:?}"
+        !epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
+        "fixture precondition: parent QC must not be an epoch root, got {parent_block}"
     );
     assert!(
         view.proposal.data.state_cert.is_none(),
@@ -4375,13 +4361,7 @@ async fn test_validated_state_cert_is_stored() {
              no longer covers an epoch-root parent and this test proves nothing",
         );
 
-    let parent_block = view
-        .proposal
-        .data
-        .justify_qc
-        .data
-        .block_number
-        .expect("a state_cert-bearing proposal must have a parent block number");
+    let parent_block = view.proposal.data.justify_qc.data.block_number;
     assert!(
         epoch_length(EPOCH_HEIGHT).position(parent_block).is_root(),
         "fixture precondition: parent QC must be an epoch root, got block {parent_block}"
@@ -4587,4 +4567,174 @@ async fn test_block_request_queued_stamped_for_every_request() {
         tracer.count(*next_view, LeaderEvent::RequestBlockHeaderQueued),
         requests
     );
+}
+
+/// A `Certificate2` at a later view than the block it names certifies that
+/// block only when it is the last block of an epoch, which a re-vote commits
+/// again at a view of its own. A block inside an epoch is looked for at the
+/// certificate's view alone: there is none there, so nothing is decided and
+/// the leaf is fetched at the certificate's view.
+#[tokio::test]
+async fn test_cert2_at_a_later_view_over_a_block_inside_an_epoch_decides_nothing() {
+    let test_data = TestData::new_with_epoch_height(2, 10).await;
+    let block = &test_data.views[0];
+    let block_number = block.proposal.data.block_header.block_number;
+    assert!(
+        !epoch_length(10).position(block_number).is_last(),
+        "setup: block {block_number} is inside its epoch"
+    );
+    let leaf_commit = block.cert2.data.leaf_commit;
+    let later = block.view_number + 2;
+
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness = ConsensusHarness::new(0).await;
+    harness
+        .apply_pair(block.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(block.cert1_input()).await;
+    let mut cert2 = block.cert2.clone();
+    cert2.view_number = later;
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2,
+            block.epoch_number,
+        )))
+        .await;
+
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "a later certificate must not decide a block inside an epoch"
+    );
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingProposal { view, leaf_commit: c }
+                if *view == later && *c == leaf_commit
+        )),
+        "the leaf must be fetched at the certificate's view"
+    );
+}
+
+/// A timeout certificate's lock on a block this node does not hold fetches
+/// the block only when the lock is at the newest decided view or later and
+/// the block is higher than the newest decided block. Each condition rules
+/// the fetch out on its own.
+#[tokio::test]
+async fn test_timeout_certificate_lock_fetches_its_block_only_above_the_newest_decided_block() {
+    let test_data = TestData::new_with_epoch_height(4, 10).await;
+    let epoch = test_data.views[0].epoch_number;
+    let decided = &test_data.views[2];
+    let decided_view = decided.view_number;
+    let decided_block = decided.proposal.data.block_header.block_number;
+    let unknown = &test_data.views[3];
+    let leaf_commit = unknown.cert1.data.leaf_commit;
+    let unknown_block = unknown.proposal.data.block_header.block_number;
+    assert!(
+        unknown.view_number > decided_view && unknown_block > decided_block,
+        "setup: the unknown block is after the newest decided one"
+    );
+
+    // (lock view, lock block number, fetched)
+    let cases = [
+        (unknown.view_number, unknown_block, true),
+        (unknown.view_number, decided_block, false),
+        (unknown.view_number, decided_block - 1, false),
+        (decided_view - 1, unknown_block, false),
+    ];
+    for (lock_view, block_number, fetched) in cases {
+        let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+        let mut harness =
+            ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+        // Views 1 to 3 decided without their payloads, so the node locks on none.
+        for view in &test_data.views[..3] {
+            harness
+                .apply_pair(view.proposal_input_consensus(&node_key))
+                .await;
+            harness.apply(view.cert1_input()).await;
+        }
+        harness.apply(decided.cert2_input()).await;
+        assert!(
+            any(harness.outputs(), |o| decides_view(o, *decided_view)),
+            "setup: view {decided_view} is decided"
+        );
+        assert_eq!(harness.consensus.lock_view(), None, "setup: no lock");
+
+        let mut lock = unknown.cert1.clone();
+        lock.view_number = lock_view;
+        lock.data.block_number = block_number;
+        // The signers timed out the view after the unknown block's.
+        let tc = timeout_cert_of(&harness, epoch, unknown.view_number + 1, Some(lock));
+        harness.apply(timeout_cert_input(tc)).await;
+
+        assert_eq!(
+            any(harness.outputs(), |o| matches!(
+                o,
+                ConsensusOutput::RequestMissingProposal { leaf_commit: c, .. } if *c == leaf_commit
+            )),
+            fetched,
+            "a lock at view {lock_view} on block {block_number}, with view {decided_view} and \
+             block {decided_block} decided"
+        );
+    }
+}
+
+/// A leader proposing on an epoch root attaches the light client state
+/// certificate of the root's epoch, and does not propose without one: the
+/// proposal would be malformed.
+#[tokio::test]
+async fn test_leader_on_an_epoch_root_proposes_only_with_its_state_cert() {
+    const EPOCH_HEIGHT: u64 = 10;
+    let test_data = TestData::new_with_epoch_height(6, EPOCH_HEIGHT).await;
+    let root = test_data
+        .views
+        .iter()
+        .find(|v| v.state_cert.is_some())
+        .expect("setup: the chain reaches an epoch root");
+    let root_epoch = root.cert1.data.epoch;
+    let next_view = root.view_number + 1;
+    let leader = test_data
+        .views
+        .iter()
+        .find(|v| v.view_number == next_view)
+        .expect("setup: the chain reaches the view after the root")
+        .leader_public_key;
+    let leader_index = node_index_for_key(&leader);
+
+    for with_state_cert in [true, false] {
+        let mut harness = ConsensusHarness::new_with_epoch_height(leader_index, EPOCH_HEIGHT).await;
+        harness
+            .apply(ConsensusInput::FetchedProposal(root.proposal_message()))
+            .await;
+        let cert1 = if with_state_cert {
+            root.cert1_input()
+        } else {
+            ConsensusInput::Certificate1(ValidCert::new(root.cert1.clone(), root.epoch_number))
+        };
+        harness.apply(cert1).await;
+
+        let proposals: Vec<_> = harness
+            .outputs()
+            .iter()
+            .filter_map(|o| match o {
+                ConsensusOutput::SendProposal(p) if p.data.view_number == next_view => {
+                    Some(p.data.clone())
+                },
+                _ => None,
+            })
+            .collect();
+        if with_state_cert {
+            assert!(!proposals.is_empty(), "the leader proposes on the root");
+            for proposal in proposals {
+                let state_cert = proposal
+                    .state_cert
+                    .expect("a proposal on an epoch root carries its state cert");
+                assert_eq!(state_cert.epoch, root_epoch);
+            }
+        } else {
+            assert!(
+                proposals.is_empty(),
+                "the leader does not propose on the root without its state cert"
+            );
+        }
+    }
 }

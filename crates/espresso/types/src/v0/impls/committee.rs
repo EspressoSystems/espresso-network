@@ -1284,7 +1284,14 @@ impl Membership<SeqTypes> for EpochCommittees {
                 .try_fetch_leaf(retry, coordinator.clone(), block_height)
                 .await
             {
-                Ok(leaf) => return Ok(leaf),
+                Ok(leaf) => {
+                    return leaf.into_leaf2().ok_or_else(|| {
+                        Self::Error::Catchup(anyhow::anyhow!(
+                            "epoch root leaf for epoch {epoch} (block {block_height}) has a \
+                             justify QC from before epochs"
+                        ))
+                    });
+                },
                 Err(err) => {
                     warn!(%epoch, block_height, retry, "failed to fetch epoch root leaf: {err:#}");
                 },
@@ -1333,7 +1340,14 @@ impl Membership<SeqTypes> for EpochCommittees {
         let drb_leaf = peers
             .try_fetch_leaf(1, coordinator.clone(), block_height)
             .await
-            .map_err(Self::Error::Catchup)?;
+            .map_err(Self::Error::Catchup)?
+            .into_leaf2()
+            .ok_or_else(|| {
+                Self::Error::Message(format!(
+                    "the leaf with the DRB result for epoch {epoch} (block {block_height}) has a \
+                     justify QC from before epochs"
+                ))
+            })?;
 
         let Some(drb) = drb_leaf.next_drb_result else {
             error!(

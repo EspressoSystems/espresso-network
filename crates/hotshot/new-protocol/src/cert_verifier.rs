@@ -966,10 +966,7 @@ mod tests {
     /// An unsigned certificate, which verification is bound to reject: what is
     /// under test is whether it is examined at all.
     fn junk_tc(view: ViewNumber, epoch: EpochNumber) -> TimeoutCertificate2<TestTypes> {
-        let data = TimeoutData2 {
-            view,
-            epoch: Some(epoch),
-        };
+        let data = TimeoutData2 { view, epoch };
         TimeoutCertificate2::new(data.clone(), data.commit(), view, None, PhantomData)
     }
 

@@ -231,7 +231,7 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, TEST_UPGRADE,
+        L1Client, L1ClientOptions, Leaf2, NodeState, PubKey, SeqTypes, TEST_UPGRADE,
         ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
@@ -265,7 +265,7 @@ mod tests {
         signature_key::BLSPubKey,
         simple_certificate::{
             CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-            QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+            QuorumCertificate2, UpgradeCertificate,
         },
         simple_vote::{
             NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
@@ -450,21 +450,21 @@ mod tests {
 
         // Locks order by epoch first: a later epoch at an earlier view replaces
         // the stored lock, and an earlier epoch at a later view does not.
-        let epoch = qc.data.epoch.unwrap_or_else(EpochNumber::genesis);
+        let epoch = qc.data.epoch;
         let at = |qc: &QuorumCertificate2<SeqTypes>| (qc.data.epoch, qc.view_number);
-        qc.data.epoch = Some(epoch + 1);
+        qc.data.epoch = epoch + 1;
         qc.view_number = ViewNumber::new(5);
         storage.append_high_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_high_qc2().await.unwrap().unwrap()),
-            (Some(epoch + 1), ViewNumber::new(5))
+            (epoch + 1, ViewNumber::new(5))
         );
-        qc.data.epoch = Some(epoch);
+        qc.data.epoch = epoch;
         qc.view_number = ViewNumber::new(9);
         storage.append_high_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_high_qc2().await.unwrap().unwrap()),
-            (Some(epoch + 1), ViewNumber::new(5))
+            (epoch + 1, ViewNumber::new(5))
         );
     }
 
@@ -484,30 +484,30 @@ mod tests {
         let at = |qc: &QuorumCertificate2<SeqTypes>| (qc.data.epoch, qc.view_number);
 
         // Epoch 2, view 5.
-        qc.data.epoch = Some(EpochNumber::new(2));
+        qc.data.epoch = EpochNumber::new(2);
         qc.view_number = ViewNumber::new(5);
         storage.append_boundary_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
-            (Some(EpochNumber::new(2)), ViewNumber::new(5))
+            (EpochNumber::new(2), ViewNumber::new(5))
         );
 
         // An earlier epoch at a later view is older: locks order by epoch first.
-        qc.data.epoch = Some(EpochNumber::new(1));
+        qc.data.epoch = EpochNumber::new(1);
         qc.view_number = ViewNumber::new(9);
         storage.append_boundary_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
-            (Some(EpochNumber::new(2)), ViewNumber::new(5))
+            (EpochNumber::new(2), ViewNumber::new(5))
         );
 
         // A later epoch replaces it.
-        qc.data.epoch = Some(EpochNumber::new(3));
+        qc.data.epoch = EpochNumber::new(3);
         qc.view_number = ViewNumber::new(4);
         storage.append_boundary_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
-            (Some(EpochNumber::new(3)), ViewNumber::new(4))
+            (EpochNumber::new(3), ViewNumber::new(4))
         );
 
         // Within an epoch, a later view replaces it and an earlier one does not.
@@ -515,13 +515,13 @@ mod tests {
         storage.append_boundary_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
-            (Some(EpochNumber::new(3)), ViewNumber::new(6))
+            (EpochNumber::new(3), ViewNumber::new(6))
         );
         qc.view_number = ViewNumber::new(5);
         storage.append_boundary_qc2(qc.clone()).await.unwrap();
         assert_eq!(
             at(&storage.load_boundary_qc2().await.unwrap().unwrap()),
-            (Some(EpochNumber::new(3)), ViewNumber::new(6))
+            (EpochNumber::new(3), ViewNumber::new(6))
         );
     }
 
@@ -681,9 +681,7 @@ mod tests {
         // Make a header
         let instance_state = NodeState::mock();
         let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
-        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
-            .await
-            .into();
+        let leaf = Leaf2::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
         let header = leaf.block_header().clone();
 
         // Test storing the header
@@ -782,14 +780,14 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         };
         let mut quorum_proposal = Proposal {
             data: QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
-                    epoch: None,
+                    epoch: EpochNumber::new(0),
                     block_header: leaf.block_header().clone(),
                     view_number: ViewNumber::genesis(),
                     justify_qc: QuorumCertificate2::genesis(
@@ -855,7 +853,7 @@ mod tests {
             encoded_transactions: leaf_payload_bytes_arc.clone(),
             metadata: leaf_payload.ns_table().clone(),
             view_number: ViewNumber::new(0),
-            epoch: None,
+            epoch: EpochNumber::new(0),
             epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
@@ -1269,8 +1267,8 @@ mod tests {
         .await;
         let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
             leaf_commit: leaf.commit(),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(leaf.height()),
+            epoch: EpochNumber::new(1),
+            block_number: leaf.height(),
         }
         .into();
         let versioned_data =
@@ -1315,7 +1313,7 @@ mod tests {
         // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
-        running_high_qc.data.block_number = Some(epoch_height);
+        running_high_qc.data.block_number = epoch_height;
         storage
             .append_high_qc2(running_high_qc.clone())
             .await
@@ -1363,8 +1361,8 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         }
         .to_proposal(&privkey)
@@ -1384,7 +1382,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -1399,7 +1397,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
@@ -1581,8 +1579,8 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         }
         .to_proposal(&privkey)
@@ -1602,7 +1600,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -1617,7 +1615,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
@@ -1800,7 +1798,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -2037,7 +2035,7 @@ mod tests {
         let storage = options.create().await.unwrap();
 
         // Add some "old" data, from view 0.
-        let leaf = Leaf::genesis(
+        let leaf = Leaf2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
             MOCK_UPGRADE.base,
@@ -2063,8 +2061,8 @@ mod tests {
                 payload_commitment,
                 share: shares[0].clone(),
                 recipient_key: pubkey,
-                epoch: None,
-                target_epoch: None,
+                epoch: EpochNumber::new(0),
+                target_epoch: EpochNumber::new(0),
                 common: avidm_param,
             }
             .to_proposal(&privkey)
@@ -2076,18 +2074,17 @@ mod tests {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis(
+                justify_qc: QuorumCertificate2::genesis(
                     &ValidatedState::default(),
                     &NodeState::mock(),
                     TEST_VERSIONS.test,
                 )
-                .await
-                .to_qc2(),
+                .await,
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -2107,14 +2104,14 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc,
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
             _pd: Default::default(),
         };
 
-        let leaf2: Leaf2 = leaf.clone().into();
+        let leaf2 = leaf.clone();
         let vote_data = Vote2Data {
             leaf_commit: leaf2.commit(),
             epoch: EpochNumber::new(0),
@@ -2821,9 +2818,7 @@ mod tests {
             .await?;
         let instance_state = NodeState::mock();
         let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
-        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
-            .await
-            .into();
+        let leaf = Leaf2::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
         storage
             .store_epoch_root(EpochNumber::new(9), leaf.block_header().clone())
             .await?;
@@ -2892,9 +2887,7 @@ mod tests {
 
         let instance_state = NodeState::mock();
         let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
-        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
-            .await
-            .into();
+        let leaf = Leaf2::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
         let header = leaf.block_header().clone();
 
         let validator = AuthenticatedValidator::mock();
@@ -3103,7 +3096,7 @@ mod tests {
             Leaf2::genesis(&ValidatedState::default(), &node_state, TEST_UPGRADE.base).await;
         let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
             proposal: QuorumProposal2::<SeqTypes> {
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 block_header: genesis_leaf.block_header().clone(),
                 view_number: genesis_leaf.view_number(),
                 justify_qc: QuorumCertificate2::genesis(
@@ -3256,8 +3249,8 @@ mod tests {
             payload_commitment,
             share: shares[0].clone(),
             recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
+            epoch: EpochNumber::new(0),
+            target_epoch: EpochNumber::new(0),
             common,
         }
         .to_proposal(&privkey)
@@ -3267,7 +3260,7 @@ mod tests {
                 encoded_transactions: leaf_payload_bytes_arc.clone(),
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
+                epoch: EpochNumber::new(0),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc).unwrap(),
@@ -3293,7 +3286,7 @@ mod tests {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
-                epoch: None,
+                epoch: EpochNumber::new(0),
                 state_cert: None,
             },
         };
@@ -3396,5 +3389,129 @@ mod tests {
         assert_eq!(initializer.anchor_leaf(), anchor_leaf);
         assert_eq!(anchor_view, Some(ViewNumber::new(2)));
         assert_eq!(storage.load_state_cert().await.unwrap(), Some(state_cert));
+    }
+
+    /// A leaf from before the new protocol, at view 1 and height `block_number`, with the QC
+    /// that certifies it.
+    async fn legacy_anchor(block_number: u64) -> (Leaf2, QuorumCertificate2<SeqTypes>) {
+        let version = versions::EPOCH_REWARD_VERSION;
+        let node_state = NodeState::mock().with_genesis_version(version);
+        let genesis = Leaf2::genesis(&ValidatedState::default(), &node_state, version).await;
+        let mut block_header = genesis.block_header().clone();
+        *block_header.height_mut() = block_number;
+        let justify_qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &node_state,
+            Upgrade::trivial(version),
+        )
+        .await;
+        let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header,
+                view_number: ViewNumber::new(1),
+                justify_qc: justify_qc.clone(),
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: EpochNumber::new(1),
+                state_cert: None,
+            },
+        });
+        assert!(
+            leaf.block_header().version() < versions::NEW_PROTOCOL_VERSION,
+            "setup: the anchor is from before the new protocol"
+        );
+        let mut qc = justify_qc;
+        qc.view_number = leaf.view_number();
+        qc.data.leaf_commit = Committable::commit(&leaf);
+        qc.data.epoch = EpochNumber::new(1);
+        qc.data.block_number = block_number;
+        (leaf, qc)
+    }
+
+    /// The next epoch's QC over the data of `qc`, at `view`.
+    fn next_epoch_qc_over(
+        qc: &QuorumCertificate2<SeqTypes>,
+        view: ViewNumber,
+    ) -> NextEpochQuorumCertificate2<SeqTypes> {
+        let data: NextEpochQuorumData2<SeqTypes> = qc.data.into();
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
+        let versioned_data = VersionedVoteData::new_infallible(data.clone(), view, &upgrade_lock);
+        let bytes: [u8; 32] = versioned_data.commit().into();
+        NextEpochQuorumCertificate2::new(data, Commitment::from_raw(bytes), view, None, PhantomData)
+    }
+
+    /// `load_consensus_state` refuses an anchor leaf from before the new protocol whose QC
+    /// certifies an epoch transition block without the next epoch's QC over the same data. The
+    /// check does not apply to a block outside the transition, nor when epochs are off.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_load_consensus_state_checks_the_legacy_anchors_next_epoch_qc<
+        P: TestablePersistence,
+    >(
+        _p: PhantomData<P>,
+    ) {
+        const EPOCH_HEIGHT: u64 = 10;
+        let transition_block = EPOCH_HEIGHT;
+        let ordinary_block = 3;
+
+        // (anchor block number, next epoch QC view if any, epoch height or `None` for epochs off,
+        //  loads)
+        let (_, transition_qc) = legacy_anchor(transition_block).await;
+        let cases = [
+            (transition_block, None, Some(EPOCH_HEIGHT), false),
+            (
+                transition_block,
+                Some(transition_qc.view_number + 1),
+                Some(EPOCH_HEIGHT),
+                false,
+            ),
+            (
+                transition_block,
+                Some(transition_qc.view_number),
+                Some(EPOCH_HEIGHT),
+                true,
+            ),
+            (transition_block, None, None, true),
+            (ordinary_block, None, Some(EPOCH_HEIGHT), true),
+        ];
+        for (block_number, next_epoch_qc_view, epoch_height, loads) in cases {
+            let (leaf, qc) = legacy_anchor(block_number).await;
+            let next_epoch_qc = next_epoch_qc_view.map(|view| next_epoch_qc_over(&qc, view));
+            let tmp = P::tmp_storage().await;
+            let storage = P::connect(&tmp).await;
+            storage
+                .append_decided_leaves(
+                    leaf.view_number(),
+                    [(
+                        &leaf_info(leaf.clone()),
+                        CertificatePair::new(qc, next_epoch_qc),
+                    )],
+                    &NullEventConsumer,
+                )
+                .await
+                .unwrap();
+            let node_state = match epoch_height {
+                Some(epoch_height) => NodeState::mock().with_epoch_height(epoch_height),
+                None => NodeState::mock(),
+            };
+
+            let result = storage
+                .load_consensus_state(node_state, Upgrade::trivial(versions::EPOCH_REWARD_VERSION))
+                .await;
+
+            let case = format!(
+                "block {block_number}, next epoch QC at {next_epoch_qc_view:?}, epoch height \
+                 {epoch_height:?}"
+            );
+            match result {
+                Ok((initializer, anchor_view)) => {
+                    assert!(loads, "{case}: loaded, expected a refusal");
+                    assert_eq!(initializer.anchor_leaf(), &leaf, "{case}");
+                    assert_eq!(anchor_view, Some(leaf.view_number()), "{case}");
+                },
+                Err(err) => assert!(!loads, "{case}: refused ({err:#}), expected to load"),
+            }
+        }
     }
 }

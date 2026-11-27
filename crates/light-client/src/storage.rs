@@ -1461,6 +1461,46 @@ mod test {
         assert!(fetched.is_empty());
     }
 
+    /// The cache holds leaves from before the 0.3 upgrade, whose QCs carry no epoch, and the
+    /// first 0.3 leaf, whose justify QC is still pre-epoch, and finds them by height and by hash.
+    #[test_log::test(rstest_reuse::apply(backends))]
+    async fn test_pre_epoch_leaves(#[case] backend: Backend) {
+        use versions::{FEE_VERSION, Upgrade};
+
+        use crate::testing::leaf_chain_with_upgrade;
+
+        let (db, _guard) = backend.open(100).await;
+
+        let leaves =
+            leaf_chain_with_upgrade(0..4, 2, Upgrade::new(FEE_VERSION, EPOCH_VERSION)).await;
+        assert_eq!(leaves[1].header().version(), FEE_VERSION);
+        assert_eq!(leaves[2].header().version(), EPOCH_VERSION);
+        for leaf in &leaves {
+            db.insert_leaf(leaf.clone()).await.unwrap();
+        }
+
+        for leaf in &leaves {
+            let height = leaf.height() as usize;
+            assert_eq!(
+                db.leaf_upper_bound(LeafId::Number(height))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                *leaf,
+                "leaf {height} by height"
+            );
+            assert_eq!(
+                db.leaf_upper_bound(LeafId::Hash(leaf.hash()))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                *leaf,
+                "leaf {height} by hash"
+            );
+        }
+        assert_eq!(db.get_leaves_in_range(0, 4).await.unwrap(), leaves);
+    }
+
     #[test_log::test(rstest_reuse::apply(backends))]
     async fn test_insert_stake_table_idempotent(#[case] backend: Backend) {
         let (db, _guard) = backend.open(100).await;

@@ -104,18 +104,17 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         );
         let qc_epoch = coordinator.epoch_length().epoch_of(leaf.height());
         ensure!(
-            justify_qc.data().epoch == Some(qc_epoch),
-            "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
+            justify_qc.data().epoch == qc_epoch,
+            "justify QC claims epoch {} but certifies the leaf at height {} in epoch {qc_epoch}",
             justify_qc.data().epoch,
             leaf.height()
         );
-        if let Some(block_number) = justify_qc.data().block_number {
-            ensure!(
-                block_number == leaf.height(),
-                "justify QC claims block number {block_number} but certifies the leaf at height {}",
-                leaf.height()
-            );
-        }
+        let block_number = justify_qc.data().block_number;
+        ensure!(
+            block_number == leaf.height(),
+            "justify QC claims block number {block_number} but certifies the leaf at height {}",
+            leaf.height()
+        );
         let membership = coordinator
             .stake_table_for_epoch(qc_epoch)
             .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
@@ -148,10 +147,14 @@ mod test {
     };
     use hotshot_types::{
         PeerConfig,
-        data::{EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment},
+        data::{
+            EpochNumber, Leaf, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+            VidCommitment,
+            history::{HistoricLeaf, PreEpochLeaf},
+        },
         signature_key::{BLSPubKey, SchnorrPubKey},
-        simple_certificate::QuorumCertificate2,
-        simple_vote::{QuorumData2, VersionedVoteData, Vote2Data},
+        simple_certificate::{QuorumCertificate, QuorumCertificate2},
+        simple_vote::{QuorumData, QuorumData2, VersionedVoteData, Vote2Data},
         stake_table::{StakeTableEntry, supermajority_threshold},
         traits::signature_key::SignatureKey,
         utils::{BuilderCommitment, verify_leaf_chain},
@@ -238,6 +241,26 @@ mod test {
         )
     }
 
+    /// A QC from before epochs on `leaf_commit`, signed like [`signed_qc`].
+    fn signed_pre_epoch_qc(
+        leaf_commit: Commitment<Leaf2<TestTypes>>,
+        view: u64,
+        quorum: &Quorum,
+        upgrade_lock: &UpgradeLock<TestTypes>,
+    ) -> QuorumCertificate<TestTypes> {
+        let view = ViewNumber::new(view);
+        let data = QuorumData {
+            leaf_commit: Commitment::from_raw(leaf_commit.into()),
+        };
+        let commit = VersionedVoteData::new_infallible(data.clone(), view, upgrade_lock).commit();
+        QuorumCertificate::create_signed_certificate(
+            commit,
+            data,
+            sign(quorum, commit.as_ref()),
+            view,
+        )
+    }
+
     fn signed_cert2(
         data: Vote2Data<TestTypes>,
         view: u64,
@@ -258,20 +281,9 @@ mod test {
     ) -> Leaf2<TestTypes> {
         Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
             proposal: QuorumProposal2 {
-                block_header: TestBlockHeader {
-                    block_number: height,
-                    payload_commitment: VidCommitment::default(),
-                    builder_commitment: BuilderCommitment::from_bytes([]),
-                    metadata: TestMetadata {
-                        num_transactions: 0,
-                    },
-                    timestamp: 0,
-                    timestamp_millis: 0,
-                    random: 0,
-                    version,
-                },
+                block_header: header(height, version),
                 view_number: ViewNumber::new(view),
-                epoch: Some(EpochNumber::new(epoch)),
+                epoch: EpochNumber::new(epoch),
                 justify_qc,
                 next_epoch_justify_qc: None,
                 upgrade_certificate: None,
@@ -280,6 +292,21 @@ mod test {
                 state_cert: None,
             },
         })
+    }
+
+    fn header(height: u64, version: vbs::version::Version) -> TestBlockHeader {
+        TestBlockHeader {
+            block_number: height,
+            payload_commitment: VidCommitment::default(),
+            builder_commitment: BuilderCommitment::from_bytes([]),
+            metadata: TestMetadata {
+                num_transactions: 0,
+            },
+            timestamp: 0,
+            timestamp_millis: 0,
+            random: 0,
+            version,
+        }
     }
 
     /// A legacy 3-chain deciding the last block of `epoch` (epoch height 10), where consecutive
@@ -295,8 +322,8 @@ mod test {
         let parent_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
-                epoch: Some(EpochNumber::new(epoch)),
-                block_number: Some(last - 1),
+                epoch: EpochNumber::new(epoch),
+                block_number: last - 1,
             },
             last - 1,
             epoch_quorum,
@@ -306,8 +333,8 @@ mod test {
         let last_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Committable::commit(&last_leaf),
-                epoch: Some(EpochNumber::new(epoch)),
-                block_number: Some(last),
+                epoch: EpochNumber::new(epoch),
+                block_number: last,
             },
             last,
             epoch_quorum,
@@ -317,8 +344,8 @@ mod test {
         let boundary_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Committable::commit(&boundary_leaf),
-                epoch: Some(EpochNumber::new(epoch + 1)),
-                block_number: Some(last + 1),
+                epoch: EpochNumber::new(epoch + 1),
+                block_number: last + 1,
             },
             last + 1,
             deciding_quorum,
@@ -336,29 +363,12 @@ mod test {
         epoch_quorum: &Quorum,
         upgrade_lock: &UpgradeLock<TestTypes>,
     ) -> Vec<Leaf2<TestTypes>> {
-        legacy_3_chain(
-            first_height,
-            epoch,
-            Some(EpochNumber::new(epoch)),
-            epoch_quorum,
-            upgrade_lock,
-        )
-    }
-
-    /// Like [`same_epoch_3_chain`], but every QC claims `qc_epoch`, as the QCs formed before
-    /// epochs were enabled claim none.
-    fn legacy_3_chain(
-        first_height: u64,
-        epoch: u64,
-        qc_epoch: Option<EpochNumber>,
-        epoch_quorum: &Quorum,
-        upgrade_lock: &UpgradeLock<TestTypes>,
-    ) -> Vec<Leaf2<TestTypes>> {
+        let qc_epoch = EpochNumber::new(epoch);
         let parent_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
                 epoch: qc_epoch,
-                block_number: Some(first_height - 1),
+                block_number: first_height - 1,
             },
             first_height - 1,
             epoch_quorum,
@@ -376,13 +386,38 @@ mod test {
                 QuorumData2 {
                     leaf_commit: Committable::commit(chain.last().unwrap()),
                     epoch: qc_epoch,
-                    block_number: Some(height - 1),
+                    block_number: height - 1,
                 },
                 height - 1,
                 epoch_quorum,
                 upgrade_lock,
             );
             chain.push(make_leaf(height, height, epoch, qc, EPOCH_VERSION));
+        }
+        chain
+    }
+
+    /// A self-consistent 3-chain of leaves from before epochs starting at `first_height`, with
+    /// every QC signed by `epoch_quorum`. Like all QCs formed before epochs, they claim no epoch.
+    fn pre_epoch_3_chain(
+        first_height: u64,
+        epoch_quorum: &Quorum,
+        upgrade_lock: &UpgradeLock<TestTypes>,
+    ) -> Vec<HistoricLeaf<TestTypes>> {
+        let mut parent_commit = Commitment::from_raw([9; 32]);
+        let mut chain = vec![];
+        for height in first_height..first_height + 3 {
+            let justify_qc =
+                signed_pre_epoch_qc(parent_commit, height - 1, epoch_quorum, upgrade_lock);
+            let leaf = PreEpochLeaf::from(Leaf::from_quorum_proposal(&QuorumProposal {
+                block_header: header(height, EPOCH_VERSION),
+                view_number: ViewNumber::new(height),
+                justify_qc,
+                upgrade_certificate: None,
+                proposal_certificate: None,
+            }));
+            parent_commit = leaf.commit();
+            chain.push(leaf.into());
         }
         chain
     }
@@ -402,7 +437,7 @@ mod test {
         let leaf = verify_leaf_chain(chain, &coordinator, 10, &upgrade_lock)
             .await
             .unwrap();
-        assert_eq!(Committable::commit(&leaf), expected);
+        assert_eq!(leaf.commit(), expected);
     }
 
     /// A QC claiming epoch 2 in its signed payload but signed by epoch 1's quorum must fail
@@ -468,14 +503,14 @@ mod test {
         let quorum2 = quorum(5..10);
         let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
 
-        let chain = legacy_3_chain(3, 1, None, &quorum1, &upgrade_lock);
-        let expected = Committable::commit(&chain[0]);
+        let chain = pre_epoch_3_chain(3, &quorum1, &upgrade_lock);
+        let expected = chain[0].commit();
 
         let coordinator = coordinator(&quorum1, &quorum2);
         let leaf = verify_leaf_chain(chain, &coordinator, 3, &upgrade_lock)
             .await
             .unwrap();
-        assert_eq!(Committable::commit(&leaf), expected);
+        assert_eq!(leaf.commit(), expected);
     }
 
     /// A QC claiming no epoch is still checked against the genesis quorum's signatures.
@@ -485,7 +520,7 @@ mod test {
         let quorum2 = quorum(5..10);
         let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
 
-        let chain = legacy_3_chain(3, 1, None, &quorum2, &upgrade_lock);
+        let chain = pre_epoch_3_chain(3, &quorum2, &upgrade_lock);
 
         let coordinator = coordinator(&quorum1, &quorum2);
         verify_leaf_chain(chain, &coordinator, 3, &upgrade_lock)
@@ -501,7 +536,7 @@ mod test {
         let quorum2 = quorum(5..10);
         let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
 
-        let chain = legacy_3_chain(13, 2, None, &quorum1, &upgrade_lock);
+        let chain = pre_epoch_3_chain(13, &quorum1, &upgrade_lock);
 
         let coordinator = coordinator(&quorum1, &quorum2);
         let err = verify_leaf_chain(chain, &coordinator, 13, &upgrade_lock)
@@ -522,8 +557,8 @@ mod test {
         let parent_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
-                epoch: Some(EpochNumber::new(epoch)),
-                block_number: Some(last - 1),
+                epoch: EpochNumber::new(epoch),
+                block_number: last - 1,
             },
             last - 1,
             epoch_quorum,
@@ -533,8 +568,8 @@ mod test {
         let last_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Committable::commit(&last_leaf),
-                epoch: Some(EpochNumber::new(epoch)),
-                block_number: Some(last),
+                epoch: EpochNumber::new(epoch),
+                block_number: last,
             },
             last,
             epoch_quorum,
@@ -621,8 +656,8 @@ mod test {
         let parent_qc = signed_qc(
             QuorumData2 {
                 leaf_commit: Commitment::from_raw([9; 32]),
-                epoch: Some(EpochNumber::new(epoch)),
-                block_number: Some(last - 1),
+                epoch: EpochNumber::new(epoch),
+                block_number: last - 1,
             },
             last - 1,
             epoch_quorum,

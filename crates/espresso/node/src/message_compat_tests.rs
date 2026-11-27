@@ -337,7 +337,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 encoded_transactions: payload.encode(),
                 metadata,
                 view_number: ViewNumber::genesis(),
-                epoch: Some(EpochNumber::genesis()),
+                epoch: EpochNumber::genesis(),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: signature.clone(),
@@ -470,8 +470,8 @@ async fn reference_new_protocol_messages(
     // the vector pins the `Some((signature, signers))` encoding rather than the `None` case.
     let quorum_data = QuorumData2::<SeqTypes> {
         leaf_commit,
-        epoch: Some(epoch),
-        block_number: Some(0),
+        epoch,
+        block_number: 0,
     };
     let cert1: Certificate1<SeqTypes> = SimpleCertificate::new(
         quorum_data,
@@ -500,10 +500,7 @@ async fn reference_new_protocol_messages(
         )),
         Default::default(),
     );
-    let timeout_data = TimeoutData2 {
-        view,
-        epoch: Some(epoch),
-    };
+    let timeout_data = TimeoutData2 { view, epoch };
     let timeout_cert: TimeoutCertificate2<SeqTypes> = SimpleCertificate::new(
         timeout_data.clone(),
         timeout_data.commit(),
@@ -666,7 +663,7 @@ async fn reference_new_protocol_messages(
         &membership,
         view,
         epoch,
-        Some(epoch),
+        epoch,
         &metadata,
     )
     .await
@@ -686,8 +683,8 @@ async fn reference_new_protocol_messages(
     let payload_commitment = vid_share.payload_commitment;
     let vid_fragment = AvidmGf2DisperseShareFragment::<SeqTypes> {
         view_number: view,
-        epoch: Some(epoch),
-        target_epoch: Some(epoch),
+        epoch,
+        target_epoch: epoch,
         payload_commitment: vid_share.payload_commitment,
         recipient_key: params.recipients[0],
         param: params.param.clone(),

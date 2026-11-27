@@ -2,21 +2,23 @@ use std::{future::Future, sync::Arc};
 
 use alloy::primitives::U256;
 use anyhow::{Context, Result, bail, ensure};
-use committable::Committable;
-use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
+use espresso_types::{Certificate2, PubKey, SeqTypes};
 use hotshot_types::{
-    data::ViewNumber,
+    data::{
+        ViewNumber,
+        history::{HistoricCertificatePair, HistoricLeaf},
+    },
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
     stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
-    vote::{self, HasViewNumber},
+    vote,
 };
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
 use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, Upgrade, version};
 
-pub type Certificate = CertificatePair<SeqTypes>;
+pub type Certificate = HistoricCertificatePair<SeqTypes>;
 
 pub trait Quorum: Sync {
     /// Check a threshold signature on a quorum certificate.
@@ -152,7 +154,7 @@ pub trait Quorum: Sync {
     /// This check forms the bulk of the commit rule for both HotStuff and HotStuff2.
     fn verify_qc_chain_and_get_version<'a>(
         &self,
-        leaf: &Leaf2,
+        leaf: &HistoricLeaf<SeqTypes>,
         certs: impl Send + IntoIterator<Item = &'a Certificate, IntoIter: Send>,
     ) -> impl Send + Future<Output = Result<ChainVersions>> {
         let span = tracing::trace_span!(
@@ -211,7 +213,10 @@ pub trait Quorum: Sync {
                 // to its epoch in the signed payload, so dispatching on it is sound: a certificate
                 // claiming the wrong epoch will fail signature verification.
                 let committing = first.unwrap_or(cert);
-                let next_epoch = match (committing.epoch(), cert.epoch()) {
+                let next_epoch = match (
+                    committing.as_certificate_pair().map(CertificatePair::epoch),
+                    cert.as_certificate_pair().map(CertificatePair::epoch),
+                ) {
                     // Certificates from before the epochs upgrade are always checked against the
                     // quorum supplied for this proof.
                     (None, _) | (_, None) => false,
@@ -222,7 +227,9 @@ pub trait Quorum: Sync {
                         // `verify` has already checked against the next epoch's quorum. Requiring
                         // that here stops the next epoch's quorum from finalizing an interior leaf
                         // of the previous epoch, which it never co-signed.
-                        committing.next_epoch_qc().is_some()
+                        committing
+                            .as_certificate_pair()
+                            .is_some_and(|pair| pair.next_epoch_qc().is_some())
                     },
                     (Some(leaf_epoch), Some(cert_epoch)) => {
                         bail!(
@@ -412,6 +419,21 @@ where
         cert: &Certificate,
     ) -> Result<()> {
         let stake_table = self.membership.stake_table().await?;
+        let cert = match cert {
+            HistoricCertificatePair::Epoch(pair) => pair,
+            HistoricCertificatePair::PreEpoch(qc) => {
+                stake_table
+                    .verify_cert::<V, _>(qc)
+                    .await
+                    .context("verifying QC")?;
+                // An epoch version checks the QC's block number, which a pre-epoch QC lacks.
+                ensure!(
+                    version(V::MAJOR, V::MINOR) < EPOCH_VERSION,
+                    "pre-epoch QC in a chain with epochs"
+                );
+                return Ok(());
+            },
+        };
         stake_table
             .verify_cert::<V, _>(cert.qc())
             .await
@@ -457,16 +479,28 @@ where
         cert: &Certificate,
     ) -> Result<()> {
         let stake_table = self.membership.next_epoch_stake_table().await?;
-        stake_table
-            .verify_cert::<V, _>(cert.qc())
-            .await
-            .context("verifying QC against next epoch quorum")?;
+        let next_epoch_qc = match cert {
+            HistoricCertificatePair::Epoch(pair) => {
+                stake_table
+                    .verify_cert::<V, _>(pair.qc())
+                    .await
+                    .context("verifying QC against next epoch quorum")?;
+                pair.next_epoch_qc()
+            },
+            HistoricCertificatePair::PreEpoch(qc) => {
+                stake_table
+                    .verify_cert::<V, _>(qc)
+                    .await
+                    .context("verifying QC against next epoch quorum")?;
+                None
+            },
+        };
 
         // A certificate from the epoch after the proof's epoch is never itself part of an epoch
         // transition (transition certificates belong to the epoch that is ending), so there is no
         // second next-epoch QC to check.
         ensure!(
-            cert.next_epoch_qc().is_none(),
+            next_epoch_qc.is_none(),
             "unexpected next-epoch QC on a certificate from the next epoch"
         );
 
@@ -483,13 +517,18 @@ mod test {
     use std::marker::PhantomData;
 
     use bitvec::vec::BitVec;
-    use committable::Commitment;
+    use committable::{Commitment, Committable};
     use espresso_types::PrivKey;
     use hotshot_query_service_types::availability::LeafQueryData;
     use hotshot_types::{
-        data::{EpochNumber, ViewNumber},
-        simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
-        simple_vote::{NextEpochQuorumData2, QuorumData2, VersionedVoteData, Vote2Data},
+        data::{
+            EpochNumber, ViewNumber,
+            history::{PreEpochQuorumCertificate, PreEpochQuorumData},
+        },
+        simple_certificate::{NextEpochQuorumCertificate2, SimpleCertificate, SuccessThreshold},
+        simple_vote::{
+            NextEpochQuorumData2, QuorumData2, QuorumMarker, VersionedVoteData, Vote2Data, Voteable,
+        },
         traits::signature_key::SignatureKey,
         vote::Certificate as _,
     };
@@ -643,7 +682,7 @@ mod test {
             custom_epoch_change_leaf_chain(EPOCH_END, EPOCH_HEIGHT, EPOCH_VERSION, |proposal| {
                 // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
                 if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
-                    *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
+                    next_epoch_justify_qc.data.block_number += 1;
                 }
             })
             .await;
@@ -714,12 +753,12 @@ mod test {
         )
     }
 
-    fn boundary_signed_qc(
-        data: QuorumData2<SeqTypes>,
+    fn boundary_signed_qc<D: Voteable<SeqTypes> + QuorumMarker + Copy + 'static>(
+        data: D,
         view: ViewNumber,
         quorum: &QuorumKeys,
         version: Version,
-    ) -> QuorumCertificate2<SeqTypes> {
+    ) -> SimpleCertificate<SeqTypes, D, SuccessThreshold> {
         let commit = VersionedVoteData::new_infallible(
             data,
             view,
@@ -727,7 +766,7 @@ mod test {
         )
         .commit();
         let sig = boundary_signature(commit.as_ref(), quorum);
-        QuorumCertificate2::create_signed_certificate(commit, data, sig, view)
+        SimpleCertificate::create_signed_certificate(commit, data, sig, view)
     }
 
     fn boundary_signed_next_epoch_qc(
@@ -772,11 +811,11 @@ mod test {
 
         // Block 10 is an epoch transition block, so its QC is dual-signed by both quorums.
         let committing_data = QuorumData2 {
-            leaf_commit: Committable::commit(leaves[1].leaf()),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(10),
+            leaf_commit: leaves[1].leaf().commit(),
+            epoch: EpochNumber::new(1),
+            block_number: 10,
         };
-        let committing_qc = Certificate::new(
+        let committing_qc = Certificate::from(CertificatePair::new(
             boundary_signed_qc(
                 committing_data,
                 ViewNumber::new(10),
@@ -788,23 +827,23 @@ mod test {
                 ViewNumber::new(10),
                 &next,
             )),
-        );
+        ));
 
         let deciding_quorum = if deciding_signed_by_next {
             &next
         } else {
             &current
         };
-        let deciding_qc = Certificate::non_epoch_change(boundary_signed_qc(
+        let deciding_qc = Certificate::from(CertificatePair::non_epoch_change(boundary_signed_qc(
             QuorumData2 {
-                leaf_commit: Committable::commit(leaves[2].leaf()),
-                epoch: Some(EpochNumber::new(2)),
-                block_number: Some(11),
+                leaf_commit: leaves[2].leaf().commit(),
+                epoch: EpochNumber::new(2),
+                block_number: 11,
             },
             ViewNumber::new(11),
             deciding_quorum,
             EPOCH_VERSION,
-        ));
+        )));
 
         let quorum = StakeTableQuorum::new(
             (
@@ -859,26 +898,26 @@ mod test {
         let leaves = leaf_chain(4..=6, EPOCH_VERSION).await;
 
         let committing_data = QuorumData2 {
-            leaf_commit: Committable::commit(leaves[1].leaf()),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(5),
+            leaf_commit: leaves[1].leaf().commit(),
+            epoch: EpochNumber::new(1),
+            block_number: 5,
         };
-        let committing_qc = Certificate::new(
+        let committing_qc = Certificate::from(CertificatePair::new(
             boundary_signed_qc(committing_data, ViewNumber::new(5), &current, EPOCH_VERSION),
             disguise_as_boundary
                 .then(|| boundary_signed_next_epoch_qc(committing_data, ViewNumber::new(5), &next)),
-        );
+        ));
 
-        let deciding_qc = Certificate::non_epoch_change(boundary_signed_qc(
+        let deciding_qc = Certificate::from(CertificatePair::non_epoch_change(boundary_signed_qc(
             QuorumData2 {
-                leaf_commit: Committable::commit(leaves[2].leaf()),
-                epoch: Some(EpochNumber::new(2)),
-                block_number: Some(6),
+                leaf_commit: leaves[2].leaf().commit(),
+                epoch: EpochNumber::new(2),
+                block_number: 6,
             },
             ViewNumber::new(6),
             &next,
             EPOCH_VERSION,
-        ));
+        )));
 
         let quorum = StakeTableQuorum::new(
             (
@@ -956,12 +995,10 @@ mod test {
         let quorum = StakeTableQuorum::new((stake_table.clone(), stake_table), 10);
 
         let leaf = &leaf_chain(1..=1, LEGACY_VERSION).await[0];
-        let unsigned = QuorumData2 {
-            leaf_commit: Committable::commit(leaf.leaf()),
-            epoch: None,
-            block_number: None,
+        let unsigned = PreEpochQuorumData {
+            leaf_commit: leaf.leaf().commit(),
         };
-        let forged = Certificate::non_epoch_change(QuorumCertificate2::new(
+        let forged = Certificate::PreEpoch(PreEpochQuorumCertificate::new(
             unsigned,
             unsigned.commit(),
             ViewNumber::genesis(),
@@ -969,12 +1006,10 @@ mod test {
             PhantomData,
         ));
         let [real_1, real_2] = [1, 2].map(|view| {
-            let data = QuorumData2 {
+            let data = PreEpochQuorumData {
                 leaf_commit: Commitment::from_raw([view as u8; 32]),
-                epoch: None,
-                block_number: None,
             };
-            Certificate::non_epoch_change(boundary_signed_qc(
+            Certificate::PreEpoch(boundary_signed_qc(
                 data,
                 ViewNumber::new(view),
                 &keys,
@@ -1006,9 +1041,11 @@ mod test {
         let qcs = qc_chain_from_leaf_chain(&leaves[1..])
             .into_iter()
             .map(|cert| {
-                let mut qc = cert.qc().clone();
+                let Certificate::PreEpoch(mut qc) = cert else {
+                    panic!("a legacy chain has pre-epoch QCs");
+                };
                 qc.view_number += 10;
-                Certificate::non_epoch_change(qc)
+                Certificate::PreEpoch(qc)
             })
             .collect::<Vec<_>>();
         let err = AlwaysTrueQuorum::new(LEAF_CHAIN_EPOCH_HEIGHT)

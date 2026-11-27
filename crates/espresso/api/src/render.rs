@@ -33,7 +33,14 @@ use hotshot_query_service_types::{
 };
 use hotshot_types::{
     HotShotConfig, PeerConfig,
-    data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
+    data::{
+        Leaf2, VidCommon, VidShare, ViewChangeEvidence2,
+        history::{
+            HistoricCertificatePair, HistoricLeaf, HistoricQuorumCertificate, PreEpochLeaf,
+            PreEpochQuorumCertificate, PreEpochTimeoutCertificate, PreEpochViewChangeEvidence,
+            PreEpochViewSyncFinalizeCertificate,
+        },
+    },
     light_client::LCV3StateSignatureRequestBody,
     network::BuilderType,
     simple_certificate::{
@@ -561,8 +568,8 @@ impl From<&[BlockSummaryQueryData<SeqTypes>]> for proto::BlockSummaryRangeRespon
     }
 }
 
-impl From<&[Leaf2<SeqTypes>]> for proto::CatchupLeafChainResponse {
-    fn from(leaves: &[Leaf2<SeqTypes>]) -> Self {
+impl From<&[HistoricLeaf<SeqTypes>]> for proto::CatchupLeafChainResponse {
+    fn from(leaves: &[HistoricLeaf<SeqTypes>]) -> Self {
         proto::CatchupLeafChainResponse {
             leaves: leaves.iter().map(Into::into).collect(),
         }
@@ -863,8 +870,8 @@ impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
     fn from(data: &QuorumData2<SeqTypes>) -> Self {
         proto::QuorumData2 {
             leaf_commit: data.leaf_commit.to_string(),
-            epoch: data.epoch.map(|epoch| epoch.u64()),
-            block_number: data.block_number,
+            epoch: Some(data.epoch.u64()),
+            block_number: Some(data.block_number),
         }
     }
 }
@@ -884,11 +891,46 @@ where
     }
 }
 
+impl From<&HistoricQuorumCertificate<SeqTypes>> for proto::QuorumCertificate2 {
+    fn from(qc: &HistoricQuorumCertificate<SeqTypes>) -> Self {
+        match qc {
+            HistoricQuorumCertificate::Epoch(qc) => qc.into(),
+            HistoricQuorumCertificate::PreEpoch(qc) => pre_epoch_qc(qc),
+        }
+    }
+}
+
+/// A pre-epoch QC as the API publishes every QC: its data has no epoch and no block number.
+fn pre_epoch_qc(cert: &PreEpochQuorumCertificate<SeqTypes>) -> proto::QuorumCertificate2 {
+    proto::QuorumCertificate2 {
+        data: Some(proto::QuorumData2 {
+            leaf_commit: cert.data.leaf_commit.to_string(),
+            epoch: None,
+            block_number: None,
+        }),
+        vote_commitment: cert.vote_commitment().to_string(),
+        view_number: cert.view_number.u64(),
+        signatures: quorum_signatures(cert),
+    }
+}
+
 impl From<&CertificatePair<SeqTypes>> for proto::CertificatePair {
     fn from(pair: &CertificatePair<SeqTypes>) -> Self {
         proto::CertificatePair {
             qc: Some(pair.qc().into()),
             next_epoch_qc: pair.next_epoch_qc().map(Into::into),
+        }
+    }
+}
+
+impl From<&HistoricCertificatePair<SeqTypes>> for proto::CertificatePair {
+    fn from(pair: &HistoricCertificatePair<SeqTypes>) -> Self {
+        match pair {
+            HistoricCertificatePair::Epoch(pair) => pair.into(),
+            HistoricCertificatePair::PreEpoch(qc) => proto::CertificatePair {
+                qc: Some(pre_epoch_qc(qc)),
+                next_epoch_qc: None,
+            },
         }
     }
 }
@@ -955,7 +997,7 @@ impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
         proto::TimeoutCertificate2 {
             data: Some(proto::TimeoutData2 {
                 view: cert.data.view.u64(),
-                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+                epoch: Some(cert.data.epoch.u64()),
             }),
             vote_commitment: cert.vote_commitment().to_string(),
             view_number: cert.view_number.u64(),
@@ -989,6 +1031,50 @@ impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
 
 impl From<&ViewSyncFinalizeCertificate2<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
     fn from(cert: &ViewSyncFinalizeCertificate2<SeqTypes>) -> Self {
+        proto::ViewSyncFinalizeCertificate2 {
+            data: Some(proto::ViewSyncFinalizeData2 {
+                relay: cert.data.relay,
+                round: cert.data.round.u64(),
+                epoch: Some(cert.data.epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&PreEpochViewChangeEvidence<SeqTypes>> for proto::ViewChangeEvidence2 {
+    fn from(evidence: &PreEpochViewChangeEvidence<SeqTypes>) -> Self {
+        use proto::view_change_evidence2::Evidence;
+
+        let evidence = match evidence {
+            PreEpochViewChangeEvidence::Timeout(cert) => Evidence::Timeout(cert.into()),
+            PreEpochViewChangeEvidence::Timeout3(cert) => Evidence::Timeout3(cert.into()),
+            PreEpochViewChangeEvidence::ViewSync(cert) => Evidence::ViewSync(cert.into()),
+        };
+        proto::ViewChangeEvidence2 {
+            evidence: Some(evidence),
+        }
+    }
+}
+
+impl From<&PreEpochTimeoutCertificate<SeqTypes>> for proto::TimeoutCertificate2 {
+    fn from(cert: &PreEpochTimeoutCertificate<SeqTypes>) -> Self {
+        proto::TimeoutCertificate2 {
+            data: Some(proto::TimeoutData2 {
+                view: cert.data.view.u64(),
+                epoch: cert.data.epoch.map(|epoch| epoch.u64()),
+            }),
+            vote_commitment: cert.vote_commitment().to_string(),
+            view_number: cert.view_number.u64(),
+            signatures: quorum_signatures(cert),
+        }
+    }
+}
+
+impl From<&PreEpochViewSyncFinalizeCertificate<SeqTypes>> for proto::ViewSyncFinalizeCertificate2 {
+    fn from(cert: &PreEpochViewSyncFinalizeCertificate<SeqTypes>) -> Self {
         proto::ViewSyncFinalizeCertificate2 {
             data: Some(proto::ViewSyncFinalizeData2 {
                 relay: cert.data.relay,
@@ -1029,6 +1115,35 @@ impl From<&Leaf2<SeqTypes>> for proto::Leaf2 {
                 .map(|result| result.to_vec())
                 .unwrap_or_default(),
             with_epoch: leaf.with_epoch,
+        }
+    }
+}
+
+impl From<&PreEpochLeaf<SeqTypes>> for proto::Leaf2 {
+    fn from(leaf: &PreEpochLeaf<SeqTypes>) -> Self {
+        proto::Leaf2 {
+            view_number: leaf.view_number().u64(),
+            justify_qc: Some(pre_epoch_qc(leaf.justify_qc())),
+            next_epoch_justify_qc: leaf.next_epoch_justify_qc().map(Into::into),
+            parent_commitment: leaf.parent_commitment().to_string(),
+            block_header: Some(leaf.block_header().into()),
+            upgrade_certificate: leaf.upgrade_certificate().map(Into::into),
+            block_payload: leaf.block_payload_ref().map(Into::into),
+            view_change_evidence: leaf.view_change_evidence().map(Into::into),
+            next_drb_result: leaf
+                .next_drb_result()
+                .map(|result| result.to_vec())
+                .unwrap_or_default(),
+            with_epoch: leaf.with_epoch(),
+        }
+    }
+}
+
+impl From<&HistoricLeaf<SeqTypes>> for proto::Leaf2 {
+    fn from(leaf: &HistoricLeaf<SeqTypes>) -> Self {
+        match leaf {
+            HistoricLeaf::Epoch(leaf) => leaf.into(),
+            HistoricLeaf::PreEpoch(leaf) => leaf.into(),
         }
     }
 }

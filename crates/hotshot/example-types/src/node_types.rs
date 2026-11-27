@@ -303,7 +303,7 @@ mod tests {
     fn timeout_cert_v2() -> TimeoutCertificate2<TestTypes> {
         let data = TimeoutData2 {
             view: ViewNumber::new(7),
-            epoch: Some(EpochNumber::new(1)),
+            epoch: EpochNumber::new(1),
         };
         SimpleCertificate::new(
             data.clone(),

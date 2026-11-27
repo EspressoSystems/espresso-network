@@ -33,11 +33,10 @@ use hotshot_query_service::{
     status::HasMetrics as _,
 };
 use hotshot_types::{
-    data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
+    data::{EpochNumber, QuorumProposalWrapper, ViewNumber, history::HistoricLeaf},
     message::Proposal,
     traits::{ValidatedState as _, election::MembershipSnapshot, metrics::Metrics},
     utils::{epoch_from_block_number, is_last_block},
-    vote::HasViewNumber,
 };
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -849,7 +848,7 @@ impl CatchupStorage for SqlStorage {
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+    ) -> anyhow::Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)> {
         let mut tx = self.read().await.context(format!(
             "opening transaction to fetch v1 reward account {accounts:?}; height {height}"
         ))?;
@@ -883,7 +882,7 @@ impl CatchupStorage for SqlStorage {
                 &accounts,
             )
             .await?;
-            Ok((state.reward_merkle_tree_v1, leaf))
+            Ok((state.reward_merkle_tree_v1, leaf.into()))
         }
     }
 
@@ -893,7 +892,7 @@ impl CatchupStorage for SqlStorage {
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+    ) -> anyhow::Result<(RewardMerkleTreeV2, HistoricLeaf<SeqTypes>)> {
         let mut tx = self.read().await.context(format!(
             "opening transaction to fetch reward account {accounts:?}; height {height}"
         ))?;
@@ -925,7 +924,7 @@ impl CatchupStorage for SqlStorage {
                 accounts,
             )
             .await?;
-            Ok((state.reward_merkle_tree_v2, leaf))
+            Ok((state.reward_merkle_tree_v2, leaf.into()))
         }
     }
 
@@ -935,7 +934,7 @@ impl CatchupStorage for SqlStorage {
         height: u64,
         view: ViewNumber,
         accounts: &[FeeAccount],
-    ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+    ) -> anyhow::Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)> {
         let mut tx = self.read().await.context(format!(
             "opening transaction to fetch account {accounts:?}; height {height}"
         ))?;
@@ -965,7 +964,7 @@ impl CatchupStorage for SqlStorage {
                 &[],
             )
             .await?;
-            Ok((state.fee_merkle_tree, leaf))
+            Ok((state.fee_merkle_tree, leaf.into()))
         }
     }
 
@@ -1043,12 +1042,12 @@ impl CatchupStorage for SqlStorage {
         load_chain_config(&mut tx, commitment).await
     }
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         let mut tx = self
             .read()
             .await
             .context(format!("opening transaction to fetch leaf at {height}"))?;
-        let leaf: Leaf2 = tx
+        let leaf: HistoricLeaf<SeqTypes> = tx
             .get_leaf((height as usize).into())
             .await
             .context(format!("leaf {height} not available"))?
@@ -1123,7 +1122,7 @@ impl CatchupStorage for SqlStorage {
         Ok(tx.load_cert2(height).await?)
     }
 
-    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         let mut tx = self
             .read()
             .await
@@ -1244,8 +1243,7 @@ mod request_storage {
 
     use async_trait::async_trait;
     use espresso_types::{
-        BlockMerkleTree, Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Header, Leaf2,
-        NodeState,
+        BlockMerkleTree, Certificate2, ChainConfig, FeeAccount, FeeMerkleTree, Header, NodeState,
         v0_3::{RewardAccountV1, RewardMerkleTreeV1},
         v0_4::{RewardAccountV2, RewardMerkleTreeV2},
     };
@@ -1262,7 +1260,7 @@ mod request_storage {
         node::BlockId,
         serializable_retry,
     };
-    use hotshot_types::data::{VidShare, ViewNumber};
+    use hotshot_types::data::{VidShare, ViewNumber, history::HistoricLeaf};
     use jf_merkle_tree_compat::MerkleTreeScheme as _;
     use light_client::consensus::header::HeaderProof;
 
@@ -1285,7 +1283,7 @@ mod request_storage {
             height: u64,
             view: ViewNumber,
             accounts: &[FeeAccount],
-        ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+        ) -> anyhow::Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)> {
             CatchupStorage::get_accounts(self, instance, height, view, accounts).await
         }
 
@@ -1295,7 +1293,7 @@ mod request_storage {
             height: u64,
             view: ViewNumber,
             accounts: &[RewardAccountV1],
-        ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+        ) -> anyhow::Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)> {
             CatchupStorage::get_reward_accounts_v1(self, instance, height, view, accounts).await
         }
 
@@ -1305,7 +1303,7 @@ mod request_storage {
             height: u64,
             view: ViewNumber,
             accounts: &[RewardAccountV2],
-        ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+        ) -> anyhow::Result<(RewardMerkleTreeV2, HistoricLeaf<SeqTypes>)> {
             CatchupStorage::get_reward_accounts_v2(self, instance, height, view, accounts).await
         }
 
@@ -1325,7 +1323,7 @@ mod request_storage {
             CatchupStorage::get_chain_config(self, commitment).await
         }
 
-        async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
             CatchupStorage::get_leaf_chain(self, height).await
         }
 
@@ -1405,7 +1403,7 @@ impl CatchupStorage for DataSource {
         height: u64,
         view: ViewNumber,
         accounts: &[FeeAccount],
-    ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+    ) -> anyhow::Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)> {
         self.as_ref()
             .get_accounts(instance, height, view, accounts)
             .await
@@ -1426,7 +1424,7 @@ impl CatchupStorage for DataSource {
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV2],
-    ) -> anyhow::Result<(RewardMerkleTreeV2, Leaf2)> {
+    ) -> anyhow::Result<(RewardMerkleTreeV2, HistoricLeaf<SeqTypes>)> {
         self.as_ref()
             .get_reward_accounts_v2(instance, height, view, accounts)
             .await
@@ -1438,7 +1436,7 @@ impl CatchupStorage for DataSource {
         height: u64,
         view: ViewNumber,
         accounts: &[RewardAccountV1],
-    ) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+    ) -> anyhow::Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)> {
         self.as_ref()
             .get_reward_accounts_v1(instance, height, view, accounts)
             .await
@@ -1467,7 +1465,7 @@ impl CatchupStorage for DataSource {
     ) -> anyhow::Result<ChainConfig> {
         self.as_ref().get_chain_config(commitment).await
     }
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<HistoricLeaf<SeqTypes>>> {
         self.as_ref().get_leaf_chain(height).await
     }
 
@@ -1478,7 +1476,7 @@ impl CatchupStorage for DataSource {
         self.as_ref().load_cert2(height).await
     }
 
-    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<HistoricLeaf<SeqTypes>> {
         self.as_ref().get_leaf(height).await
     }
 
@@ -1736,7 +1734,7 @@ async fn load_v1_reward_accounts(
     db: &SqlStorage,
     height: u64,
     accounts: &[RewardAccountV1],
-) -> anyhow::Result<(RewardMerkleTreeV1, Leaf2)> {
+) -> anyhow::Result<(RewardMerkleTreeV1, HistoricLeaf<SeqTypes>)> {
     // Open a new read transaction to get the leaf
     let mut tx = db
         .read()
@@ -1843,7 +1841,7 @@ async fn load_v1_reward_accounts(
 async fn load_reward_merkle_tree_v2(
     db: &SqlStorage,
     height: u64,
-) -> anyhow::Result<(PermittedRewardMerkleTreeV2, Leaf2)> {
+) -> anyhow::Result<(PermittedRewardMerkleTreeV2, HistoricLeaf<SeqTypes>)> {
     // Open a new read transaction to get the leaf
     let mut tx = db
         .read()
@@ -1865,7 +1863,7 @@ async fn load_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
     accounts: &[FeeAccount],
-) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
+) -> anyhow::Result<(FeeMerkleTree, HistoricLeaf<SeqTypes>)> {
     let leaf = tx
         .get_leaf(LeafId::<SeqTypes>::from(height as usize))
         .await
@@ -1948,7 +1946,12 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         .get_leaf((from_height as usize).into())
         .await
         .context(format!("leaf {from_height} not available"))?;
-    let from_leaf: Leaf2 = from_leaf.leaf().clone();
+    let from_leaf: Leaf2 = from_leaf.leaf().clone().into_leaf2().with_context(|| {
+        format!(
+            "state reconstruction cannot start from leaf {from_height}, whose justify QC is from \
+             before epochs"
+        )
+    })?;
     ensure!(
         from_leaf.view_number() < to_view,
         "state reconstruction: starting state {:?} must be before ending state {to_view:?}",

@@ -1006,7 +1006,7 @@ async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
 /// leader lookup and share verification for `epoch`, the erasure parameters the
 /// reconstructor holds every peer's share to for `target_epoch`. An honest
 /// disperser sends them equal, so a fragment that lets them diverge is
-/// malformed — as is one that names no epoch at all.
+/// malformed.
 #[tokio::test]
 async fn fragment_accumulator_rejects_diverging_epochs() {
     let test_data = TestData::new(1).await;
@@ -1018,18 +1018,10 @@ async fn fragment_accumulator_rejects_diverging_epochs() {
     let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
 
     let mut diverging = template.clone();
-    diverging.target_epoch = diverging.epoch.map(|e| e + 1);
+    diverging.target_epoch = diverging.epoch + 1;
     assert!(matches!(
         accumulator.accept(&disperser_key(), diverging),
         Err(VidFragmentError::TargetEpochMismatch { .. })
-    ));
-
-    let mut no_epoch = template;
-    no_epoch.epoch = None;
-    no_epoch.target_epoch = None;
-    assert!(matches!(
-        accumulator.accept(&disperser_key(), no_epoch),
-        Err(VidFragmentError::MissingEpoch)
     ));
 }
 
@@ -1082,7 +1074,7 @@ async fn fragment_accumulator_keeps_epochs_apart() {
     let view = &test_data.views[0];
     let share = multi_namespace_share(view, 0, 2);
     let mut next_epoch_share = share.clone();
-    next_epoch_share.epoch = share.epoch.map(|e| e + 1);
+    next_epoch_share.epoch = share.epoch + 1;
     next_epoch_share.target_epoch = next_epoch_share.epoch;
     let mut fragments = vid_fragments(&share).collect::<Vec<_>>().into_iter();
     let mut next_epoch_fragments = vid_fragments(&next_epoch_share)

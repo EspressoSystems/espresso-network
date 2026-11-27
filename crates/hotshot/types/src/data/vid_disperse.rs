@@ -52,19 +52,19 @@ use crate::{
 
 impl<NODE: NodeType> HasEpoch for AvidMDisperseShare<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for AvidmGf2Disperse<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for AvidmGf2DisperseShare<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
@@ -220,9 +220,11 @@ pub struct AvidMDisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
     pub view_number: ViewNumber,
     /// The epoch number for which this VID data belongs to
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// The epoch number to which the recipient of this VID belongs to
-    pub target_epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub target_epoch: EpochNumber,
     /// Block payload commitment
     pub payload_commitment: AvidMCommitment,
     /// A storage node's key and its corresponding VID share
@@ -289,9 +291,11 @@ pub struct AvidmGf2Disperse<TYPES: NodeType> {
     /// The view number for which this VID data is intended
     pub view_number: ViewNumber,
     /// Epoch the data of this proposal belongs to
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// Epoch to which the recipients of this VID belong to
-    pub target_epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub target_epoch: EpochNumber,
     /// VidCommitment calculated based on the number of nodes in `target_epoch`.
     pub payload_commitment: AvidmGf2Commitment,
     /// A storage node's key and its corresponding VID share
@@ -319,7 +323,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         common: AvidmGf2Common,
         membership: &EpochMembership<TYPES>,
         target_epoch: EpochNumber,
-        data_epoch: Option<EpochNumber>,
+        data_epoch: EpochNumber,
     ) -> Result<Self> {
         let payload_byte_len = common.payload_byte_len();
         let shares = membership
@@ -336,7 +340,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             shares,
             payload_commitment: commit,
             epoch: data_epoch,
-            target_epoch: Some(target_epoch),
+            target_epoch,
             payload_byte_len,
             common,
         })
@@ -352,7 +356,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         membership: &EpochMembershipCoordinator<TYPES>,
         view: ViewNumber,
         target_epoch: EpochNumber,
-        data_epoch: Option<EpochNumber>,
+        data_epoch: EpochNumber,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
         let target_mem = membership.stake_table_for_epoch(target_epoch)?;
@@ -495,9 +499,11 @@ pub struct AvidmGf2DisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
     pub view_number: ViewNumber,
     /// The epoch number for which this VID data belongs to
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// The epoch number to which the recipient of this VID belongs to
-    pub target_epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub target_epoch: EpochNumber,
     /// Block payload commitment
     pub payload_commitment: AvidmGf2Commitment,
     /// A storage node's key and its corresponding VID share
@@ -565,9 +571,11 @@ pub struct AvidmGf2DisperseShareFragment<T: NodeType> {
     /// The view number for which this VID data is intended.
     pub view_number: ViewNumber,
     /// The epoch number for which this VID data belongs to.
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// The epoch number to which the recipient of this VID belongs to.
-    pub target_epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub target_epoch: EpochNumber,
     /// Block payload commitment (the aggregate over all namespaces).
     pub payload_commitment: AvidmGf2Commitment,
     /// A public key of the share recipient.
@@ -588,7 +596,7 @@ impl<T: NodeType> HasViewNumber for AvidmGf2DisperseShareFragment<T> {
 
 impl<T: NodeType> HasEpoch for AvidmGf2DisperseShareFragment<T> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 

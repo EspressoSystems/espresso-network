@@ -16,13 +16,16 @@ use std::{
 
 use arbitrary::Arbitrary;
 use espresso_fuzz::{Edit, apply_edits};
-use espresso_types::{Header, Leaf2, NamespaceId, Payload, SeqTypes, Transaction};
+use espresso_types::{Header, NamespaceId, Payload, SeqTypes, Transaction};
 use futures::executor::block_on;
 use hotshot_query_service_types::{
     availability::{LeafId, LeafQueryData},
     node::BlockId,
 };
-use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
+use hotshot_types::{
+    data::{EpochNumber, history::HistoricLeaf},
+    utils::epoch_from_block_number,
+};
 use libfuzzer_sys::fuzz_target;
 use light_client::{
     client::Client,
@@ -72,10 +75,10 @@ type Quorum = StakeTableQuorum<(Arc<StakeTable>, Arc<StakeTable>)>;
 
 struct Chain {
     quorums: BTreeMap<u64, Quorum>,
-    leaves: Vec<Leaf2>,
+    leaves: Vec<HistoricLeaf<SeqTypes>>,
     headers: Vec<Header>,
     payloads: Vec<Payload>,
-    leaf_proofs: Vec<(LeafProof, Option<Leaf2>)>,
+    leaf_proofs: Vec<(LeafProof, Option<HistoricLeaf<SeqTypes>>)>,
     header_proofs: Vec<(u64, HeaderProof)>,
     payload_proofs: Vec<PayloadProof>,
     namespace_proofs: Vec<NamespaceProof>,
@@ -282,7 +285,7 @@ impl Chain {
     async fn verify_leaf_proof(
         &self,
         proof: &LeafProof,
-        finalized: Option<&Leaf2>,
+        finalized: Option<&HistoricLeaf<SeqTypes>>,
     ) -> anyhow::Result<LeafQueryData<SeqTypes>> {
         let hint = match proof.epoch(EPOCH_HEIGHT)? {
             Some(epoch) => LeafProofHint::Quorum(

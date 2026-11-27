@@ -3,10 +3,9 @@ use std::{ops::Range, sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_lock::Mutex;
-use committable::Committable;
 use either::Either;
 use espresso_types::{
-    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, StateLeaf, ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::{Delta, PermittedRewardMerkleTreeV2},
@@ -23,6 +22,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{
+    data::history::HistoricLeaf,
     traits::ValidatedState as HotShotState,
     utils::{epoch_from_block_number, is_last_block},
 };
@@ -44,8 +44,8 @@ pub(crate) async fn compute_state_update(
     parent_state: &ValidatedState,
     instance: &NodeState,
     peers: &impl StateCatchup,
-    parent_leaf: &Leaf2,
-    proposed_leaf: &Leaf2,
+    parent_leaf: &impl StateLeaf,
+    proposed_leaf: &impl StateLeaf,
 ) -> anyhow::Result<(ValidatedState, Delta)> {
     let header = proposed_leaf.block_header();
 
@@ -218,8 +218,8 @@ async fn update_state_storage<T>(
     storage: &Arc<T>,
     instance: &NodeState,
     peers: &impl StateCatchup,
-    parent_leaf: &Leaf2,
-    proposed_leaf: &Leaf2,
+    parent_leaf: &HistoricLeaf<SeqTypes>,
+    proposed_leaf: &HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<ValidatedState>
 where
     T: SequencerStateDataSource,
@@ -529,7 +529,7 @@ where
 /// The reward tree of `parent_leaf`, from storage.
 async fn load_parent_reward_tree<T>(
     storage: &T,
-    parent_leaf: &Leaf2,
+    parent_leaf: &HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<PermittedRewardMerkleTreeV2>
 where
     T: SequencerStateDataSource,
@@ -775,7 +775,7 @@ where
 async fn fetch_boundary_state(
     catchup: &impl StateCatchup,
     instance: &NodeState,
-    leaf: &Leaf2,
+    leaf: &HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<ValidatedState> {
     let header = leaf.block_header();
     let mut state = ValidatedState::from_header(header);
@@ -869,7 +869,7 @@ async fn follow_leaves<T>(
     storage: &Arc<T>,
     instance: &NodeState,
     provider: &LightClientProvider,
-    mut parent_leaf: Leaf2,
+    mut parent_leaf: HistoricLeaf<SeqTypes>,
     mut parent_state: ValidatedState,
 ) where
     T: SequencerStateDataSource,
@@ -950,7 +950,11 @@ where
 }
 
 /// The leaf at `height`, from local storage, or from peers once the data pruner has deleted it.
-async fn leaf_at<T>(storage: &Arc<T>, provider: &LightClientProvider, height: u64) -> Leaf2
+async fn leaf_at<T>(
+    storage: &Arc<T>,
+    provider: &LightClientProvider,
+    height: u64,
+) -> HistoricLeaf<SeqTypes>
 where
     T: SequencerStateDataSource,
 {
@@ -984,7 +988,10 @@ where
 /// of every protocol version, and one proof covers the run: it proves the last leaf final and
 /// chains the rest to it. The loop needs each leaf once, so the leaves are stored neither in this
 /// database, where the pruner would only delete them again, nor in the light client's cache.
-async fn fetch_pruned_leaves(provider: &LightClientProvider, heights: Range<u64>) -> Vec<Leaf2> {
+async fn fetch_pruned_leaves(
+    provider: &LightClientProvider,
+    heights: Range<u64>,
+) -> Vec<HistoricLeaf<SeqTypes>> {
     let start = heights.start as usize;
     let end = heights.end as usize;
     let mut delay = Duration::from_secs(1);
@@ -1012,9 +1019,9 @@ async fn fetch_pruned_leaves(provider: &LightClientProvider, heights: Range<u64>
 async fn apply_leaf<T>(
     storage: &Arc<T>,
     instance: &NodeState,
-    parent_leaf: &mut Leaf2,
+    parent_leaf: &mut HistoricLeaf<SeqTypes>,
     parent_state: &mut ValidatedState,
-    leaf: Leaf2,
+    leaf: HistoricLeaf<SeqTypes>,
 ) where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,

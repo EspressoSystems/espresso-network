@@ -2,7 +2,7 @@ use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Du
 
 use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use disco_types::status::StatusCode;
 use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
 use futures::{TryStreamExt, future::try_join, stream::StreamExt};
@@ -14,7 +14,9 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::simple_certificate::QuorumCertificate2;
+use hotshot_types::{
+    data::history::HistoricQuorumCertificate, simple_certificate::QuorumCertificate2,
+};
 use itertools::izip;
 use jf_merkle_tree_compat::{
     DigestAlgorithm, MerkleTreeScheme,
@@ -184,7 +186,7 @@ async fn complete_proof_with_cert2<State>(
     state: &State,
     proof: &mut LeafProof,
     leaf: LeafQueryData<SeqTypes>,
-    requested_leaf_qc: QuorumCertificate2<SeqTypes>,
+    requested_leaf_qc: HistoricQuorumCertificate<SeqTypes>,
     fetch_timeout: Duration,
     chain_limit: usize,
 ) -> Result<(), Error>
@@ -264,7 +266,7 @@ where
         if start_commit != cert2.data.leaf_commit {
             return Err(internal("stored cert2 does not finalize the expected leaf"));
         }
-        proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+        proof.add_certificate(Arc::new(cert2), require_qc2(requested_leaf_qc)?);
         return Ok(());
     }
 
@@ -285,7 +287,7 @@ where
                 return Err(internal("stored cert2 does not finalize the expected leaf"));
             }
             if !proof.push(leaf) {
-                proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+                proof.add_certificate(Arc::new(cert2), require_qc2(requested_leaf_qc)?);
             }
             return Ok(());
         }
@@ -295,6 +297,15 @@ where
     }
 
     Err(not_found("missing cert2 leaf"))
+}
+
+/// The QC a new-protocol proof carries for its requested leaf, which a cert2 proves and so has an
+/// epoch.
+fn require_qc2(
+    qc: HistoricQuorumCertificate<SeqTypes>,
+) -> Result<QuorumCertificate2<SeqTypes>, Error> {
+    qc.into_qc2()
+        .ok_or_else(|| internal("a new-protocol proof needs a QC with an epoch"))
 }
 
 pub(crate) async fn get_leaf_proof_with_finalized_assumption<State>(
@@ -849,7 +860,7 @@ mod test {
     fn cert2_for_leaf(leaf: &LeafQueryData<SeqTypes>) -> espresso_types::Certificate2<SeqTypes> {
         let data = Vote2Data {
             leaf_commit: leaf.leaf().commit(),
-            epoch: leaf.qc().data.epoch.unwrap(),
+            epoch: leaf.qc().as_qc2().unwrap().data.epoch,
             block_number: leaf.height(),
         };
         espresso_types::Certificate2::new(
@@ -1468,6 +1479,89 @@ mod test {
                 .await
                 .unwrap(),
             leaves[1]
+        );
+    }
+
+    /// Light clients decode the proofs of mainnet's leaves from before 0.3 and across the upgrade
+    /// as the server encodes them. The JSON form is the recorded chain's leaves and QCs in the
+    /// proof's layout. The binary form is pinned.
+    #[test]
+    fn test_legacy_leaf_proof_encoding() {
+        use light_client::consensus::leaf::LeafProof;
+        use serde_json::{Value, json};
+
+        let chain = crate::legacy_chain::LegacyChain::load("v2-v3").unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/legacy-chains/v2-v3/blocks.json");
+        let recorded: Vec<Value> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let upgraded = chain
+            .blocks
+            .iter()
+            .position(|block| block.leaf.header().version() >= EPOCH_VERSION)
+            .unwrap();
+
+        let leaf = |height: usize| recorded[height]["leaf"]["leaf"].clone();
+        // A proof carries the QC on a leaf as the justify QC of the leaf after it.
+        let pair = |height: usize| json!({ "qc": recorded[height + 1]["leaf"]["leaf"]["justify_qc"], "next_epoch_qc": null });
+        let prove = |heights: std::ops::RangeInclusive<usize>| {
+            let mut proof = LeafProof::default();
+            for height in heights {
+                proof.push(chain.blocks[height].leaf.clone());
+            }
+            proof
+        };
+
+        let cases = [
+            (
+                prove(1..=4),
+                json!({
+                    "leaves": [leaf(1)],
+                    "proof": { "HotStuff": {
+                        "precommit_qc": pair(1),
+                        "committing_qc": pair(2),
+                        "deciding_qc": pair(3),
+                        "committing_leaf": leaf(2),
+                        "deciding_leaf": leaf(3),
+                    } },
+                }),
+                "pre-epoch 3-chain",
+            ),
+            (
+                prove(upgraded - 1..=upgraded + 2),
+                json!({
+                    "leaves": [leaf(upgraded - 1), leaf(upgraded)],
+                    "proof": { "HotStuff2": {
+                        "committing_qc": pair(upgraded),
+                        "deciding_qc": pair(upgraded + 1),
+                        "deciding_leaf": leaf(upgraded + 1),
+                    } },
+                }),
+                "2-chain across the upgrade",
+            ),
+        ];
+        let mut digests = vec![];
+        for (proof, expected, name) in cases {
+            assert_eq!(serde_json::to_value(&proof).unwrap(), expected, "{name}");
+            assert_eq!(
+                serde_json::from_value::<LeafProof>(expected).unwrap(),
+                proof,
+                "{name}"
+            );
+            let bytes = bincode::serialize(&proof).unwrap();
+            assert_eq!(
+                bincode::deserialize::<LeafProof>(&bytes).unwrap(),
+                proof,
+                "{name}"
+            );
+            digests.push(blake3::hash(&bytes).to_hex().to_string());
+        }
+        assert_eq!(
+            digests,
+            [
+                "42ff2e3753d9631427de7f5cb8476bfdc312a3a353309712e0e9b56f69964d86",
+                "19ccf8f0c9aff68f62027ccf81480c42029f33f24b620549d47255e98efc3429",
+            ],
+            "binary form of the pre-epoch 3-chain proof and the 2-chain proof across the upgrade"
         );
     }
 

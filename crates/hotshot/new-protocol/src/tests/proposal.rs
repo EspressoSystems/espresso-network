@@ -184,7 +184,7 @@ fn rejects_justify_qc_epoch(
             expected, claimed, ..
         }) => {
             assert_eq!(expected, EpochNumber::new(expected_epoch));
-            assert_eq!(Some(claimed), proposal.justify_qc.data.epoch);
+            assert_eq!(claimed, proposal.justify_qc.data.epoch);
         },
         other => panic!(
             "expected MalformedProposal::JustifyQcEpoch for block {}, got {other:?}",
@@ -218,7 +218,7 @@ async fn no_justify_qc_of_a_chain_crossing_epoch_boundaries_is_rejected() {
 async fn justify_qc_from_another_epoch_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
     let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
-    let parent_epoch = proposal.justify_qc.data.epoch.expect("an epoch");
+    let parent_epoch = proposal.justify_qc.data.epoch;
     assert_eq!(parent_epoch, EpochNumber::new(2));
 
     for claimed in [
@@ -226,7 +226,7 @@ async fn justify_qc_from_another_epoch_is_rejected() {
         EpochNumber::new(parent_epoch.saturating_sub(1)),
     ] {
         let mut tampered = proposal.clone();
-        tampered.justify_qc.data.epoch = Some(claimed);
+        tampered.justify_qc.data.epoch = claimed;
         rejects_justify_qc_epoch(&tampered, EPOCH_HEIGHT, *parent_epoch);
     }
 }
@@ -241,30 +241,25 @@ async fn first_proposal_of_an_epoch_carries_a_justify_qc_from_the_previous_epoch
     let proposals = chain_crossing_epoch_boundaries().await;
     let first_of_epoch = at_block(&proposals, EPOCH_HEIGHT + 1);
     assert_eq!(first_of_epoch.epoch, EpochNumber::new(2));
-    assert_eq!(
-        first_of_epoch.justify_qc.data.epoch,
-        Some(EpochNumber::new(1))
-    );
+    assert_eq!(first_of_epoch.justify_qc.data.epoch, EpochNumber::new(1));
     assert!(justify_qc_matches_parent(&first_of_epoch, epoch_length(EPOCH_HEIGHT)).is_ok());
 
     let mut tampered = first_of_epoch.clone();
-    tampered.justify_qc.data.epoch = Some(tampered.epoch);
+    tampered.justify_qc.data.epoch = tampered.epoch;
     rejects_justify_qc_epoch(&tampered, EPOCH_HEIGHT, 1);
 }
 
-/// A justify QC must certify the block below the proposal. It names its epoch
-/// and block number together, so one that has passed the epoch check and names
-/// no block does not describe a parent at all.
+/// A justify QC must certify the block below the proposal.
 #[tokio::test]
 async fn justify_qc_certifying_another_block_is_rejected() {
     let proposals = chain_crossing_epoch_boundaries().await;
     let proposal = at_block(&proposals, EPOCH_HEIGHT + 5);
     let parent_block = proposal.block_header.block_number - 1;
-    assert_eq!(proposal.justify_qc.data.block_number, Some(parent_block));
+    assert_eq!(proposal.justify_qc.data.block_number, parent_block);
 
     for claimed in [proposal.block_header.block_number, parent_block - 1] {
         let mut tampered = proposal.clone();
-        tampered.justify_qc.data.block_number = Some(claimed);
+        tampered.justify_qc.data.block_number = claimed;
         match justify_qc_matches_parent(&tampered, epoch_length(EPOCH_HEIGHT)) {
             Err(MalformedProposal::JustifyQcBlockNumber {
                 expected,
@@ -277,13 +272,6 @@ async fn justify_qc_certifying_another_block_is_rejected() {
             other => panic!("expected MalformedProposal::JustifyQcBlockNumber, got {other:?}"),
         }
     }
-
-    let mut without_block_number = proposal.clone();
-    without_block_number.justify_qc.data.block_number = None;
-    assert!(matches!(
-        justify_qc_matches_parent(&without_block_number, epoch_length(EPOCH_HEIGHT)),
-        Err(MalformedProposal::JustifyQcWithoutBlockNumber(_))
-    ));
 }
 
 /// Every proposal of a chain that crosses epoch boundaries carries either no
@@ -365,24 +353,11 @@ async fn state_cert_missing_at_an_epoch_root_proposal_is_rejected() {
     );
 }
 
-/// The epoch selects the committee, so a justify QC that names none cannot be
-/// checked against one.
-#[tokio::test]
-async fn justify_qc_without_an_epoch_is_rejected() {
-    let mut proposal = epoch_aware_proposal(EPOCH_HEIGHT).await;
-    proposal.justify_qc.data.epoch = None;
-
-    assert!(matches!(
-        justify_qc_matches_parent(&proposal, epoch_length(EPOCH_HEIGHT)),
-        Err(MalformedProposal::JustifyQcWithoutEpoch(_))
-    ));
-}
-
 /// The boundary Cert2 a first-of-epoch proposal carries, and the epoch its
 /// justify QC names.
 fn first_of_epoch(proposals: &[Proposal<TestTypes>]) -> (Proposal<TestTypes>, EpochNumber) {
     let proposal = at_block(proposals, EPOCH_HEIGHT + 1);
-    let epoch = proposal.justify_qc.data.epoch.expect("an epoch");
+    let epoch = proposal.justify_qc.data.epoch;
     assert_eq!(epoch, EpochNumber::new(1));
     assert!(proposal.next_epoch_justify_qc.is_some());
     (proposal, epoch)
@@ -674,7 +649,7 @@ async fn evidence_with_a_lock_of_a_later_epoch_is_rejected_before_lookup() {
     let (membership, _storage, _client) =
         mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
     let mut lock = previous.cert1.clone();
-    lock.data.epoch = Some(view.epoch_number + 1000);
+    lock.data.epoch = view.epoch_number + 1000;
     let committee = membership
         .membership_for_epoch(view.epoch_number)
         .expect("the proposal's committee");
@@ -794,8 +769,8 @@ async fn genesis_justify_qc_certifying_a_later_block_is_rejected() {
     );
     assert!(justify_qc_matches_parent(&proposal, epoch_length(EPOCH_HEIGHT)).is_ok());
 
-    proposal.justify_qc.data.block_number = Some(23);
-    proposal.justify_qc.data.epoch = Some(EpochNumber::new(3));
+    proposal.justify_qc.data.block_number = 23;
+    proposal.justify_qc.data.epoch = EpochNumber::new(3);
     proposal.block_header.block_number = 24;
     proposal.epoch = EpochNumber::new(3);
     assert!(matches!(

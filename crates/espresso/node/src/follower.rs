@@ -37,7 +37,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     ValidatorConfig,
-    data::{EpochNumber, VidShare, ViewNumber},
+    data::{EpochNumber, VidShare, ViewNumber, history::HistoricLeaf},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -369,7 +369,7 @@ impl<P: SequencerPersistence> FollowerContext<P> {
     }
 
     /// Waits for the first decided leaf.
-    pub async fn decided_leaf(&self) -> Leaf2 {
+    pub async fn decided_leaf(&self) -> HistoricLeaf<SeqTypes> {
         self.handle.consensus.decided_leaf().await
     }
 
@@ -477,7 +477,7 @@ struct FollowerConsensus {
 
 #[async_trait]
 impl ConsensusSource for FollowerConsensus {
-    async fn decided_leaf(&self) -> Leaf2 {
+    async fn decided_leaf(&self) -> HistoricLeaf<SeqTypes> {
         let mut decided = self.decided.clone();
         let leaf = decided
             .wait_for(Option::is_some)
@@ -703,7 +703,7 @@ impl<P: SequencerPersistence> Follower<P> {
 
     /// As a validator does on decide, so the API validates state certificates against the version
     /// the network runs.
-    async fn track_upgrade(&self, leaf: &Leaf2) {
+    async fn track_upgrade(&self, leaf: &HistoricLeaf<SeqTypes>) {
         let Some(cert) = leaf.upgrade_certificate() else {
             return;
         };
@@ -731,7 +731,7 @@ impl<P: SequencerPersistence> Follower<P> {
     /// Awaited, so the transition block finds the stake table it supplies a DRB for, and a
     /// failed derivation fails the block and is retried with it. Nothing is redone when the
     /// membership already knows the result, as after a restart or a catchup walk.
-    async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
+    async fn track_epoch(&self, leaf: &HistoricLeaf<SeqTypes>) -> anyhow::Result<()> {
         let height = leaf.height();
         let Some(epoch) = leaf.epoch(self.epoch_height) else {
             return Ok(());
@@ -743,7 +743,7 @@ impl<P: SequencerPersistence> Follower<P> {
                 .map_err(|err| anyhow!("deriving the stake table of epoch {}: {err}", epoch + 2))?;
         }
         if is_transition_block(height, self.epoch_height)
-            && let Some(drb) = leaf.next_drb_result
+            && let Some(drb) = leaf.next_drb_result()
             && !self.has_drb(epoch + 1)
         {
             self.coordinator.supply_drb(epoch + 1, drb);

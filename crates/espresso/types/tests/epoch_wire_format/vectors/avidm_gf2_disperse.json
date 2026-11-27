@@ -1,0 +1,75 @@
+{
+  "view_number": 10,
+  "epoch": 3,
+  "target_epoch": 4,
+  "payload_commitment": "AvidmGf2Commit~o82S-DZkllAdk8RIQqvkO9CGLlAKleSdbpjXmG59lhuB",
+  "shares": {
+    "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U": [
+      {
+        "range": {
+          "start": 0,
+          "end": 1
+        },
+        "payload": [
+          [
+            1,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            1,
+            2,
+            3,
+            1
+          ]
+        ],
+        "mt_proofs": [
+          "MERKLE_PROOF~AQAAAAAAAAADAAAAAAAAAHux7Ogx7DXIwzd4c_BkUO9o2GGXL6X3swploFIt3M6nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4"
+        ]
+      }
+    ],
+    "BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR": [
+      {
+        "range": {
+          "start": 1,
+          "end": 2
+        },
+        "payload": [
+          [
+            1,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            1,
+            2,
+            3,
+            1
+          ]
+        ],
+        "mt_proofs": [
+          "MERKLE_PROOF~AQAAAAAAAAADAAAAAAAAAMPqFwZa6XJZ4vxLJBBnspja3n4JKUMw-E8LtYwtapOdAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIE"
+        ]
+      }
+    ]
+  },
+  "payload_byte_len": 11,
+  "common": {
+    "param": {
+      "total_weights": 2,
+      "recovery_threshold": 1
+    },
+    "ns_commits": [
+      "AvidmGf2Commit~OQtHAjCSspm-lPSf8iZsQHDFmelWRFwitJHpjOw30Y9v"
+    ],
+    "ns_lens": [
+      11
+    ]
+  }
+}

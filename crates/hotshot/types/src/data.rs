@@ -47,10 +47,7 @@ use crate::{
         signature_key::SignatureKey,
         states::TestableState,
     },
-    utils::{
-        EpochTransitionIndicator, bincode_opts, genesis_epoch_from_version,
-        option_epoch_from_block_number,
-    },
+    utils::{EpochTransitionIndicator, bincode_opts, option_epoch_from_block_number},
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
@@ -199,22 +196,11 @@ pub struct DaProposal2<TYPES: NodeType> {
     /// View this proposal applies to
     pub view_number: ViewNumber,
     /// Epoch this proposal applies to
-    pub epoch: Option<EpochNumber>,
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
     /// Indicates whether we are in epoch transition
     /// In epoch transition the next epoch payload commit should be calculated additionally
     pub epoch_transition_indicator: EpochTransitionIndicator,
-}
-
-impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
-    fn from(da_proposal: DaProposal<TYPES>) -> Self {
-        Self {
-            encoded_transactions: da_proposal.encoded_transactions,
-            metadata: da_proposal.metadata,
-            view_number: da_proposal.view_number,
-            epoch: None,
-            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-        }
-    }
 }
 
 impl<TYPES: NodeType> From<DaProposal2<TYPES>> for DaProposal<TYPES> {
@@ -518,6 +504,7 @@ impl From<VidShare2> for VidShare {
     }
 }
 
+pub mod history;
 pub mod ns_table;
 pub mod vid_disperse;
 
@@ -621,8 +608,8 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     pub fn target_epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V0(_) => None,
-            Self::V1(share) => share.target_epoch,
-            Self::V2(share) => share.target_epoch,
+            Self::V1(share) => Some(share.target_epoch),
+            Self::V2(share) => Some(share.target_epoch),
         }
     }
 
@@ -712,18 +699,6 @@ impl<TYPES: NodeType> ViewChangeEvidence<TYPES> {
             ViewChangeEvidence::ViewSync(view_sync_cert) => view_sync_cert.view_number == *view,
         }
     }
-
-    /// Convert to ViewChangeEvidence2
-    pub fn to_evidence2(self) -> ViewChangeEvidence2<TYPES> {
-        match self {
-            ViewChangeEvidence::Timeout(timeout_cert) => {
-                ViewChangeEvidence2::Timeout(timeout_cert.to_tc2())
-            },
-            ViewChangeEvidence::ViewSync(view_sync_cert) => {
-                ViewChangeEvidence2::ViewSync(view_sync_cert.to_vsc2())
-            },
-        }
-    }
 }
 
 /// Helper type to encapsulate the various ways that proposal certificates can be captured and
@@ -801,8 +776,9 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     /// view number for the proposal
     pub view_number: ViewNumber,
 
-    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
-    pub epoch: Option<EpochNumber>,
+    /// The epoch number corresponding to the block number.
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 
     /// certificate that the proposal is chaining from
     pub justify_qc: QuorumCertificate2<TYPES>,
@@ -830,10 +806,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
 
 impl<TYPES: NodeType> QuorumProposal2<TYPES> {
     pub fn is_validate_block_height(&self) -> bool {
-        self.justify_qc
-            .data()
-            .block_number
-            .is_some_and(|bn| bn + 1 == self.block_header.block_number())
+        self.justify_qc.data().block_number + 1 == self.block_header.block_number()
     }
 }
 
@@ -854,8 +827,9 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
     /// view number for the proposal
     pub view_number: ViewNumber,
 
-    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
-    pub epoch: Option<EpochNumber>,
+    /// The epoch number corresponding to the block number.
+    #[serde(with = "crate::always_some")]
+    pub epoch: EpochNumber,
 
     /// certificate that the proposal is chaining from
     pub justify_qc: QuorumCertificate2<TYPES>,
@@ -1019,14 +993,6 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposalWrapper<TYPES> {
-    fn from(quorum_proposal: QuorumProposal<TYPES>) -> Self {
-        Self {
-            proposal: quorum_proposal.into(),
-        }
-    }
-}
-
 impl<TYPES: NodeType> From<QuorumProposal2Legacy<TYPES>> for QuorumProposalWrapper<TYPES> {
     fn from(quorum_proposal: QuorumProposal2Legacy<TYPES>) -> Self {
         Self {
@@ -1052,43 +1018,6 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2Lega
 impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for QuorumProposal2<TYPES> {
     fn from(quorum_proposal_wrapper: QuorumProposalWrapper<TYPES>) -> Self {
         quorum_proposal_wrapper.proposal
-    }
-}
-
-impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposal2<TYPES> {
-    fn from(quorum_proposal: QuorumProposal<TYPES>) -> Self {
-        Self {
-            block_header: quorum_proposal.block_header,
-            view_number: quorum_proposal.view_number,
-            epoch: None,
-            justify_qc: quorum_proposal.justify_qc.to_qc2(),
-            next_epoch_justify_qc: None,
-            upgrade_certificate: quorum_proposal.upgrade_certificate,
-            view_change_evidence: quorum_proposal
-                .proposal_certificate
-                .map(ViewChangeEvidence::to_evidence2),
-            next_drb_result: None,
-            state_cert: None,
-        }
-    }
-}
-
-impl<TYPES: NodeType> From<Leaf<TYPES>> for Leaf2<TYPES> {
-    fn from(leaf: Leaf<TYPES>) -> Self {
-        let bytes: [u8; 32] = leaf.parent_commitment.into();
-
-        Self {
-            view_number: leaf.view_number,
-            justify_qc: leaf.justify_qc.to_qc2(),
-            next_epoch_justify_qc: None,
-            parent_commitment: Commitment::from_raw(bytes),
-            block_header: leaf.block_header,
-            upgrade_certificate: leaf.upgrade_certificate,
-            block_payload: leaf.block_payload,
-            view_change_evidence: None,
-            next_drb_result: None,
-            with_epoch: false,
-        }
     }
 }
 
@@ -1148,19 +1077,19 @@ impl HasViewNumber for UpgradeProposal2 {
 
 impl<NODE: NodeType> HasEpoch for QuorumProposal2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for DaProposal2<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
 impl<NODE: NodeType> HasEpoch for QuorumProposal2Legacy<NODE> {
     fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        Some(self.epoch)
     }
 }
 
@@ -1305,7 +1234,9 @@ pub struct Leaf2<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> Leaf2<TYPES> {
-    /// Create a new leaf from its components.
+    /// The genesis leaf of a chain with epochs: its justify QC is in the first epoch. `version` is
+    /// passed to the block header. A chain that started before epochs has
+    /// [`history::PreEpochLeaf::genesis`].
     ///
     /// # Panics
     ///
@@ -1317,28 +1248,14 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         instance_state: &TYPES::InstanceState,
         version: Version,
     ) -> Self {
-        let epoch = genesis_epoch_from_version(version);
-
-        let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
-                .await
-                .unwrap();
-
+        let (block_header, payload) =
+            genesis_block::<TYPES>(validated_state, instance_state, version).await;
         let genesis_view = ViewNumber::genesis();
-
-        let block_header =
-            TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
-
-        let block_number = if version < EPOCH_VERSION {
-            None
-        } else {
-            Some(0u64)
-        };
 
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
-            epoch,
-            block_number,
+            epoch: EpochNumber::genesis(),
+            block_number: 0,
         };
 
         let justify_qc = QuorumCertificate2::new(
@@ -1355,11 +1272,11 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             next_epoch_justify_qc: None,
             parent_commitment: null_quorum_data.leaf_commit,
             upgrade_certificate: None,
-            block_header: block_header.clone(),
+            block_header,
             block_payload: Some(payload),
             view_change_evidence: None,
             next_drb_result: None,
-            with_epoch: epoch.is_some(),
+            with_epoch: true,
         }
     }
     /// Time when this leaf was created.
@@ -1488,39 +1405,103 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
             with_epoch,
         } = self;
 
-        let mut cb = RawCommitmentBuilder::new("leaf commitment")
-            .u64_field("view number", **view_number)
-            .field("parent leaf commitment", *parent_commitment)
-            .field("block header", block_header.commit())
-            .field("justify qc", justify_qc.commit())
-            .optional("upgrade certificate", upgrade_certificate);
+        LeafCommitment {
+            view_number: *view_number,
+            parent_commitment: *parent_commitment,
+            block_header,
+            justify_qc,
+            upgrade_certificate,
+            with_epoch: *with_epoch,
+            next_epoch_justify_qc,
+            next_drb_result,
+            view_change_evidence,
+        }
+        .commit()
+    }
+}
 
-        if *with_epoch {
+/// The fields a leaf commitment covers.
+///
+/// [`Leaf2`] and [`history::PreEpochLeaf`] both commit through it, so a pre-epoch leaf keeps the
+/// commitment it had as a [`Leaf2`].
+pub(crate) struct LeafCommitment<'a, TYPES: NodeType, QC: Committable, EV: LeafEvidence<TYPES>> {
+    pub view_number: ViewNumber,
+    pub parent_commitment: Commitment<Leaf2<TYPES>>,
+    pub block_header: &'a TYPES::BlockHeader,
+    pub justify_qc: &'a QC,
+    pub upgrade_certificate: &'a Option<UpgradeCertificate<TYPES>>,
+    pub with_epoch: bool,
+    pub next_epoch_justify_qc: &'a Option<NextEpochQuorumCertificate2<TYPES>>,
+    pub next_drb_result: &'a Option<DrbResult>,
+    pub view_change_evidence: &'a Option<EV>,
+}
+
+impl<TYPES: NodeType, QC: Committable, EV: LeafEvidence<TYPES>> LeafCommitment<'_, TYPES, QC, EV> {
+    pub(crate) fn commit(self) -> Commitment<Leaf2<TYPES>> {
+        let mut cb = RawCommitmentBuilder::new("leaf commitment")
+            .u64_field("view number", *self.view_number)
+            .field("parent leaf commitment", self.parent_commitment)
+            .field("block header", self.block_header.commit())
+            .field("justify qc", self.justify_qc.commit())
+            .optional("upgrade certificate", self.upgrade_certificate);
+
+        if self.with_epoch {
             cb = cb
                 .constant_str("with_epoch")
-                .optional("next_epoch_justify_qc", next_epoch_justify_qc);
+                .optional("next_epoch_justify_qc", self.next_epoch_justify_qc);
 
-            if let Some(next_drb_result) = next_drb_result {
+            if let Some(next_drb_result) = self.next_drb_result {
                 cb = cb
                     .constant_str("next_drb_result")
                     .fixed_size_bytes(next_drb_result);
             }
 
-            match view_change_evidence {
-                Some(ViewChangeEvidence2::Timeout(cert)) => {
-                    cb = cb.field("timeout cert", cert.commit());
-                },
-                Some(ViewChangeEvidence2::ViewSync(cert)) => {
-                    cb = cb.field("viewsync cert", cert.commit());
-                },
-                Some(ViewChangeEvidence2::Timeout3(cert)) => {
-                    cb = cb.field("timeout cert v3", cert.commit());
-                },
-                None => {},
+            if let Some(evidence) = self.view_change_evidence {
+                cb = evidence.add_to_leaf_commitment(cb);
             }
         }
 
         cb.finalize()
+    }
+}
+
+/// The block of a genesis leaf: its header and its empty payload. `version` is passed to the header.
+///
+/// # Panics
+///
+/// Panics if the empty payload cannot be built.
+pub(crate) async fn genesis_block<TYPES: NodeType>(
+    validated_state: &TYPES::ValidatedState,
+    instance_state: &TYPES::InstanceState,
+    version: Version,
+) -> (TYPES::BlockHeader, TYPES::BlockPayload) {
+    let (payload, metadata) =
+        TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
+            .await
+            .unwrap();
+    let header = TYPES::BlockHeader::genesis(instance_state, payload.clone(), &metadata, version);
+    (header, payload)
+}
+
+/// View change evidence, as the commitment of the leaf that carries it covers it.
+pub(crate) trait LeafEvidence<TYPES: NodeType> {
+    /// Adds this evidence to the commitment of its leaf.
+    fn add_to_leaf_commitment(
+        &self,
+        cb: RawCommitmentBuilder<Leaf2<TYPES>>,
+    ) -> RawCommitmentBuilder<Leaf2<TYPES>>;
+}
+
+impl<TYPES: NodeType> LeafEvidence<TYPES> for ViewChangeEvidence2<TYPES> {
+    fn add_to_leaf_commitment(
+        &self,
+        cb: RawCommitmentBuilder<Leaf2<TYPES>>,
+    ) -> RawCommitmentBuilder<Leaf2<TYPES>> {
+        match self {
+            Self::Timeout(cert) => cb.field("timeout cert", cert.commit()),
+            Self::ViewSync(cert) => cb.field("viewsync cert", cert.commit()),
+            Self::Timeout3(cert) => cb.field("timeout cert v3", cert.commit()),
+        }
     }
 }
 
@@ -1634,7 +1615,8 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
 }
 
 impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
-    /// Create the Genesis certificate
+    /// The QC on the genesis leaf of a chain with epochs, see [`Leaf2::genesis`]. A chain that
+    /// started before epochs has [`history::PreEpochQuorumCertificate::genesis`].
     #[must_use]
     pub async fn genesis(
         validated_state: &TYPES::ValidatedState,
@@ -1647,15 +1629,10 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         let genesis_view = ViewNumber::genesis();
 
         let genesis_leaf = Leaf2::genesis(validated_state, instance_state, upgrade.base).await;
-        let block_number = if upgrade_lock.epochs_enabled(genesis_view) {
-            Some(genesis_leaf.height())
-        } else {
-            None
-        };
         let data = QuorumData2 {
             leaf_commit: genesis_leaf.commit(),
-            epoch: genesis_epoch_from_version(upgrade.base), // #3967 make sure this is enough of a gate for epochs
-            block_number,
+            epoch: EpochNumber::genesis(),
+            block_number: genesis_leaf.height(),
         };
 
         let versioned_data =
@@ -1889,7 +1866,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             proposal:
                 QuorumProposal2 {
                     view_number,
-                    epoch,
+                    epoch: _,
                     justify_qc,
                     next_epoch_justify_qc,
                     block_header,
@@ -1910,7 +1887,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             block_payload: None,
             view_change_evidence: view_change_evidence.clone(),
             next_drb_result: *next_drb_result,
-            with_epoch: epoch.is_some(),
+            with_epoch: true,
         }
     }
 }
@@ -1921,7 +1898,7 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
             proposal:
                 QuorumProposal2 {
                     view_number,
-                    epoch,
+                    epoch: _,
                     justify_qc,
                     next_epoch_justify_qc,
                     block_header,
@@ -1944,7 +1921,7 @@ impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
             block_payload: None,
             view_change_evidence,
             next_drb_result,
-            with_epoch: epoch.is_some(),
+            with_epoch: true,
         }
     }
 }

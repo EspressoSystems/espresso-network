@@ -355,8 +355,8 @@ async fn test_unsigned_view_zero_high_qc_does_not_move_the_epoch() {
     // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(forged),
-        block_number: Some(11),
+        epoch: forged,
+        block_number: 11,
     };
     let cert = Certificate1::<TestTypes>::new(
         data,
@@ -448,8 +448,8 @@ async fn test_forged_view_zero_high_qc_does_not_shadow_the_genesis_qc() {
     // Well formed, in the genesis epoch, and not the genesis QC.
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(epoch),
-        block_number: Some(5),
+        epoch,
+        block_number: 5,
     };
     let forged = Certificate1::<TestTypes>::new(
         data,
@@ -500,8 +500,8 @@ fn view_one_proposal_on_forged_genesis_parent(
     }
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(epoch),
-        block_number: Some(23),
+        epoch,
+        block_number: 23,
     };
     let mut proposal = honest.proposal.data.clone();
     assert_eq!(
@@ -1948,8 +1948,8 @@ async fn test_forged_vid_fragments_do_not_block_the_vote() {
         if let MessageType::Consensus(ConsensusMessage::VidShareFragment(f)) =
             &mut fragment.message_type
         {
-            f.data.epoch = Some(EpochNumber::new(999));
-            f.data.target_epoch = Some(EpochNumber::new(999));
+            f.data.epoch = EpochNumber::new(999);
+            f.data.target_epoch = EpochNumber::new(999);
         }
         harness.message(fragment);
     }
@@ -2201,8 +2201,8 @@ async fn test_view_zero_certificate1_is_not_delivered() {
     // Block 11 is in epoch 2 at an epoch height of 10, so the pair is well formed.
     let data = QuorumData2::<TestTypes> {
         leaf_commit: Commitment::default_commitment_no_preimage(),
-        epoch: Some(forged_epoch),
-        block_number: Some(11),
+        epoch: forged_epoch,
+        block_number: 11,
     };
     let forged = Certificate1::<TestTypes>::new(
         data,

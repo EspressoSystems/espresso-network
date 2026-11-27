@@ -237,10 +237,8 @@ impl TestView {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = hotshot_types::simple_vote::QuorumData2 {
             leaf_commit: proposal_commitment(&self.proposal.data.clone()),
-            epoch: Some(self.epoch_number),
-            block_number: Some(BlockHeader::<TestTypes>::block_number(
-                &self.proposal.data.block_header,
-            )),
+            epoch: self.epoch_number,
+            block_number: BlockHeader::<TestTypes>::block_number(&self.proposal.data.block_header),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -350,7 +348,7 @@ impl TestView {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
-            epoch: Some(epoch),
+            epoch,
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -596,11 +594,11 @@ impl TestData {
             // gives it: the two must agree for the share to pair with the
             // proposal. The epoch is not an input to the commitment, so
             // patching it does not invalidate the shares.
-            vid_disperse.epoch = Some(epoch);
-            vid_disperse.target_epoch = Some(epoch);
+            vid_disperse.epoch = epoch;
+            vid_disperse.target_epoch = epoch;
             for share in &mut vid_shares {
-                share.epoch = Some(epoch);
-                share.target_epoch = Some(epoch);
+                share.epoch = epoch;
+                share.target_epoch = epoch;
             }
 
             let needs_new_epoch = length.position(block_number.saturating_sub(1)).is_last();
@@ -1773,7 +1771,7 @@ impl ConsensusHarness {
                     &self.membership_coordinator,
                     *view,
                     *epoch,
-                    Some(*epoch),
+                    *epoch,
                     metadata,
                 )
                 .await
@@ -1874,8 +1872,8 @@ pub(crate) fn build_cert1(
 ) -> Certificate1<TestTypes> {
     let data = hotshot_types::simple_vote::QuorumData2 {
         leaf_commit,
-        epoch: Some(epoch),
-        block_number: Some(block_number),
+        epoch,
+        block_number,
     };
     build_cert::<
         TestTypes,
@@ -2032,7 +2030,7 @@ pub(crate) fn build_timeout_cert2_signed_by(
 ) -> TimeoutEvidence<TestTypes> {
     let data = TimeoutData2 {
         view: view_number,
-        epoch: Some(epoch),
+        epoch,
     };
     let shares: Vec<SignerShare> = signers
         .iter()
@@ -2080,7 +2078,7 @@ pub(crate) fn build_timeout_cert_with_lock(
     }
     let data = TimeoutData2 {
         view: view_number,
-        epoch: Some(epoch),
+        epoch,
     };
     TimeoutEvidence::V2(build_cert::<
         TestTypes,

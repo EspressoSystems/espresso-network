@@ -1,0 +1,36 @@
+{
+  "data": {
+    "V1": {
+      "view_number": 10,
+      "epoch": 3,
+      "target_epoch": 4,
+      "payload_commitment": "AvidMCommit~F5QmO1GXrK4MstGC3Fs5oztxSuc4M52Ijp7_iTYSLCuk",
+      "share": {
+        "index": 0,
+        "ns_commits": [
+          "AvidMCommit~LcVTHyKevNUViuIuj73RaS2jQs535hPu1HoSbsfyE_qu"
+        ],
+        "ns_lens": [
+          11
+        ],
+        "content": [
+          {
+            "range": {
+              "start": 0,
+              "end": 1
+            },
+            "payload": "FIELD~AQAAAAAAAAABAAAAAAAAAAEAAAADAAAAAQIDAQAAAAAAAAAAAAAAAAAAAAAAAAAA5A",
+            "mt_proofs": "FIELD~AQAAAAAAAAAAAAAAAAAAAB0"
+          }
+        ]
+      },
+      "recipient_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+      "common": {
+        "total_weights": 1,
+        "recovery_threshold": 1
+      }
+    }
+  },
+  "signature": "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE",
+  "_pd": null
+}

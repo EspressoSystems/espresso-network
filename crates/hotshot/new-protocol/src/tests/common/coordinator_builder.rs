@@ -229,7 +229,7 @@ pub async fn build_test_coordinator(
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),
             view_number: ViewNumber::genesis(),
-            epoch: Some(EpochNumber::genesis()),
+            epoch: EpochNumber::genesis(),
             justify_qc: genesis_cert1.clone(),
             next_epoch_justify_qc: None,
             upgrade_certificate: None,
@@ -313,8 +313,8 @@ pub async fn build_test_coordinator(
 pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
-        epoch: Some(EpochNumber::genesis()),
-        block_number: Some(0),
+        epoch: EpochNumber::genesis(),
+        block_number: 0,
     };
     Certificate1::new(
         data,

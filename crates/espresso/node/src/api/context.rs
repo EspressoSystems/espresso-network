@@ -20,7 +20,7 @@ use futures::future::BoxFuture;
 use hotshot_query_service::availability::VidCommonQueryData;
 use hotshot_types::{
     ValidatorConfig,
-    data::{EpochNumber, VidShare, ViewNumber},
+    data::{EpochNumber, VidShare, ViewNumber, history::HistoricLeaf},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -38,7 +38,7 @@ pub type Delta = <ValidatedState as hotshot_types::traits::ValidatedState<SeqTyp
 
 #[async_trait]
 pub trait ConsensusSource: Send + Sync + 'static {
-    async fn decided_leaf(&self) -> Leaf2;
+    async fn decided_leaf(&self) -> HistoricLeaf<SeqTypes>;
     async fn decided_state(&self) -> Option<Arc<ValidatedState>>;
     async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>>;
     async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes>;
@@ -88,8 +88,8 @@ pub trait ApiContext: Send + Sync + 'static {
 
 #[async_trait]
 impl<P: SequencerPersistence> ConsensusSource for ConsensusHandle<SeqTypes, Arc<P>> {
-    async fn decided_leaf(&self) -> Leaf2 {
-        ConsensusHandle::decided_leaf(self).await
+    async fn decided_leaf(&self) -> HistoricLeaf<SeqTypes> {
+        ConsensusHandle::decided_leaf(self).await.into()
     }
 
     async fn decided_state(&self) -> Option<Arc<ValidatedState>> {

@@ -1187,10 +1187,7 @@ impl Recorder {
                             obj(&[
                                 ("blockHash", ident(&vote.vote.data.leaf_commit)),
                                 ("epoch", epoch_json(HasEpoch::epoch(&vote.vote.data))),
-                                (
-                                    "blockNumber",
-                                    vote.vote.data.block_number.unwrap_or(0).to_string(),
-                                ),
+                                ("blockNumber", vote.vote.data.block_number.to_string()),
                             ]),
                         ),
                         ("view", view_json(vote.vote.view_number)),
@@ -1498,10 +1495,7 @@ fn cert1_json_raw<T: NodeType>(cert: &Certificate1<T>) -> String {
             obj(&[
                 ("blockHash", ident(&cert.data.leaf_commit)),
                 ("epoch", epoch_json(cert.epoch())),
-                (
-                    "blockNumber",
-                    cert.data.block_number.unwrap_or(0).to_string(),
-                ),
+                ("blockNumber", cert.data.block_number.to_string()),
             ]),
         ),
         ("view", view_json(cert.view_number())),
