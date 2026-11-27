@@ -776,7 +776,7 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     /// view number for the proposal
     pub view_number: ViewNumber,
 
-    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
+    /// The epoch number corresponding to the block number.
     #[serde(with = "crate::always_some")]
     pub epoch: EpochNumber,
 
@@ -827,7 +827,7 @@ pub struct QuorumProposal2Legacy<TYPES: NodeType> {
     /// view number for the proposal
     pub view_number: ViewNumber,
 
-    /// The epoch number corresponding to the block number. Can be `None` for pre-epoch version.
+    /// The epoch number corresponding to the block number.
     #[serde(with = "crate::always_some")]
     pub epoch: EpochNumber,
 

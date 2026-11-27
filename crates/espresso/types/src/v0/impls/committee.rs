@@ -1082,8 +1082,8 @@ impl Membership<SeqTypes> for EpochCommittees {
                 Ok(leaf) => {
                     return leaf.into_leaf2().ok_or_else(|| {
                         Self::Error::Catchup(anyhow::anyhow!(
-                            "epoch root leaf for epoch {epoch} (block {block_height}) predates \
-                             epochs"
+                            "epoch root leaf for epoch {epoch} (block {block_height}) has a \
+                             justify QC from before epochs"
                         ))
                     });
                 },
@@ -1139,8 +1139,8 @@ impl Membership<SeqTypes> for EpochCommittees {
             .into_leaf2()
             .ok_or_else(|| {
                 Self::Error::Message(format!(
-                    "the leaf with the DRB result for epoch {epoch} (block {block_height}) \
-                     predates epochs"
+                    "the leaf with the DRB result for epoch {epoch} (block {block_height}) has a \
+                     justify QC from before epochs"
                 ))
             })?;
 

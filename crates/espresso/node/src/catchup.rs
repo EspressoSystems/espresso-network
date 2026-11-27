@@ -298,8 +298,9 @@ pub(crate) fn new_protocol_leaves(
         .into_iter()
         .map(|leaf| {
             let height = leaf.height();
-            leaf.into_leaf2()
-                .with_context(|| format!("leaf {height} of a new-protocol chain predates epochs"))
+            leaf.into_leaf2().with_context(|| {
+                format!("leaf {height} of a new-protocol chain has a justify QC from before epochs")
+            })
         })
         .collect()
 }
@@ -1702,9 +1703,9 @@ pub async fn add_fee_accounts_to_state(
     tree: &FeeMerkleTree,
     leaf: HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<()> {
-    let leaf = leaf
-        .into_leaf2()
-        .context("accounts at a leaf from before epochs cannot join the consensus state")?;
+    let Some(leaf) = consensus_leaf(leaf, view) else {
+        return Ok(());
+    };
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1752,9 +1753,9 @@ pub async fn add_v2_reward_accounts_to_state(
     tree: &RewardMerkleTreeV2,
     leaf: HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<()> {
-    let leaf = leaf
-        .into_leaf2()
-        .context("accounts at a leaf from before epochs cannot join the consensus state")?;
+    let Some(leaf) = consensus_leaf(leaf, view) else {
+        return Ok(());
+    };
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1802,9 +1803,9 @@ pub async fn add_v1_reward_accounts_to_state(
     tree: &RewardMerkleTreeV1,
     leaf: HistoricLeaf<SeqTypes>,
 ) -> anyhow::Result<()> {
-    let leaf = leaf
-        .into_leaf2()
-        .context("accounts at a leaf from before epochs cannot join the consensus state")?;
+    let Some(leaf) = consensus_leaf(leaf, view) else {
+        return Ok(());
+    };
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1843,6 +1844,22 @@ pub async fn add_v1_reward_accounts_to_state(
     Ok(())
 }
 
+/// `leaf` as the [`Leaf2`] that fetched accounts join the consensus state at.
+///
+/// Consensus holds no state for a leaf whose justify QC is from before epochs, so the accounts
+/// fetched at such a leaf stay out of it, as they did when consensus dropped them on update.
+fn consensus_leaf(leaf: HistoricLeaf<SeqTypes>, view: &ViewNumber) -> Option<Leaf2> {
+    let leaf = leaf.into_leaf2();
+    if leaf.is_none() {
+        tracing::debug!(
+            ?view,
+            "not adding fetched accounts to the consensus state: the leaf's justify QC is from \
+             before epochs"
+        );
+    }
+    leaf
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -1850,12 +1867,16 @@ mod test {
         time::Instant,
     };
 
-    use espresso_types::v0::mock::MockStateCatchup;
-    use hotshot_types::traits::metrics::NoMetrics;
+    use espresso_types::{PubKey, Transaction, v0::mock::MockStateCatchup};
+    use hotshot_types::{
+        data::{EpochNumber, history::PreEpochLeaf},
+        traits::metrics::NoMetrics,
+        utils::StateAndDelta,
+    };
     use test_utils::reserve_tcp_port;
 
     use super::*;
-    use crate::SequencerApiVersion;
+    use crate::{SequencerApiVersion, api::context::Delta};
 
     /// A peer that never answers keeps the `fetch_*` methods of a [`ParallelStateCatchup`] retrying
     /// for good, so a caller that retries on its own never gets an error to retry from.
@@ -2230,5 +2251,164 @@ mod test {
         catchup.fetch_chain_config(config.commit()).await.unwrap();
         assert_eq!(start.elapsed(), FALLBACK_DELAY);
         assert_eq!(fallback_calls.load(AtomicOrdering::SeqCst), 2);
+    }
+
+    /// Holds no state for any view, and records each leaf that `update_leaf` gets.
+    #[derive(Default)]
+    struct RecordingConsensus {
+        updated_leaves: Mutex<Vec<Leaf2>>,
+    }
+
+    #[async_trait]
+    impl ConsensusSource for RecordingConsensus {
+        async fn decided_leaf(&self) -> HistoricLeaf<SeqTypes> {
+            unimplemented!()
+        }
+
+        async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
+            unimplemented!()
+        }
+
+        async fn state(&self, _view: ViewNumber) -> Option<Arc<ValidatedState>> {
+            None
+        }
+
+        async fn state_and_delta(&self, _view: ViewNumber) -> StateAndDelta<SeqTypes> {
+            (None, None)
+        }
+
+        async fn undecided_leaves(&self) -> Vec<Leaf2> {
+            unimplemented!()
+        }
+
+        async fn current_epoch(&self) -> Option<EpochNumber> {
+            unimplemented!()
+        }
+
+        async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+            unimplemented!()
+        }
+
+        async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+            unimplemented!()
+        }
+
+        async fn submit_transaction(
+            &self,
+            _tx: Transaction,
+        ) -> anyhow::Result<Commitment<Transaction>> {
+            unimplemented!()
+        }
+
+        async fn update_leaf(
+            &self,
+            leaf: Leaf2,
+            _state: Arc<ValidatedState>,
+            _delta: Option<Arc<Delta>>,
+        ) -> anyhow::Result<()> {
+            self.updated_leaves.lock().push(leaf);
+            Ok(())
+        }
+
+        async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+
+        async fn proposal_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+
+        async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+
+        async fn vote_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
+            unimplemented!()
+        }
+    }
+
+    async fn pre_epoch_genesis() -> HistoricLeaf<SeqTypes> {
+        PreEpochLeaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            versions::FEE_VERSION,
+        )
+        .await
+        .into()
+    }
+
+    /// Consensus never holds state for a leaf from before epochs, so fee accounts read at such a
+    /// leaf stay out of the consensus state, and that is not an error.
+    #[tokio::test]
+    async fn fee_accounts_at_pre_epoch_leaf_skip_consensus_state() {
+        let consensus = RecordingConsensus::default();
+        let tree = ValidatedState::default().fee_merkle_tree;
+        add_fee_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            pre_epoch_genesis().await,
+        )
+        .await
+        .expect("a leaf from before epochs is skipped, not an error");
+        assert!(consensus.updated_leaves.lock().is_empty());
+    }
+
+    /// Like [`fee_accounts_at_pre_epoch_leaf_skip_consensus_state`], for v2 reward accounts.
+    #[tokio::test]
+    async fn v2_reward_accounts_at_pre_epoch_leaf_skip_consensus_state() {
+        let consensus = RecordingConsensus::default();
+        let tree = ValidatedState::default().reward_merkle_tree_v2;
+        add_v2_reward_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            pre_epoch_genesis().await,
+        )
+        .await
+        .expect("a leaf from before epochs is skipped, not an error");
+        assert!(consensus.updated_leaves.lock().is_empty());
+    }
+
+    /// Like [`fee_accounts_at_pre_epoch_leaf_skip_consensus_state`], for v1 reward accounts.
+    #[tokio::test]
+    async fn v1_reward_accounts_at_pre_epoch_leaf_skip_consensus_state() {
+        let consensus = RecordingConsensus::default();
+        let tree = ValidatedState::default().reward_merkle_tree_v1;
+        add_v1_reward_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            pre_epoch_genesis().await,
+        )
+        .await
+        .expect("a leaf from before epochs is skipped, not an error");
+        assert!(consensus.updated_leaves.lock().is_empty());
+    }
+
+    /// Fee accounts read at a leaf with epochs join the consensus state at that leaf.
+    #[tokio::test]
+    async fn fee_accounts_at_epoch_leaf_update_that_leaf() {
+        let consensus = RecordingConsensus::default();
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            EPOCH_VERSION,
+        )
+        .await;
+        let tree = ValidatedState::default().fee_merkle_tree;
+        add_fee_accounts_to_state(
+            &consensus,
+            &ViewNumber::new(0),
+            &[],
+            &tree,
+            leaf.clone().into(),
+        )
+        .await
+        .expect("accounts at a leaf with epochs join the consensus state");
+        assert_eq!(*consensus.updated_leaves.lock(), vec![leaf]);
     }
 }

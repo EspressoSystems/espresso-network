@@ -1832,7 +1832,10 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
         .await
         .context(format!("leaf {from_height} not available"))?;
     let from_leaf: Leaf2 = from_leaf.leaf().clone().into_leaf2().with_context(|| {
-        format!("state reconstruction cannot start from leaf {from_height}, which predates epochs")
+        format!(
+            "state reconstruction cannot start from leaf {from_height}, whose justify QC is from \
+             before epochs"
+        )
     })?;
     ensure!(
         from_leaf.view_number() < to_view,
