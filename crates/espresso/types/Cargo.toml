@@ -131,6 +131,7 @@ rustix = { workspace = true }
 test-log = { workspace = true }
 test-server = { workspace = true }
 test-utils = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 toml = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }

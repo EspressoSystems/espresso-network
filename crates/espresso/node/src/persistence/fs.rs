@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
@@ -1587,6 +1587,16 @@ impl MembershipPersistence for Persistence {
         Ok(Some(stake))
     }
 
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let inner = self.inner.read().await;
+        let path = inner.stake_table_dir_path();
+        // The directory is created by the first `store_stake`.
+        if !path.try_exists()? {
+            return Ok(BTreeSet::new());
+        }
+        Ok(epoch_files(path)?.map(|(epoch, _)| epoch).collect())
+    }
+
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         let inner = self.inner.read().await;
         let file_path = inner
@@ -1697,6 +1707,22 @@ impl MembershipPersistence for Persistence {
         fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        // A write without a reward or hash keeps the stored one. An unreadable file is overwritten.
+        let (block_reward, stake_table_hash) =
+            if block_reward.is_some() && stake_table_hash.is_some() || !file_path.is_file() {
+                (block_reward, stake_table_hash)
+            } else {
+                let (_, stored_reward, stored_hash) = fs::read(&file_path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| Ok(deserialize_stake_table(&bytes)?.0))
+                    .inspect_err(|err| tracing::warn!(%epoch, "unreadable stake file: {err:#}"))
+                    .unwrap_or_default();
+                (
+                    block_reward.or(stored_reward),
+                    stake_table_hash.or(stored_hash),
+                )
+            };
 
         inner.replace(
             &file_path,
@@ -2504,6 +2530,25 @@ mod test {
         let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
         assert!(epochs.contains(&EpochNumber::new(1)));
         assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    /// An unreadable stake file does not fail a write without a reward or hash.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_store_stake_replaces_unreadable_file() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::options(&tmp).create().await.unwrap();
+        let path = storage.inner.read().await.stake_table_dir_path();
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("5.txt"), b"not a stake table").unwrap();
+
+        let validator = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let mut stake = indexmap::IndexMap::new();
+        stake.insert(validator.account, validator);
+        let epoch = EpochNumber::new(5);
+        storage.store_stake(epoch, stake, None, None).await.unwrap();
+
+        let (loaded, reward, hash) = storage.load_stake(epoch).await.unwrap().unwrap();
+        assert_eq!((loaded.len(), reward, hash), (1, None, None));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

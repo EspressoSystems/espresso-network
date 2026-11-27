@@ -61,5 +61,5 @@ private def tokenRules : String :=
 
 def main := manualMain (%doc Reference)
   (config := {
-    extraHead := #[.tag "style" #[] (.text false (tableRules ++ linkRules ++ tokenRules))]
+    extraHead := #[.element "style" #[] (.raw (tableRules ++ linkRules ++ tokenRules))]
   })

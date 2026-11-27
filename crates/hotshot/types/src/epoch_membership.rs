@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -10,7 +10,7 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use hotshot_utils::anytrace::{self, Wrap};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
-use tokio::{spawn, time::timeout};
+use tokio::{spawn, sync::Mutex as AsyncMutex, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use versions::DRB_FIX_VERSION;
@@ -58,6 +58,22 @@ type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
 /// snapshot.
 type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
 
+/// Hook that may install stake tables for `catchup(target)` when the held pair `(start-1, start)` is
+/// more than one epoch below `target`. Called with `(target, start, coordinator)`. Returns the walk
+/// start `start'`, at or above `start`, or an error, which is logged; the walk then runs from `start`.
+/// The pair `(start'-1, start')` is held on return, and so is the table of epoch `start'-2` (the next
+/// install's block reward reads it). The hook bounds its own duration (no timeout,
+/// `seed_lock` held) and must not await a catchup on this coordinator.
+pub type CatchupSeedFn<TYPES> = Arc<
+    dyn Fn(
+            EpochNumber,
+            EpochNumber,
+            EpochMembershipCoordinator<TYPES>,
+        ) -> BoxFuture<'static, anyhow::Result<EpochNumber>>
+        + Send
+        + Sync,
+>;
+
 /// Consensus components currently resident in memory. This says nothing about
 /// reward context, authenticated roots, or persistence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +117,9 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     store_drb_progress_fn: StoreDrbProgressFn,
     load_drb_progress_fn: LoadDrbProgressFn,
     store_drb_result_fn: StoreDrbResultFn,
+    catchup_seed: Arc<OnceLock<CatchupSeedFn<TYPES>>>,
+    /// Serves waiters first come, so a seed for an old epoch can run ahead of the node's own catchup.
+    seed_lock: Arc<AsyncMutex<()>>,
     drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
 
@@ -117,6 +136,8 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
             drb_difficulty_selector: Arc::clone(&self.drb_difficulty_selector),
+            catchup_seed: Arc::clone(&self.catchup_seed),
+            seed_lock: Arc::clone(&self.seed_lock),
         }
     }
 }
@@ -139,6 +160,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
+            catchup_seed: Arc::default(),
+            seed_lock: Arc::default(),
         }
     }
 
@@ -151,6 +174,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         BlockNumber::new(self.epoch_length.get())
     }
 
+    /// The bound on a single catchup step.
+    pub fn catchup_timeout(&self) -> Duration {
+        self.catchup_timeout
+    }
+
     /// Override the bound on a single catchup step. Mostly for tests.
     pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
         self.catchup_timeout = timeout;
@@ -161,6 +189,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     pub fn with_store_drb_result_fn(mut self, f: StoreDrbResultFn) -> Self {
         self.store_drb_result_fn = f;
         self
+    }
+
+    /// Sets the hook once; all clones share it.
+    pub fn set_catchup_seed(&self, f: CatchupSeedFn<TYPES>) {
+        assert!(self.catchup_seed.set(f).is_ok(), "catchup seed set twice");
     }
 
     /// Get a reference to the membership
@@ -365,6 +398,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// where the walk stops, not where it starts, so an epoch nobody can serve
     /// costs one fetch attempt at the first gap rather than a probe of every
     /// earlier epoch.
+    /// A set catchup seed hook may move the start; it runs under `seed_lock`. An error from the hook
+    /// is logged and the walk runs from the held pair.
     ///
     /// Concurrent catchups walk the same epochs and share one attempt per
     /// epoch, so whichever reaches an epoch first fetches it while the others
@@ -380,18 +415,20 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             ));
         }
 
-        let known = self.membership.highest_known_epoch().unwrap_or(seeded);
+        let mut start = self.held_pair_top(epoch, seeded).await?;
 
-        let mut start = known
-            .min(EpochNumber::new(epoch.saturating_sub(1)))
-            .max(seeded);
-
-        while start > seeded {
-            if self.stake_table_present(start).await? && self.stake_table_present(start - 1).await?
-            {
-                break;
+        if start + 1 < epoch
+            && let Some(seed) = self.catchup_seed.get()
+        {
+            // One seed at a time; a seed that ran meanwhile may have made this one unnecessary.
+            let _seeding = self.seed_lock.lock().await;
+            start = self.held_pair_top(epoch, seeded).await?;
+            if start + 1 < epoch {
+                match seed(epoch, start, self.clone()).await {
+                    Ok(seeded_start) => start = seeded_start,
+                    Err(err) => warn!(%epoch, %start, "catchup seed failed, walking: {err:#}"),
+                }
             }
-            start = start - 1;
         }
 
         info!(target: "announce::catchup", %epoch, %start, "catching up to epoch");
@@ -417,21 +454,54 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self.drb_ready(epoch).await
     }
 
+    /// The top `start` of the highest consecutive held pair `(start-1, start)` with
+    /// `start <= epoch - 1`, floored at `seeded`.
+    async fn held_pair_top(&self, epoch: EpochNumber, seeded: EpochNumber) -> Result<EpochNumber> {
+        let known = self.membership.highest_known_epoch().unwrap_or(seeded);
+
+        let mut start = known
+            .min(EpochNumber::new(epoch.saturating_sub(1)))
+            .max(seeded);
+
+        while start > seeded {
+            if self.stake_table_present(start).await? && self.stake_table_present(start - 1).await?
+            {
+                break;
+            }
+            start = start - 1;
+        }
+        Ok(start)
+    }
+
     /// The membership for `epoch`, if its stake table is in memory.
     fn epoch_membership(&self, epoch: EpochNumber) -> Option<EpochMembership<TYPES>> {
-        Some(EpochMembership {
+        Some(self.membership_of(epoch, self.membership.snapshot(epoch)?))
+    }
+
+    /// The membership for `epoch` over `snapshot`.
+    fn membership_of(
+        &self,
+        epoch: EpochNumber,
+        snapshot: Snapshot<TYPES>,
+    ) -> EpochMembership<TYPES> {
+        EpochMembership {
             epoch,
-            snapshot: self.membership.snapshot(epoch)?,
+            snapshot,
             coordinator: self.clone(),
-        })
+        }
     }
 
     /// Whether `epoch`'s stake table is in memory.
     ///
     /// It is read from storage if it is not already in RAM.
     async fn stake_table_present(&self, epoch: EpochNumber) -> Result<bool> {
-        if self.membership.snapshot(epoch).is_some() {
-            return Ok(true);
+        Ok(self.held_snapshot(epoch).await?.is_some())
+    }
+
+    /// The snapshot of `epoch`, read from storage if it is not already in RAM.
+    async fn held_snapshot(&self, epoch: EpochNumber) -> Result<Option<Snapshot<TYPES>>> {
+        if let Some(snapshot) = self.membership.snapshot(epoch) {
+            return Ok(Some(snapshot));
         }
         debug!(%epoch, "loading stake table from storage");
         timeout(
@@ -550,13 +620,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         // `stake_table_for_epoch`, which on a miss claims the root epoch and
         // spawns a nested catchup for it: that is how one step turns into a
         // cascade.
-        self.stake_table_present(root_epoch).await?;
-        let Some(root_membership) = self.epoch_membership(root_epoch) else {
+        let Some(root_snapshot) = self.held_snapshot(root_epoch).await? else {
             return Err(anytrace::error!(
                 "the stake table for epoch {epoch} is derived from epoch {root_epoch}, which is \
                  in neither memory nor local storage"
             ));
         };
+        let root_membership = self.membership_of(root_epoch, root_snapshot);
 
         // Verification of the root is handled in get_epoch_root_and_drb
         debug!(%epoch, %root_epoch, "fetching epoch root");

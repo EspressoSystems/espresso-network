@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    sync::Arc,
+    time::Instant,
+};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
@@ -1864,6 +1869,19 @@ impl MembershipPersistence for Persistence {
             .transpose()
     }
 
+    async fn stored_stake_epochs(&self) -> anyhow::Result<BTreeSet<EpochNumber>> {
+        let mut tx = self.db.read().await?;
+        let epochs =
+            query_as::<(i64,)>("SELECT epoch FROM epoch_drb_and_root WHERE stake IS NOT NULL")
+                .fetch_all(tx.as_mut())
+                .await
+                .context("listing epochs with a stake table")?;
+        Ok(epochs
+            .into_iter()
+            .map(|(epoch,)| EpochNumber::new(epoch as u64))
+            .collect())
+    }
+
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
         let result = self
             .db
@@ -1992,16 +2010,22 @@ impl MembershipPersistence for Persistence {
             .transpose()?;
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_drb_and_root",
-                ["epoch", "stake", "block_reward", "stake_table_hash"],
-                ["epoch"],
-                [(
-                    epoch_i64,
-                    stake_table_bytes.clone(),
-                    reward_bytes.clone(),
-                    stake_table_hash_bytes.clone(),
-                )],
+            // A write without a reward or hash keeps the stored one.
+            tx.execute(
+                query(
+                    "INSERT INTO epoch_drb_and_root (epoch, stake, block_reward, stake_table_hash)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (epoch) DO UPDATE SET
+                        stake = excluded.stake,
+                        block_reward = COALESCE(
+                            excluded.block_reward, epoch_drb_and_root.block_reward),
+                        stake_table_hash = COALESCE(
+                            excluded.stake_table_hash, epoch_drb_and_root.stake_table_hash)",
+                )
+                .bind(epoch_i64)
+                .bind(stake_table_bytes.clone())
+                .bind(reward_bytes.clone())
+                .bind(stake_table_hash_bytes.clone()),
             )
             .await?;
             tx.commit().await

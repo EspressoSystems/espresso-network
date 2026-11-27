@@ -2557,7 +2557,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.52.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3788,15 +3788,19 @@ dependencies = [
 name = "espresso-fuzz"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "arbitrary",
  "bincode",
  "espresso-types",
+ "futures",
  "hotshot-query-service-types",
  "hotshot-types",
  "jf-advz",
  "libfuzzer-sys",
+ "light-client",
  "serde",
  "serde_json",
+ "versions",
  "vid",
 ]
 
@@ -4350,9 +4354,9 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -4894,6 +4898,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hotshot-metrics"
+version = "0.1.0"
+dependencies = [
+ "dyn-clone",
+ "hotshot-metrics",
+ "itertools 0.14.0",
+ "prometheus",
+ "snafu 0.8.9",
+ "test-log",
+ "tracing",
+]
+
+[[package]]
 name = "hotshot-new-protocol"
 version = "0.1.0"
 dependencies = [
@@ -5005,6 +5022,7 @@ dependencies = [
  "futures",
  "generic-array 0.14.7",
  "hotshot-example-types",
+ "hotshot-metrics",
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
@@ -5017,7 +5035,6 @@ dependencies = [
  "lazy_static",
  "log",
  "pretty_assertions",
- "prometheus",
  "rand 0.8.6",
  "refinery",
  "refinery-core",
@@ -5141,9 +5158,9 @@ dependencies = [
  "derive_more 2.1.1",
  "digest 0.10.7",
  "displaydoc",
- "dyn-clone",
  "futures",
  "generic-array 1.4.3",
+ "hotshot-metrics",
  "hotshot-utils",
  "jf-advz",
  "jf-crhf",
@@ -5725,8 +5742,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jf-advz"
-version = "0.2.4"
-source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-advz-v0.2.4#4b935eeb59e404b38f823694eb488c1377468f36"
+version = "0.2.5"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-advz-v0.2.5#60a739bf2d7b4b6f80765cd17f99bac78ed53349"
 dependencies = [
  "anyhow",
  "ark-ec 0.5.0",
@@ -5798,8 +5815,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree-compat"
-version = "0.3.1"
-source = "git+https://github.com/EspressoSystems/jellyfish-compat?tag=jf-merkle-tree-compat-v0.3.1#4b935eeb59e404b38f823694eb488c1377468f36"
+version = "0.3.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-compat-v0.3.2#d73542d25ed691d3d78e8334c5f3aed5d85d8fbe"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -7668,7 +7685,7 @@ dependencies = [
 name = "process-metrics"
 version = "0.1.0"
 dependencies = [
- "hotshot-types",
+ "hotshot-metrics",
  "humantime",
  "procfs",
  "sha2 0.10.9",
@@ -7907,16 +7924,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.14"
+version = "0.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "addec6a0dcad8a8d96a771f815f0eaf55f9d1805756410b39f5fa81332574cbd"
+checksum = "af66907df18639dcf4db56ca65490cabc4b27a97dbadd96f2926cca73298f016"
 dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10741,9 +10758,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -11159,7 +11176,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

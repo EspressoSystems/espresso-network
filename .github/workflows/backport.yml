@@ -19,6 +19,8 @@ jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
+    outputs:
+      created_pull_numbers: ${{ steps.backport.outputs.created_pull_numbers }}
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged &&
@@ -28,15 +30,6 @@ jobs:
         with:
           fetch-depth: 0
           filter: blob:none
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
-          components: rustfmt
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: just
 
       - uses: taiki-e/install-action@v2
         with:
@@ -91,15 +84,48 @@ jobs:
           echo "created_pull_numbers=${created# }" >> "$GITHUB_OUTPUT"
           echo "failed_targets=${failed# }" >> "$GITHUB_OUTPUT"
 
+      - name: Fail if a backport could not be created
+        if: always() && steps.backport.outputs.failed_targets != ''
+        env:
+          FAILED_TARGETS: ${{ steps.backport.outputs.failed_targets }}
+        run: |
+          echo "::error::Could not create a backport for: $FAILED_TARGETS"
+          exit 1
+
+  resolve:
+    name: Resolve backport conflicts
+    needs: backport
+    if: ${{ !cancelled() && needs.backport.outputs.created_pull_numbers != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
       - name: Detect remaining conflicts
         id: resolve
-        if: steps.backport.outputs.created_pull_numbers != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          PR_NUMBERS: ${{ needs.backport.outputs.created_pull_numbers }}
         run: |
           set -euo pipefail
-          pr_numbers="${{ steps.backport.outputs.created_pull_numbers }}"
+          pr_numbers="$PR_NUMBERS"
           needs_claude=""
           for pr in $pr_numbers; do
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
@@ -141,7 +167,7 @@ jobs:
           flagged_files=$(cat "$RUNNER_TEMP/flagged-files.txt" 2>/dev/null || echo none)
           prompt=$(printf 'These backport PRs have conflicts to resolve:\n%s\n\nFiles without conflict markers, per PR:\n%s\n\n%s' \
             "$NEEDS_CLAUDE" "$flagged_files" "$prompt_body")
-          claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
+          claude -p "$prompt" --model opus --effort high --dangerously-skip-permissions
 
       - name: Install protoc
         if: steps.resolve.outputs.needs_claude != ''
@@ -205,10 +231,19 @@ jobs:
             fi
           done
 
-      - name: Fail if a backport could not be created
-        if: always() && steps.backport.outputs.failed_targets != ''
+  # PRs opened with GITHUB_TOKEN fire no pull_request_target event. A separate job keeps
+  # `actions: write` away from the Claude step. No `ref`: one run refreshes every open tracker.
+  # On failure the output can be empty although a PR was created.
+  refresh-trackers:
+    needs: backport
+    if: ${{ !cancelled() && (needs.backport.outputs.created_pull_numbers != '' || needs.backport.result == 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the release tracker refresh
         env:
-          FAILED_TARGETS: ${{ steps.backport.outputs.failed_targets }}
-        run: |
-          echo "::error::Could not create a backport for: $FAILED_TARGETS"
-          exit 1
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+        run: gh workflow run update-release-tracker.yml --ref "$REF"

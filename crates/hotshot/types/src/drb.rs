@@ -404,21 +404,11 @@ pub mod election {
         randomized_committee: &RandomizedCommittee<Entry>,
         view: u64,
     ) -> Entry {
-        let RandomizedCommittee {
-            cdf,
-            stake_table_hash,
-            drb,
-        } = randomized_committee;
-        // We hash the concatenated drb, view and stake table hash.
-        let mut hasher = Sha512::new();
-        hasher.update(drb);
-        hasher.update(view.to_le_bytes());
-        hasher.update(stake_table_hash);
-        let raw_breakpoint: [u8; 64] = hasher.finalize().into();
+        let cdf = &randomized_committee.cdf;
 
-        // then calculate the remainder modulo the total stake as a U512
+        // calculate the view's hash modulo the total stake as a U512
         let remainder: U512 =
-            U512::from_le_bytes(raw_breakpoint) % U512::from(cdf.last().unwrap().1);
+            randomized_committee.view_hash(view) % U512::from(cdf.last().unwrap().1);
 
         // and drop the top 32 bytes, downcasting to a U256
         let breakpoint: U256 = U256::from_le_slice(&remainder.to_le_bytes_vec()[0..32]);
@@ -447,6 +437,22 @@ pub mod election {
     impl<Entry> RandomizedCommittee<Entry> {
         pub fn drb_result(&self) -> [u8; 32] {
             self.drb
+        }
+
+        /// The committee in the order its stakes are laid end to end.
+        pub fn entries(&self) -> impl Iterator<Item = &Entry> {
+            self.cdf.iter().map(|(entry, _)| entry)
+        }
+
+        /// The hash a view's leader is drawn from: of the concatenated drb, view and stake
+        /// table hash.
+        pub fn view_hash(&self, view: u64) -> U512 {
+            let mut hasher = Sha512::new();
+            hasher.update(self.drb);
+            hasher.update(view.to_le_bytes());
+            hasher.update(self.stake_table_hash);
+            let raw: [u8; 64] = hasher.finalize().into();
+            U512::from_le_bytes(raw)
         }
     }
 }
