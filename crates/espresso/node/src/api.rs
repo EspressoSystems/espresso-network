@@ -1197,11 +1197,6 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         async move {
             self.save_reward_tree_v2(height, merkle_tree).await?;
 
-            // Skip garbage collection in tests
-            if cfg!(any(test, feature = "testing")) {
-                return Ok(());
-            }
-
             let finalized_hotshot_height = match node_state.finalized_hotshot_height().await {
                 Ok(h) => h,
                 Err(err) => {
@@ -5104,12 +5099,17 @@ mod test {
             .membership()
             .epoch_block_reward(3.into())
             .expect("block reward is not None");
+        // A node stores reward proofs only for the height the L1 light client has finalized.
+        set_light_client_finalized_height(&network, first_boundary - EPOCH_HEIGHT).await?;
+        wait_for_reward_proofs_of_tree(&client, first_boundary - EPOCH_HEIGHT).await?;
 
         assert_eq!(
             reward_balance(&client, first_boundary - EPOCH_HEIGHT, address).await,
             U256::ZERO,
             "rewards before the first boundary"
         );
+        set_light_client_finalized_height(&network, first_boundary).await?;
+        wait_for_reward_proofs(&client, first_boundary, address).await?;
         assert_eq!(
             reward_balance(&client, first_boundary, address).await,
             U256::from(EPOCH_HEIGHT) * block_reward.0,
@@ -5154,6 +5154,9 @@ mod test {
 
         let mut prev_total = U256::ZERO;
         for height in [3 * EPOCH_HEIGHT].into_iter().chain(boundaries) {
+            // A node stores reward proofs for the height the L1 light client has finalized.
+            set_light_client_finalized_height(&network, height).await?;
+            wait_for_reward_proofs_of_tree(&client, height).await?;
             let mut total = U256::ZERO;
             for address in &addresses {
                 total += reward_balance(&client, height, *address).await;
@@ -5253,6 +5256,9 @@ mod test {
             }
 
             let boundary = (epoch + 1) * EPOCH_HEIGHT;
+            // A node stores reward proofs for the height the L1 light client has finalized.
+            set_light_client_finalized_height(&network, boundary).await?;
+            wait_for_reward_proofs_of_tree(&client, boundary).await?;
             for (address, amount) in &expected {
                 let balance = client
                     .get::<Option<RewardAmount>>(&format!(
@@ -5408,6 +5414,191 @@ mod test {
         }
     }
 
+    /// Set the HotShot height the L1 light client has finalized to `height`, on the mock light
+    /// client node 0 of `network` reads it from, as the light client prover would. The rest of the
+    /// finalized state stays as it is.
+    async fn set_light_client_finalized_height<P: PersistenceOptions, const N: usize>(
+        network: &TestNetwork<P, N>,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        let stake_table = network
+            .server
+            .node_state()
+            .chain_config
+            .stake_table_contract
+            .context("setup: node 0 has no stake table contract")?;
+        crate::testing::set_mock_light_client_height(
+            network.cfg.l1_url(),
+            network.cfg.signer(),
+            stake_table,
+            height,
+        )
+        .await
+        .context("setup: setting the light client finalized height")
+    }
+
+    /// How long to wait for a node to store reward proofs after the L1 light client's finalized
+    /// height changes. A time, not a block count: a node stores proofs only at every 30th block,
+    /// and caches the finalized height it reads, for 1 s on the nodes of a `TestNetwork` and 30 s
+    /// on query nodes, followers and replays.
+    const REWARD_PROOFS_TIMEOUT: Duration = Duration::from_secs(180);
+
+    /// Wait until `client` serves a reward claim for `address` at `height`, as its node has stored
+    /// the reward proofs for `height`. A 404 also means that `address` has no rewards at `height`,
+    /// so callers pass an account that has.
+    async fn wait_for_reward_proofs(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        address: Address,
+    ) -> anyhow::Result<()> {
+        let path = format!("reward-state-v2/reward-claim-input/{height}/{address}");
+        wait_until_served(client, &path, Instant::now() + REWARD_PROOFS_TIMEOUT).await
+    }
+
+    /// Wait until `client` serves the reward proof of every account in its reward tree at the
+    /// epoch boundary `boundary`. A node writes proofs in chunks, so one account's proof does not
+    /// show that the others' are stored. Asks for balances, not claims, as an account with a zero
+    /// balance has a proof but no claim.
+    async fn wait_for_reward_proofs_of_tree(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        boundary: u64,
+    ) -> anyhow::Result<()> {
+        let accounts: Vec<(Address, RewardAmount)> = client
+            .get(&format!(
+                "reward-state-v2/reward-amounts/{boundary}/0/10000"
+            ))
+            .send()
+            .await
+            .with_context(|| format!("no reward tree at {boundary}"))?;
+        let deadline = Instant::now() + REWARD_PROOFS_TIMEOUT;
+        for (account, _) in accounts {
+            let path = format!("reward-state-v2/reward-balance/{boundary}/{account}");
+            wait_until_served(client, &path, deadline).await?;
+        }
+        Ok(())
+    }
+
+    /// Poll `path` while `client` answers it with a 404, until it answers or `deadline` passes.
+    async fn wait_until_served(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        path: &str,
+        deadline: Instant,
+    ) -> anyhow::Result<()> {
+        loop {
+            match client.get::<serde_json::Value>(path).send().await {
+                Ok(_) => return Ok(()),
+                Err(err) if err.status == StatusCode::NOT_FOUND && Instant::now() < deadline => {
+                    sleep(Duration::from_secs(1)).await
+                },
+                Err(err) => bail!("no reward proofs: {path} answered {err}"),
+            }
+        }
+    }
+
+    /// The decaf incident of 2026-11-17, end to end: the L1 light client lags more than 5 epochs
+    /// behind the chain, and reward claims at its finalized height must still be served. The node
+    /// stores proofs for the boundary below the height the light client has finalized, not for the
+    /// chain's own heights, and garbage collection keeps that boundary's tree and proofs, while it
+    /// deletes the trees below it.
+    #[apply(sql_data_sources)]
+    async fn test_reward_lc_claims_while_light_client_lags<D: TestableSqlDataSource>(
+        _d: PhantomData<D>,
+    ) -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 1;
+        // Inside epoch 5. Its boundary below, 40, is the first with rewards.
+        const FINALIZED: u64 = 4 * EPOCH_HEIGHT + EPOCH_HEIGHT / 2;
+        let claim_boundary = 4 * EPOCH_HEIGHT;
+        // 6 epochs past the finalized height's epoch, so that 5 epochs of retention alone would
+        // delete the claim boundary's tree.
+        let tip_boundary = (epoch_from_block_number(FINALIZED, EPOCH_HEIGHT) + 6) * EPOCH_HEIGHT;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<D, NUM_NODES>().await;
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(D::options(&storage[0], Options::with_port(api_port)))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .pos_hook(
+                DelegationConfig::VariableAmounts,
+                StakeTableContractVersion::V3,
+                TEST_UPGRADE,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        let address = network_config.staking_priv_keys()[0].signer.address();
+
+        wait_until_block_height(&client, "reward-state-v2/block-height", FINALIZED).await;
+        let below_claim_boundary = (EPOCH_HEIGHT..claim_boundary).step_by(EPOCH_HEIGHT as usize);
+        for height in below_claim_boundary.clone() {
+            client
+                .get::<Vec<u8>>(&reward_tree_path(height))
+                .send()
+                .await
+                .with_context(|| format!("setup: no reward tree at {height}"))?;
+        }
+        set_light_client_finalized_height(&network, FINALIZED).await?;
+        wait_until_block_height(&client, "reward-state-v2/block-height", tip_boundary).await;
+
+        wait_for_reward_proofs(&client, FINALIZED, address)
+            .await
+            .context("no reward claim at the L1-finalized height")?;
+        wait_for_reward_proofs_of_tree(&client, claim_boundary).await?;
+
+        let mut problems = vec![];
+        for height in below_claim_boundary {
+            match client
+                .get::<Vec<u8>>(&reward_tree_path(height))
+                .send()
+                .await
+            {
+                Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                Ok(_) => problems.push(format!(
+                    "the reward tree at {height}, below the claim boundary {claim_boundary}, was \
+                     not garbage collected"
+                )),
+                Err(err) => bail!("reward tree at {height}: {err}"),
+            }
+        }
+        if let Err(err) = client
+            .get::<Vec<u8>>(&reward_tree_path(claim_boundary))
+            .send()
+            .await
+        {
+            problems.push(format!(
+                "the reward tree at the claim boundary {claim_boundary} is gone: {err}"
+            ));
+        }
+        let above = ((claim_boundary + EPOCH_HEIGHT)..=tip_boundary).step_by(EPOCH_HEIGHT as usize);
+        for height in above {
+            match client
+                .get::<RewardAmount>(&format!(
+                    "reward-state-v2/reward-balance/{height}/{address}"
+                ))
+                .send()
+                .await
+            {
+                Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                Ok(_) => problems.push(format!(
+                    "reward proofs stored at {height}, above {claim_boundary}, the boundary of \
+                     the L1-finalized height {FINALIZED}"
+                )),
+                Err(err) => bail!("reward balance at {height}: {err}"),
+            }
+        }
+        ensure!(problems.is_empty(), "{}", problems.join("\n"));
+        Ok(())
+    }
+
     /// From 0.3 to 0.5 every block paid its leader's commission and delegators, which only legacy
     /// consensus produced; the v4 chain's commissions change in epoch 2.
     #[apply(sql_data_sources)]
@@ -5508,7 +5699,8 @@ mod test {
         Ok(())
     }
 
-    /// Checks every validator's and delegator's balance in the v2 reward tree at `height`.
+    /// Checks every validator's and delegator's balance in the v2 reward tree at `height`. Reads
+    /// the stored tree, not reward proofs: a replay stores proofs for one L1-finalized height only.
     async fn assert_stakers_balances(
         client: &Client<ClientErr, SequencerApiVersion>,
         height: u64,
@@ -5520,17 +5712,24 @@ mod test {
             .flat_map(|v| v.delegators.keys().copied().chain([v.account]))
             .chain(expected.keys().copied())
             .collect::<HashSet<_>>();
+        let tree: HashMap<Address, U256> = match client
+            .get::<Vec<(Address, RewardAmount)>>(&format!(
+                "reward-state-v2/reward-amounts/{height}/0/10000"
+            ))
+            .send()
+            .await
+        {
+            Ok(page) => page
+                .into_iter()
+                .map(|(account, amount)| (account, amount.0))
+                .collect(),
+            // No tree is stored at a height whose block changed no balance.
+            Err(err) if err.status == StatusCode::NOT_FOUND => HashMap::new(),
+            Err(err) => bail!("reward tree at {height}: {err}"),
+        };
         for staker in stakers {
-            let balance = match client
-                .get::<RewardAmount>(&format!("reward-state-v2/reward-balance/{height}/{staker}"))
-                .send()
-                .await
-            {
-                Ok(amount) => Some(amount.0),
-                // Not in the tree yet.
-                Err(err) if err.status == StatusCode::NOT_FOUND => None,
-                Err(err) => bail!("reward balance of {staker} at {height}: {err}"),
-            };
+            // Not in the tree yet when `None`.
+            let balance = tree.get(&staker).copied();
             ensure!(
                 balance == expected.get(&staker).copied(),
                 "balance of {staker} at {height}: {balance:?}, expected {:?}",
@@ -5546,13 +5745,17 @@ mod test {
         _d: PhantomData<D>,
     ) -> anyhow::Result<()> {
         let chain = LegacyChain::load("v4")?;
-        let replay = chain.replay::<D>().await?;
+        // A node stores reward proofs for the height the L1 light client has finalized, and only
+        // at a block whose height is a multiple of 30, so claim at the newest such block.
+        let height = chain.tip() / 30 * 30;
+        let replay = chain.replay_with_l1_finalized::<D>(Some(height)).await?;
         let client = &replay.client;
-        let tip = chain.tip();
+        wait_for_reward_proofs_of_tree(client, height).await?;
         let root = chain
             .blocks
-            .last()
-            .unwrap()
+            .iter()
+            .find(|block| block.leaf.height() == height)
+            .context("the claimed block is recorded")?
             .leaf
             .header()
             .reward_merkle_tree_root();
@@ -5564,7 +5767,7 @@ mod test {
         let mut balances = vec![];
         for staker in stakers {
             let res: RewardAccountQueryDataV2 = client
-                .get(&format!("reward-state-v2/proof/{tip}/{staker}"))
+                .get(&format!("reward-state-v2/proof/{height}/{staker}"))
                 .send()
                 .await?;
             ensure!(res.proof.verify(&root)? == res.balance, "proof of {staker}");
@@ -5573,7 +5776,7 @@ mod test {
             }
             let claim: RewardClaimInput = client
                 .get(&format!(
-                    "reward-state-v2/reward-claim-input/{tip}/{staker}"
+                    "reward-state-v2/reward-claim-input/{height}/{staker}"
                 ))
                 .send()
                 .await?;
@@ -5593,7 +5796,7 @@ mod test {
 
         balances.sort_by_key(|(account, _)| std::cmp::Reverse(*account));
         let page: Vec<(RewardAccountV2, RewardAmount)> = client
-            .get(&format!("reward-state-v2/reward-amounts/{tip}/0/10000"))
+            .get(&format!("reward-state-v2/reward-amounts/{height}/0/10000"))
             .send()
             .await?;
         ensure!(page == balances, "reward page {page:?}");
@@ -6237,19 +6440,18 @@ mod test {
             genesis_state.chain_config.commit(),
         )
         .await?;
-        let rewarded: Vec<RewardAccountV2> = network
-            .server
-            .decided_state()
-            .await
-            .unwrap()
-            .reward_merkle_tree_v2
-            .iter()
-            .map(|(account, _)| *account)
-            .collect();
+        let rewarded = claimable_accounts(&api_client, tip, EPOCH_HEIGHT).await?;
         assert!(
             !rewarded.is_empty(),
             "no rewards distributed after {EPOCHS_TO_FOLLOW} epochs"
         );
+        // A node stores reward proofs for the height the L1 light client has finalized.
+        set_light_client_finalized_height(&network, tip).await?;
+        for client in [&api_client, &follower_client] {
+            for account in &rewarded {
+                wait_for_reward_proofs(client, tip, account.0).await?;
+            }
+        }
         assert_same_rewards(&api_client, &follower_client, tip, &rewarded).await?;
 
         let txn = Transaction::new(NamespaceId::from(1_u32), vec![1, 2, 3]);
@@ -6530,6 +6732,36 @@ mod test {
             assert_same_response(api_client, follower_client, &path).await?;
         }
         Ok(())
+    }
+
+    /// The accounts with a balance in the reward tree that claims at `tip` read: the tree at the
+    /// epoch boundary below `tip`. The chain moves on while a test runs, so a later decided state
+    /// can hold accounts that this tree lacks, whose claims at `tip` are 404.
+    async fn claimable_accounts(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        tip: u64,
+        epoch_height: u64,
+    ) -> anyhow::Result<Vec<RewardAccountV2>> {
+        let boundary = reward_proof_boundary(tip, epoch_height)
+            .with_context(|| format!("no reward claims before the first boundary, tip {tip}"))?;
+        timeout(
+            FOLLOW_TIMEOUT,
+            wait_until_block_height(client, "reward-state-v2/block-height", boundary + 1),
+        )
+        .await
+        .context("reward state did not reach the claim boundary")?;
+        let tree: Vec<(RewardAccountV2, RewardAmount)> = client
+            .get(&format!(
+                "reward-state-v2/reward-amounts/{boundary}/0/10000"
+            ))
+            .send()
+            .await
+            .with_context(|| format!("reward tree at {boundary}"))?;
+        Ok(tree
+            .into_iter()
+            .filter(|(_, amount)| !amount.0.is_zero())
+            .map(|(account, _)| account)
+            .collect())
     }
 
     async fn assert_same_rewards(
@@ -12796,27 +13028,29 @@ mod test {
 
         let validators: AuthenticatedValidatorMap = client.get("node/validators/3").send().await?;
         ensure!(!validators.is_empty(), "epoch 3 has validators");
-        let mut balances = vec![];
-        for validator in validators.keys() {
-            let balance = client
-                .get::<Option<RewardAmount>>(&format!(
-                    "reward-state-v2/reward-balance/{tip}/{validator}"
-                ))
-                .send()
-                .await;
-            if fills_v2 {
-                balances.push(balance?.unwrap_or_default().0);
-            } else {
-                // The v2 tree was never written, so there is no proof to answer with.
-                match balance {
-                    Err(err) if err.status == StatusCode::NOT_FOUND => {},
-                    other => bail!(
-                        "{}: {validator} v2 balance should be missing, got {other:?}",
-                        chain.name
-                    ),
-                }
-            }
-        }
+        // Reads the stored tree, not reward proofs: a replay stores proofs for one L1-finalized
+        // height only.
+        let tree: HashMap<Address, RewardAmount> = match client
+            .get::<Vec<(Address, RewardAmount)>>(&format!(
+                "reward-state-v2/reward-amounts/{tip}/0/10000"
+            ))
+            .send()
+            .await
+        {
+            Ok(page) => page.into_iter().collect(),
+            // The v2 tree was never written, so there is none to answer with.
+            Err(err) if !fills_v2 && err.status == StatusCode::NOT_FOUND => HashMap::new(),
+            Err(err) => bail!("{}: v2 reward tree at {tip}: {err}", chain.name),
+        };
+        ensure!(
+            fills_v2 || tree.is_empty(),
+            "{}: the v2 reward tree should be missing, got {tree:?}",
+            chain.name
+        );
+        let balances: Vec<U256> = validators
+            .keys()
+            .map(|validator| tree.get(validator).copied().unwrap_or_default().0)
+            .collect();
         ensure!(
             balances.iter().any(|balance| !balance.is_zero()) == fills_v2,
             "{}: v2 reward balances {balances:?}",
@@ -13173,7 +13407,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, TEST_UPGRADE).await;
-        let contracts = network.contracts.unwrap();
+        let contracts = network.contracts.clone().unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
 
         // Update only once epoch 3 has started: by then the stake tables of epochs 3 and 4 are
@@ -13250,8 +13484,12 @@ mod test {
             block_with_new_commissions + 1,
         )
         .await;
-        let mut new_amounts = vec![];
-        for (val, ..) in commissions {
+        // A node stores reward proofs for the height the L1 light client has finalized, and
+        // garbage collects older ones, so read every balance at one height before moving it on.
+        set_light_client_finalized_height(&network, last_block_with_old_commissions).await?;
+        wait_for_reward_proofs_of_tree(&client, last_block_with_old_commissions).await?;
+        let mut before_amounts = vec![];
+        for (val, ..) in &commissions {
             let before = client
                 .get::<Option<RewardAmount>>(&format!(
                     "reward-state-v2/reward-balance/{last_block_with_old_commissions}/{val}"
@@ -13259,6 +13497,12 @@ mod test {
                 .send()
                 .await?
                 .unwrap();
+            before_amounts.push(before);
+        }
+        set_light_client_finalized_height(&network, block_with_new_commissions).await?;
+        wait_for_reward_proofs_of_tree(&client, block_with_new_commissions).await?;
+        let mut new_amounts = vec![];
+        for ((val, ..), before) in commissions.iter().zip(before_amounts) {
             let after = client
                 .get::<Option<RewardAmount>>(&format!(
                     "reward-state-v2/reward-balance/{block_with_new_commissions}/{val}"
@@ -13714,6 +13958,10 @@ mod test {
                 sleep(Duration::from_millis(500)).await;
             };
 
+            // A node stores reward proofs for the height the L1 light client has finalized, and
+            // only while it processes blocks.
+            set_light_client_finalized_height(&network, height).await?;
+            wait_for_reward_proofs_of_tree(&client, height).await?;
             network.stop_consensus().await;
 
             let http = reqwest::Client::new();

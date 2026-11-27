@@ -147,9 +147,33 @@ impl LegacyChain {
     /// Starts a query node on this chain and returns once it has stored every block and derived
     /// the merklized state up to the tip.
     pub async fn replay<D: TestableSqlDataSource>(&self) -> anyhow::Result<ReplayNode<D>> {
+        self.replay_with_l1_finalized(None).await
+    }
+
+    /// Like [`Self::replay`], with the HotShot height the L1 light client has finalized set to
+    /// `finalized` before the node starts, if given. The recorded L1 never moves it from genesis,
+    /// and the node stores reward proofs only for that height.
+    pub async fn replay_with_l1_finalized<D: TestableSqlDataSource>(
+        &self,
+        finalized: Option<u64>,
+    ) -> anyhow::Result<ReplayNode<D>> {
         let l1 = replay_l1(&self.l1_blocks)
             .await
             .with_context(|| format!("replaying the {} chain's L1", self.name))?;
+        if let Some(height) = finalized {
+            let stake_table = self
+                .genesis
+                .chain_config
+                .stake_table_contract
+                .context("a recorded chain has a stake table")?;
+            crate::testing::set_mock_light_client_height(
+                l1.endpoint_url(),
+                l1.keys()[0].clone().into(),
+                stake_table,
+                height,
+            )
+            .await?;
+        }
 
         let storage = D::create_storage().await;
         let mut db = D::persistence_options(&storage);

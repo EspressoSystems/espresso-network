@@ -674,29 +674,16 @@ impl RewardMerkleTreeDataSource for SqlStorage {
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
             // Only attempt to persist proofs every 30th block.
-            //
-            // In tests, we persist proofs at every block height so
-            // reward claim tests can query proofs at arbitrary heights. This can be
-            // removed once all reward claim tests are updated
-            if !cfg!(any(test, feature = "testing"))
-                && !(height + node_state.node_id).is_multiple_of(30)
-            {
+            if !(height + node_state.node_id).is_multiple_of(30) {
                 return Ok(());
             }
 
-            // In tests, we use the current block height directly instead
-            // of querying the L1 finalized HotShot height, because test environments don't
-            // deploy a light client contract
-            let finalized_hotshot_height = if cfg!(any(test, feature = "testing")) {
-                height
-            } else {
-                match node_state.finalized_hotshot_height().await {
-                    Ok(h) => h,
-                    Err(err) => {
-                        tracing::warn!("failed to get finalized hotshot height: {err:#}");
-                        return Ok(());
-                    },
-                }
+            let finalized_hotshot_height = match node_state.finalized_hotshot_height().await {
+                Ok(h) => h,
+                Err(err) => {
+                    tracing::warn!("failed to get finalized hotshot height: {err:#}");
+                    return Ok(());
+                },
             };
 
             // Resolve which height to load the reward tree from.
@@ -2911,8 +2898,8 @@ mod tests {
 
     /// When the L1-finalized height lies inside an epoch, `persist_reward_proofs` stores proofs
     /// from the reward tree at the newest epoch boundary below it, at that boundary: not from or at
-    /// the boundary one epoch lower, and not at the finalized height. In tests the finalized height
-    /// is the height passed in.
+    /// the boundary one epoch lower, and not at the finalized height. The node state reads the
+    /// finalized height from the L1 light client; the test puts it in the node state's cache.
     #[tokio::test]
     #[test_log::test]
     async fn test_persist_reward_proofs_inside_epoch_uses_boundary_below() {
@@ -2953,9 +2940,12 @@ mod tests {
             "setup: no proofs at {boundary} yet"
         );
 
-        let node_state = NodeState::mock().with_epoch_height(epoch_height);
+        let mut node_state = NodeState::mock().with_epoch_height(epoch_height);
+        // Node 0 stores proofs only at a block whose height is a multiple of 30.
+        let block = 3 * epoch_height;
+        cache_l1_finalized(&mut node_state, finalized).await;
         storage
-            .persist_reward_proofs(&node_state, finalized, EPOCH_REWARD_VERSION)
+            .persist_reward_proofs(&node_state, block, EPOCH_REWARD_VERSION)
             .await
             .unwrap();
 
@@ -2988,6 +2978,258 @@ mod tests {
                 "proofs stored at {height}, finalized height {finalized}"
             );
         }
+    }
+
+    /// `persist_reward_proofs` stores proofs for the height the L1 light client has finalized, as
+    /// the node state reads it, not for the block it is called at: reward claims are made at the
+    /// finalized height. Called at 30 while the light client has finalized 25, it stores proofs at
+    /// 20, from the tree at 20, and none at 30, though the tree at 30 exists.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_reward_lc_proofs_at_finalized_boundary() {
+        let db = TmpDb::init().await;
+        let account = super::RewardAccountV2(Address::repeat_byte(1));
+        let storage = reward_lc_storage(&db, account).await;
+        let mut node_state = NodeState::mock().with_epoch_height(LC_EPOCH_HEIGHT);
+
+        cache_l1_finalized(&mut node_state, LC_FINALIZED).await;
+        storage
+            .persist_reward_proofs(&node_state, 30, EPOCH_REWARD_VERSION)
+            .await
+            .unwrap();
+
+        let stored = wait_for_proofs_at_any(&storage, &[20, 30]).await;
+        assert_eq!(
+            stored, 20,
+            "proofs stored at {stored}, not at 20, the boundary of the L1-finalized height \
+             {LC_FINALIZED}"
+        );
+        assert!(
+            !storage.proof_exists(30).await,
+            "proofs stored at 30, the block called at, above the L1-finalized height \
+             {LC_FINALIZED}"
+        );
+        assert_eq!(
+            stored_proof_balance(&storage, 20, account).await,
+            U256::from(20),
+            "the proofs at 20 come from the tree at 20"
+        );
+    }
+
+    /// `persist_reward_proofs` stores proofs only at the blocks where the block height plus the
+    /// node id is a multiple of 30, so nodes spread the work: a call at another block stores
+    /// nothing, though the L1 light client has finalized a height whose proofs are missing.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_reward_lc_proofs_only_on_throttle_blocks() {
+        use tokio::time::{Duration, sleep};
+
+        // The stored call reads a later L1-finalized height, whose boundary is 30, so a late write
+        // of the skipped call at 20 cannot hide behind the stored call's proofs.
+        const STORED_FINALIZED: u64 = LC_FINALIZED + LC_EPOCH_HEIGHT;
+        // (node id, a block it skips, a block it stores proofs at)
+        for (node_id, skipped, stored) in [(0, 23, 30), (7, 30, 53)] {
+            let db = TmpDb::init().await;
+            let account = super::RewardAccountV2(Address::repeat_byte(1));
+            let storage = reward_lc_storage(&db, account).await;
+            let mut node_state = NodeState::mock().with_epoch_height(LC_EPOCH_HEIGHT);
+            node_state.node_id = node_id;
+
+            cache_l1_finalized(&mut node_state, LC_FINALIZED).await;
+            storage
+                .persist_reward_proofs(&node_state, skipped, EPOCH_REWARD_VERSION)
+                .await
+                .unwrap();
+            // A spawned task writes the proofs, so give one the time to land.
+            sleep(Duration::from_secs(2)).await;
+            for height in [20, 30] {
+                assert!(
+                    !storage.proof_exists(height).await,
+                    "node {node_id}: the call at block {skipped} stored proofs at {height}, but \
+                     {skipped} + {node_id} is not a multiple of 30"
+                );
+            }
+
+            cache_l1_finalized(&mut node_state, STORED_FINALIZED).await;
+            storage
+                .persist_reward_proofs(&node_state, stored, EPOCH_REWARD_VERSION)
+                .await
+                .unwrap();
+            let at = wait_for_proofs_at_any(&storage, &[20, 30]).await;
+            assert_eq!(
+                at, 30,
+                "node {node_id}: proofs stored at {at}; the call at block {stored} stores them at \
+                 30, and the call at block {skipped} stores none"
+            );
+        }
+    }
+
+    /// After it stores a reward tree, `save_and_gc_reward_tree_v2` deletes the trees and proofs
+    /// below the lower of two boundaries: the oldest of the 5 epochs it retains, and the boundary
+    /// of the height the L1 light client has finalized, which reward claims read. Storing the tree
+    /// at 100 while the light client has finalized 25 deletes the tree and proofs at 10, and keeps
+    /// them from 20 up, though retention alone would delete everything below 50.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_reward_lc_gc_below_finalized_boundary() {
+        use espresso_types::v0_3::RewardAmount;
+        use tokio::time::{Duration, Instant, sleep};
+
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+        let account = super::RewardAccountV2(Address::repeat_byte(1));
+        let tree = |balance: u64| {
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            tree.update(account, RewardAmount(U256::from(balance)))
+                .unwrap();
+            tree
+        };
+
+        for boundary in (10..100).step_by(10) {
+            storage
+                .save_reward_tree_v2(boundary, &tree(boundary))
+                .await
+                .unwrap();
+        }
+        for boundary in [10, 20] {
+            storage
+                .persist_proofs(
+                    boundary,
+                    [(bincode::serialize(&account).unwrap(), b"proof".to_vec())].into_iter(),
+                )
+                .await
+                .unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(storage.proof_exists(10).await && storage.proof_exists(20).await) {
+            assert!(Instant::now() < deadline, "setup: no proofs at 10 and 20");
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        let mut node_state = NodeState::mock().with_epoch_height(LC_EPOCH_HEIGHT);
+        cache_l1_finalized(&mut node_state, LC_FINALIZED).await;
+        storage
+            .save_and_gc_reward_tree_v2(&node_state, 100, EPOCH_REWARD_VERSION, &tree(100))
+            .await
+            .unwrap();
+
+        assert!(
+            storage.load_tree(10).await.is_err(),
+            "the tree at 10, below 20, the boundary of the L1-finalized height {LC_FINALIZED}, \
+             was not garbage collected"
+        );
+        assert!(
+            !storage.proof_exists(10).await,
+            "the proofs at 10, below 20, the boundary of the L1-finalized height {LC_FINALIZED}, \
+             were not garbage collected"
+        );
+        for boundary in (20..=100).step_by(10) {
+            assert!(
+                storage.load_tree(boundary).await.is_ok(),
+                "the tree at {boundary}, at or above the boundary of the L1-finalized height \
+                 {LC_FINALIZED}, was garbage collected"
+            );
+        }
+        assert!(
+            storage.proof_exists(20).await,
+            "the proofs at 20, the boundary of the L1-finalized height {LC_FINALIZED}, were \
+             garbage collected"
+        );
+    }
+
+    /// The epoch height of the `test_reward_lc_*` storage tests.
+    const LC_EPOCH_HEIGHT: u64 = 10;
+
+    /// The height the L1 light client has finalized in the `test_reward_lc_*` storage tests:
+    /// inside the third epoch, so its boundary is 20, and the boundary above it, 30, is a block at
+    /// which node 0 stores proofs.
+    const LC_FINALIZED: u64 = 25;
+
+    /// Storage with V0.5 leaves up to 30 and reward trees at the boundaries 20 and 30, in which
+    /// `account` has the balance 20 and 30, so a stored proof shows which tree it comes from.
+    async fn reward_lc_storage(db: &TmpDb, account: super::RewardAccountV2) -> SqlStorage {
+        use espresso_types::v0_3::RewardAmount;
+
+        let opt = tmp_options(db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let mut tx = storage.write().await.unwrap();
+        for leaf in leaf_chain(0..=30, EPOCH_REWARD_VERSION).await {
+            tx.insert_leaf(&leaf).await.unwrap();
+        }
+        Transaction::commit(tx).await.unwrap();
+
+        for boundary in [20, 30] {
+            let mut tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+            tree.update(account, RewardAmount(U256::from(boundary)))
+                .unwrap();
+            storage.save_reward_tree_v2(boundary, &tree).await.unwrap();
+        }
+        for boundary in [20, 30] {
+            assert!(
+                !storage.proof_exists(boundary).await,
+                "setup: no proofs at {boundary} yet"
+            );
+        }
+        storage
+    }
+
+    /// Make `node_state` read `finalized` as the HotShot height the L1 light client has finalized,
+    /// as if read from L1. The node state's own cache drops its entry after 1 s in tests, which a
+    /// slow storage write can outlast, so this cache keeps it for the whole test.
+    async fn cache_l1_finalized(node_state: &mut NodeState, finalized: u64) {
+        node_state.finalized_hotshot_height =
+            moka::future::Cache::builder().max_capacity(1).build();
+        node_state
+            .finalized_hotshot_height
+            .insert((), finalized)
+            .await;
+    }
+
+    /// The first of `heights` that has reward proofs stored, waiting for a spawned task to write
+    /// them, as they can land after `persist_reward_proofs` returns.
+    async fn wait_for_proofs_at_any(storage: &SqlStorage, heights: &[u64]) -> u64 {
+        use tokio::time::{Duration, Instant, sleep};
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            for &height in heights {
+                if storage.proof_exists(height).await {
+                    return height;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no reward proofs stored at any of {heights:?}"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// The balance of `account` in the reward proof stored at the boundary `boundary`.
+    async fn stored_proof_balance(
+        storage: &SqlStorage,
+        boundary: u64,
+        account: super::RewardAccountV2,
+    ) -> U256 {
+        let proof = storage
+            .load_proof(
+                boundary,
+                bincode::serialize(&account).unwrap(),
+                LC_EPOCH_HEIGHT,
+            )
+            .await
+            .unwrap();
+        bincode::deserialize::<super::RewardAccountQueryDataV2>(&proof)
+            .unwrap()
+            .balance
     }
 
     /// On a fresh pruned node, `load_proof` at a pruned height inside an epoch returns the proof
