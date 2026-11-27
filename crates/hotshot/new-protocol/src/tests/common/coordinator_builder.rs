@@ -33,6 +33,7 @@ use crate::{
     message::{Certificate1, OpaqueMessage, Proposal},
     network::Cliquenet,
     outbox::Outbox,
+    pq::PqVoting,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     upgrade::UpgradeProtocol,
@@ -45,6 +46,8 @@ use crate::{
 pub struct UpgradeSetup {
     pub lock: hotshot_types::message::UpgradeLock<TestTypes>,
     pub config: UpgradeConfig,
+    /// SLH-DSA signatures on upgrade votes; `None` behaves as 0.7.x.
+    pub pq: Option<PqVoting<TestTypes>>,
 }
 
 impl Default for UpgradeSetup {
@@ -52,6 +55,7 @@ impl Default for UpgradeSetup {
         Self {
             lock: test_upgrade_lock(),
             config: UpgradeConfig::default(),
+            pq: None,
         }
     }
 }
@@ -75,6 +79,7 @@ pub async fn build_test_coordinator(
     let UpgradeSetup {
         lock: upgrade_lock,
         config: upgrade_config,
+        pq,
     } = upgrade;
 
     let epoch_manager = EpochManager::new(epoch_length(epoch_height), membership.clone());
@@ -278,6 +283,7 @@ pub async fn build_test_coordinator(
             public_key,
             private_key.clone(),
         ))
+        .maybe_pq(pq)
         .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)

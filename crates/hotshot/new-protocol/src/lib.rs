@@ -11,6 +11,7 @@ pub mod logging;
 pub mod message;
 pub mod network;
 pub mod outbox;
+pub mod pq;
 pub mod serve;
 pub mod state;
 pub mod storage;
