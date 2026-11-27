@@ -247,7 +247,9 @@ mod tests {
     };
     use jf_advz::VidScheme;
 
-    use crate::{Payload, Transaction, v0::impls::block::test::ValidTest, v0_1::ADVZTxProof};
+    use crate::{
+        NamespaceId, Payload, Transaction, v0::impls::block::test::ValidTest, v0_1::ADVZTxProof,
+    };
 
     /// A zero-length transaction has no payload bytes to prove, so the proof
     /// alone does not pin which transaction it is for.
@@ -270,6 +272,31 @@ mod tests {
         assert!(proof.verify(block.ns_table(), &tx, &commit, &common));
 
         let forged = Transaction::new(tx.namespace(), b"not in the block".to_vec());
+        assert!(!proof.verify(block.ns_table(), &forged, &commit, &common));
+    }
+
+    /// Both namespaces hold one 3-byte tx and fit in the first field element,
+    /// so every range of `forged` has the same length as the honest range and
+    /// lies in the same element. jf-advz 0.2.4 accepted the honest proof's
+    /// prefix and suffix at the other namespace's ranges (jellyfish-compat#56).
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn tx_proof_rejects_tx_moved_to_another_namespace() {
+        let txs = [(10u32, b"abc"), (20, b"xyz")]
+            .map(|(ns, bytes)| Transaction::new(NamespaceId::from(ns), bytes.to_vec()));
+        let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
+            .await
+            .unwrap()
+            .0;
+        let disperse = advz_scheme(10).disperse(block.encode()).unwrap();
+        let commit = VidCommitment::V0(disperse.commit);
+        let common = VidCommon::V0(disperse.common.clone());
+
+        let index = block.iter(block.ns_table()).next().unwrap();
+        let (tx, proof) = ADVZTxProof::new(&index, &block, &disperse.common).unwrap();
+        assert!(proof.verify(block.ns_table(), &tx, &commit, &common));
+
+        assert_eq!(tx, txs[0]);
+        let forged = Transaction::new(txs[1].namespace(), tx.payload().to_vec());
         assert!(!proof.verify(block.ns_table(), &forged, &commit, &common));
     }
 }
