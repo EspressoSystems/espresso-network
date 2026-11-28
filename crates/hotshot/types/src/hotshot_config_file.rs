@@ -50,19 +50,19 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     pub da_committees: Vec<VersionedDaCommittee<TYPES>>,
     /// Number of staking DA nodes
     pub staked_da_nodes: usize,
-    /// Number of fixed leaders for GPU VID
+    /// Legacy fixed-leader GPU VID setting; retained for config compatibility, unused by consensus.
     pub fixed_leader_for_gpuvid: usize,
-    /// Base duration for next-view timeout, in milliseconds
+    /// Legacy next-view timeout; retained for config compatibility, unused by consensus.
     pub next_view_timeout: u64,
-    /// Duration for view sync round timeout
+    /// Legacy view-sync timeout; retained for config compatibility, unused by consensus.
     pub view_sync_timeout: Duration,
-    /// Number of network bootstrap nodes
+    /// Legacy bootstrap-node count; retained for config compatibility, unused by consensus.
     pub num_bootstrap: usize,
-    /// The maximum amount of time a leader can wait to get a block from a builder
+    /// Legacy external-builder timeout; retained for config compatibility, unused by consensus.
     pub builder_timeout: Duration,
-    /// Time to wait until we request data associated with a proposal
+    /// Legacy proposal data-request delay; retained for config compatibility, unused by consensus.
     pub data_request_delay: Option<Duration>,
-    /// Builder API base URL
+    /// Legacy external-builder URLs; retained for config compatibility, unused by consensus.
     #[serde(default = "default_builder_urls")]
     pub builder_urls: Vec1<Url>,
     /// Upgrade config

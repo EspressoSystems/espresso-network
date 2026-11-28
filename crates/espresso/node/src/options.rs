@@ -92,7 +92,7 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
     pub public_api_url: Option<Url>,
 
-    /// The URL of the builders to use for submitting transactions
+    /// Deprecated: accepted for compatibility and ignored. Leaders build blocks in-process.
     #[clap(long, env = "ESPRESSO_BUILDER_URLS", value_delimiter = ',')]
     pub builder_urls: Vec<Url>,
 
