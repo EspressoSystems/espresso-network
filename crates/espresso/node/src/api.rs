@@ -54,6 +54,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
+    epoch::EpochLength,
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
@@ -1665,15 +1666,19 @@ where
     }
 }
 
-pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: ChainId) -> Genesis {
-    let epoch_height = config.config.epoch_height;
-    let first_epoch = epoch_from_block_number(config.config.epoch_start_block, epoch_height);
-    Genesis {
-        epoch_height,
+pub(crate) fn light_client_genesis(
+    config: &NetworkConfig<SeqTypes>,
+    chain_id: ChainId,
+) -> anyhow::Result<Genesis> {
+    let epoch_length = EpochLength::try_from(config.config.epoch_height)
+        .context("the network config has no epoch height")?;
+    let first_epoch = epoch_length.epoch_of(config.config.epoch_start_block);
+    Ok(Genesis {
+        epoch_height: epoch_length,
 
         // Dynamic state starts from the third epoch, since we need the prior epoch's root
         // to have the upgraded header with the stake table hash.
-        first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
+        first_epoch_with_dynamic_stake_table: first_epoch + 2,
 
         stake_table: config
             .config
@@ -1683,7 +1688,7 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
             .collect(),
 
         chain_id,
-    }
+    })
 }
 
 /// [`Provider`] implementation wrapping a lazy [`LightClient`].
@@ -1765,7 +1770,7 @@ impl LightClientProvider {
             None => LightClientMetrics::default(),
         };
         let chain_id = ctx.node_state().genesis_chain_config.chain_id;
-        let genesis = light_client_genesis(&ctx.network_config(), chain_id);
+        let genesis = light_client_genesis(&ctx.network_config(), chain_id)?;
         Ok(Arc::new(
             LightClient::from_genesis_with_options(
                 db,

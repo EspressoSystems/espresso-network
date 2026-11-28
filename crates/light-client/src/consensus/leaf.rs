@@ -5,11 +5,8 @@ use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
-    data::EpochNumber,
-    epoch_membership::EpochMembership,
-    simple_certificate::QuorumCertificate2,
-    traits::block_contents::BlockHeader,
-    utils::{epoch_from_block_number, is_last_block},
+    data::EpochNumber, epoch::EpochLength, epoch_membership::EpochMembership,
+    simple_certificate::QuorumCertificate2, traits::block_contents::BlockHeader,
     vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
@@ -250,14 +247,11 @@ impl LeafProof {
                 );
                 if cert2.view_number() > curr.view_number() {
                     ensure!(
-                        is_last_block(curr.height(), quorum.epoch_height()),
+                        quorum.epoch_length().position(curr.height()).is_last(),
                         "cert2 view is after the leaf's, which is not the last block of its epoch"
                     );
                 }
-                let epoch = EpochNumber::new(epoch_from_block_number(
-                    curr.height(),
-                    quorum.epoch_height(),
-                ));
+                let epoch = quorum.epoch_length().epoch_of(curr.height());
                 ensure!(
                     cert2.data.epoch == epoch,
                     "cert2 epoch {} does not match the leaf's epoch {epoch}",
@@ -399,13 +393,12 @@ impl LeafProof {
     /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
     /// a [`LeafProofHint::Quorum`] is needed with a quorum from this epoch. If [`None`], then a
     /// [`LeafProofHint::Assumption`] is needed.
-    pub fn epoch(&self, epoch_height: u64) -> Result<Option<EpochNumber>> {
+    pub fn epoch(&self, epoch_length: EpochLength) -> Result<Option<EpochNumber>> {
         if matches!(self.proof, FinalityProof::Assumption) {
             Ok(None)
         } else {
             let height = self.leaves.last().context("empty leaf chain")?.height();
-            let epoch = epoch_from_block_number(height, epoch_height);
-            Ok(Some(epoch.into()))
+            Ok(Some(epoch_length.epoch_of(height)))
         }
     }
 }

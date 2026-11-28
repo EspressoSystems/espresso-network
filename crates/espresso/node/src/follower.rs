@@ -916,7 +916,7 @@ async fn connect_light_client(
                      peers; pin a light client genesis unless those peers are trusted"
                 );
             }
-            light_client_genesis(network_config, chain_id)
+            light_client_genesis(network_config, chain_id)?
         },
     };
     Ok(

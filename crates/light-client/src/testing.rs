@@ -32,6 +32,7 @@ use hotshot_types::{
         EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
         vid_commitment,
     },
+    epoch::EpochLength,
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
@@ -43,7 +44,6 @@ use hotshot_types::{
         block_contents::{BlockPayload as _, EncodeBytes},
         signature_key::{SignatureKey, StateSignatureKey},
     },
-    utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
     vid::avidm::init_avidm_param,
     vote::Certificate as _,
     x25519,
@@ -269,8 +269,10 @@ pub async fn custom_epoch_change_leaf_chain(
     version: Version,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
+    let epoch_length = epoch_length(epoch_height);
     custom_leaf_chain(Upgrade::trivial(version), range, |proposal| {
-        if is_epoch_transition(proposal.block_header.height(), epoch_height) {
+        let position = epoch_length.position(proposal.block_header.height());
+        if position.is_epoch_transition() {
             let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.into();
             let commit = data.commit();
             proposal.next_epoch_justify_qc = Some(NextEpochQuorumCertificate2::new(
@@ -291,15 +293,26 @@ pub async fn custom_epoch_change_leaf_chain(
 /// Their certificates pin epoch 1, so every height they use lies in the first epoch.
 pub const LEAF_CHAIN_EPOCH_HEIGHT: u64 = 1000;
 
+/// The epoch length of a test chain.
+///
+/// # Panics
+///
+/// Panics if `blocks` is zero.
+pub fn epoch_length(blocks: u64) -> EpochLength {
+    EpochLength::try_from(blocks).expect("test epoch lengths are positive")
+}
+
 /// A quorum which accepts every signature.
 #[derive(Clone, Copy, Debug)]
 pub struct AlwaysTrueQuorum {
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl AlwaysTrueQuorum {
     pub fn new(epoch_height: u64) -> Self {
-        Self { epoch_height }
+        Self {
+            epoch_length: epoch_length(epoch_height),
+        }
     }
 }
 
@@ -315,20 +328,22 @@ impl Quorum for AlwaysTrueQuorum {
         Ok(())
     }
 
-    fn epoch_height(&self) -> u64 {
-        self.epoch_height
+    fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
     }
 }
 
 /// A quorum which rejects every signature.
 #[derive(Clone, Copy, Debug)]
 pub struct AlwaysFalseQuorum {
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl AlwaysFalseQuorum {
     pub fn new(epoch_height: u64) -> Self {
-        Self { epoch_height }
+        Self {
+            epoch_length: epoch_length(epoch_height),
+        }
     }
 }
 
@@ -344,17 +359,17 @@ impl Quorum for AlwaysFalseQuorum {
         bail!("always false quorum");
     }
 
-    fn epoch_height(&self) -> u64 {
-        self.epoch_height
+    fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
     }
 }
 
 /// A quorum which verifies that calls to `verify` use the correct version, but does not check
 /// signatures.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct VersionCheckQuorum {
     leaves: HashMap<Commitment<Leaf2>, Leaf2>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl VersionCheckQuorum {
@@ -364,7 +379,7 @@ impl VersionCheckQuorum {
                 .into_iter()
                 .map(|leaf| (leaf.commit(), leaf))
                 .collect(),
-            epoch_height,
+            epoch_length: epoch_length(epoch_height),
         }
     }
 }
@@ -394,20 +409,22 @@ impl Quorum for VersionCheckQuorum {
         Ok(())
     }
 
-    fn epoch_height(&self) -> u64 {
-        self.epoch_height
+    fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
     }
 }
 
 /// A quorum which verifies that epoch change QCs are provided, but does not check signatures.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EpochChangeQuorum {
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl EpochChangeQuorum {
     pub fn new(epoch_height: u64) -> Self {
-        Self { epoch_height }
+        Self {
+            epoch_length: epoch_length(epoch_height),
+        }
     }
 }
 
@@ -417,7 +434,7 @@ impl Quorum for EpochChangeQuorum {
         cert: &Certificate,
     ) -> anyhow::Result<()> {
         if V::version() >= EpochVersion::version() {
-            cert.verify_next_epoch_qc(self.epoch_height)?;
+            cert.verify_next_epoch_qc(self.epoch_length)?;
         }
         Ok(())
     }
@@ -429,22 +446,22 @@ impl Quorum for EpochChangeQuorum {
         Ok(())
     }
 
-    fn epoch_height(&self) -> u64 {
-        self.epoch_height
+    fn epoch_length(&self) -> EpochLength {
+        self.epoch_length
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct TestClient {
     inner: Arc<Mutex<InnerTestClient>>,
-    epoch_height: u64,
+    epoch_length: EpochLength,
 }
 
 impl Default for TestClient {
     fn default() -> Self {
         Self {
             inner: Default::default(),
-            epoch_height: 100,
+            epoch_length: epoch_length(100),
         }
     }
 }
@@ -569,11 +586,11 @@ impl InnerTestClient {
     async fn leaf(
         &mut self,
         height: usize,
-        epoch_height: u64,
+        epoch_length: EpochLength,
         mut payload: Option<Vec<Transaction>>,
     ) -> LeafQueryData<SeqTypes> {
         for i in self.leaves.len()..=height {
-            let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
+            let epoch = epoch_length.epoch_of(i as u64);
             let view_offset = self.view_gaps.iter().filter(|&&g| g < i).count() as u64;
             let view_number = ViewNumber::new(i as u64 + view_offset);
 
@@ -631,7 +648,9 @@ impl InnerTestClient {
             *block_header.payload_commitment_mut() = payload_comm;
             *block_header.ns_table_mut() = ns_table;
             if *epoch + 1 >= self.first_epoch_with_dynamic_stake_table
-                && is_ge_epoch_root(block_header.height(), epoch_height)
+                && epoch_length
+                    .position(block_header.height())
+                    .is_at_or_after_root()
             {
                 assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
             }
@@ -642,10 +661,10 @@ impl InnerTestClient {
             // representation always has `next_epoch_justify_qc: None`.
             let next_epoch_justify_qc = if i > 0
                 && self.version_at(i as u64) < NEW_PROTOCOL_VERSION
-                && is_epoch_transition(i as u64 - 1, epoch_height)
+                && epoch_length.position(i as u64 - 1).is_epoch_transition()
             {
                 let parent_qc = self.leaves[i - 1].qc().clone();
-                let parent_epoch = epoch_from_block_number(i as u64 - 1, epoch_height);
+                let parent_epoch = *epoch_length.epoch_of(i as u64 - 1);
                 let parent_upgrade = Upgrade::trivial(self.version_at(i as u64 - 1));
                 let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
                 let versioned_commit = VersionedVoteData::new_infallible(
@@ -803,8 +822,8 @@ impl InnerTestClient {
         }
     }
 
-    fn vid_common(&mut self, height: u64, epoch_height: u64) -> VidCommon {
-        let epoch = epoch_from_block_number(height, epoch_height);
+    fn vid_common(&mut self, height: u64, epoch_length: EpochLength) -> VidCommon {
+        let epoch = *epoch_length.epoch_of(height);
         let quorum = self.quorum_for_epoch(epoch);
         VidCommon::V1(init_avidm_param(quorum.len()).unwrap())
     }
@@ -814,7 +833,7 @@ impl TestClient {
     pub fn with_epoch_height(epoch_height: u64) -> Self {
         Self {
             inner: Default::default(),
-            epoch_height,
+            epoch_length: epoch_length(epoch_height),
         }
     }
 
@@ -835,7 +854,7 @@ impl TestClient {
     pub async fn genesis(&self) -> Genesis {
         let mut inner = self.inner.lock().await;
         Genesis {
-            epoch_height: self.epoch_height,
+            epoch_height: self.epoch_length,
             stake_table: inner
                 .quorum_for_epoch(1)
                 .iter()
@@ -858,18 +877,18 @@ impl TestClient {
             "cannot add transactions for a block which has already been generated"
         );
         inner
-            .leaf(height, self.epoch_height, Some(transactions))
+            .leaf(height, self.epoch_length, Some(transactions))
             .await;
     }
 
     pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
-        inner.leaf(height, self.epoch_height, None).await
+        inner.leaf(height, self.epoch_length, None).await
     }
 
     pub async fn payload(&self, height: usize) -> Payload {
         let mut inner = self.inner.lock().await;
-        inner.leaf(height, self.epoch_height, None).await;
+        inner.leaf(height, self.epoch_length, None).await;
         inner.payloads[height].clone()
     }
 
@@ -883,13 +902,13 @@ impl TestClient {
         inner.missing_leaves.remove(&height);
         inner.invalid_proofs.remove(&height);
         inner.swapped_leaves.remove(&height);
-        inner.leaf(height, self.epoch_height, None).await
+        inner.leaf(height, self.epoch_length, None).await
     }
 
     pub async fn forget_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
         inner.missing_leaves.insert(height);
-        inner.leaf(height, self.epoch_height, None).await
+        inner.leaf(height, self.epoch_length, None).await
     }
 
     pub async fn return_invalid_proof(&self, for_height: usize) {
@@ -931,7 +950,7 @@ impl TestClient {
 
     pub async fn vid_common(&self, height: u64) -> VidCommon {
         let mut inner = self.inner.lock().await;
-        inner.vid_common(height, self.epoch_height)
+        inner.vid_common(height, self.epoch_length)
     }
 
     pub async fn mock_block_height(&self, height: u64) {
@@ -995,7 +1014,7 @@ impl TestClient {
     /// Drop the `Certificate2` finalizing the leaf at `height`, like a server that never stored it.
     pub async fn forget_cert2(&self, height: usize) {
         let mut inner = self.inner.lock().await;
-        inner.leaf(height, self.epoch_height, None).await;
+        inner.leaf(height, self.epoch_length, None).await;
         inner.cert2s.remove(&height);
     }
 }
@@ -1039,7 +1058,7 @@ impl Client for TestClient {
             );
         }
 
-        let leaf = inner.leaf(height, self.epoch_height, None).await;
+        let leaf = inner.leaf(height, self.epoch_length, None).await;
 
         let mut proof = LeafProof::default();
         proof.push(leaf.clone());
@@ -1072,7 +1091,7 @@ impl Client for TestClient {
         const MAX_PROOF_LEAVES: usize = 16;
         let mut next = height + 1;
         loop {
-            let leaf = inner.leaf(next, self.epoch_height, None).await;
+            let leaf = inner.leaf(next, self.epoch_length, None).await;
             next += 1;
             if proof.push(leaf) {
                 break;
@@ -1102,7 +1121,7 @@ impl Client for TestClient {
         );
         if inner.invalid_proofs.contains(&height) {
             tracing::info!(root, height, "return mock invalid proof");
-            let leaf = inner.leaf(height, self.epoch_height, None).await;
+            let leaf = inner.leaf(height, self.epoch_length, None).await;
             // Construct a proof using a Merkle tree of the wrong height.
             let mt = BlockMerkleTree::from_elems(
                 Some(BLOCK_MERKLE_TREE_HEIGHT + 1),
@@ -1123,7 +1142,7 @@ impl Client for TestClient {
         tracing::info!(height, root = %mt.commitment(), "get proof from Merkle tree");
         let proof = mt.lookup(height as u64).expect_ok().unwrap().1;
         let header = inner
-            .leaf(height, self.epoch_height, None)
+            .leaf(height, self.epoch_length, None)
             .await
             .header()
             .clone();
@@ -1139,7 +1158,7 @@ impl Client for TestClient {
         let mut inner = self.inner.lock().await;
         for h in start_height..end_height {
             let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
-            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+            leaves.push(inner.leaf(height, self.epoch_length, None).await);
         }
         Ok(leaves)
     }
@@ -1159,7 +1178,7 @@ impl Client for TestClient {
                 .swapped_leaves
                 .get(&(height as usize))
                 .unwrap_or(&(height as usize));
-            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+            leaves.push(inner.leaf(height, self.epoch_length, None).await);
         }
         Ok(leaves)
     }
@@ -1209,7 +1228,7 @@ impl Client for TestClient {
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
         let mut inner = self.inner.lock().await;
 
-        let vid_common = inner.vid_common(height, self.epoch_height);
+        let vid_common = inner.vid_common(height, self.epoch_length);
         let height = height as usize;
         ensure!(height < inner.payloads.len());
 
@@ -1255,7 +1274,7 @@ impl Client for TestClient {
     ) -> Result<NamespaceProof> {
         let mut inner = self.inner.lock().await;
 
-        let vid_common = inner.vid_common(height, self.epoch_height);
+        let vid_common = inner.vid_common(height, self.epoch_length);
         let height = height as usize;
         ensure!(height < inner.payloads.len());
 
