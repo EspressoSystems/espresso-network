@@ -217,6 +217,13 @@ async fn build_coordinator(
         Leaf2::from(genesis_proposal.clone()),
     );
     consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
+    // Enters view 1, the view after the genesis certificate. `Coordinator::start`
+    // starts the node in the view consensus is in.
+    consensus.resume_from_restart(
+        ViewNumber::genesis(),
+        ViewNumber::genesis(),
+        ViewNumber::genesis(),
+    );
 
     let proposal_validator = ProposalValidator::new(
         membership.clone(),

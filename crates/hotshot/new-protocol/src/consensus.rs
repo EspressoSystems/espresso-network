@@ -1145,7 +1145,7 @@ impl<T: NodeType> Consensus<T> {
     /// On restart, bar voting and proposing in every view this node may have
     /// acted in by raising `timeout_view` (vote1, propose) and
     /// `restart_barred_view` (vote-action re-recording), pin the decide floor
-    /// at the anchor, and place the view cursor just past the high QC.
+    /// at the anchor, and enter the view after the high QC.
     /// Forward-only: never regresses any view.
     pub fn resume_from_restart(
         &mut self,
@@ -1181,11 +1181,10 @@ impl<T: NodeType> Consensus<T> {
                 .and_modify(|recorded| *recorded = (*recorded).min(parent_view))
                 .or_insert(parent_view);
         }
-        // `Coordinator::start` enters `current_view + 1`, so parking the cursor
-        // at the high QC makes the node re-enter at `high_qc + 1`.
-        let resume_view = self
-            .stored_high_qc
-            .map_or(anchor_view + 1, |lock| lock.view);
+        // The node re-enters the view after its high QC, as a running node does on
+        // the high QC's `Cert1`. `Coordinator::start` starts the view timer there,
+        // and a timeout is accepted only for a view the node is in.
+        let resume_view = self.stored_high_qc.map_or(anchor_view, |lock| lock.view) + 1;
         self.set_current_view_max(resume_view);
     }
 

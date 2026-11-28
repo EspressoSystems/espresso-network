@@ -3536,6 +3536,34 @@ async fn test_no_redecide_below_restart_anchor() {
     );
 }
 
+/// A restarted node is in the view after its high QC, the view its timer runs for.
+///
+/// Its timeout for that view is answered with a timeout vote. After all nodes restart, these
+/// votes are the only way past a leader that does not propose. The high QC is for a later
+/// view than the anchor: a timeout for the view after the anchor is answered wherever the
+/// node is.
+#[tokio::test]
+async fn restarted_node_times_out_the_view_after_its_high_qc() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let high_qc = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+    let resume_view = high_qc.view_number + 1;
+
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        high_qc.cert1.clone(),
+        [high_qc.proposal.data.clone()],
+    )
+    .await;
+    harness.resume_from_restart(anchor_view, anchor_view + 1, high_qc.view_number);
+    assert_eq!(harness.consensus.current_view(), resume_view);
+
+    harness.apply(ConsensusInput::Timeout(resume_view)).await;
+    assert_eq!(count_matching(harness.outputs(), is_send_timeout_vote), 1);
+}
+
 /// A timeout for a view below `current_view` is ignored entirely: no
 /// timeout vote is signed or broadcast. Regression test for restarted
 /// nodes being dragged back to long-past views (e.g. the protocol-upgrade
