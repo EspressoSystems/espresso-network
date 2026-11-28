@@ -138,6 +138,41 @@
         packages = with pkgs; [ graphviz plantuml mdbook ];
       };
 
+      # elan installs the toolchain pinned in lean/lean-toolchain on the first lake call
+      devShells.lean = addOnShell {
+        packages = [
+          pkgs.elan
+          # `just lean::pdf`
+          (pkgs.texliveBasic.withPackages (ps: with ps; [
+            latexmk
+            memoir
+            fontspec
+            sourcecodepro
+            sourcesanspro
+            sourceserifpro
+            dejavu
+            fancyvrb
+            fvextra
+            tcolorbox
+            ulem
+            newunicodechar
+            listings
+            pdfcol
+            tikzfill
+            lineno
+            upquote
+            xkeyval
+            booktabs
+            xpatch
+          ]))
+        ];
+        # On Linux elan patches toolchains to store paths in its own closure, which a GC deletes once
+        # elan is unreferenced. One ELAN_HOME per elan build: entering the shell restores those paths.
+        shellHook = lib.optionalString stdenv.hostPlatform.isLinux ''
+          export ELAN_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}/nix-elan/${baseNameOf "${pkgs.elan}"}"
+        '';
+      };
+
       devShells.go = addOnShell {
         packages = [ pkgs.go_1_27 ];
       };

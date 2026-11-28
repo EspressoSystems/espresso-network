@@ -59,3 +59,8 @@ jobs:
         run: |
           just doc-figures
           just bench-block-build --help
+
+      # `command -v lake` passes on the elan proxy; this installs and runs the pinned toolchain.
+      - name: Lean toolchain
+        if: runner.os == 'Linux'
+        run: nix develop .#lean --accept-flake-config -c bash -c 'cd lean && lake --version'

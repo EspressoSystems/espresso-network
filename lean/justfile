@@ -2,56 +2,68 @@ default:
     just --list
 
 # Build the specification and check its claims about itself.
+[script("../scripts/with-tools", "lean", "lake")]
 spec:
     cd new-protocol-spec && lake build
 
 # Check that every name the specification's prose mentions still exists.
+[script("../scripts/with-tools", "lean", "lake")]
 lint:
     cd new-protocol-spec && lake exe lint
 
 # Build the executable machine and its conformance proof.
+[script("../scripts/with-tools", "lean", "lake")]
 impl:
     cd new-protocol-impl && lake build
 
 # Build the trace checker and the simulator.
+[script("../scripts/with-tools", "lean", "lake")]
 diff:
     cd new-protocol-diff && lake build
 
 # Run the machine on random schedules over a simulated network, and check every run.
+[script("../scripts/with-tools", "lean", "lake")]
 sim seeds="4":
     cd new-protocol-diff && lake build sim && .lake/build/bin/sim {{seeds}}
 
 # Build and render the reference document.
+[script("../scripts/with-tools", "lean", "lake")]
 docs:
     cd new-protocol-docs && lake build && .lake/build/bin/reference --output _out --with-tex
 
 # Check that every result of the specification is spliced into the reference.
+[script("../scripts/with-tools", "lean", "lake")]
 coverage:
     cd new-protocol-docs && lake exe coverage
 
+[script("../scripts/with-tools", "lean", "latexmk", "lualatex")]
 pdf: docs
     cd new-protocol-docs/_out/tex && latexmk -lualatex -interaction=nonstopmode main.tex
 
+[script("../scripts/with-tools", "python", "python3")]
 serve-docs: docs
     cd new-protocol-docs/_out/html-multi && python3 -m http.server --bind 127.0.0.1 8000
 
 # Build the stake table specification and prove its invariant.
+[script("../scripts/with-tools", "lean", "lake")]
 stake-spec:
     cd stake-table-spec && lake build
 
 # Build the stake table implementation and its conformance proof.
+[script("../scripts/with-tools", "lean", "lake")]
 stake-impl:
     cd stake-table-impl && lake build
 
 # Build the checker that compares the node's stake table cases with the implementation.
+[script("../scripts/with-tools", "lean", "lake")]
 stake-check:
     cd stake-table-diff && lake build
 
 all: spec lint impl diff sim docs coverage stake-spec stake-impl stake-check
 
-
 # Generate stake table cases with the node's results, and check them against the
 # Lean implementation.
+[script("../scripts/with-tools", "lean", "lake", "cargo")]
 stake-diff dir="../target/stake-table-corpus":
     rm -f "{{absolute_path(dir)}}"/*.jsonl
     STAKE_TABLE_CORPUS="{{absolute_path(dir)}}" cargo test -p espresso-types --lib stake_table_corpus -- --ignored
