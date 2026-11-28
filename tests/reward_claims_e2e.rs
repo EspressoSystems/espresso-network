@@ -27,8 +27,8 @@ use hotshot_contract_adapter::{
 use hotshot_query_service::data_source::sql::postgres::SqlDataSource;
 use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
 use hotshot_types::{
+    epoch::EpochLength,
     stake_table::{HSStakeTable, one_honest_threshold},
-    utils::epoch_from_block_number,
 };
 use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
@@ -105,7 +105,8 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let reward_claim_addr = contracts.address(Contract::RewardClaimProxy).unwrap();
 
     // Start the relay server
-    let first_epoch = epoch_from_block_number(epoch_start_block, BLOCKS_PER_EPOCH);
+    let blocks_per_epoch = EpochLength::try_from(BLOCKS_PER_EPOCH).unwrap();
+    let first_epoch = *blocks_per_epoch.epoch_of(epoch_start_block);
     let mut thresholds = HashMap::new();
     thresholds.insert(first_epoch, one_honest_threshold(initial_total_stakes));
 
@@ -145,7 +146,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         l1_rpc_client,
         light_client_address: lc_addr,
         signer: build_signer(TEST_MNEMONIC, 0),
-        blocks_per_epoch: BLOCKS_PER_EPOCH,
+        blocks_per_epoch,
         epoch_start_block,
         max_retries: 5,
         max_gas_price: None,
