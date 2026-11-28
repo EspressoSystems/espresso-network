@@ -192,8 +192,19 @@ impl Server {
                                 node = %self.key,
                                 peer = %conn.key,
                                 addr = %conn.addr,
+                                registered = %party.addr,
                                 "party has invalid ip addr"
                             );
+                            if !NetAddr::from(conn.addr).is_probably_global() {
+                                warn!(
+                                    name = %self.conf.name,
+                                    node = %self.key,
+                                    peer = %conn.key,
+                                    addr = %conn.addr,
+                                    "Rejected an inbound connection from a private IP address. In case there is a \
+                                     reverse proxy in front of this host, it needs to preserve the connection's source IP."
+                                );
+                            }
                             self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
                         }
