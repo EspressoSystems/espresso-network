@@ -19,7 +19,10 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
-    traits::{BlockPayload, metrics::NoMetrics, signature_key::SignatureKey},
+    traits::{
+        BlockPayload, block_contents::Transaction as _, metrics::NoMetrics,
+        signature_key::SignatureKey,
+    },
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
@@ -30,7 +33,8 @@ use vid::utils::blake3::Blake3Node;
 use crate::{
     block::{
         BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig, BlockBuilderOutput, BlockError,
-        block_commitments, forward_budget, transaction_hashes,
+        MIN_PARALLEL_BYTES, MIN_PARALLEL_TRANSACTIONS, block_commitments, forward_budget,
+        forwarded_hashes, transaction_hashes,
     },
     coordinator::Coordinator,
     helpers::test_upgrade_lock,
@@ -874,6 +878,58 @@ async fn transactions_larger_than_a_block_are_not_pooled() {
         Vec::from([tx(1), tx(2)]),
         "the oversized transaction takes no pool space from ones that fit"
     );
+}
+
+#[tokio::test]
+async fn batch_hashed_in_parallel_pools_in_order_under_its_own_hashes() {
+    // Four transactions to a block, ten to the batch: over the byte threshold, under the count.
+    let batch: Vec<_> = (0..10)
+        .map(|n| TestTransaction::new(vec![n; 64 * 1024]))
+        .collect();
+    let size = batch[0].minimum_block_size();
+    assert!(batch.len() < MIN_PARALLEL_TRANSACTIONS);
+    assert!(size * batch.len() as u64 >= MIN_PARALLEL_BYTES);
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(4 * size),
+        ..small_config()
+    });
+    // The pool holds fanout + 1 blocks: the first 8 of the batch.
+    b.on_transactions(tx_msg(view(1), batch.clone()));
+    b.on_block_reconstructed(
+        view(1),
+        payload(1),
+        batch[..4].iter().map(Committable::commit).collect(),
+    );
+
+    let mut txns = b.drain(view(2));
+    txns.sort_by_key(|t| t.bytes().clone());
+    assert_eq!(
+        txns,
+        batch[4..8].to_vec(),
+        "the batch's first 8 are pooled, and the hashes of its first 4 remove exactly those"
+    );
+}
+
+#[test]
+fn forwarded_hashes_are_the_serial_hashes_on_every_path() {
+    let small = |count: u32| -> Vec<_> {
+        (0..count)
+            .map(|n| TestTransaction::new(n.to_le_bytes().to_vec()))
+            .collect()
+    };
+    let large: Vec<_> = (0..3)
+        .map(|n| TestTransaction::new(vec![n; 128 * 1024]))
+        .collect();
+    let many = small(MIN_PARALLEL_TRANSACTIONS as u32);
+    assert!(large.len() < MIN_PARALLEL_TRANSACTIONS);
+    let bytes = |batch: &[TestTransaction]| -> u64 {
+        batch.iter().map(TestTransaction::minimum_block_size).sum()
+    };
+    assert!(bytes(&large) >= MIN_PARALLEL_BYTES && bytes(&many) < MIN_PARALLEL_BYTES);
+    for batch in [small(0), small(3), large, many] {
+        let serial: Vec<_> = batch.iter().map(Committable::commit).collect();
+        assert_eq!(forwarded_hashes::<TestTypes>(&batch), serial);
+    }
 }
 
 #[tokio::test]
