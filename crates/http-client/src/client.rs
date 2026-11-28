@@ -71,34 +71,40 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
     /// `timeout` is `None`).
     pub async fn connect(&self, timeout: Option<Duration>) -> bool {
         let deadline = timeout.map(|d| Instant::now() + d);
-        while deadline.map(|t| Instant::now() < t).unwrap_or(true) {
-            match self
-                .inner
-                // Absolute path: always probes the application's top-level healthcheck,
-                // regardless of any submodule prefix in `base_url`. Matches surf-disco.
-                .get(self.base_url.join("/healthcheck").unwrap())
-                .send()
-                .await
-            {
-                Ok(res) if res.status() == reqwest::StatusCode::OK => return true,
-                Ok(res) => {
-                    tracing::info!(
-                        url = %self.base_url,
-                        status = %res.status(),
-                        "waiting for server to become ready",
-                    );
-                },
-                Err(err) => {
-                    tracing::info!(
-                        url = %self.base_url,
-                        err = reqwest_error_msg(err),
-                        "waiting for server to become ready",
-                    );
-                },
+        let poll = async {
+            while deadline.map(|t| Instant::now() < t).unwrap_or(true) {
+                match self
+                    .inner
+                    // Absolute path: always probes the application's top-level healthcheck,
+                    // regardless of any submodule prefix in `base_url`. Matches surf-disco.
+                    .get(self.base_url.join("/healthcheck").unwrap())
+                    .send()
+                    .await
+                {
+                    Ok(res) if res.status() == reqwest::StatusCode::OK => return true,
+                    Ok(res) => {
+                        tracing::info!(
+                            url = %self.base_url,
+                            status = %res.status(),
+                            "waiting for server to become ready",
+                        );
+                    },
+                    Err(err) => {
+                        tracing::info!(
+                            url = %self.base_url,
+                            err = reqwest_error_msg(err),
+                            "waiting for server to become ready",
+                        );
+                    },
+                }
+                sleep(self.retry_interval).await;
             }
-            sleep(self.retry_interval).await;
+            false
+        };
+        match timeout {
+            Some(duration) => tokio::time::timeout(duration, poll).await.unwrap_or(false),
+            None => poll.await,
         }
-        false
     }
 
     /// Connect to the server, retrying until the server is `healthy`.
@@ -113,13 +119,19 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
         timeout: Option<Duration>,
     ) -> Option<H> {
         let deadline = timeout.map(|d| Instant::now() + d);
-        while deadline.map(|t| Instant::now() < t).unwrap_or(true) {
-            match self.healthcheck::<H>().await {
-                Ok(health) if healthy(&health) => return Some(health),
-                _ => sleep(self.retry_interval).await,
+        let poll = async {
+            while deadline.map(|t| Instant::now() < t).unwrap_or(true) {
+                match self.healthcheck::<H>().await {
+                    Ok(health) if healthy(&health) => return Some(health),
+                    _ => sleep(self.retry_interval).await,
+                }
             }
+            None
+        };
+        match timeout {
+            Some(duration) => tokio::time::timeout(duration, poll).await.unwrap_or(None),
+            None => poll.await,
         }
-        None
     }
 
     /// Build an HTTP `GET` request.
