@@ -4,8 +4,8 @@ set -euo pipefail
 # Security Model
 # ──────────────
 # This script pre-fetches PR review comments for use by AI code reviewers
-# (Claude, etc.). Only comments from team members (MEMBER, OWNER,
-# COLLABORATOR), trusted bots (claude, gemini-code-assist) and github-actions
+# (Claude, etc.). Only comments from team members (MEMBER, OWNER), trusted
+# bots (claude, gemini-code-assist) and github-actions
 # comments starting with the claude_gh.py marker are included.
 #
 # This mitigates prompt injection: external contributors' comments are
@@ -101,7 +101,7 @@ query($owner: String!, $repo: String!, $pr: Int!) {
   local result
   result="$(echo "${pr_data}" | jq '
     def trusted:
-      (.authorAssociation | IN("MEMBER","OWNER","COLLABORATOR"))
+      (.authorAssociation | IN("MEMBER","OWNER"))
       or (.author.login | IN("claude","gemini-code-assist"))
       or (.author.login == "github-actions" and (.body | startswith("<!-- claude-gh -->")));
     {
