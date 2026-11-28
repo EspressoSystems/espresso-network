@@ -9,6 +9,7 @@ never compiles libFuzzer.
 | `vid_ns_shares`       | edited bincode of an honest AvidmGf2 common and its shares                  | no panic in verify or recover; verified shards covering the threshold recover the payload |
 | `ns_table`            | namespace table and payload bytes                                           | no panic walking the payload; both namespace table parsers agree on every valid table     |
 | `inclusion_proofs`    | edited bincode or JSON of honest tx and namespace proofs                    | no panic decoding or verifying; no proof of a transaction or namespace not in the block   |
+| `merkle_catchup`      | edited honest fee and v1 reward account snapshots and block frontiers       | no panic; an accepted response leaves the node with the honest accounts and roots         |
 | `light_client_proofs` | edited bincode or JSON of honest leaf, header, payload and namespace proofs | no panic decoding or verifying; nothing verifies unless it is on the chain                |
 
 ## Running
