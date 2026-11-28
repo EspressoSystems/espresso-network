@@ -525,11 +525,14 @@ impl VidScheme for AvidmGf2Scheme {
         let shard_bytes = first_share.payload[0].len();
         // The buffers below are sized from `shard_bytes` and the threshold, so
         // the shares must agree on the former and carry enough shards to cover
-        // the latter before anything is allocated.
-        if shares
-            .iter()
-            .any(|share| !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes))
-        {
+        // the latter before anything is allocated. A share reaching past the
+        // encoded payload is rejected here rather than by the decoder, which
+        // does not run when every original shard is present.
+        if shares.iter().any(|share| {
+            !share.validate()
+                || share.range.end > param.total_weights
+                || share.payload.iter().any(|p| p.len() != shard_bytes)
+        }) {
             return Err(VidError::InvalidShare);
         }
         if shares
@@ -546,23 +549,27 @@ impl VidScheme for AvidmGf2Scheme {
         // `Vec<Option<Vec<u8>>>`. Reconstructed shards come from the decoder
         // and are copied directly into the output buffer below.
         let mut input_orig: Vec<Option<&[u8]>> = vec![None; original_count];
-
-        let mut recovered: Vec<u8> = Vec::with_capacity(original_count * shard_bytes);
-        if recovery_count == 0 {
-            // Edge case where there are no recovery shares: every original must
-            // be supplied as input.
-            for share in shares {
-                for (i, index) in share.range.clone().enumerate() {
-                    if index < original_count {
-                        input_orig[index] = Some(&share.payload[i]);
-                    }
+        for share in shares {
+            for (i, index) in share.range.clone().enumerate() {
+                if index < original_count {
+                    input_orig[index] = Some(&share.payload[i]);
                 }
             }
-            for slot in &input_orig {
-                let shard = slot
-                    .ok_or_else(|| VidError::Internal(anyhow!("Failed to recover the payload.")))?;
+        }
+
+        let mut recovered: Vec<u8> = Vec::with_capacity(original_count * shard_bytes);
+        if input_orig.iter().all(Option::is_some) {
+            // The code is systematic: the original shards are the padded
+            // payload, so with all of them in hand the decoder would restore
+            // nothing and the payload is their concatenation.
+            for shard in input_orig.iter().flatten() {
                 recovered.extend_from_slice(shard);
             }
+        } else if recovery_count == 0 {
+            // No recovery shards exist, so a missing original cannot be restored.
+            return Err(VidError::Internal(anyhow!(
+                "Failed to recover the payload."
+            )));
         } else {
             let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
                 original_count,
@@ -573,7 +580,6 @@ impl VidScheme for AvidmGf2Scheme {
                 for (i, index) in share.range.clone().enumerate() {
                     let shard = &share.payload[i];
                     if index < original_count {
-                        input_orig[index] = Some(shard);
                         decoder.add_original_shard(index, shard)?;
                     } else {
                         decoder.add_recovery_shard(index - original_count, shard)?;
@@ -744,6 +750,87 @@ pub mod tests {
                 let payload_recovered =
                     AvidmGf2Scheme::recover(&params, &commit, &shares[..]).unwrap();
                 assert_eq!(payload_recovered, payload);
+            }
+        }
+    }
+
+    /// The shares holding the original shards recover the payload by
+    /// themselves, with or without recovery shards alongside, and a share
+    /// reaching past the encoded payload is rejected.
+    #[test]
+    fn recovers_from_original_shards() {
+        let weights = [3u32, 2, 4, 1, 5];
+        let total_weights = weights.iter().sum::<u32>() as usize;
+        let recovery_threshold = total_weights.div_ceil(3);
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let mut rng = jf_utils::test_rng();
+        let mut payload = vec![0u8; 200];
+        rng.fill_bytes(&mut payload);
+
+        let (commit, shares) = AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+        let originals: Vec<_> = shares
+            .iter()
+            .filter(|share| share.range.start < recovery_threshold)
+            .cloned()
+            .collect();
+        assert!(originals.len() < shares.len());
+        assert_eq!(
+            AvidmGf2Scheme::recover(&params, &commit, &originals).unwrap(),
+            payload
+        );
+        assert_eq!(
+            AvidmGf2Scheme::recover(&params, &commit, &shares).unwrap(),
+            payload
+        );
+
+        let mut out_of_range = shares.last().unwrap().clone();
+        out_of_range.range = total_weights - 1..total_weights + out_of_range.payload.len() - 1;
+        assert!(matches!(
+            AvidmGf2Scheme::recover(&params, &commit, &[out_of_range]),
+            Err(VidError::InvalidShare)
+        ));
+    }
+
+    /// A share set with every original shard and some recovery shards
+    /// recovers by concatenation, and returns what the decoder returns for a
+    /// set missing an original, at lengths on both sides of a shard boundary.
+    ///
+    /// The decoder rejects a recovery shard given twice, so recovering a set
+    /// that repeats one shows the decoder did not run.
+    #[test]
+    fn concatenation_matches_decoding() {
+        for (rt, tw) in [(1, 3), (3, 10), (4, 12), (7, 20)] {
+            let params = AvidmGf2Scheme::setup(rt, tw).unwrap();
+            let weights = vec![1u32; tw];
+            for len in [0, 1, 31, 32, 33, 63, 64, 65, 1000, 4097] {
+                let payload: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
+                let (commit, shares) =
+                    AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+                let recover = |shares: &[_]| AvidmGf2Scheme::recover(&params, &commit, shares);
+
+                let missing_first_original = shares[1..=rt].to_vec();
+                let decoded = recover(&missing_first_original).unwrap();
+                assert_eq!(decoded, payload, "({rt}, {tw}) {len}");
+                let with_every_original = shares[..=rt].to_vec();
+                assert_eq!(
+                    recover(&with_every_original).unwrap(),
+                    decoded,
+                    "({rt}, {tw}) {len}"
+                );
+
+                let repeat = |mut shares: Vec<_>| {
+                    shares.push(shares.last().cloned().unwrap());
+                    shares
+                };
+                assert_eq!(
+                    recover(&repeat(with_every_original)).unwrap(),
+                    payload,
+                    "({rt}, {tw}) {len}"
+                );
+                assert!(
+                    recover(&repeat(missing_first_original)).is_err(),
+                    "({rt}, {tw}) {len}"
+                );
             }
         }
     }
