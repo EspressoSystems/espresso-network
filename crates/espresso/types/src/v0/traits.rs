@@ -304,9 +304,9 @@ pub trait StateCatchup: Send + Sync {
         None
     }
 
-    /// The block Merkle root of the header at `lc_contract_state.height`, accepted by
-    /// `LcContractFinalizedState::verify_header`. One attempt. An implementation returns a verified
-    /// value and the caller installs it without checking again. Default: unsupported error.
+    /// The block Merkle root at `lc_contract_state.height`, accepted by
+    /// `LcContractFinalizedState::verify_block_merkle_root`. One attempt. An implementation returns a
+    /// verified value and the caller installs it without checking again. Default: unsupported error.
     async fn try_fetch_lc_contract_block_merkle_root(
         &self,
         _retry: usize,

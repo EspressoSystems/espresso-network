@@ -34,9 +34,9 @@ const MAX_CONCURRENT_REQUESTS: usize = 3;
 /// `doc/agents/architecture.md`.
 ///
 /// `F` and `blockCommRoot` come from the SNARK-verified LC contract. Every installed table comes
-/// from a header proven against the block Merkle root of a header at `F` that `verify_header`
-/// accepted. Proven heights are below `F`, installed epochs above `start`, and every table has a
-/// block reward.
+/// from a header proven against a block Merkle root that `verify_block_merkle_root` matched to the
+/// contract's at `F`. Proven heights are below `F`, installed epochs above `start`, and every
+/// table has a block reward.
 pub struct LcContractSeed {
     /// Seed attempts that installed a window.
     seeded: Arc<dyn Counter>,

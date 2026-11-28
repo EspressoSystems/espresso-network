@@ -2009,6 +2009,7 @@ impl Fetcher {
                             request_timeout,
                             StakeTableV3::new(stake_table_contract, provider.clone())
                                 .lightClient()
+                                .block(BlockId::number(block))
                                 .call(),
                         )
                         .await
