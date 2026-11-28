@@ -5,7 +5,7 @@
 use serde::{Serialize, de::DeserializeOwned};
 use vbs::{BinarySerializer, Serializer, version::StaticVersionType};
 
-use crate::body::{DecodeFailure, EncodeFailure};
+use crate::body::{DecodeFailure, EncodeFailure, decode_binary};
 
 /// Encode a binary data frame payload as VBS.
 pub fn encode_binary_frame<Ver: StaticVersionType, T: Serialize + ?Sized>(
@@ -24,7 +24,7 @@ pub fn encode_text_frame<T: Serialize + ?Sized>(item: &T) -> Result<String, Enco
 pub fn decode_binary_frame<Ver: StaticVersionType, T: DeserializeOwned>(
     bytes: &[u8],
 ) -> Result<T, DecodeFailure> {
-    Serializer::<Ver>::deserialize(bytes).map_err(|err| DecodeFailure::Binary(err.to_string()))
+    decode_binary::<Ver, T>(bytes)
 }
 
 /// Decode a text data frame payload as JSON. Borrows the payload so transports can decode
