@@ -28,5 +28,5 @@ pub use reward::*;
 pub use stake_table::*;
 pub use state::{
     BuilderValidationError, ProposalValidationError, StateValidationError, ValidatedState,
-    get_l1_deposits,
+    get_l1_deposits, remember_blocks_frontier,
 };

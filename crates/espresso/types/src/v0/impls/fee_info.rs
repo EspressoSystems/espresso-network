@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{marker::PhantomData, str::FromStr, sync::Arc};
 
 use alloy::primitives::{
     Address, U256,
@@ -17,16 +17,19 @@ use hotshot_query_service_types::explorer::MonetaryValue;
 use hotshot_types::traits::block_contents::BuilderFee;
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult, MerkleTreeError,
-    MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    DigestAlgorithm, Element, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
+    Index, LookupResult, MerkleTreeError, MerkleTreeScheme, ToTraversalPath,
+    UniversalMerkleTreeScheme,
+    prelude::{MerkleNode, MerkleProof, Sha3Digest, Sha3Node},
 };
 use num_traits::CheckedSub;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::v0_1::IterableFeeInfo;
 use crate::{
-    AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment,
-    FeeMerkleProof, FeeMerkleTree, SeqTypes, eth_signature_key::EthKeyPair,
+    AccountQueryData, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
+    FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes, eth_signature_key::EthKeyPair,
 };
 
 /// Possible charge fee failures
@@ -347,7 +350,12 @@ impl FeeAccountProof {
         }
     }
 
+    /// Returns `None` if `account` is not in memory, or if `tree` does not have the fee tree's
+    /// height, as a tree decoded from a peer may not.
     pub fn prove(tree: &FeeMerkleTree, account: Address) -> Option<(Self, U256)> {
+        if tree.height() != FEE_MERKLE_TREE_HEIGHT {
+            return None;
+        }
         match tree.universal_lookup(FeeAccount(account)) {
             LookupResult::Ok(balance, proof) => Some((
                 Self {
@@ -367,17 +375,21 @@ impl FeeAccountProof {
         }
     }
 
+    /// A proof that passes remembers into any tree with root `comm`, so a caller can remember
+    /// it without handling a failure.
     pub fn verify(&self, comm: &FeeMerkleCommitment) -> anyhow::Result<U256> {
-        match &self.proof {
+        let (FeeMerkleProof::Presence(proof) | FeeMerkleProof::Absence(proof)) = &self.proof;
+        ensure!(is_lookup_shaped(proof), "proof is not shaped like a lookup");
+        let balance = match &self.proof {
             FeeMerkleProof::Presence(proof) => {
                 ensure!(
                     FeeMerkleTree::verify(comm, FeeAccount(self.account), proof)?.is_ok(),
                     "invalid proof"
                 );
-                Ok(proof
+                proof
                     .elem()
                     .context("presence proof is missing account balance")?
-                    .0)
+                    .0
             },
             FeeMerkleProof::Absence(proof) => {
                 let tree = FeeMerkleTree::from_commitment(comm);
@@ -389,19 +401,34 @@ impl FeeAccountProof {
                     )?,
                     "invalid proof"
                 );
-                Ok(U256::ZERO)
+                U256::ZERO
             },
-        }
+        };
+        // `MerkleTreeScheme::verify` recomputes each node on the path and ignores the value the
+        // proof stores for it, which `remember` compares. A tree holding only the root adopts the
+        // most proof nodes, so it is the strictest target.
+        self.remember(&mut FeeMerkleTree::from_commitment(comm))
+            .context("proof cannot be remembered")?;
+        Ok(balance)
     }
 
     /// Prove each of `accounts` out of `snapshot`, a partial tree from an untrusted peer, and
-    /// verify every proof against `root`. Fails if the snapshot lacks an account or any proof does
-    /// not verify.
+    /// verify every proof against `root`. Fails if the snapshot's height is not the tree height,
+    /// the snapshot lacks an account, or any proof does not verify.
     pub fn verify_snapshot(
         snapshot: &FeeMerkleTree,
         accounts: &[FeeAccount],
         root: &FeeMerkleCommitment,
     ) -> anyhow::Result<Vec<Self>> {
+        ensure!(
+            snapshot.height() == FEE_MERKLE_TREE_HEIGHT,
+            "snapshot has height {}, expected {FEE_MERKLE_TREE_HEIGHT}",
+            snapshot.height()
+        );
+        ensure!(
+            is_tree_lookup_shaped(snapshot)?,
+            "snapshot is not shaped like a merkle tree"
+        );
         accounts
             .iter()
             .map(|account| {
@@ -433,6 +460,82 @@ impl FeeAccountProof {
             },
         }
     }
+}
+
+/// Whether `remember` can adopt every node of `proof` into a tree as it is: each branch has `ARITY`
+/// children, each sibling is a non-default forgotten digest or empty, and a leaf stores its own
+/// digest and `proof.pos`.
+/// `MerkleTreeScheme::verify` checks none of these, and `lookup` and `universal_lookup` build only
+/// proofs of this shape.
+pub(super) fn is_lookup_shaped<E, I, const ARITY: usize>(
+    proof: &MerkleProof<E, I, Sha3Node, ARITY>,
+) -> bool
+where
+    E: Element,
+    I: Index,
+    Sha3Digest: DigestAlgorithm<E, I, Sha3Node>,
+{
+    proof.proof.iter().all(|node| match node {
+        MerkleNode::Leaf { value, pos, elem } => {
+            *pos == proof.pos
+                && Sha3Digest::digest_leaf(pos, elem).is_ok_and(|digest| digest == *value)
+        },
+        // The default digest hashes like `Empty`, but `remember` would store it as forgotten.
+        MerkleNode::Branch { children, .. } => {
+            children.len() == ARITY
+                && children.iter().all(|child| match **child {
+                    MerkleNode::Empty => true,
+                    MerkleNode::ForgettenSubtree { value } => value != Sha3Node::default(),
+                    MerkleNode::Leaf { .. } | MerkleNode::Branch { .. } => false,
+                })
+        },
+        MerkleNode::Empty | MerkleNode::ForgettenSubtree { .. } => true,
+    })
+}
+
+/// Whether every branch of `tree` lies above the leaves and has `ARITY` children, which
+/// `universal_lookup` indexes without checking. Fails if `MerkleTreeWire` cannot decode `tree`.
+pub(super) fn is_tree_lookup_shaped<T>(tree: &T) -> anyhow::Result<bool>
+where
+    T: MerkleTreeScheme<NodeValue = Sha3Node> + Serialize,
+    T::Element: CanonicalSerialize + CanonicalDeserialize,
+    T::Index: CanonicalSerialize + CanonicalDeserialize,
+{
+    let wire: MerkleTreeWire<T::Element, T::Index> = bincode::serialize(tree)
+        .and_then(|bytes| bincode::deserialize(&bytes))
+        .context("MerkleTreeWire no longer matches the jellyfish merkle tree layout")?;
+    Ok(is_subtree_lookup_shaped(&wire.root, wire.height, T::ARITY))
+}
+
+/// `is_tree_lookup_shaped` for the subtree at `node`, `height` levels above the leaves.
+fn is_subtree_lookup_shaped<E: Element, I: Index>(
+    node: &MerkleNode<E, I, Sha3Node>,
+    height: usize,
+    arity: usize,
+) -> bool {
+    match node {
+        MerkleNode::Branch { children, .. } => {
+            height > 0
+                && children.len() == arity
+                && children
+                    .iter()
+                    .all(|child| is_subtree_lookup_shaped(child, height - 1, arity))
+        },
+        MerkleNode::Empty | MerkleNode::Leaf { .. } | MerkleNode::ForgettenSubtree { .. } => true,
+    }
+}
+
+/// The serde layout of jellyfish's merkle tree structs, whose `root` field is private.
+#[derive(Serialize, Deserialize)]
+#[serde(
+    bound = "E: CanonicalSerialize + CanonicalDeserialize, I: CanonicalSerialize + \
+             CanonicalDeserialize"
+)]
+struct MerkleTreeWire<E: Element, I: Index> {
+    root: Arc<MerkleNode<E, I, Sha3Node>>,
+    height: usize,
+    num_leaves: u64,
+    _phantom: PhantomData<()>,
 }
 
 impl From<(FeeAccountProof, U256)> for AccountQueryData {
@@ -470,9 +573,210 @@ pub fn retain_accounts(
 }
 
 #[cfg(test)]
-mod test {
-    use super::{Address, IterableFeeInfo};
-    use crate::{FeeAccount, FeeAmount, FeeInfo};
+pub(super) mod test {
+    use std::sync::Arc;
+
+    use jf_merkle_tree_compat::{
+        MerkleTreeScheme,
+        prelude::{MerkleNode, Sha3Node},
+    };
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::{Address, IterableFeeInfo, MerkleTreeWire, is_tree_lookup_shaped, retain_accounts};
+    use crate::{
+        FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleProof,
+        FeeMerkleTree,
+    };
+
+    #[rstest]
+    #[case::shorter(7)]
+    #[case::taller(21)]
+    fn test_prove_rejects_a_tree_of_another_height(#[case] height: u64) {
+        let account = Address::repeat_byte(1);
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(account), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let mut json = serde_json::to_value(&tree).unwrap();
+        json["height"] = height.into();
+        let tree: FeeMerkleTree = serde_json::from_value(json).unwrap();
+
+        assert!(FeeAccountProof::prove(&tree, account).is_none());
+    }
+
+    #[test]
+    fn test_merkle_tree_wire_round_trips_a_tree() {
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(Address::repeat_byte(1)), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let wire: MerkleTreeWire<FeeAmount, FeeAccount> =
+            bincode::deserialize(&bincode::serialize(&tree).unwrap()).unwrap();
+        let decoded: FeeMerkleTree =
+            bincode::deserialize(&bincode::serialize(&wire).unwrap()).unwrap();
+
+        assert_eq!(decoded, tree);
+        assert!(is_tree_lookup_shaped(&tree).unwrap());
+    }
+
+    #[test]
+    fn test_verify_snapshot_accepts_a_retained_snapshot() {
+        let [one, two, absent] = [1, 2, 3].map(|byte| FeeAccount(Address::repeat_byte(byte)));
+        let full = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(one, FeeAmount::from(1)), (two, FeeAmount::from(2))],
+        )
+        .unwrap();
+        let accounts = [one, two, absent];
+        let snapshot = retain_accounts(&full, accounts).unwrap();
+
+        FeeAccountProof::verify_snapshot(&snapshot, &accounts, &full.commitment()).unwrap();
+    }
+
+    #[rstest]
+    #[case::root_without_children(0, 0)]
+    #[case::branch_at_leaf_height(FEE_MERKLE_TREE_HEIGHT, FeeMerkleTree::ARITY)]
+    fn test_verify_snapshot_rejects_a_misshaped_branch(#[case] depth: usize, #[case] arity: usize) {
+        let account = FeeAccount(Address::repeat_byte(1));
+        let tree =
+            FeeMerkleTree::from_kv_set(FEE_MERKLE_TREE_HEIGHT, [(account, FeeAmount::from(1))])
+                .unwrap();
+        let mut json = serde_json::to_value(&tree).unwrap();
+        replace_node_with_branch(&mut json, depth, arity);
+        let snapshot: FeeMerkleTree = serde_json::from_value(json).unwrap();
+
+        assert!(
+            FeeAccountProof::verify_snapshot(&snapshot, &[account], &tree.commitment()).is_err()
+        );
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_rewritten_branch_value() {
+        let present = Address::repeat_byte(1);
+        let mut absent = present;
+        absent.0[0] = 2;
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(present), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, absent).unwrap();
+        let FeeMerkleProof::Absence(path) = &mut proof.proof else {
+            panic!("expected an absence proof");
+        };
+        let Some(MerkleNode::Branch {
+            value: root,
+            children,
+        }) = path.proof.last_mut()
+        else {
+            panic!("expected a branch at the root");
+        };
+        let (MerkleNode::Branch { value, .. } | MerkleNode::ForgettenSubtree { value }) =
+            Arc::make_mut(&mut children[usize::from(absent.0[19])])
+        else {
+            panic!("expected a node on the path below the root");
+        };
+        *value = *root;
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_subtree_below_the_root() {
+        let present = Address::repeat_byte(1);
+        let mut absent = present;
+        absent.0[0] = 2;
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(present), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, absent).unwrap();
+        let FeeMerkleProof::Absence(path) = &mut proof.proof else {
+            panic!("expected an absence proof");
+        };
+        let Some(MerkleNode::Branch { children, .. }) = path.proof.last_mut() else {
+            panic!("expected a branch at the root");
+        };
+        let on_path = &mut children[usize::from(absent.0[19])];
+        *on_path = Arc::new(MerkleNode::Branch {
+            value: on_path.value(),
+            children: vec![],
+        });
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_rewritten_leaf_value() {
+        let account = Address::repeat_byte(1);
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(account), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, account).unwrap();
+        let FeeMerkleProof::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Leaf { value, .. }) = path.proof.first_mut() else {
+            panic!("expected a leaf");
+        };
+        *value = Sha3Node::default();
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_leaf_at_another_position() {
+        let [account, other] = [1, 2].map(|byte| FeeAccount(Address::repeat_byte(byte)));
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(account, FeeAmount::from(1)), (other, FeeAmount::from(2))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, account.0).unwrap();
+        let FeeMerkleProof::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Leaf { pos, .. }) = path.proof.first_mut() else {
+            panic!("expected a leaf");
+        };
+        *pos = other;
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
+
+    #[test]
+    fn test_verify_rejects_a_proof_with_a_forgotten_empty_sibling() {
+        let account = Address::repeat_byte(1);
+        let tree = FeeMerkleTree::from_kv_set(
+            FEE_MERKLE_TREE_HEIGHT,
+            [(FeeAccount(account), FeeAmount::from(1))],
+        )
+        .unwrap();
+        let (mut proof, _) = FeeAccountProof::prove(&tree, account).unwrap();
+        let FeeMerkleProof::Presence(path) = &mut proof.proof else {
+            panic!("expected a presence proof");
+        };
+        let Some(MerkleNode::Branch { children, .. }) = path.proof.last_mut() else {
+            panic!("expected a branch at the root");
+        };
+        let Some(sibling) = children
+            .iter_mut()
+            .find(|child| matches!(***child, MerkleNode::Empty))
+        else {
+            panic!("expected an empty sibling");
+        };
+        *sibling = Arc::new(MerkleNode::ForgettenSubtree {
+            value: Sha3Node::default(),
+        });
+
+        assert!(proof.verify(&tree.commitment()).is_err());
+    }
 
     #[test]
     fn test_iterable_fee_info() {
@@ -486,5 +790,16 @@ mod test {
         // check accounts collector
         let accounts = fees.accounts();
         assert_eq!(vec![FeeAccount::from(Address::default())], accounts);
+    }
+
+    /// Replace the first non-empty node `depth` levels below the root of the serialized tree
+    /// `json` with a branch of `arity` empty children that keeps the node's value.
+    pub(crate) fn replace_node_with_branch(json: &mut Value, depth: usize, arity: usize) {
+        let node = (0..depth).fold(&mut json["root"], |node, _| {
+            let children = node["Branch"]["children"].as_array_mut().unwrap();
+            children.iter_mut().find(|child| *child != "Empty").unwrap()
+        });
+        let value = node.as_object().unwrap().values().next().unwrap()["value"].clone();
+        *node = json!({ "Branch": { "value": value, "children": vec!["Empty"; arity] } });
     }
 }

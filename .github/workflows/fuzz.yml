@@ -23,6 +23,7 @@ jobs:
       matrix:
         # inclusion_proofs and vid_ns_shares are off until the arkworks update lands
         target:
+          - merkle_catchup
           - ns_table
     steps:
       - uses: actions/checkout@v7
